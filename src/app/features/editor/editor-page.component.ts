@@ -3,17 +3,20 @@ import { Component, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { Subject } from 'rxjs';
 import { debounceTime, takeUntil } from 'rxjs/operators';
-import { DocumentEditorContainerComponent, DocumentEditorContainerModule } from '@syncfusion/ej2-angular-documenteditor';
+import { DocumentEditorContainerComponent, DocumentEditorContainerModule, ToolbarService } from '@syncfusion/ej2-angular-documenteditor';
 import { BookService } from '../../core/services/book.service';
 import { ChapterService } from '../../core/services/chapter.service';
 import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
+import { DocumentVersionService } from '../../core/services/document-version.service';
+import { AnalysisService } from '../../core/services/analysis.service';
 import { BookDetailDto, ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
 import { ChapterTreeComponent } from '../chapter-tree/chapter-tree.component';
 import { AnalysisPanelComponent } from '../analysis-panel/analysis-panel.component';
 import { IssuePanelComponent, ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
 import { BookDashboardComponent } from '../book-dashboard/book-dashboard.component';
 import { LanguageIssue } from '../../core/models/language-engine';
+import { normalizeTextForAnalysis, normalizedOffsetToRawOffset } from '../../core/utils/normalize-text-for-analysis';
 
 @Component({
   selector: 'app-editor-page',
@@ -26,8 +29,10 @@ import { LanguageIssue } from '../../core/models/language-engine';
     IssuePanelComponent,
     BookDashboardComponent
   ],
+  providers: [ToolbarService],
   template: `
-    <div class="editor-layout">
+    <div class="editor-page-wrapper">
+      <div class="editor-layout">
       <aside class="sidebar">
         <div class="sidebar-header">
           <h3>Chapters</h3>
@@ -55,7 +60,7 @@ import { LanguageIssue } from '../../core/models/language-engine';
       </aside>
       <main class="editor-area">
         @if (selectedChapterId) {
-          <div class="editor-shell">
+          <div class="editor-shell" [attr.dir]="editorDirection">
             <div class="editor-status">
               <span *ngIf="isSaving">שומר…</span>
               <span *ngIf="!isSaving && hasPendingChanges">שינויים ממתינים לשמירה</span>
@@ -63,13 +68,22 @@ import { LanguageIssue } from '../../core/models/language-engine';
               @if (selectedSceneId) {
                 <span class="scope-badge">Scene</span>
               }
+              <span class="direction-btns">
+                <button type="button" class="dir-btn" title="Right-to-left (RTL)" (click)="setSelectionRtl()">RTL</button>
+                <button type="button" class="dir-btn" title="Left-to-right (LTR)" (click)="setSelectionLtr()">LTR</button>
+              </span>
+              <button type="button" class="save-btn" [disabled]="!hasPendingChanges || isSaving" (click)="saveCurrentDocument()">שמור</button>
+              <button type="button" class="back-btn" (click)="goBackToBooks()">חזרה לספרים</button>
             </div>
             <ejs-documenteditorcontainer
               #docEditor
               [enableToolbar]="true"
-              [enableRtl]="true"
-              [locale]="'he'"
+              [toolbarMode]="'Toolbar'"
+              [showPropertiesPane]="false"
+              [enableRtl]="editorDirection === 'rtl'"
+              [locale]="editorCulture"
               [height]="'100%'"
+              serviceUrl="/api/documenteditor/"
               (created)="onEditorCreated()"
               (contentChange)="onContentChange()">
             </ejs-documenteditorcontainer>
@@ -106,7 +120,20 @@ import { LanguageIssue } from '../../core/models/language-engine';
           <app-analysis-panel
             [bookId]="bookId"
             [chapterId]="selectedChapterId"
-            [sceneId]="selectedSceneId">
+            [sceneId]="selectedSceneId"
+            [bookLanguage]="book?.language ?? 'he'"
+            [documentText]="currentDocumentPlainText"
+            [documentChapterId]="documentOwnerChapterId"
+            [documentSceneId]="documentOwnerSceneId"
+            [saveBeforeRun]="getSaveBeforeRun()"
+            (analysisStarted)="onAnalysisStarted()"
+            (analysisCompleted)="onAnalysisCompleted()"
+            (analysisStatus)="onAnalysisStatus($event)"
+            (analysisProgressPercent)="onAnalysisProgressPercent($event)"
+            (applyCorrection)="onApplyCorrection($event)"
+            (showInDocument)="selectRangeInEditor($event)"
+            (suggestionRangesChange)="applySuggestionHighlights($event)"
+            (revertToVersion)="onRevertToVersion($event)">
           </app-analysis-panel>
         }
         @if (rightPanelTab === 'language') {
@@ -125,8 +152,25 @@ import { LanguageIssue } from '../../core/models/language-engine';
         }
       </aside>
     </div>
+    @if (analysisRunning) {
+      <div class="analysis-overlay" role="status" aria-live="polite" aria-label="Analysis in progress">
+        <div class="analysis-overlay-card">
+          <h3 class="analysis-overlay-title">Run analysis</h3>
+          <div class="analysis-spinner"></div>
+          <p class="analysis-overlay-message">{{ analysisStatusText }}</p>
+          <div class="analysis-progress-wrapper" *ngIf="analysisStatusPercent !== null">
+            <div class="analysis-progress-bar">
+              <div class="analysis-progress-fill" [style.width.%]="analysisStatusPercent"></div>
+            </div>
+            <span class="analysis-progress-label">{{ analysisStatusPercent }}%</span>
+          </div>
+        </div>
+      </div>
+    }
+  </div>
   `,
   styles: [`
+    .editor-page-wrapper { position: relative; }
     .editor-layout {
       display: grid;
       grid-template-columns: 240px minmax(0, 2fr) 300px;
@@ -180,21 +224,130 @@ import { LanguageIssue } from '../../core/models/language-engine';
       margin-bottom: 0.25rem;
       gap: 0.5rem;
     }
-    .editor-area ejs-documenteditorcontainer,
-    .editor-area ejs-documenteditorcontainer .e-de-ctnr {
-      display: block;
+    .editor-area ejs-documenteditorcontainer {
+      display: flex;
+      flex-direction: column;
       width: 100%;
       height: 100%;
     }
+    .editor-area ejs-documenteditorcontainer > * {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+    .editor-area ejs-documenteditorcontainer .e-de-ctnr {
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+    }
     .badge { font-size: 0.75rem; color: #666; }
     .scope-badge { font-size: 0.7rem; color: #0078d4; margin-inline-start: 0.5rem; }
+    .save-btn, .back-btn {
+      margin-inline-start: 0.5rem;
+      padding: 0.25rem 0.5rem;
+      font-size: 0.8rem;
+      border: 1px solid #0078d4;
+      border-radius: 4px;
+      background: #fff;
+      color: #0078d4;
+      cursor: pointer;
+    }
+    .save-btn:hover:not(:disabled) { background: #e6f0ff; }
+    .save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .back-btn { border-color: #666; color: #333; }
+    .back-btn:hover { background: #f5f5f5; }
+    .direction-btns { display: inline-flex; gap: 0.2rem; margin-inline-start: 0.5rem; }
+    .dir-btn {
+      padding: 0.2rem 0.4rem;
+      font-size: 0.75rem;
+      border: 1px solid #888;
+      border-radius: 4px;
+      background: #fff;
+      color: #333;
+      cursor: pointer;
+    }
+    .dir-btn:hover { background: #eee; }
     .add-chapter { width: 100%; margin-bottom: 0.75rem; padding: 0.5rem; cursor: pointer; }
     .import-btn { padding: 0.35rem 0.5rem; font-size: 0.8rem; cursor: pointer; }
+    .analysis-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(255, 255, 255, 0.85);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
+    }
+    .analysis-overlay-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+      padding: 1.5rem 2rem;
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+      border: 1px solid #eee;
+      min-width: 260px;
+      max-width: 360px;
+    }
+    .analysis-overlay-title {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #222;
+    }
+    .analysis-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid #e0e0e0;
+      border-top-color: #0078d4;
+      border-radius: 50%;
+      animation: analysis-spin 0.8s linear infinite;
+    }
+    @keyframes analysis-spin {
+      to { transform: rotate(360deg); }
+    }
+    .analysis-overlay-message {
+      margin: 0;
+      font-size: 0.95rem;
+      color: #333;
+      text-align: center;
+    }
+    .analysis-progress-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      width: 100%;
+      margin-top: 0.25rem;
+    }
+    .analysis-progress-bar {
+      flex: 1;
+      height: 6px;
+      border-radius: 999px;
+      background: #f0f0f0;
+      overflow: hidden;
+    }
+    .analysis-progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #0078d4, #4ba3ff);
+      transition: width 0.25s ease-out;
+    }
+    .analysis-progress-label {
+      font-size: 0.75rem;
+      color: #555;
+      min-width: 2.5rem;
+      text-align: right;
+    }
   `]
 })
 export class EditorPageComponent implements OnInit, OnDestroy {
   @ViewChild('docEditor', { static: false })
   docEditor?: DocumentEditorContainerComponent;
+  @ViewChild(AnalysisPanelComponent, { static: false })
+  analysisPanel?: AnalysisPanelComponent;
 
   book: BookDetailDto | null = null;
   selectedChapterId: string | null = null;
@@ -204,11 +357,34 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   scenesByChapter: Record<string, SceneSummaryDto[]> = {};
   private destroy$ = new Subject<void>();
   private contentChanged$ = new Subject<void>();
+  /** Current document plain text for analysis panel (Proofread diff, Line Edit offset). */
+  currentDocumentPlainText = '';
+  /** Chapter/scene the current document content belongs to; set when document is loaded so panel can safely restore highlights. */
+  documentOwnerChapterId: string | null = null;
+  documentOwnerSceneId: string | null = null;
   isSaving = false;
   hasPendingChanges = false;
   rightPanelTab: 'analysis' | 'language' | 'book' = 'analysis';
+  /** True while an analysis run or stream is in progress; shows full-screen overlay and blocks interaction. */
+  analysisRunning = false;
+  /** Human-readable status text shown in the analysis overlay spinner. */
+  analysisStatusText = 'Running analysis…';
+  /** Numeric percent (0–100) for analysis overlay progress bar; null when unknown. */
+  analysisStatusPercent: number | null = null;
+  /** Used for editor-shell dir attribute (e.g. 'rtl' for Hebrew). */
+  get editorDirection(): string {
+    const lang = this.book?.language?.toLowerCase();
+    return lang === 'he' || lang === 'ar' || !lang ? 'rtl' : 'ltr';
+  }
+  /** Syncfusion DocumentEditor locale/culture; must match book language for correct RTL punctuation and UI. */
+  get editorCulture(): string {
+    const lang = this.book?.language?.toLowerCase();
+    return lang === 'he' || lang === 'ar' ? 'he' : 'en';
+  }
   private pendingLoadTarget: { chapterId: string; sceneId?: string } | null = null;
   private isOpeningDocument = false;
+  /** Last suggestion ranges applied for highlights; re-applied after document replace (e.g. Accept). */
+  private lastSuggestionRanges: { startOffset: number; endOffset: number }[] = [];
 
   constructor(
     private route: ActivatedRoute,
@@ -216,7 +392,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     private bookService: BookService,
     private chapterService: ChapterService,
     private sceneService: SceneService,
-    private syncService: SyncService
+    private syncService: SyncService,
+    private documentVersionService: DocumentVersionService,
+    private analysisService: AnalysisService
   ) {}
 
   ngOnInit(): void {
@@ -231,8 +409,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       }
     });
     this.contentChanged$
-      .pipe(debounceTime(3000), takeUntil(this.destroy$))
-      .subscribe(() => this.saveCurrentDocument());
+      .pipe(debounceTime(400), takeUntil(this.destroy$))
+      .subscribe(() => this.refreshDocumentPlainText());
     this.syncService.chapterUpdated$.pipe(takeUntil(this.destroy$)).subscribe(ev => {
       if (this.book && ev.bookId === this.bookId) {
         const ch = this.book.chapters.find(c => c.id === ev.chapterId);
@@ -366,8 +544,39 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     this.destroy$.complete();
   }
 
-  /** Valid empty SFDT with one paragraph so selection/layout have a valid target (avoids Syncfusion length/currentWidget errors). */
-  private static readonly EMPTY_SFDT = '{"sections":[{"blocks":[{"inlines":[{"characterFormat":{},"text":""}]}],"headersFooters":{}}]}';
+  /** Valid empty SFDT with one paragraph so selection/layout have a valid target (avoids Syncfusion length/currentWidget errors). RTL-friendly for Hebrew. */
+  private static readonly EMPTY_SFDT = '{"sections":[{"blocks":[{"paragraphFormat":{"bidi":true},"inlines":[{"characterFormat":{"bidi":true},"text":""}]}],"headersFooters":{}}]}';
+
+  /**
+   * Ensure all paragraphs and inlines in SFDT have bidi: true so RTL punctuation and layout render correctly.
+   * Call when loading content for a Hebrew (or other RTL) book so existing content is not treated as LTR.
+   */
+  private ensureSfdtRtl(sfdtString: string): string {
+    if (this.editorDirection !== 'rtl') return sfdtString;
+    try {
+      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
+      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
+      for (const section of sections) {
+        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
+        for (const block of blocks) {
+          const pf = block['paragraphFormat'] ?? block['pf'];
+          if (pf && typeof pf === 'object') {
+            (pf as Record<string, unknown>)['bidi'] = true;
+          }
+          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
+          for (const inline of inlines) {
+            const cf = inline['characterFormat'] ?? inline['cf'];
+            if (cf && typeof cf === 'object') {
+              (cf as Record<string, unknown>)['bidi'] = true;
+            }
+          }
+        }
+      }
+      return JSON.stringify(doc);
+    } catch {
+      return sfdtString;
+    }
+  }
 
   selectChapter(ch: ChapterSummaryDto): void {
     const load = () => {
@@ -428,13 +637,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     if (!this.bookId || !this.docEditor) return;
     this.chapterService.getById(this.bookId, chapterId).subscribe(dto => {
       const raw = dto.contentSfdt?.trim();
-      const sfdt = raw && raw !== '{"sections":[{"blocks":[]}]}' ? raw : EditorPageComponent.EMPTY_SFDT;
+      let sfdt = raw && raw !== '{"sections":[{"blocks":[]}]}' ? raw : EditorPageComponent.EMPTY_SFDT;
+      sfdt = this.ensureSfdtRtl(sfdt);
       this.isOpeningDocument = true;
       setTimeout(() => {
         try {
           if (!this.docEditor?.documentEditor || this.selectedChapterId !== chapterId || this.selectedSceneId) return;
           this.docEditor.documentEditor.open(sfdt);
           this.hasPendingChanges = false;
+          this.currentDocumentPlainText = normalizeTextForAnalysis(this.getTextFromSfdt(sfdt));
+          this.documentOwnerChapterId = chapterId;
+          this.documentOwnerSceneId = null;
         } finally {
           this.isOpeningDocument = false;
         }
@@ -446,13 +659,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     if (!this.bookId || !this.docEditor) return;
     this.sceneService.getById(this.bookId, chapterId, sceneId).subscribe(dto => {
       const raw = dto.contentSfdt?.trim();
-      const sfdt = raw && raw !== '{"sections":[{"blocks":[]}]}' ? raw : EditorPageComponent.EMPTY_SFDT;
+      let sfdt = raw && raw !== '{"sections":[{"blocks":[]}]}' ? raw : EditorPageComponent.EMPTY_SFDT;
+      sfdt = this.ensureSfdtRtl(sfdt);
       this.isOpeningDocument = true;
       setTimeout(() => {
         try {
           if (!this.docEditor?.documentEditor || this.selectedSceneId !== sceneId) return;
           this.docEditor.documentEditor.open(sfdt);
           this.hasPendingChanges = false;
+          this.currentDocumentPlainText = normalizeTextForAnalysis(this.getTextFromSfdt(sfdt));
+          this.documentOwnerChapterId = chapterId;
+          this.documentOwnerSceneId = sceneId;
         } finally {
           this.isOpeningDocument = false;
         }
@@ -461,6 +678,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   }
 
   private applyRtlToSelectionDeferred(): void {
+    if (this.editorDirection !== 'rtl') return;
     setTimeout(() => {
       if (!this.docEditor?.documentEditor) return;
       try {
@@ -473,13 +691,34 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     }, 100);
   }
 
+  /** Set current selection (or paragraph) to RTL. */
+  setSelectionRtl(): void {
+    if (!this.docEditor?.documentEditor) return;
+    try {
+      const sel = this.docEditor.documentEditor.selection;
+      if (sel?.paragraphFormat) sel.paragraphFormat.bidi = true;
+      if (sel?.characterFormat) sel.characterFormat.bidi = true;
+    } catch { /* ignore */ }
+  }
+
+  /** Set current selection (or paragraph) to LTR. */
+  setSelectionLtr(): void {
+    if (!this.docEditor?.documentEditor) return;
+    try {
+      const sel = this.docEditor.documentEditor.selection;
+      if (sel?.paragraphFormat) sel.paragraphFormat.bidi = false;
+      if (sel?.characterFormat) sel.characterFormat.bidi = false;
+    } catch { /* ignore */ }
+  }
+
   onContentChange(): void {
     if (!this.selectedChapterId) return;
     this.hasPendingChanges = true;
     this.contentChanged$.next();
   }
 
-  private saveCurrentDocument(onCompleted?: () => void): void {
+  /** Public save for the Save button. Only saves when there are pending changes. */
+  saveCurrentDocument(onCompleted?: () => void): void {
     if (!this.bookId || !this.selectedChapterId || !this.docEditor || !this.hasPendingChanges || this.isOpeningDocument) {
       if (onCompleted) onCompleted();
       return;
@@ -487,6 +726,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     let sfdt: string;
     try {
       sfdt = this.docEditor.documentEditor.serialize();
+      sfdt = this.stripHighlightFromSfdt(sfdt);
     } catch {
       if (onCompleted) onCompleted();
       return;
@@ -501,7 +741,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         },
         error: () => {
           this.isSaving = false;
-          console.error('Failed to auto-save scene');
+          console.error('Failed to save scene');
           if (onCompleted) onCompleted();
         }
       });
@@ -514,11 +754,67 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         },
         error: () => {
           this.isSaving = false;
-          console.error('Failed to auto-save chapter');
+          console.error('Failed to save chapter');
           if (onCompleted) onCompleted();
         }
       });
     }
+  }
+
+  /** Returns a Promise that resolves when save completes (or immediately if nothing to save). Used by analysis panel and canDeactivate guard. */
+  saveCurrentDocumentPromise(): Promise<void> {
+    return new Promise(resolve => {
+      if (!this.hasPendingChanges || !this.bookId || !this.selectedChapterId || !this.docEditor || this.isOpeningDocument) {
+        resolve();
+        return;
+      }
+      this.saveCurrentDocument(() => resolve());
+    });
+  }
+
+  /** Callback for analysis panel: save before run so analysis uses latest content. */
+  getSaveBeforeRun(): () => Promise<void> {
+    return () => this.saveCurrentDocumentPromise();
+  }
+
+  /** Called when analysis panel starts a run or stream; shows overlay and freezes UI. */
+  onAnalysisStarted(): void {
+    this.analysisRunning = true;
+    this.analysisStatusText = 'Running analysis…';
+    this.analysisStatusPercent = null;
+    this.refreshDocumentPlainText();
+  }
+
+  /** Called when analysis panel finishes (success or error); hides overlay. */
+  onAnalysisCompleted(): void {
+    this.analysisRunning = false;
+  }
+
+  /** Receive human-readable status messages from the analysis panel while a run is in progress. */
+  onAnalysisStatus(message: string): void {
+    if (message && this.analysisRunning) {
+      this.analysisStatusText = message;
+    }
+  }
+
+  /** Receive numeric progress (0–100) from analysis panel to show a progress bar in the overlay. */
+  onAnalysisProgressPercent(percent: number | null): void {
+    if (!this.analysisRunning) {
+      this.analysisStatusPercent = null;
+      return;
+    }
+    if (percent == null || Number.isNaN(percent)) {
+      this.analysisStatusPercent = null;
+      return;
+    }
+    this.analysisStatusPercent = Math.max(0, Math.min(100, Math.round(percent)));
+  }
+
+  /** Save if needed, then navigate to books list. Used by Back to books button and canDeactivate (browser back). */
+  goBackToBooks(): void {
+    const navigate = () => this.router.navigate(['/books']);
+    if (this.hasPendingChanges) this.saveCurrentDocument(navigate);
+    else navigate();
   }
 
   goToImport(): void {
@@ -528,7 +824,13 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   onEditorCreated(): void {
     if (!this.docEditor) return;
-    this.docEditor.documentEditor.enableRtl = true;
+    const ed = this.docEditor.documentEditor;
+    const isRtl = this.editorDirection === 'rtl';
+    ed.enableRtl = isRtl;
+    if (isRtl) {
+      ed.setDefaultParagraphFormat({ bidi: true });
+      ed.setDefaultCharacterFormat({ bidi: true });
+    }
     this.applyRtlToSelectionDeferred();
     const target = this.pendingLoadTarget;
     if (target && this.selectedChapterId === target.chapterId) {
@@ -542,12 +844,29 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     if (!this.docEditor?.documentEditor || !this.selectedChapterId) return;
     try {
       const sfdt = this.docEditor.documentEditor.serialize();
-      const currentText = this.getTextFromSfdt(sfdt);
-      const newText =
-        event.startOffset != null && event.endOffset != null
-          ? currentText.slice(0, event.startOffset) + event.text + currentText.slice(event.endOffset)
-          : event.text;
-      const newSfdt = this.buildMinimalSfdt(newText);
+      // Offsets from proofread diff are in normalized document text; use currentDocumentPlainText for the slice
+      const currentText = this.currentDocumentPlainText || this.getTextFromSfdt(sfdt) || this.getPlainTextFromEditor();
+      let startOffset = event.startOffset;
+      let endOffset = event.endOffset;
+      // When offsets missing but originalText provided (e.g. Redo suggestion from Versions), find range in normalized document
+      if ((startOffset == null || endOffset == null) && event.originalText != null && currentText) {
+        const normOriginal = normalizeTextForAnalysis(event.originalText);
+        const idx = currentText.indexOf(normOriginal);
+        if (idx >= 0) {
+          startOffset = idx;
+          endOffset = idx + normOriginal.length;
+        }
+      }
+
+      let newSfdt: string;
+      if (startOffset != null && endOffset != null && currentText) {
+        const newText =
+          currentText.slice(0, startOffset) + event.text + currentText.slice(endOffset);
+        newSfdt = this.replacePlainTextInSfdt(sfdt, newText, startOffset, endOffset, event.text.length);
+      } else {
+        newSfdt = this.buildMinimalSfdt(event.text);
+      }
+
       this.isOpeningDocument = true;
       setTimeout(() => {
         try {
@@ -555,6 +874,30 @@ export class EditorPageComponent implements OnInit, OnDestroy {
             this.docEditor.documentEditor.open(newSfdt);
             this.hasPendingChanges = true;
             this.contentChanged$.next();
+            this.refreshDocumentPlainText();
+            this.applySuggestionHighlights(this.lastSuggestionRanges);
+            if (this.bookId && !event.skipCreatingVersion) {
+              const now = new Date();
+              const timeLabel = now.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit', second: '2-digit' });
+              const maxLen = 35;
+              const trunc = (t: string) => (t.length <= maxLen ? t : t.slice(0, maxLen) + '…');
+              const label = event.originalText != null
+                ? `Original: ${trunc(event.originalText)} → Suggested: ${trunc(event.text)}`
+                : `After accept (${timeLabel})`;
+              // Store the document state *before* the replacement so Revert restores original text.
+              this.documentVersionService
+                .create(
+                  this.bookId,
+                  this.selectedChapterId,
+                  sfdt,
+                  label,
+                  this.selectedSceneId ?? undefined,
+                  event.analysisId ?? undefined,
+                  event.originalText ?? undefined,
+                  event.text
+                )
+                .subscribe({ error: () => {} });
+            }
           }
         } finally {
           this.isOpeningDocument = false;
@@ -566,18 +909,383 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   }
 
   onIssueHighlighted(_issue: LanguageIssue): void {
-    // Optional: scroll editor to issue range or select it (Syncfusion selection by offset would go here).
+    // Future: map LanguageIssue offset/context to editor selection
   }
 
-  /** Extract plain text from SFDT JSON by walking sections/blocks/inlines. */
+  onRevertToVersion(versionId: string): void {
+    if (!this.bookId || !this.selectedChapterId) return;
+    this.documentVersionService.get(this.bookId, this.selectedChapterId, versionId).subscribe({
+      next: (detail) => {
+        let sfdt = detail.contentSfdt;
+        if (sfdt) sfdt = this.ensureSfdtRtl(sfdt);
+        if (!this.docEditor?.documentEditor || !sfdt) return;
+        this.isOpeningDocument = true;
+        setTimeout(() => {
+          try {
+            if (this.docEditor?.documentEditor) {
+              this.docEditor.documentEditor.open(sfdt!);
+              this.hasPendingChanges = true;
+              this.contentChanged$.next();
+              this.refreshDocumentPlainText();
+              this.applySuggestionHighlights([]);
+              this.isOpeningDocument = false;
+              this.saveCurrentDocument();
+              // Record revert as history action so the suggestion shows as Reverted in History tab.
+              const analysisId = detail.analysisResultId ?? detail.analysisId;
+              if (this.bookId && this.selectedChapterId && analysisId && detail.originalText != null && detail.suggestedText != null) {
+                this.analysisService
+                  .saveSuggestionOutcome(this.bookId, this.selectedChapterId, analysisId, detail.originalText, detail.suggestedText, 'Reverted')
+                  .subscribe({
+                    next: () => {
+                      // Defer refresh so server has committed and GET returns updated outcomes; force panel to reload history and versions and update view.
+                      setTimeout(() => {
+                        this.analysisPanel?.refreshHistory();
+                        this.analysisPanel?.refreshVersions();
+                      }, 100);
+                    },
+                    error: () => {}
+                  });
+              }
+            }
+          } finally {
+            this.isOpeningDocument = false;
+          }
+        }, 0);
+      },
+      error: () => {}
+    });
+  }
+
+  /**
+   * Scroll the editor into view and select the text range for the suggestion.
+   *
+   * Uses Syncfusion Search API (find + navigate) when originalText is provided, so
+   * selection uses the editor's own coordinate system. We do not use hierarchical-index
+   * fallback because it incorrectly moves the cursor to the start; the same range is
+   * already shown via yellow highlights from applySuggestionHighlights.
+   */
+  selectRangeInEditor(payload: { startOffset: number; endOffset: number; originalText?: string }): void {
+    const editor = this.docEditor?.documentEditor;
+    if (!editor) return;
+
+    const originalText = payload.originalText?.trim();
+
+    const doSelect = (): void => {
+      try {
+        const searchModule = (editor as unknown as { searchModule?: { find: (text: string) => { startOffset: string; endOffset: string } | null; navigate: (r: { startOffset: string; endOffset: string }) => void } }).searchModule;
+        if (originalText && searchModule?.find && searchModule?.navigate) {
+          const result = searchModule.find(originalText);
+          if (result?.startOffset != null && result?.endOffset != null) {
+            searchModule.navigate(result);
+            editor.focusIn();
+            return;
+          }
+        }
+        // No selection change when Search doesn't find the text – avoids moving cursor to start.
+        // The word is already highlighted yellow via applySuggestionHighlights.
+      } catch {
+        // ignore
+      }
+    };
+
+    const el = this.docEditor?.element;
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    requestAnimationFrame(() => {
+      setTimeout(doSelect, 150);
+    });
+  }
+
+  /**
+   * Apply or clear visible highlights in the document for proofread suggestion ranges.
+   * Modifies the SFDT directly (so we don't rely on selectByHierarchicalIndex, which
+   * can yield empty selection when the runtime structure differs). Re-opens the document
+   * with highlights applied. Highlights are stripped before save.
+   */
+  applySuggestionHighlights(ranges: { startOffset: number; endOffset: number }[]): void {
+    const editor = this.docEditor?.documentEditor;
+    if (!editor || !this.selectedChapterId) return;
+
+    this.lastSuggestionRanges = ranges.slice();
+
+    try {
+      let sfdt = editor.serialize();
+      sfdt = this.stripHighlightFromSfdt(sfdt);
+
+      if (ranges.length > 0) {
+        const docLen = this.getTextFromSfdt(sfdt).length || this.getPlainTextFromEditor().length;
+        const validRanges = ranges.filter(({ startOffset, endOffset }) => {
+          const spanLen = endOffset - startOffset;
+          return docLen <= 0 || spanLen < docLen * 0.9;
+        });
+        sfdt = this.applyHighlightRangesToSfdt(sfdt, validRanges);
+      }
+
+      this.isOpeningDocument = true;
+      setTimeout(() => {
+        try {
+          if (this.docEditor?.documentEditor && this.selectedChapterId) {
+            this.docEditor.documentEditor.open(sfdt);
+          }
+        } finally {
+          this.isOpeningDocument = false;
+        }
+      }, 0);
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Apply Yellow highlight to the given plain-text character ranges in the SFDT.
+   * Uses the same key convention as the serialized document (standard or Syncfusion v32 optimized).
+   */
+  private applyHighlightRangesToSfdt(
+    sfdtString: string,
+    ranges: { startOffset: number; endOffset: number }[]
+  ): string {
+    if (ranges.length === 0) return sfdtString;
+    try {
+      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
+      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
+      let running = 0; // normalized character count (ranges are in normalized document text)
+
+      for (const section of sections) {
+        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
+        for (const block of blocks) {
+          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
+          const newInlines: Record<string, unknown>[] = [];
+          const inlinesKey = block['inlines'] != null ? 'inlines' : 'i';
+          const textKey = this.detectTextKey(inlines);
+          const cfKey = this.detectCharacterFormatKey(inlines);
+
+          for (const inline of inlines) {
+            const text = inline['text'] ?? inline['tlp'];
+            if (typeof text !== 'string') {
+              newInlines.push({ ...inline });
+              continue;
+            }
+            const normLen = normalizeTextForAnalysis(text).length;
+            const blockStart = running;
+            const blockEnd = running + normLen;
+            running = blockEnd;
+
+            const spans = this.getHighlightSpansInRange(blockStart, blockEnd, ranges);
+            if (spans.length === 0) {
+              newInlines.push(this.inlineWithoutHighlight(inline, cfKey));
+              continue;
+            }
+
+            let posRaw = 0;
+            for (const [spanStart, spanEnd] of spans) {
+              const startNormInInline = spanStart - blockStart;
+              const endNormInInline = spanEnd - blockStart;
+              const startRaw = normalizedOffsetToRawOffset(text, startNormInInline);
+              const endRaw = normalizedOffsetToRawOffset(text, endNormInInline);
+              if (startRaw > posRaw) {
+                newInlines.push(this.createInlineForHighlight(text.slice(posRaw, startRaw), inline, false, textKey, cfKey));
+              }
+              if (endRaw > startRaw) {
+                newInlines.push(this.createInlineForHighlight(text.slice(startRaw, endRaw), inline, true, textKey, cfKey));
+              }
+              posRaw = endRaw;
+            }
+            if (posRaw < text.length) {
+              newInlines.push(this.createInlineForHighlight(text.slice(posRaw), inline, false, textKey, cfKey));
+            }
+          }
+
+          block[inlinesKey] = newInlines;
+        }
+      }
+
+      return JSON.stringify(doc);
+    } catch {
+      return sfdtString;
+    }
+  }
+
+  private getHighlightSpansInRange(
+    blockStart: number,
+    blockEnd: number,
+    ranges: { startOffset: number; endOffset: number }[]
+  ): Array<[number, number]> {
+    const spans: Array<[number, number]> = [];
+    for (const { startOffset, endOffset } of ranges) {
+      const start = Math.max(blockStart, startOffset);
+      const end = Math.min(blockEnd, endOffset);
+      if (start < end) spans.push([start, end]);
+    }
+    return spans.sort((a, b) => a[0] - b[0]);
+  }
+
+  private detectTextKey(inlines: Array<Record<string, unknown>>): 'text' | 'tlp' {
+    for (const inline of inlines) {
+      if (inline['tlp'] !== undefined) return 'tlp';
+      if (inline['text'] !== undefined) return 'text';
+    }
+    return 'text';
+  }
+
+  private detectCharacterFormatKey(inlines: Array<Record<string, unknown>>): 'characterFormat' | 'cf' {
+    for (const inline of inlines) {
+      if (inline['cf'] !== undefined) return 'cf';
+      if (inline['characterFormat'] !== undefined) return 'characterFormat';
+    }
+    return 'characterFormat';
+  }
+
+  private inlineWithoutHighlight(inline: Record<string, unknown>, cfKey: string): Record<string, unknown> {
+    const out = { ...inline };
+    const cf = out[cfKey] as Record<string, unknown> | undefined;
+    if (cf && typeof cf === 'object') {
+      const fmt = { ...cf };
+      delete fmt['highlightColor'];
+      delete fmt['hc'];
+      out[cfKey] = fmt;
+    }
+    return out;
+  }
+
+  private createInlineForHighlight(
+    text: string,
+    template: Record<string, unknown>,
+    highlight: boolean,
+    textKey: string,
+    cfKey: string
+  ): Record<string, unknown> {
+    const out = { ...template };
+    out[textKey] = text;
+
+    const cf = template[cfKey] as Record<string, unknown> | undefined;
+    const fmt = (cf && typeof cf === 'object') ? { ...cf } : {};
+    if (highlight) {
+      fmt['highlightColor'] = 'Yellow';
+      fmt['hc'] = 'Yellow';
+    } else {
+      delete fmt['highlightColor'];
+      delete fmt['hc'];
+    }
+    out[cfKey] = fmt;
+    return out;
+  }
+
+  /**
+   * Remove all highlight formatting from SFDT JSON so saved document does not persist suggestion highlights.
+   * Handles both standard keys and Syncfusion v32 optimized keys.
+   */
+  private stripHighlightFromSfdt(sfdtString: string): string {
+    try {
+      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
+      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
+      for (const section of sections) {
+        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
+        for (const block of blocks) {
+          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
+          for (const inline of inlines) {
+            const cf = inline['characterFormat'] ?? inline['cf'];
+            if (cf && typeof cf === 'object') {
+              const fmt = cf as Record<string, unknown>;
+              delete fmt['highlightColor'];
+              delete fmt['hc'];
+            }
+          }
+        }
+      }
+      return JSON.stringify(doc);
+    } catch {
+      return sfdtString;
+    }
+  }
+
+  /**
+   * Convert a plain-text character offset (matching getTextFromSfdt output) to a
+   * Syncfusion hierarchical position string. Syncfusion expects four segments for body content:
+   * "sectionIndex;bodyIndex;blockIndex;offset" so that getBodyWidget consumes two segments
+   * and getParagraphInternal gets "blockIndex;offset". We use bodyIndex 0 for main content.
+   *
+   * Walks sections → blocks → inlines in the same order as getTextFromSfdt so the
+   * running character count stays in sync with the plain text the analysis panel uses.
+   * Uses raw (un-normalized) lengths so the returned position is valid for the actual SFDT.
+   */
+  private plainOffsetToSfdtPosition(sfdtString: string, plainOffset: number): string | null {
+    try {
+      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
+      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
+      let running = 0;
+      let lastPos = '0;0;0;0';
+      for (let si = 0; si < sections.length; si++) {
+        const section = sections[si];
+        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
+        for (let bi = 0; bi < blocks.length; bi++) {
+          const block = blocks[bi];
+          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
+          let blockLen = 0;
+          for (const inline of inlines) {
+            const text = inline['text'] ?? inline['tlp'];
+            if (typeof text === 'string') blockLen += text.length;
+          }
+          if (plainOffset <= running + blockLen) {
+            return `${si};0;${bi};${plainOffset - running}`;
+          }
+          running += blockLen;
+          lastPos = `${si};0;${bi};${blockLen}`;
+        }
+      }
+      return lastPos;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Update currentDocumentPlainText from the editor content (for analysis panel). Call before run so diff uses latest text. */
+  refreshDocumentPlainText(): void {
+    if (!this.docEditor?.documentEditor || !this.selectedChapterId) return;
+    try {
+      const sfdt = this.docEditor.documentEditor.serialize();
+      const text = this.getTextFromSfdt(sfdt);
+      if (text) {
+        this.currentDocumentPlainText = normalizeTextForAnalysis(text);
+        return;
+      }
+    } catch { /* fall through to selection fallback */ }
+    const fallback = this.getPlainTextFromEditor();
+    if (fallback) this.currentDocumentPlainText = normalizeTextForAnalysis(fallback);
+  }
+
+  /** Fallback: extract plain text via Syncfusion's selection API (works regardless of SFDT format). */
+  private getPlainTextFromEditor(): string {
+    const editor = this.docEditor?.documentEditor;
+    if (!editor?.selection) return '';
+    try {
+      const startPos = editor.selection.startOffset;
+      const endPos = editor.selection.endOffset;
+      editor.selection.selectAll();
+      const text = editor.selection.text || '';
+      editor.selection.select(startPos, endPos);
+      return text;
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Extract plain text from SFDT JSON by walking sections/blocks/inlines.
+   * Handles both standard keys and Syncfusion v32 optimized keys (sec, b, i, tlp).
+   */
   private getTextFromSfdt(sfdtString: string): string {
     try {
-      const doc = JSON.parse(sfdtString) as { sections?: Array<{ blocks?: Array<{ inlines?: Array<{ text?: string }> }> }> };
+      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
+      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
       const parts: string[] = [];
-      for (const section of doc.sections ?? []) {
-        for (const block of section.blocks ?? []) {
-          for (const inline of block.inlines ?? []) {
-            if (typeof inline.text === 'string') parts.push(inline.text);
+      for (const section of sections) {
+        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
+        for (const block of blocks) {
+          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
+          for (const inline of inlines) {
+            const text = inline['text'] ?? inline['tlp'];
+            if (typeof text === 'string') parts.push(text);
           }
         }
       }
@@ -590,6 +1298,118 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /** Build minimal SFDT with one paragraph containing the given text (RTL-friendly). */
   private buildMinimalSfdt(text: string): string {
     const escaped = JSON.stringify(text);
-    return `{"sections":[{"blocks":[{"inlines":[{"characterFormat":{},"text":${escaped}}]}],"headersFooters":{}}]}`;
+    return `{"sections":[{"blocks":[{"paragraphFormat":{"bidi":true},"inlines":[{"characterFormat":{"bidi":true},"text":${escaped}}]}],"headersFooters":{}}]}`;
+  }
+
+  /**
+   * Replace the document's plain text with newPlainText inside the existing SFDT structure.
+   * Preserves sections/blocks and key format (standard or optimized). Strips highlights.
+   * When replaceStartOffset/replaceEndOffset/replaceTextLength are provided (range replace),
+   * computes new block boundaries so segments stay aligned after length-changing edits.
+   * Used by Accept suggestion so structure and formatting keys stay correct.
+   */
+  private replacePlainTextInSfdt(
+    sfdtString: string,
+    newPlainText: string,
+    replaceStartOffset?: number,
+    replaceEndOffset?: number,
+    replaceTextLength?: number
+  ): string {
+    try {
+      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
+      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
+
+      // Collect character length per block using normalized text (same order as getTextFromSfdt)
+      const blockLengths: number[] = [];
+      for (const section of sections) {
+        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
+        for (const block of blocks) {
+          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
+          let raw = '';
+          for (const inline of inlines) {
+            const t = inline['text'] ?? inline['tlp'];
+            if (typeof t === 'string') raw += t;
+          }
+          blockLengths.push(normalizeTextForAnalysis(raw).length);
+        }
+      }
+
+      let segments: string[];
+      const hasReplaceRange =
+        replaceStartOffset != null && replaceEndOffset != null && replaceTextLength != null;
+
+      if (hasReplaceRange && blockLengths.length > 0) {
+        // Compute new end position for each block after the replacement so segment slicing matches newPlainText length.
+        const offsetDelta = replaceTextLength - (replaceEndOffset - replaceStartOffset);
+        let running = 0;
+        const newEnds: number[] = [];
+        for (const len of blockLengths) {
+          const blockStart = running;
+          const blockEnd = running + len;
+          running = blockEnd;
+          if (blockEnd <= replaceStartOffset) {
+            newEnds.push(blockEnd);
+          } else if (blockStart >= replaceEndOffset) {
+            newEnds.push(blockEnd + offsetDelta);
+          } else if (blockEnd <= replaceEndOffset) {
+            newEnds.push(replaceStartOffset + replaceTextLength);
+          } else {
+            newEnds.push(replaceStartOffset + replaceTextLength + (blockEnd - replaceEndOffset));
+          }
+        }
+        segments = [];
+        let prev = 0;
+        for (const end of newEnds) {
+          segments.push(newPlainText.slice(prev, end));
+          prev = end;
+        }
+      } else {
+        // No range replace or single block: split by original block lengths
+        segments = [];
+        let pos = 0;
+        if (blockLengths.length === 0) {
+          segments.push(newPlainText);
+        } else {
+          for (let i = 0; i < blockLengths.length; i++) {
+            const len = blockLengths[i];
+            if (i === blockLengths.length - 1) {
+              segments.push(newPlainText.slice(pos));
+            } else {
+              segments.push(newPlainText.slice(pos, pos + len));
+              pos += len;
+            }
+          }
+        }
+      }
+
+      // Replace each block's inlines with a single inline containing the segment
+      let segIdx = 0;
+      const isRtl = this.editorDirection === 'rtl';
+      for (const section of sections) {
+        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
+        for (const block of blocks) {
+          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
+          const inlinesKey = block['inlines'] != null ? 'inlines' : 'i';
+          const textKey = this.detectTextKey(inlines);
+          const cfKey = this.detectCharacterFormatKey(inlines);
+          const segment = segments[segIdx++] ?? '';
+          let template = inlines[0] ?? {};
+          // Preserve RTL so Accept doesn't strip bidi from the document
+          if (isRtl) {
+            const pf = block['paragraphFormat'] ?? block['pf'];
+            if (pf && typeof pf === 'object') (pf as Record<string, unknown>)['bidi'] = true;
+            const tCf = template[cfKey] as Record<string, unknown> | undefined;
+            if (tCf && typeof tCf === 'object') tCf['bidi'] = true;
+            else if (cfKey) template = { ...template, [cfKey]: { ...(template[cfKey] as object), bidi: true } };
+          }
+          const newInline = this.createInlineForHighlight(segment, template, false, textKey, cfKey);
+          block[inlinesKey] = [newInline];
+        }
+      }
+
+      return JSON.stringify(doc);
+    } catch {
+      return sfdtString;
+    }
   }
 }
