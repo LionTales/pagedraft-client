@@ -706,19 +706,6 @@ export class AnalysisPanelComponent implements OnChanges {
     return !!r && (r.analysisType || r.type) === 'Proofread' && this.proofreadSuggestions.length === 0;
   }
 
-  private isResultNearlySameAsDocument(result: AnalysisResultDto): boolean {
-    if (!this.documentText?.trim() || !result.resultText?.trim()) return false;
-    const a = this.documentText.trim().replace(/\s+/g, ' ');
-    const b = result.resultText.trim().replace(/\s+/g, ' ');
-    if (a.length === 0 && b.length === 0) return true;
-    const minLen = Math.min(a.length, b.length);
-    const maxLen = Math.max(a.length, b.length);
-    if (maxLen > 0 && minLen / maxLen < 0.95) return false;
-    let match = 0;
-    for (let i = 0; i < minLen; i++) if (a[i] === b[i]) match++;
-    return match / minLen >= 0.98;
-  }
-
   /** Proofread suggestions for the currently selected history item (from diff of original doc vs resultText). Uses stored original document text when available so accepted suggestions still appear. */
   get proofreadSuggestionsForHistory(): AnalysisSuggestion[] {
     const current = this.history[this.selectedIndex];

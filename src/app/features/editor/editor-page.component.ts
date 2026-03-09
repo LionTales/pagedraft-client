@@ -125,7 +125,7 @@ import { normalizeTextForAnalysis, normalizedOffsetToRawOffset } from '../../cor
             [documentText]="currentDocumentPlainText"
             [documentChapterId]="documentOwnerChapterId"
             [documentSceneId]="documentOwnerSceneId"
-            [saveBeforeRun]="getSaveBeforeRun()"
+            [saveBeforeRun]="saveBeforeRun"
             (analysisStarted)="onAnalysisStarted()"
             (analysisCompleted)="onAnalysisCompleted()"
             (analysisStatus)="onAnalysisStatus($event)"
@@ -783,9 +783,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   }
 
   /** Callback for analysis panel: save before run so analysis uses latest content. */
-  getSaveBeforeRun(): () => Promise<void> {
-    return () => this.saveCurrentDocumentPromise();
-  }
+  readonly saveBeforeRun = () => this.saveCurrentDocumentPromise();
 
   /** Called when analysis panel starts a run or stream; shows overlay and freezes UI. */
   onAnalysisStarted(): void {
