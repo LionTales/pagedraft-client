@@ -737,7 +737,9 @@ export class AnalysisPanelComponent implements OnChanges {
 
   /** Stable key for a Proofread run + suggestion (chapterId, sceneId, createdAt, original, suggested). Use so Accepted/Dismissed match for same run whether from API or streaming. */
   private proofreadRunKey(r: AnalysisResultDto, s: { original: string; suggested: string }): string {
-    return `${this.proofreadRunKeyForResult(r)}-${s.original}-${s.suggested}`;
+    const o = this.normalizeKeyText(s.original);
+    const g = this.normalizeKeyText(s.suggested);
+    return `${this.proofreadRunKeyForResult(r)}-${o}-${g}`;
   }
 
   /** Key for a Proofread suggestion outcome. Uses id when available (persisted run) so it matches API-stored outcomes; otherwise run key for streaming. */
@@ -1378,7 +1380,8 @@ export class AnalysisPanelComponent implements OnChanges {
   }
 
   runAnalysis(): void {
-    if (!this.bookId || !this.chapterId || !this.canRun) return;
+    if (!this.bookId || !this.chapterId || !this.canRun || this.isRunning) return;
+    this.isRunning = true;
     this.runAnalysisAfterSave();
   }
 
@@ -1395,7 +1398,12 @@ export class AnalysisPanelComponent implements OnChanges {
       setTimeout(() => this.doRunAnalysis(), 0);
     };
     if (this.saveBeforeRun) {
-      this.saveBeforeRun().then(run);
+      this.saveBeforeRun()
+        .then(run)
+        .catch(() => {
+          this.isRunning = false;
+          this.analysisCompleted.emit();
+        });
     } else {
       run();
     }
@@ -1500,8 +1508,9 @@ export class AnalysisPanelComponent implements OnChanges {
   }
 
   runStreaming(): void {
-    if (!this.bookId || !this.chapterId || !this.canRun) return;
+    if (!this.bookId || !this.chapterId || !this.canRun || this.isRunning) return;
     const run = () => {
+      this.isRunning = true;
       this.analysisStarted.emit();
       this.emitInitialStatusForRun(true);
       this.runStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -1511,7 +1520,12 @@ export class AnalysisPanelComponent implements OnChanges {
       setTimeout(() => this.doRunStreaming(), 0);
     };
     if (this.saveBeforeRun) {
-      this.saveBeforeRun().then(run);
+      this.saveBeforeRun()
+        .then(run)
+        .catch(() => {
+          this.isRunning = false;
+          this.analysisCompleted.emit();
+        });
     } else {
       run();
     }
@@ -1587,6 +1601,45 @@ export class AnalysisPanelComponent implements OnChanges {
     this.analysisStatus.emit(`Running ${label}${suffix}`);
   }
 
+  /** Emit a human-readable status + numeric progress for a given progress snapshot. Returns the normalized status. */
+  private handleProgressUpdate(p: AnalysisProgressDto): string {
+    const status = (p.status || '').toLowerCase();
+    const current = p.currentChunk;
+    const total = p.totalChunks || 0;
+    let phase: string;
+    if (status === 'failed') {
+      phase = 'failed – see error message';
+    } else if (status === 'canceled') {
+      phase = 'canceled';
+    } else if (total > 0 && current === 1) {
+      phase = 'analyzing first part…';
+    } else if (total > 0 && current === total) {
+      phase = 'final part…';
+    } else if (total > 0 && current > 1) {
+      phase = 'analyzing middle sections…';
+    } else if (status === 'pending') {
+      phase = 'preparing chunks…';
+    } else {
+      phase = 'running…';
+    }
+
+    const prefix = total > 0 && current > 0
+      ? `Proofread ${current}/${total}`
+      : total > 0
+        ? `Proofread 0/${total}`
+        : 'Proofread';
+
+    const message = `${prefix} – ${phase}`;
+    this.analysisStatus.emit(message);
+
+    if (typeof p.estimatedCompletionPercent === 'number' && p.estimatedCompletionPercent >= 0) {
+      this.currentProgressPercent = Math.max(0, Math.min(100, p.estimatedCompletionPercent));
+      this.analysisProgressPercent.emit(this.currentProgressPercent);
+    }
+
+    return status;
+  }
+
   /** Start polling backend analysis progress for a chunked Proofread run, emitting status updates for the editor overlay. */
   private startProgressPollingIfNeeded(result: AnalysisResultDto): void {
     const type = result.analysisType || result.type;
@@ -1601,43 +1654,12 @@ export class AnalysisPanelComponent implements OnChanges {
       .subscribe({
         next: (p: AnalysisProgressDto) => {
           if (!p) return;
-          const status = (p.status || '').toLowerCase();
-          const current = p.currentChunk;
-          const total = p.totalChunks || 0;
-          let phase: string;
-          if (status === 'failed') {
-            phase = 'failed – see error message';
-          } else if (status === 'canceled') {
-            phase = 'canceled';
-          } else if (total > 0 && current === 1) {
-            phase = 'analyzing first part…';
-          } else if (total > 0 && current === total) {
-            phase = 'final part…';
-          } else if (total > 0 && current > 1) {
-            phase = 'analyzing middle sections…';
-          } else if (status === 'pending') {
-            phase = 'preparing chunks…';
-          } else {
-            phase = 'running…';
-          }
-
-          const prefix = total > 0 && current > 0
-            ? `Proofread ${current}/${total}`
-            : total > 0
-              ? `Proofread 0/${total}`
-              : 'Proofread';
-
-          const message = `${prefix} – ${phase}`;
-          this.analysisStatus.emit(message);
-
-          if (typeof p.estimatedCompletionPercent === 'number' && p.estimatedCompletionPercent >= 0) {
-            this.currentProgressPercent = Math.max(0, Math.min(100, p.estimatedCompletionPercent));
-            this.analysisProgressPercent.emit(this.currentProgressPercent);
-          }
-
+          const status = this.handleProgressUpdate(p);
           if (status === 'succeeded' || status === 'failed' || status === 'canceled') {
             this.progressStop$.next();
-            this.currentProgressPercent = status === 'succeeded' ? 100 : this.currentProgressPercent;
+            if (status === 'succeeded') {
+              this.currentProgressPercent = 100;
+            }
             this.analysisProgressPercent.emit(this.currentProgressPercent);
           }
         },
@@ -1664,40 +1686,7 @@ export class AnalysisPanelComponent implements OnChanges {
       .subscribe({
         next: (p: AnalysisProgressDto) => {
           if (!p) return;
-          const status = (p.status || '').toLowerCase();
-          const current = p.currentChunk;
-          const total = p.totalChunks || 0;
-          let phase: string;
-          if (status === 'failed') {
-            phase = 'failed – see error message';
-          } else if (status === 'canceled') {
-            phase = 'canceled';
-          } else if (total > 0 && current === 1) {
-            phase = 'analyzing first part…';
-          } else if (total > 0 && current === total) {
-            phase = 'final part…';
-          } else if (total > 0 && current > 1) {
-            phase = 'analyzing middle sections…';
-          } else if (status === 'pending') {
-            phase = 'preparing chunks…';
-          } else {
-            phase = 'running…';
-          }
-
-          const prefix = total > 0 && current > 0
-            ? `Proofread ${current}/${total}`
-            : total > 0
-              ? `Proofread 0/${total}`
-              : 'Proofread';
-
-          const message = `${prefix} – ${phase}`;
-          this.analysisStatus.emit(message);
-
-          // Emit numeric progress for the editor overlay progress bar when available.
-          if (typeof p.estimatedCompletionPercent === 'number' && p.estimatedCompletionPercent >= 0) {
-            this.currentProgressPercent = Math.max(0, Math.min(100, p.estimatedCompletionPercent));
-            this.analysisProgressPercent.emit(this.currentProgressPercent);
-          }
+          const status = this.handleProgressUpdate(p);
 
           if (status === 'succeeded') {
             this.progressStop$.next();

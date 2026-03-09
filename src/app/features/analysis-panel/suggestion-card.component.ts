@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 import { AnalysisSuggestion } from '../../core/models/analysis';
 import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proofread-diff';
 
@@ -154,7 +154,7 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
     }
   `]
 })
-export class SuggestionCardComponent {
+export class SuggestionCardComponent implements OnChanges {
   @Input() suggestion!: AnalysisSuggestion;
   /** When true, show status badge (Accepted/Dismissed) and hide action buttons. Used in History tab. */
   @Input() readOnly = false;
@@ -163,6 +163,22 @@ export class SuggestionCardComponent {
   @Output() accept = new EventEmitter<AnalysisSuggestion>();
   @Output() dismiss = new EventEmitter<AnalysisSuggestion>();
   @Output() showInDocument = new EventEmitter<AnalysisSuggestion>();
+
+  private _originalFragments: DiffFragment[] = [];
+  private _suggestedFragments: DiffFragment[] = [];
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['suggestion']) {
+      if (!this.suggestion || this.suggestion.original === this.suggestion.suggested) {
+        this._originalFragments = [];
+        this._suggestedFragments = [];
+      } else {
+        const diff = getSuggestionDiffFragments(this.suggestion.original, this.suggestion.suggested);
+        this._originalFragments = diff.originalFragments;
+        this._suggestedFragments = diff.suggestedFragments;
+      }
+    }
+  }
 
   onFieldsClick(): void {
     if (!this.readOnly && this.suggestion.startOffset != null && this.suggestion.endOffset != null) {
@@ -182,12 +198,10 @@ export class SuggestionCardComponent {
   }
 
   get originalFragments(): DiffFragment[] {
-    if (!this.suggestion || this.suggestion.original === this.suggestion.suggested) return [];
-    return getSuggestionDiffFragments(this.suggestion.original, this.suggestion.suggested).originalFragments;
+    return this._originalFragments;
   }
 
   get suggestedFragments(): DiffFragment[] {
-    if (!this.suggestion || this.suggestion.original === this.suggestion.suggested) return [];
-    return getSuggestionDiffFragments(this.suggestion.original, this.suggestion.suggested).suggestedFragments;
+    return this._suggestedFragments;
   }
 }
