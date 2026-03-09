@@ -8,6 +8,12 @@ export interface ApplyCorrectionEvent {
   text: string;
   startOffset?: number;
   endOffset?: number;
+  /** Optional: original text that was replaced (for version label / display). */
+  originalText?: string;
+  /** Optional: analysis result id when applying a proofread suggestion (for version history / revert outcome). */
+  analysisId?: string;
+  /** When true, do not create a new document version (e.g. Redo re-applies an existing suggestion without adding another revert snapshot). */
+  skipCreatingVersion?: boolean;
 }
 
 @Component({
