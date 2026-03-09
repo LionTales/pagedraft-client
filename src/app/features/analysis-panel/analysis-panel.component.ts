@@ -953,10 +953,13 @@ export class AnalysisPanelComponent implements OnChanges {
     current?: AnalysisResultDto
   ): AnalysisSuggestion[] {
     if (!current) return suggestions.map(s => ({ ...s }));
-    const keyPrefix = `${current.id}-`;
+    const id = (current.id || '').toLowerCase();
+    const keyPrefix = `${id}-`;
     return suggestions
       .filter(s => {
-        const key = `${keyPrefix}${s.original}-${s.suggested}`;
+        const orig = this.normalizeKeyText(s.original);
+        const sugg = this.normalizeKeyText(s.suggested);
+        const key = `${keyPrefix}${orig}-${sugg}`;
         return !this.dismissedLineEditKeys.has(key) && !this.acceptedLineEditKeys.has(key);
       })
       .map(s => {
@@ -982,11 +985,12 @@ export class AnalysisPanelComponent implements OnChanges {
     const matchedOutcomeKeys = new Set<string>();
 
     if (embedded?.length) {
-      const keyPrefix = `${current.id}-`;
+      const id = (current.id || '').toLowerCase();
+      const keyPrefix = `${id}-`;
       for (const s of suggestions) {
         const orig = this.normalizeKeyText(s.original);
         const sugg = this.normalizeKeyText(s.suggested);
-        const key = `${keyPrefix}${s.original}-${s.suggested}`;
+        const key = `${keyPrefix}${orig}-${sugg}`;
         if (this.acceptedLineEditKeys.has(key)) {
           result.push({ suggestion: s, status: 'accepted' as const });
           matchedOutcomeKeys.add(`${orig}|${sugg}`);
@@ -1016,9 +1020,12 @@ export class AnalysisPanelComponent implements OnChanges {
       }
       return result.sort((a, b) => AnalysisPanelComponent.suggestionStatusOrder(a.status) - AnalysisPanelComponent.suggestionStatusOrder(b.status));
     }
-    const keyPrefix = `${current.id}-`;
+    const id = (current.id || '').toLowerCase();
+    const keyPrefix = `${id}-`;
     const keyBased = suggestions.map(s => {
-      const key = `${keyPrefix}${s.original}-${s.suggested}`;
+      const orig = this.normalizeKeyText(s.original);
+      const sugg = this.normalizeKeyText(s.suggested);
+      const key = `${keyPrefix}${orig}-${sugg}`;
       if (this.acceptedLineEditKeys.has(key)) return { suggestion: s, status: 'accepted' as const };
       if (this.dismissedLineEditKeys.has(key)) return { suggestion: s, status: 'dismissed' as const };
       return { suggestion: s, status: 'pending' as const };
@@ -1063,14 +1070,20 @@ export class AnalysisPanelComponent implements OnChanges {
     } else {
       this.applyCorrection.emit({ text: suggestion.suggested, originalText: suggestion.original });
     }
-    this.acceptedLineEditKeys.add(`${current.id}-${suggestion.original}-${suggestion.suggested}`);
+    const id = (current.id || '').toLowerCase();
+    const orig = this.normalizeKeyText(suggestion.original);
+    const sugg = this.normalizeKeyText(suggestion.suggested);
+    this.acceptedLineEditKeys.add(`${id}-${orig}-${sugg}`);
     if (this.bookId && this.chapterId && current.id) {
       this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, current.id, suggestion.original, suggestion.suggested, 'Accepted').subscribe({ error: () => {} });
     }
   }
 
   onLineEditDismiss(suggestion: AnalysisSuggestion, current: AnalysisResultDto): void {
-    this.dismissedLineEditKeys.add(`${current.id}-${suggestion.original}-${suggestion.suggested}`);
+    const id = (current.id || '').toLowerCase();
+    const orig = this.normalizeKeyText(suggestion.original);
+    const sugg = this.normalizeKeyText(suggestion.suggested);
+    this.dismissedLineEditKeys.add(`${id}-${orig}-${sugg}`);
     if (this.bookId && this.chapterId && current.id) {
       this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, current.id, suggestion.original, suggestion.suggested, 'Dismissed').subscribe({ error: () => {} });
     }

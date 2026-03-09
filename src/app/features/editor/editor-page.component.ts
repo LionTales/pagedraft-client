@@ -449,6 +449,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       if (ev.bookId !== this.bookId) return;
       this.loadScenesForChapter(ev.chapterId);
     });
+
+    window.addEventListener('beforeunload', this.handleBeforeUnload);
   }
 
   private loadScenesForChapter(chapterId: string): void {
@@ -539,10 +541,18 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    window.removeEventListener('beforeunload', this.handleBeforeUnload);
     if (this.bookId) this.syncService.leaveBook(this.bookId);
     this.destroy$.next();
     this.destroy$.complete();
   }
+
+  private handleBeforeUnload = (event: BeforeUnloadEvent): void => {
+    if (this.hasPendingChanges) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  };
 
   /** Valid empty SFDT with one paragraph so selection/layout have a valid target (avoids Syncfusion length/currentWidget errors). RTL-friendly for Hebrew. */
   private static readonly EMPTY_SFDT = '{"sections":[{"blocks":[{"paragraphFormat":{"bidi":true},"inlines":[{"characterFormat":{"bidi":true},"text":""}]}],"headersFooters":{}}]}';
