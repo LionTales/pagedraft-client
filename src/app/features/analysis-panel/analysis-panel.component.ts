@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subject } from 'rxjs';
 import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, PromptTemplateDto, SuggestionOutcomeDto, AnalysisProgressDto, RunAnalysisRequest } from '../../core/models/analysis';
@@ -603,7 +603,7 @@ import { SuggestionCardComponent } from './suggestion-card.component';
     .btn-revert, .btn-redo { flex-shrink: 0; }
   `]
 })
-export class AnalysisPanelComponent implements OnChanges {
+export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   @Input() bookId: string | null = null;
   @Input() chapterId: string | null = null;
   @Input() sceneId: string | null = null;
@@ -678,6 +678,11 @@ export class AnalysisPanelComponent implements OnChanges {
   lastRunDurationLabel: string | null = null;
   /** Latest estimated completion percent for the current Proofread run (0–100). */
   currentProgressPercent: number | null = null;
+
+  ngOnDestroy(): void {
+    this.progressStop$.next();
+    this.progressStop$.complete();
+  }
 
   constructor(
     private analysisService: AnalysisService,
@@ -1111,7 +1116,6 @@ export class AnalysisPanelComponent implements OnChanges {
     } else {
       this.applyCorrection.emit({ text: s.suggested, originalText: s.original, analysisId: this.latestResult?.id ?? undefined });
     }
-    this.proofreadSuggestions = this.proofreadSuggestions.filter(x => x !== s);
     if (this.latestResult) {
       const key = this.proofreadSuggestionKey(this.latestResult, s);
       this.acceptedProofreadHistoryKeys.add(key);
@@ -1119,6 +1123,10 @@ export class AnalysisPanelComponent implements OnChanges {
         this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, this.latestResult.id, s.original, s.suggested, 'Accepted').subscribe({ error: () => {} });
       }
     }
+    // Clear current suggestions and re-diff against the updated document text on the next documentText change,
+    // so remaining suggestions get fresh offsets that match the modified document.
+    this.proofreadSuggestions = [];
+    this.hasRestoredProofreadForCurrentContext = false;
     this.emitSuggestionRanges();
     this.cdr.detectChanges();
   }
@@ -1153,6 +1161,11 @@ export class AnalysisPanelComponent implements OnChanges {
     if (this.bookId && this.chapterId && current.id) {
       this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, current.id, s.original, s.suggested, 'Accepted').subscribe({ error: () => {} });
     }
+    // After accepting from History, recompute Run-tab suggestions against the updated document
+    // on the next documentText change so offsets and highlights stay in sync.
+    this.proofreadSuggestions = [];
+    this.hasRestoredProofreadForCurrentContext = false;
+    this.emitSuggestionRanges();
   }
 
   onProofreadHistoryDismiss(s: AnalysisSuggestion, current: AnalysisResultDto): void {
