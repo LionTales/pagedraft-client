@@ -1,4 +1,4 @@
 {
-  "/api": { "target": "https://localhost:5001", "secure": false },
-  "/hubs": { "target": "https://localhost:5001", "secure": false, "ws": true }
+  "/api":  { "target": "http://localhost:5114", "secure": false },
+  "/hubs": { "target": "http://localhost:5114", "secure": false, "ws": true }
 }
