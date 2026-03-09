@@ -1442,7 +1442,13 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   /** Legacy synchronous /analyze path (kept for short texts and non-Proofread types, and as a fallback). */
   private doRunAnalysisSync(): void {
-    if (!this.bookId || !this.chapterId || !this.canRun) return;
+    if (!this.bookId || !this.chapterId || !this.canRun) {
+      // If we reach the sync fallback but cannot actually run (e.g. chapter changed),
+      // make sure we clear the running state and notify the host so overlays are dismissed.
+      this.isRunning = false;
+      this.analysisCompleted.emit();
+      return;
+    }
     this.isRunning = true;
     this.runError = null;
     this.streamingText = '';
