@@ -1046,29 +1046,6 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       let sfdt = editor.serialize();
       sfdt = this.stripHighlightFromSfdt(sfdt);
 
-      // Debug-only: log how ranges map onto the flattened document text before highlight is applied.
-      try {
-        const flat = this.getTextFromSfdt(sfdt);
-        if (flat && ranges.length) {
-          const maxToLog = Math.min(ranges.length, 10);
-          for (let i = 0; i < maxToLog; i++) {
-            const r = ranges[i];
-            const start = Math.max(0, r.startOffset - 10);
-            const end = Math.min(flat.length, r.endOffset + 10);
-            const context = flat.slice(start, end);
-            // eslint-disable-next-line no-console
-            console.debug('[PageDraft] highlight range debug', {
-              suggestionId: r.suggestionId,
-              startOffset: r.startOffset,
-              endOffset: r.endOffset,
-              context
-            });
-          }
-        }
-      } catch {
-        // best-effort logging only
-      }
-
       if (ranges.length > 0) {
         const docLen = this.getTextFromSfdt(sfdt).length || this.getPlainTextFromEditor().length;
         const validRanges = ranges.filter(({ startOffset, endOffset }) => {
@@ -1083,11 +1060,6 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         try {
           if (this.docEditor?.documentEditor && this.selectedChapterId) {
             this.docEditor.documentEditor.open(sfdt);
-            try {
-              const bm = (this.docEditor.documentEditor as unknown as { getBookmarks?: (includeHidden: boolean) => string[] }).getBookmarks?.(true) ?? [];
-              // eslint-disable-next-line no-console
-              console.debug(`[PageDraft] ${bm.length} bookmark(s) registered after highlight pass`, bm);
-            } catch { /* diagnostic only */ }
           }
         } finally {
           this.isOpeningDocument = false;

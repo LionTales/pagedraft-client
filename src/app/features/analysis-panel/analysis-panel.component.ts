@@ -739,30 +739,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       // best-effort correction only
     }
 
-    // Debug-only: help inspect how backend offsets align with the current document text.
-    try {
-      if (this.documentText && mapped.length) {
-        const doc = this.documentText;
-        mapped.forEach(s => {
-          if (s.startOffset == null || s.endOffset == null) return;
-          const start = Math.max(0, s.startOffset - 10);
-          const end = Math.min(doc.length, s.endOffset + 10);
-          const around = doc.slice(start, end);
-          // eslint-disable-next-line no-console
-          console.debug('[AnalysisPanel] suggestion offset debug', {
-            id: s.id,
-            original: s.original,
-            suggested: s.suggested,
-            startOffset: s.startOffset,
-            endOffset: s.endOffset,
-            context: around
-          });
-        });
-      }
-    } catch {
-      // best-effort logging only
-    }
-
     return mapped;
   }
 
@@ -1176,12 +1152,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     } else {
       this.applyCorrection.emit({ text: s.suggested, originalText: s.original, analysisId: this.latestResult?.id ?? undefined });
     }
-    if (this.latestResult && this.bookId && this.chapterId && s.id) {
+    if (this.latestResult) {
       const key = this.proofreadSuggestionKey(this.latestResult, s);
       this.acceptedProofreadHistoryKeys.add(key);
-      this.analysisService
-        .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Accepted')
-        .subscribe({ error: () => {} });
+      if (this.bookId && this.chapterId && this.latestResult.id && s.id) {
+        this.analysisService
+          .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Accepted')
+          .subscribe({ error: () => {} });
+      }
     }
     // Clear current suggestions and re-diff against the updated document text on the next documentText change,
     // so remaining suggestions get fresh offsets that match the modified document.
@@ -1193,12 +1171,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   onProofreadDismiss(s: AnalysisSuggestion): void {
     this.proofreadSuggestions = this.proofreadSuggestions.filter(x => x !== s);
-    if (this.latestResult && this.bookId && this.chapterId && s.id) {
+    if (this.latestResult) {
       const key = this.proofreadSuggestionKey(this.latestResult, s);
       this.dismissedProofreadHistoryKeys.add(key);
-      this.analysisService
-        .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Dismissed')
-        .subscribe({ error: () => {} });
+      if (this.bookId && this.chapterId && this.latestResult.id && s.id) {
+        this.analysisService
+          .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Dismissed')
+          .subscribe({ error: () => {} });
+      }
     }
     this.emitSuggestionRanges();
     this.cdr.detectChanges();
@@ -1432,8 +1412,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           this.acceptedLineEditKeys.clear();
           this.dismissedLineEditKeys.clear();
         }
-        // Populate Accepted/Dismissed key Sets from API *before* restoring Run tab so we filter correctly
-        this.applyEmbeddedSuggestionOutcomes();
         const first = this.allAnalyses[0];
         if (first && (first.analysisType || first.type) === 'Proofread') {
           this.latestResult = first;
@@ -1468,10 +1446,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return merged;
   }
 
-  /** Populate Accepted/Dismissed key Sets from embedded suggestion outcomes (when Suggestions are present on the DTO). */
-  private applyEmbeddedSuggestionOutcomes(): void {
-    // No-op after cleanup: outcomes now come from AnalysisSuggestion.Outcome and in-memory key sets.
-  }
 
   runAnalysis(): void {
     if (!this.bookId || !this.chapterId || !this.canRun || this.isRunning) return;
