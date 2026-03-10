@@ -1,13 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import {
-  AnalysisResultDto,
-  AnalysisSuggestionDto,
-  PromptTemplateDto,
-  RunAnalysisRequest,
-  StartAnalysisJobResponse
-} from '../models/analysis';
+import { AnalysisResultDto, PromptTemplateDto, RunAnalysisRequest, StartAnalysisJobResponse } from '../models/analysis';
 
 @Injectable({ providedIn: 'root' })
 export class AnalysisService {
@@ -31,16 +25,6 @@ export class AnalysisService {
       return this.http.get<AnalysisResultDto[]>(url, { params });
     }
     return this.http.get<AnalysisResultDto[]>(url);
-  }
-
-  /** Load all server-side suggestions for a specific analysis result. */
-  getSuggestions(
-    bookId: string,
-    chapterId: string,
-    analysisId: string
-  ): Observable<AnalysisSuggestionDto[]> {
-    const url = `/api/books/${bookId}/chapters/${chapterId}/analyses/${analysisId}/suggestions`;
-    return this.http.get<AnalysisSuggestionDto[]>(url);
   }
 
   /** Update the Outcome for a single server-side suggestion row (Accepted, Dismissed, Reverted, Superseded). */

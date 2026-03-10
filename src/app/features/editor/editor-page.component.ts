@@ -1209,12 +1209,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     }
 
     const bookmarkType = isStart ? 0 : 1;
-    // Standard SFDT keys
-    out['bookmarkType'] = bookmarkType;
-    out['name'] = name;
-    // Optimized SFDT keys (Syncfusion v21.1+ default): 'bkt' for bookmarkType, 'n' for name
-    out['bkt'] = bookmarkType;
-    out['n'] = name;
+    const useOptimizedKeys = Object.prototype.hasOwnProperty.call(template, 'bkt') ||
+      Object.prototype.hasOwnProperty.call(template, 'n');
+    if (useOptimizedKeys) {
+      // Optimized SFDT keys (Syncfusion v21.1+ default): 'bkt' for bookmarkType, 'n' for name
+      out['bkt'] = bookmarkType;
+      out['n'] = name;
+    } else {
+      // Standard SFDT keys
+      out['bookmarkType'] = bookmarkType;
+      out['name'] = name;
+    }
 
     return out;
   }

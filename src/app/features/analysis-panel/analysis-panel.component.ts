@@ -1171,6 +1171,23 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.cdr.detectChanges();
   }
 
+  private applyExplanationToSuggestionDtos(suggestionId: string, explanation: string): void {
+    const sources: AnalysisResultDto[] = [];
+    if (this.latestResult) {
+      sources.push(this.latestResult);
+    }
+    if (this.allAnalyses?.length) {
+      sources.push(...this.allAnalyses);
+    }
+    for (const result of sources) {
+      if (!result?.suggestions?.length) continue;
+      const dto = result.suggestions.find(x => x.id && x.id === suggestionId);
+      if (dto) {
+        dto.explanation = explanation;
+      }
+    }
+  }
+
   onExplainSuggestion(s: AnalysisSuggestion): void {
     if (!s.id || !this.bookId || !this.chapterId || this.explainingSuggestionId) return;
     this.explainingSuggestionId = s.id;
@@ -1178,6 +1195,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.analysisService.explainSuggestion(this.bookId, this.chapterId, s.id).subscribe({
       next: (res) => {
         s.explanation = res.explanation;
+        this.applyExplanationToSuggestionDtos(s.id!, res.explanation);
         this.explainingSuggestionId = null;
         this.cdr.detectChanges();
       },
