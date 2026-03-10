@@ -923,19 +923,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return status === 'archived';
   }
 
-  /** Re-apply the suggestion (replace original with suggested) and refresh versions and history. */
-  onRedoVersion(v: DocumentVersionDto): void {
-    const analysisId = v.analysisResultId ?? v.analysisId;
-    if (!analysisId || v.originalText == null || v.suggestedText == null) return;
-    this.applyCorrection.emit({
-      text: v.suggestedText,
-      originalText: v.originalText,
-      analysisId,
-      skipCreatingVersion: true
-    });
-    // After redo, caller can refresh versions/history if needed; no legacy SuggestionOutcomeRecord update.
-  }
-
   /** Parse version label "Original: X → Suggested: Y" for display. */
   versionLabelOriginal(label: string | null | undefined): string | null {
     if (!label || !label.includes(' → Suggested: ')) return null;
@@ -1301,6 +1288,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.latestResult = null;
       this.proofreadSuggestions = [];
       this.proofreadSuggestionsUnreliable = false;
+      this.lineEditRunSuggestions = [];
       this.dismissedProofreadHistoryKeys.clear();
       this.acceptedProofreadHistoryKeys.clear();
       this.dismissedLineEditKeys.clear();

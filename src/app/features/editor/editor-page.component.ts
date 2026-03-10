@@ -859,7 +859,10 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   onApplyCorrection(event: ApplyCorrectionEvent): void {
     if (!this.docEditor?.documentEditor || !this.selectedChapterId) return;
     try {
-      const sfdt = this.docEditor.documentEditor.serialize();
+      let sfdt = this.docEditor.documentEditor.serialize();
+      // Always strip suggestion highlights/bookmarks before applying a correction so
+      // the newly opened document does not retain stale highlight formatting.
+      sfdt = this.stripHighlightFromSfdt(sfdt);
       // Offsets from proofread diff are in normalized document text; use currentDocumentPlainText for the slice
       const currentText = this.currentDocumentPlainText || this.getTextFromSfdt(sfdt) || this.getPlainTextFromEditor();
       let startOffset = event.startOffset;
