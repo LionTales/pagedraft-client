@@ -1914,7 +1914,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       const analysisType = analysis.analysisType || analysis.type;
       if (analysisType !== type) continue;
       const suggestions = this.mapDtoSuggestions(analysis);
-      total += suggestions.filter(s => !s.outcome || s.outcome === 'Pending').length;
+      total += suggestions.filter(s => {
+        const outcome = (s.outcome || '').toLowerCase();
+        return !outcome || outcome === 'pending';
+      }).length;
     }
 
     return total;
