@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subject } from 'rxjs';
-import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, PromptTemplateDto, SuggestionOutcomeDto, AnalysisProgressDto, RunAnalysisRequest } from '../../core/models/analysis';
+import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, AnalysisProgressDto, RunAnalysisRequest } from '../../core/models/analysis';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
@@ -103,23 +103,27 @@ import { SuggestionCardComponent } from './suggestion-card.component';
             <app-suggestion-card
               *ngFor="let s of proofreadSuggestions"
               [suggestion]="s"
+              [loadingExplanation]="explainingSuggestionId === s.id"
               (accept)="onProofreadAccept(s)"
               (dismiss)="onProofreadDismiss(s)"
+              (explain)="onExplainSuggestion($event)"
               (showInDocument)="onShowInDocument(s)">
             </app-suggestion-card>
           </div>
         </div>
-        <!-- Line Edit (Run): same as History — overallFeedback + suggestion cards, no raw JSON -->
+        <!-- Line Edit (Run): overallFeedback + server-side suggestion cards -->
         <ng-container *ngIf="latestResult && getLineEdit(latestResult) as lineEdit">
           <article class="result-view">
             <h4>{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
             <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
             <div class="line-edit-suggestions">
               <app-suggestion-card
-                *ngFor="let s of toAnalysisSuggestions(lineEdit.suggestions, latestResult)"
+                *ngFor="let s of lineEditRunSuggestions"
                 [suggestion]="s"
+                [loadingExplanation]="explainingSuggestionId === s.id"
                 (accept)="onLineEditAccept(s, latestResult)"
                 (dismiss)="onLineEditDismiss(s, latestResult)"
+                (explain)="onExplainSuggestion($event)"
                 (showInDocument)="onShowInDocument(s)">
               </app-suggestion-card>
             </div>
@@ -183,7 +187,9 @@ import { SuggestionCardComponent } from './suggestion-card.component';
                   *ngFor="let item of filteredProofreadHistoryItemsWithStatus"
                   [suggestion]="item.suggestion"
                   [readOnly]="true"
-                  [status]="item.status">
+                  [status]="item.status"
+                  [loadingExplanation]="explainingSuggestionId === item.suggestion.id"
+                  (explain)="onExplainSuggestion($event)">
                 </app-suggestion-card>
               </div>
             </div>
@@ -204,7 +210,9 @@ import { SuggestionCardComponent } from './suggestion-card.component';
                 *ngFor="let item of filteredLineEditSuggestionsWithStatus(current)"
                 [suggestion]="item.suggestion"
                 [readOnly]="true"
-                [status]="item.status">
+                [status]="item.status"
+                [loadingExplanation]="explainingSuggestionId === item.suggestion.id"
+                (explain)="onExplainSuggestion($event)">
               </app-suggestion-card>
             </div>
           </ng-container>
@@ -236,7 +244,7 @@ import { SuggestionCardComponent } from './suggestion-card.component';
         <div *ngIf="bookId && chapterId">
           <p class="muted versions-hint">Each accept or save creates a version. Revert to restore the document to that state.</p>
           <div class="versions-list" *ngIf="versions.length; else noVersions">
-            <div class="version-item" *ngFor="let v of versions" [class.version-item-reverted]="isVersionReverted(v)">
+            <div class="version-item" *ngFor="let v of versions">
               <div class="version-info">
                 <span class="version-date">{{ v.createdAt | date:'M/d/yy, h:mm:ss a' }}</span>
                 <ng-container *ngIf="versionLabelOriginal(v.label) && versionLabelSuggested(v.label); else plainLabel">
@@ -248,8 +256,14 @@ import { SuggestionCardComponent } from './suggestion-card.component';
                 </ng-template>
               </div>
               <div class="version-actions">
-                <button type="button" class="run-btn secondary btn-redo" *ngIf="isVersionReverted(v)" (click)="onRedoVersion(v)">Redo suggestion</button>
-                <button type="button" class="run-btn secondary btn-revert" *ngIf="!isVersionReverted(v)" (click)="onRevert(v.id)">Revert</button>
+                <button
+                  type="button"
+                  class="run-btn secondary btn-revert"
+                  [disabled]="isVersionLocked(v)"
+                  [title]="isVersionLocked(v) ? 'Cannot revert -- a newer analysis was run on the updated text' : ''"
+                  (click)="onRevert(v.id)">
+                  Revert
+                </button>
               </div>
             </div>
           </div>
@@ -623,8 +637,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   /** Optional numeric progress (0–100) for the global analysis spinner. */
   @Output() analysisProgressPercent = new EventEmitter<number | null>();
   @Output() applyCorrection = new EventEmitter<ApplyCorrectionEvent>();
-  @Output() showInDocument = new EventEmitter<{ startOffset: number; endOffset: number; originalText?: string }>();
-  @Output() suggestionRangesChange = new EventEmitter<{ startOffset: number; endOffset: number }[]>();
+  @Output() showInDocument = new EventEmitter<{ suggestionId?: string; startOffset: number; endOffset: number; originalText?: string }>();
+  @Output() suggestionRangesChange = new EventEmitter<{ suggestionId?: string; startOffset: number; endOffset: number }[]>();
   @Output() revertToVersion = new EventEmitter<string>();
 
   readonly analysisTypes = ANALYSIS_TYPES;
@@ -636,6 +650,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   templates: PromptTemplateDto[] = [];
   history: AnalysisResultDto[] = [];
+  /** All analyses from the API (Active + Archived); History tab shows only Archived. */
+  private allAnalyses: AnalysisResultDto[] = [];
   selectedIndex = 0;
   historyFilterType: string | null = null;
 
@@ -647,7 +663,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   runError: string | null = null;
   /** Latest result shown on Run tab (set when run completes or streaming completes). */
   latestResult: AnalysisResultDto | null = null;
-  /** Proofread suggestions from diff (original vs resultText); shown on Run tab with Accept/Dismiss. */
+  /** Proofread suggestions populated from server-side AnalysisSuggestion rows; shown on Run tab with Accept/Dismiss. */
   proofreadSuggestions: AnalysisSuggestion[] = [];
   /** True when diff produced too many suggestions (likely model returned unrelated content); show "try shorter section" instead of cards. */
   proofreadSuggestionsUnreliable = false;
@@ -665,8 +681,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   private hasRestoredProofreadForCurrentContext = false;
   /** Versions list for the Versions tab (chapter/scene document snapshots). */
   versions: DocumentVersionDto[] = [];
-  /** Suggestion outcomes for the chapter/scene; used to mark reverted versions and enable Redo. */
-  suggestionOutcomes: SuggestionOutcomeDto[] = [];
   /** Filter for History "Suggestions — what happened": show All, only Accepted, only Dismissed, or only Pending. */
   historySuggestionStatusFilter: 'all' | 'accepted' | 'dismissed' | 'reverted' | 'pending' = 'all';
   /** Current progress info for a running proofread job (chunked). */
@@ -678,6 +692,79 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   lastRunDurationLabel: string | null = null;
   /** Latest estimated completion percent for the current Proofread run (0–100). */
   currentProgressPercent: number | null = null;
+  /** Line Edit suggestions for the current Run tab (from server-side AnalysisSuggestion rows). */
+  lineEditRunSuggestions: AnalysisSuggestion[] = [];
+  /** Cached list of Active analyses (by status) for the current chapter/scene, used for re-analysis warnings. */
+  private activeAnalyses: AnalysisResultDto[] = [];
+  /** ID of the suggestion currently being explained via the Why? button (null = none loading). */
+  explainingSuggestionId: string | null = null;
+
+  /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI. */
+  private mapDtoSuggestions(result: AnalysisResultDto | null | undefined): AnalysisSuggestion[] {
+    const list: AnalysisSuggestionDto[] = (result?.suggestions ?? []) || [];
+    const mapped = list.map(dto => ({
+      id: dto.id,
+      startOffset: dto.startOffset,
+      endOffset: dto.endOffset,
+      original: dto.originalText,
+      suggested: dto.suggestedText,
+      reason: dto.reason ?? undefined,
+      category: dto.category ?? undefined,
+      explanation: dto.explanation ?? undefined,
+      outcome: dto.outcome ?? undefined
+    }));
+
+    // Validate and correct offsets: the server's normalized text may differ slightly
+    // from the client's (Syncfusion GetText vs manual SFDT walk). If the slice at the
+    // reported offsets doesn't match originalText, search nearby and fix.
+    try {
+      if (this.documentText && mapped.length) {
+        const doc = this.documentText;
+        const searchRadius = 30;
+        for (const s of mapped) {
+          if (s.startOffset == null || s.endOffset == null || !s.original) continue;
+          const slice = doc.slice(s.startOffset, s.endOffset);
+          if (slice === s.original) continue;
+          const searchStart = Math.max(0, s.startOffset - searchRadius);
+          const searchEnd = Math.min(doc.length, s.endOffset + searchRadius);
+          const region = doc.slice(searchStart, searchEnd);
+          const idx = region.indexOf(s.original);
+          if (idx >= 0) {
+            s.startOffset = searchStart + idx;
+            s.endOffset = s.startOffset + s.original.length;
+          }
+        }
+      }
+    } catch {
+      // best-effort correction only
+    }
+
+    // Debug-only: help inspect how backend offsets align with the current document text.
+    try {
+      if (this.documentText && mapped.length) {
+        const doc = this.documentText;
+        mapped.forEach(s => {
+          if (s.startOffset == null || s.endOffset == null) return;
+          const start = Math.max(0, s.startOffset - 10);
+          const end = Math.min(doc.length, s.endOffset + 10);
+          const around = doc.slice(start, end);
+          // eslint-disable-next-line no-console
+          console.debug('[AnalysisPanel] suggestion offset debug', {
+            id: s.id,
+            original: s.original,
+            suggested: s.suggested,
+            startOffset: s.startOffset,
+            endOffset: s.endOffset,
+            context: around
+          });
+        });
+      }
+    } catch {
+      // best-effort logging only
+    }
+
+    return mapped;
+  }
 
   ngOnDestroy(): void {
     this.progressStop$.next();
@@ -711,11 +798,20 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return !!r && (r.analysisType || r.type) === 'Proofread' && this.proofreadSuggestions.length === 0;
   }
 
-  /** Proofread suggestions for the currently selected history item (from diff of original doc vs resultText). Uses stored original document text when available so accepted suggestions still appear. */
+  /**
+   * Proofread suggestions for the currently selected history item.
+   * Prefer persisted server-side suggestions (AnalysisSuggestionDto) when present,
+   * and fall back to client-side diff of original document vs resultText for legacy runs.
+   */
   get proofreadSuggestionsForHistory(): AnalysisSuggestion[] {
     const current = this.history[this.selectedIndex];
     if (!current || (current.analysisType || current.type) !== 'Proofread' || !current.resultText)
       return [];
+    // When backend AnalysisSuggestion rows exist, use them directly (includes outcome and reason/category).
+    if (current.suggestions && current.suggestions.length) {
+      return this.mapDtoSuggestions(current);
+    }
+    // Legacy/streaming fallback: recompute via diff using stored original document snapshot.
     const runKey = this.proofreadRunKeyForResult(current);
     const originalText = this.proofreadOriginalDocumentByRunKey.get(runKey) ?? this.documentText;
     if (!originalText) return [];
@@ -751,50 +847,39 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return s === 'pending' ? 0 : s === 'accepted' ? 1 : s === 'reverted' ? 2 : 3;
   }
 
-  /** For History tab: each Proofread suggestion with its outcome (accepted/dismissed/pending). Uses embedded suggestionOutcomes when present so status matches API. Merges diff-based suggestions with outcomes: diff suggestions get status from matching outcome; outcomes that don't match any diff suggestion are added as synthetic suggestions (so Accepted/Dismissed still appear after document changed). In-memory keys (dismissed/accepted in this session) take precedence over embedded so they are not lost after Run analysis. */
+  /**
+   * For History tab: each Proofread suggestion with its outcome (accepted/dismissed/reverted/pending).
+   * Preferred path: when server-side suggestions exist, use suggestion.outcome as the source of truth,
+   * with in-memory Accepted/Dismissed keys overriding for the current session.
+   * When no suggestions array exists (very old/streaming runs), fall back to key-based in-memory outcome tracking only.
+   */
   get proofreadHistoryItemsWithStatus(): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
     const current = this.history[this.selectedIndex];
     if (!current) return [];
     const suggestions = this.proofreadSuggestionsForHistory;
-    const embedded = current.suggestionOutcomes;
     const result: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] = [];
-    const matchedOutcomeKeys = new Set<string>();
 
-    if (embedded?.length) {
+    // Preferred: when persisted suggestions exist for this result, rely on suggestion.outcome.
+    if (current.suggestions && current.suggestions.length && suggestions.length) {
       for (const s of suggestions) {
-        const orig = this.normalizeKeyText(s.original);
-        const sugg = this.normalizeKeyText(s.suggested);
         const key = this.proofreadSuggestionKey(current, s);
-        // Prefer in-memory outcome so dismiss/accept in this session are not lost (e.g. after Run analysis without reload)
+        let status: 'accepted' | 'dismissed' | 'reverted' | 'pending';
         if (this.acceptedProofreadHistoryKeys.has(key)) {
-          result.push({ suggestion: s, status: 'accepted' as const });
-          matchedOutcomeKeys.add(`${orig}|${sugg}`);
-          continue;
+          status = 'accepted';
+        } else if (this.dismissedProofreadHistoryKeys.has(key)) {
+          status = 'dismissed';
+        } else {
+          const outcome = (s.outcome || '').toLowerCase();
+          if (outcome === 'accepted') status = 'accepted';
+          else if (outcome === 'dismissed') status = 'dismissed';
+          else if (outcome === 'reverted') status = 'reverted';
+          else status = 'pending';
         }
-        if (this.dismissedProofreadHistoryKeys.has(key)) {
-          result.push({ suggestion: s, status: 'dismissed' as const });
-          matchedOutcomeKeys.add(`${orig}|${sugg}`);
-          continue;
-        }
-        const o = embedded.find(
-          e => this.normalizeKeyText(e.originalText) === orig && this.normalizeKeyText(e.suggestedText) === sugg
-        );
-        const status = o?.outcome === 'Accepted' ? 'accepted' as const : o?.outcome === 'Dismissed' ? 'dismissed' as const : o?.outcome === 'Reverted' ? 'reverted' as const : 'pending' as const;
         result.push({ suggestion: s, status });
-        if (o) matchedOutcomeKeys.add(`${orig}|${sugg}`);
-      }
-      for (const o of embedded) {
-        const orig = this.normalizeKeyText(o.originalText);
-        const sugg = this.normalizeKeyText(o.suggestedText);
-        if (matchedOutcomeKeys.has(`${orig}|${sugg}`)) continue;
-        const status = o.outcome === 'Accepted' ? 'accepted' as const : o.outcome === 'Dismissed' ? 'dismissed' as const : o.outcome === 'Reverted' ? 'reverted' as const : 'pending' as const;
-        result.push({
-          suggestion: { original: o.originalText, suggested: o.suggestedText, reason: 'Proofread' },
-          status
-        });
       }
       return result.sort((a, b) => AnalysisPanelComponent.suggestionStatusOrder(a.status) - AnalysisPanelComponent.suggestionStatusOrder(b.status));
     }
+
     const keyBased = suggestions.map(s => {
       const key = this.proofreadSuggestionKey(current, s);
       if (this.acceptedProofreadHistoryKeys.has(key)) return { suggestion: s, status: 'accepted' as const };
@@ -840,16 +925,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   loadVersions(): void {
     if (!this.bookId || !this.chapterId) return;
-    this.analysisService.getSuggestionOutcomes(this.bookId, this.chapterId, this.sceneId ?? undefined).subscribe({
-      next: (outcomes) => {
-        this.suggestionOutcomes = outcomes ?? [];
-        this.cdr.detectChanges();
-      },
-      error: () => {
-        this.suggestionOutcomes = [];
-        this.cdr.detectChanges();
-      }
-    });
     this.documentVersionService.list(this.bookId, this.chapterId, this.sceneId ?? undefined).subscribe({
       next: (list) => {
         this.versions = list ?? [];
@@ -866,38 +941,23 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.revertToVersion.emit(versionId);
   }
 
-  /** True when this version's suggestion has a Reverted outcome (so we grey it out and show Redo). */
-  isVersionReverted(v: DocumentVersionDto): boolean {
-    const aid = (v.analysisResultId ?? v.analysisId) ?? '';
-    if (!aid || v.originalText == null || v.suggestedText == null) return false;
-    const orig = this.normalizeKeyText(v.originalText);
-    const sugg = this.normalizeKeyText(v.suggestedText);
-    const aidLower = aid.toLowerCase();
-    return this.suggestionOutcomes.some(
-      o => (o.analysisResultId || '').toLowerCase() === aidLower &&
-           this.normalizeKeyText(o.originalText) === orig &&
-           this.normalizeKeyText(o.suggestedText) === sugg &&
-           (o.outcome || '').toLowerCase() === 'reverted'
-    );
+  /** True when this version is linked to an Archived analysis result, so Revert should be disabled. */
+  isVersionLocked(v: DocumentVersionDto): boolean {
+    const status = (v.analysisStatus || '').toLowerCase();
+    return status === 'archived';
   }
 
-  /** Re-apply the suggestion (replace original with suggested), set outcome to Accepted, refresh versions and history. */
+  /** Re-apply the suggestion (replace original with suggested) and refresh versions and history. */
   onRedoVersion(v: DocumentVersionDto): void {
     const analysisId = v.analysisResultId ?? v.analysisId;
-    if (!analysisId || v.originalText == null || v.suggestedText == null || !this.bookId || !this.chapterId) return;
+    if (!analysisId || v.originalText == null || v.suggestedText == null) return;
     this.applyCorrection.emit({
       text: v.suggestedText,
       originalText: v.originalText,
       analysisId,
       skipCreatingVersion: true
     });
-    this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, analysisId, v.originalText, v.suggestedText, 'Accepted').subscribe({
-      next: () => {
-        this.loadVersions();
-        this.refreshHistory();
-      },
-      error: () => {}
-    });
+    // After redo, caller can refresh versions/history if needed; no legacy SuggestionOutcomeRecord update.
   }
 
   /** Parse version label "Original: X → Suggested: Y" for display. */
@@ -967,51 +1027,45 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       });
   }
 
-  /** For History tab: all Line Edit suggestions for the given result with status (accepted/dismissed/reverted/pending). Uses embedded suggestionOutcomes when present. Outcomes that don't match any structuredResult suggestion are added as synthetic suggestions so Accepted/Dismissed/Reverted still appear. In-memory keys take precedence over embedded so dismiss/accept in this session are not lost after Run analysis. */
+  /**
+   * For History tab: all Line Edit suggestions for the given result with status (accepted/dismissed/reverted/pending).
+   * Preferred path: when server-side suggestions exist, use suggestion.outcome as the source of truth.
+   * When no suggestions array exists (very old runs), fall back to structuredResult + in-memory outcome tracking.
+   */
   lineEditSuggestionsWithStatus(current: AnalysisResultDto): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
-    const lineEdit = this.getLineEdit(current);
-    if (!lineEdit) return [];
-    const suggestions = this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, current);
-    const embedded = current.suggestionOutcomes;
-    const result: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] = [];
-    const matchedOutcomeKeys = new Set<string>();
-
-    if (embedded?.length) {
+    // Preferred: use persisted AnalysisSuggestionDto rows when present.
+    if (current.suggestions && current.suggestions.length) {
+      const base = this.mapDtoSuggestions(current);
+      const result: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] = [];
       const id = (current.id || '').toLowerCase();
       const keyPrefix = `${id}-`;
-      for (const s of suggestions) {
+
+      for (const s of base) {
         const orig = this.normalizeKeyText(s.original);
         const sugg = this.normalizeKeyText(s.suggested);
         const key = `${keyPrefix}${orig}-${sugg}`;
+        let status: 'accepted' | 'dismissed' | 'reverted' | 'pending';
         if (this.acceptedLineEditKeys.has(key)) {
-          result.push({ suggestion: s, status: 'accepted' as const });
-          matchedOutcomeKeys.add(`${orig}|${sugg}`);
-          continue;
+          status = 'accepted';
+        } else if (this.dismissedLineEditKeys.has(key)) {
+          status = 'dismissed';
+        } else {
+          const outcome = (s.outcome || '').toLowerCase();
+          if (outcome === 'accepted') status = 'accepted';
+          else if (outcome === 'dismissed') status = 'dismissed';
+          else if (outcome === 'reverted') status = 'reverted';
+          else status = 'pending';
         }
-        if (this.dismissedLineEditKeys.has(key)) {
-          result.push({ suggestion: s, status: 'dismissed' as const });
-          matchedOutcomeKeys.add(`${orig}|${sugg}`);
-          continue;
-        }
-        const o = embedded.find(
-          e => this.normalizeKeyText(e.originalText) === orig && this.normalizeKeyText(e.suggestedText) === sugg
-        );
-        const status = o?.outcome === 'Accepted' ? 'accepted' as const : o?.outcome === 'Dismissed' ? 'dismissed' as const : o?.outcome === 'Reverted' ? 'reverted' as const : 'pending' as const;
         result.push({ suggestion: s, status });
-        if (o) matchedOutcomeKeys.add(`${orig}|${sugg}`);
       }
-      for (const o of embedded) {
-        const orig = this.normalizeKeyText(o.originalText);
-        const sugg = this.normalizeKeyText(o.suggestedText);
-        if (matchedOutcomeKeys.has(`${orig}|${sugg}`)) continue;
-        const status = o.outcome === 'Accepted' ? 'accepted' as const : o.outcome === 'Dismissed' ? 'dismissed' as const : o.outcome === 'Reverted' ? 'reverted' as const : 'pending' as const;
-        result.push({
-          suggestion: { original: o.originalText, suggested: o.suggestedText, reason: 'Line Edit' },
-          status
-        });
-      }
+
       return result.sort((a, b) => AnalysisPanelComponent.suggestionStatusOrder(a.status) - AnalysisPanelComponent.suggestionStatusOrder(b.status));
     }
+
+    // Legacy: fall back to structuredResult + SuggestionOutcomeDto.
+    const lineEdit = this.getLineEdit(current);
+    if (!lineEdit) return [];
+    const suggestions = this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, current);
     const id = (current.id || '').toLowerCase();
     const keyPrefix = `${id}-`;
     const keyBased = suggestions.map(s => {
@@ -1066,8 +1120,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const orig = this.normalizeKeyText(suggestion.original);
     const sugg = this.normalizeKeyText(suggestion.suggested);
     this.acceptedLineEditKeys.add(`${id}-${orig}-${sugg}`);
-    if (this.bookId && this.chapterId && current.id) {
-      this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, current.id, suggestion.original, suggestion.suggested, 'Accepted').subscribe({ error: () => {} });
+    if (this.bookId && this.chapterId && current.id && suggestion.id) {
+      this.analysisService
+        .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Accepted')
+        .subscribe({ error: () => {} });
     }
   }
 
@@ -1076,14 +1132,17 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const orig = this.normalizeKeyText(suggestion.original);
     const sugg = this.normalizeKeyText(suggestion.suggested);
     this.dismissedLineEditKeys.add(`${id}-${orig}-${sugg}`);
-    if (this.bookId && this.chapterId && current.id) {
-      this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, current.id, suggestion.original, suggestion.suggested, 'Dismissed').subscribe({ error: () => {} });
+    if (this.bookId && this.chapterId && current.id && suggestion.id) {
+      this.analysisService
+        .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Dismissed')
+        .subscribe({ error: () => {} });
     }
   }
 
   onShowInDocument(s: AnalysisSuggestion): void {
     if (s.startOffset != null && s.endOffset != null) {
       this.showInDocument.emit({
+        suggestionId: s.id,
         startOffset: s.startOffset,
         endOffset: s.endOffset,
         originalText: s.original || undefined
@@ -1097,6 +1156,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const first = this.proofreadSuggestions[0];
     if (first.startOffset != null && first.endOffset != null) {
       this.showInDocument.emit({
+        suggestionId: first.id,
         startOffset: first.startOffset,
         endOffset: first.endOffset,
         originalText: first.original || undefined
@@ -1116,12 +1176,12 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     } else {
       this.applyCorrection.emit({ text: s.suggested, originalText: s.original, analysisId: this.latestResult?.id ?? undefined });
     }
-    if (this.latestResult) {
+    if (this.latestResult && this.bookId && this.chapterId && s.id) {
       const key = this.proofreadSuggestionKey(this.latestResult, s);
       this.acceptedProofreadHistoryKeys.add(key);
-      if (this.bookId && this.chapterId && this.latestResult.id) {
-        this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, this.latestResult.id, s.original, s.suggested, 'Accepted').subscribe({ error: () => {} });
-      }
+      this.analysisService
+        .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Accepted')
+        .subscribe({ error: () => {} });
     }
     // Clear current suggestions and re-diff against the updated document text on the next documentText change,
     // so remaining suggestions get fresh offsets that match the modified document.
@@ -1133,15 +1193,32 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   onProofreadDismiss(s: AnalysisSuggestion): void {
     this.proofreadSuggestions = this.proofreadSuggestions.filter(x => x !== s);
-    if (this.latestResult) {
+    if (this.latestResult && this.bookId && this.chapterId && s.id) {
       const key = this.proofreadSuggestionKey(this.latestResult, s);
       this.dismissedProofreadHistoryKeys.add(key);
-      if (this.bookId && this.chapterId && this.latestResult.id) {
-        this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, this.latestResult.id, s.original, s.suggested, 'Dismissed').subscribe({ error: () => {} });
-      }
+      this.analysisService
+        .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Dismissed')
+        .subscribe({ error: () => {} });
     }
     this.emitSuggestionRanges();
     this.cdr.detectChanges();
+  }
+
+  onExplainSuggestion(s: AnalysisSuggestion): void {
+    if (!s.id || !this.bookId || !this.chapterId || this.explainingSuggestionId) return;
+    this.explainingSuggestionId = s.id;
+    this.cdr.detectChanges();
+    this.analysisService.explainSuggestion(this.bookId, this.chapterId, s.id).subscribe({
+      next: (res) => {
+        s.explanation = res.explanation;
+        this.explainingSuggestionId = null;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.explainingSuggestionId = null;
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   onProofreadHistoryAccept(s: AnalysisSuggestion, current: AnalysisResultDto): void {
@@ -1158,8 +1235,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     }
     const key = this.proofreadSuggestionKey(current, s);
     this.acceptedProofreadHistoryKeys.add(key);
-    if (this.bookId && this.chapterId && current.id) {
-      this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, current.id, s.original, s.suggested, 'Accepted').subscribe({ error: () => {} });
+    if (this.bookId && this.chapterId && current.id && s.id) {
+      this.analysisService
+        .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Accepted')
+        .subscribe({ error: () => {} });
     }
     // After accepting from History, recompute Run-tab suggestions against the updated document
     // on the next documentText change so offsets and highlights stay in sync.
@@ -1171,8 +1250,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   onProofreadHistoryDismiss(s: AnalysisSuggestion, current: AnalysisResultDto): void {
     const key = this.proofreadSuggestionKey(current, s);
     this.dismissedProofreadHistoryKeys.add(key);
-    if (this.bookId && this.chapterId && current.id) {
-      this.analysisService.saveSuggestionOutcome(this.bookId, this.chapterId, current.id, s.original, s.suggested, 'Dismissed').subscribe({ error: () => {} });
+    if (this.bookId && this.chapterId && current.id && s.id) {
+      this.analysisService
+        .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Dismissed')
+        .subscribe({ error: () => {} });
     }
   }
 
@@ -1184,7 +1265,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     }
     const ranges = this.proofreadSuggestions
       .filter(s => s.startOffset != null && s.endOffset != null)
-      .map(s => ({ startOffset: s.startOffset!, endOffset: s.endOffset! }));
+      .map(s => ({ suggestionId: s.id, startOffset: s.startOffset!, endOffset: s.endOffset! }));
     this.suggestionRangesChange.emit(ranges);
   }
 
@@ -1271,15 +1352,28 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   /**
    * When we have a Proofread latestResult and document text for the current chapter,
-   * recompute proofread suggestions and emit ranges so highlights show.
-   * Filters out suggestions that are already accepted or dismissed so they don't reappear on Run tab after navigating back.
+   * restore proofread suggestions and emit ranges so highlights show.
+   * Prefers server-side suggestions (which carry id, explanation, outcome) and falls back
+   * to client-side proofreadDiff for legacy/streaming runs that lack persisted suggestions.
+   * Filters out suggestions that are already accepted or dismissed so they don't reappear on Run tab.
    */
   private restoreProofreadStateFromLatestResult(): void {
-    if (!this.documentText || !this.latestResult) return;
+    if (!this.latestResult) return;
     const type = this.latestResult.analysisType || this.latestResult.type;
-    if (type !== 'Proofread' || !this.latestResult.resultText) return;
-    const all = proofreadDiff(this.documentText, this.latestResult.resultText);
+    if (type !== 'Proofread') return;
+
+    let all: AnalysisSuggestion[];
+    if (this.latestResult.suggestions && this.latestResult.suggestions.length) {
+      all = this.mapDtoSuggestions(this.latestResult);
+    } else if (this.documentText && this.latestResult.resultText) {
+      all = proofreadDiff(this.documentText, this.latestResult.resultText);
+    } else {
+      return;
+    }
+
     this.proofreadSuggestions = all.filter(s => {
+      const outcome = (s.outcome || '').toLowerCase();
+      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'superseded') return false;
       const key = this.proofreadSuggestionKey(this.latestResult!, s);
       return !this.acceptedProofreadHistoryKeys.has(key) && !this.dismissedProofreadHistoryKeys.has(key);
     });
@@ -1312,13 +1406,20 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     if (!this.bookId || !this.chapterId) return;
     const loadingChapterId = this.chapterId;
     const loadingSceneId = this.sceneId ?? undefined;
-    const existingHistory = mergeWithExisting ? this.history : [];
+    const existingHistory = mergeWithExisting ? this.allAnalyses : [];
     this.analysisService.getHistory(this.bookId, this.chapterId, this.historyFilterType ?? undefined, this.sceneId ?? undefined).subscribe({
       next: (items) => {
         // Ignore if user switched chapter/scene before this response
         if (this.chapterId !== loadingChapterId || (this.sceneId ?? undefined) !== loadingSceneId) return;
         const fromApi = items ?? [];
-        this.history = mergeWithExisting ? this.mergeHistoryWithExisting(fromApi, existingHistory) : fromApi;
+        // Merge with existing full list (Active + Archived) when requested.
+        this.allAnalyses = mergeWithExisting
+          ? this.mergeHistoryWithExisting(fromApi, existingHistory)
+          : fromApi;
+        // Cache Active analyses (by status) for re-analysis lifecycle checks.
+        this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
+        // History tab shows only Archived analyses (or those without a status yet, treated as Archived).
+        this.history = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
         this.selectedIndex = 0;
         // Prepend streaming run (no id) so it appears in History and Accepted/Dismissed keys match
         if (this.latestResult && !this.latestResult.id) {
@@ -1333,7 +1434,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         }
         // Populate Accepted/Dismissed key Sets from API *before* restoring Run tab so we filter correctly
         this.applyEmbeddedSuggestionOutcomes();
-        const first = this.history[0];
+        const first = this.allAnalyses[0];
         if (first && (first.analysisType || first.type) === 'Proofread') {
           this.latestResult = first;
           if (this.documentMatchesCurrentContext && this.documentText) {
@@ -1367,33 +1468,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return merged;
   }
 
-  /** Populate Accepted/Dismissed key Sets from suggestionOutcomes embedded in each history item (from GET analyses).
-   * Only add Accepted and Dismissed; Reverted and Pending stay out of key sets so status comes from embedded outcome. */
+  /** Populate Accepted/Dismissed key Sets from embedded suggestion outcomes (when Suggestions are present on the DTO). */
   private applyEmbeddedSuggestionOutcomes(): void {
-    for (const item of this.history) {
-      const outcomes = item.suggestionOutcomes;
-      if (!outcomes?.length) continue;
-      const type = (item.analysisType || item.type) || '';
-      const id = (item.id || '').toLowerCase();
-      for (const o of outcomes) {
-        const outcome = (o.outcome || '').trim();
-        if (outcome !== 'Accepted' && outcome !== 'Dismissed') continue;
-        const orig = this.normalizeKeyText(o.originalText);
-        const sugg = this.normalizeKeyText(o.suggestedText);
-        const key = `${id}-${orig}-${sugg}`;
-        if (type === 'Proofread') {
-          if (outcome === 'Accepted') this.acceptedProofreadHistoryKeys.add(key);
-          else this.dismissedProofreadHistoryKeys.add(key);
-        } else if (type === 'LineEdit') {
-          if (outcome === 'Accepted') this.acceptedLineEditKeys.add(key);
-          else this.dismissedLineEditKeys.add(key);
-        }
-      }
-    }
+    // No-op after cleanup: outcomes now come from AnalysisSuggestion.Outcome and in-memory key sets.
   }
 
   runAnalysis(): void {
     if (!this.bookId || !this.chapterId || !this.canRun || this.isRunning) return;
+    if (!this.confirmReanalysisIfPendingSuggestions()) return;
     this.isRunning = true;
     this.runAnalysisAfterSave();
   }
@@ -1454,6 +1536,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.streamingText = '';
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
+    this.lineEditRunSuggestions = [];
     this.emitSuggestionRanges();
 
     this.analysisService.run(this.bookId, this.chapterId, {
@@ -1469,14 +1552,18 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.selectedIndex = 0;
         this.latestResult = result;
         this.activeSubTab = 'run';
-        if ((result.analysisType || result.type) === 'Proofread' && this.documentText != null && result.resultText) {
-          this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
-          const raw = proofreadDiff(this.documentText, result.resultText);
-          this.proofreadSuggestions = raw;
+        if ((result.analysisType || result.type) === 'Proofread') {
+          if (this.documentText != null) {
+            this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
+          }
+          const mapped = this.mapDtoSuggestions(result);
+          this.proofreadSuggestions = mapped;
           this.proofreadSuggestionsUnreliable = false;
           this.hasRestoredProofreadForCurrentContext = true;
           this.emitSuggestionRanges();
           this.autoShowFirstSuggestion();
+        } else if ((result.analysisType || result.type) === 'LineEdit') {
+          this.lineEditRunSuggestions = this.mapDtoSuggestions(result);
         }
         this.startProgressPollingIfNeeded(result);
         this.setLastRunDuration();
@@ -1500,6 +1587,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.streamingText = '';
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
+    this.lineEditRunSuggestions = [];
     this.emitSuggestionRanges();
 
     const requestBody = {
@@ -1528,6 +1616,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   runStreaming(): void {
     if (!this.bookId || !this.chapterId || !this.canRun || this.isRunning) return;
+    if (!this.confirmReanalysisIfPendingSuggestions()) return;
     const run = () => {
       this.isRunning = true;
       this.analysisStarted.emit();
@@ -1742,14 +1831,18 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.selectedIndex = 0;
         this.latestResult = result;
         this.activeSubTab = 'run';
-        if ((result.analysisType || result.type) === 'Proofread' && this.documentText != null && result.resultText) {
-          this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
-          const raw = proofreadDiff(this.documentText, result.resultText);
-          this.proofreadSuggestions = raw;
+        if ((result.analysisType || result.type) === 'Proofread') {
+          if (this.documentText != null) {
+            this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
+          }
+          const mapped = this.mapDtoSuggestions(result);
+          this.proofreadSuggestions = mapped;
           this.proofreadSuggestionsUnreliable = false;
           this.hasRestoredProofreadForCurrentContext = true;
           this.emitSuggestionRanges();
           this.autoShowFirstSuggestion();
+        } else if ((result.analysisType || result.type) === 'LineEdit') {
+          this.lineEditRunSuggestions = this.mapDtoSuggestions(result);
         }
         this.analysisCompleted.emit();
       },
@@ -1778,6 +1871,39 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       label = rem ? `${mins}m ${rem}s` : `${mins}m`;
     }
     this.lastRunDurationLabel = label;
+  }
+
+  /**
+   * Before starting a new analysis, warn the user when there is an Active analysis
+   * for the same scope/type with pending suggestions that will be superseded.
+   */
+  private confirmReanalysisIfPendingSuggestions(): boolean {
+    const pending = this.getPendingSuggestionCountForActive();
+    if (!pending) return true;
+
+    const scopeLabel = this.sceneId ? 'scene' : 'chapter';
+    const message =
+      pending === 1
+        ? `Running a new analysis will end your current session for this ${scopeLabel}. 1 pending suggestion will be discarded. Continue?`
+        : `Running a new analysis will end your current session for this ${scopeLabel}. ${pending} pending suggestions will be discarded. Continue?`;
+
+    return window.confirm(message);
+  }
+
+  /** Count pending suggestions (no outcome) on Active analyses matching the current selected type. */
+  private getPendingSuggestionCountForActive(): number {
+    if (!this.activeAnalyses?.length) return 0;
+    const type = this.selectedAnalysisType;
+    let total = 0;
+
+    for (const analysis of this.activeAnalyses) {
+      const analysisType = analysis.analysisType || analysis.type;
+      if (analysisType !== type) continue;
+      const suggestions = this.mapDtoSuggestions(analysis);
+      total += suggestions.filter(s => !s.outcome || s.outcome === 'Pending').length;
+    }
+
+    return total;
   }
 
   saveAsTemplate(): void {

@@ -1,7 +1,13 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { AnalysisResultDto, PromptTemplateDto, RunAnalysisRequest, StartAnalysisJobResponse, SuggestionOutcomeDto } from '../models/analysis';
+import {
+  AnalysisResultDto,
+  AnalysisSuggestionDto,
+  PromptTemplateDto,
+  RunAnalysisRequest,
+  StartAnalysisJobResponse
+} from '../models/analysis';
 
 @Injectable({ providedIn: 'root' })
 export class AnalysisService {
@@ -27,32 +33,35 @@ export class AnalysisService {
     return this.http.get<AnalysisResultDto[]>(url);
   }
 
-  /** Load all suggestion outcomes (Accepted/Dismissed) for the chapter/scene so the History tab can restore state. */
-  getSuggestionOutcomes(
+  /** Load all server-side suggestions for a specific analysis result. */
+  getSuggestions(
     bookId: string,
     chapterId: string,
-    sceneId?: string | null
-  ): Observable<SuggestionOutcomeDto[]> {
-    let url = `/api/books/${bookId}/chapters/${chapterId}/suggestion-outcomes`;
-    if (sceneId) url += `?sceneId=${encodeURIComponent(sceneId)}`;
-    return this.http.get<SuggestionOutcomeDto[]>(url);
+    analysisId: string
+  ): Observable<AnalysisSuggestionDto[]> {
+    const url = `/api/books/${bookId}/chapters/${chapterId}/analyses/${analysisId}/suggestions`;
+    return this.http.get<AnalysisSuggestionDto[]>(url);
   }
 
-  /** Persist one suggestion outcome (Accepted, Dismissed, or Reverted). Call when the result has an id (saved run). */
-  saveSuggestionOutcome(
+  /** Update the Outcome for a single server-side suggestion row (Accepted, Dismissed, Reverted, Superseded). */
+  updateSuggestionOutcome(
     bookId: string,
     chapterId: string,
-    analysisId: string,
-    originalText: string,
-    suggestedText: string,
-    outcome: 'Accepted' | 'Dismissed' | 'Reverted'
+    suggestionId: string,
+    outcome: 'Accepted' | 'Dismissed' | 'Reverted' | 'Superseded'
   ): Observable<void> {
-    const url = `/api/books/${bookId}/chapters/${chapterId}/analyses/${analysisId}/suggestion-outcomes`;
-    return this.http.post<void>(url, {
-      originalText,
-      suggestedText,
-      outcome
-    });
+    const url = `/api/books/${bookId}/chapters/${chapterId}/suggestions/${suggestionId}/outcome`;
+    return this.http.patch<void>(url, { outcome });
+  }
+
+  /** Request an explanation for a specific suggestion (cached on the server after first call). */
+  explainSuggestion(
+    bookId: string,
+    chapterId: string,
+    suggestionId: string
+  ): Observable<{ explanation: string }> {
+    const url = `/api/books/${bookId}/chapters/${chapterId}/suggestions/${suggestionId}/explain`;
+    return this.http.post<{ explanation: string }>(url, {});
   }
 
   run(

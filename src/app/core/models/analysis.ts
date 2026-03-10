@@ -14,8 +14,10 @@ export interface AnalysisResultDto {
   language?: string | null;
   /** True when API detected Proofread result nearly identical to input (possible length limit). */
   proofreadNoChangesHint?: boolean;
-  /** When loading history (GET analyses), contains Accepted/Dismissed per suggestion. */
-  suggestionOutcomes?: SuggestionOutcomeDto[] | null;
+  /** Active/Archived status of this analysis result. */
+  status?: string | null;
+  /** Server-side suggestions for this analysis run (Proofread and Line Edit). */
+  suggestions?: AnalysisSuggestionDto[] | null;
 }
 
 export interface RunAnalysisRequest {
@@ -46,22 +48,32 @@ export interface PromptTemplateDto {
   language: string;
 }
 
-/** Unified suggestion model for Proofread (from diff) and Line Edit (from structuredResult). */
+/** Unified suggestion model used in the UI for Proofread and Line Edit. */
 export interface AnalysisSuggestion {
+  id?: string;
   startOffset?: number;
   endOffset?: number;
   original: string;
   suggested: string;
   reason?: string;
   category?: string;
+  explanation?: string;
+  outcome?: string | null;
 }
 
-/** One persisted suggestion outcome (Accepted/Dismissed) for restoring History tab state. */
-export interface SuggestionOutcomeDto {
+/** Server-side suggestion DTO returned from the backend. */
+export interface AnalysisSuggestionDto {
+  id: string;
   analysisResultId: string;
   originalText: string;
   suggestedText: string;
-  outcome: string;
+  startOffset: number;
+  endOffset: number;
+  reason?: string | null;
+  category?: string | null;
+  explanation?: string | null;
+  outcome?: string | null;
+  orderIndex: number;
 }
 
 export interface AnalysisProgressDto {
