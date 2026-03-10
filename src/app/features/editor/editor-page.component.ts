@@ -1374,20 +1374,24 @@ export class EditorPageComponent implements OnInit, OnDestroy {
             }
           }
           if (plainOffset <= running + blockNormLen) {
-            // Offset falls within this block; walk inlines again to map normalized offset to raw offset.
-            let blockRunning = running;
+            // Offset falls within this block; walk inlines again to map normalized offset
+            // to a raw offset within the entire block (accumulating raw lengths).
+            let blockRunningNorm = running;
+            let blockRunningRaw = 0;
             for (const inline of inlines) {
               const text = inline['text'] ?? inline['tlp'];
               if (typeof text !== 'string') continue;
               const normLen = normalizeTextForAnalysis(text).length;
-              const startNorm = blockRunning;
-              const endNorm = blockRunning + normLen;
+              const startNorm = blockRunningNorm;
+              const endNorm = blockRunningNorm + normLen;
               if (plainOffset <= endNorm) {
                 const offsetInInlineNorm = plainOffset - startNorm;
-                const rawOffset = normalizedOffsetToRawOffset(text, offsetInInlineNorm);
-                return `${si};0;${bi};${rawOffset}`;
+                const rawOffsetInInline = normalizedOffsetToRawOffset(text, offsetInInlineNorm);
+                const rawOffsetInBlock = blockRunningRaw + rawOffsetInInline;
+                return `${si};0;${bi};${rawOffsetInBlock}`;
               }
-              blockRunning = endNorm;
+              blockRunningNorm = endNorm;
+              blockRunningRaw += text.length;
             }
             // Fallback: if we couldn't map precisely, snap to end of block.
             return `${si};0;${bi};${blockRawLen}`;
