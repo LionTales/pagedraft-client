@@ -990,34 +990,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     }
   }
 
-  /** Map Line Edit suggestion shape to AnalysisSuggestion; filter dismissed and accepted (so they hide on Run tab); add startOffset/endOffset from documentText when available. */
-  toAnalysisSuggestions(
-    suggestions: Array<{ original: string; suggested: string; reason: string; category: string }>,
-    current?: AnalysisResultDto
-  ): AnalysisSuggestion[] {
-    if (!current) return suggestions.map(s => ({ ...s }));
-    const id = (current.id || '').toLowerCase();
-    const keyPrefix = `${id}-`;
-    return suggestions
-      .filter(s => {
-        const orig = this.normalizeKeyText(s.original);
-        const sugg = this.normalizeKeyText(s.suggested);
-        const key = `${keyPrefix}${orig}-${sugg}`;
-        return !this.dismissedLineEditKeys.has(key) && !this.acceptedLineEditKeys.has(key);
-      })
-      .map(s => {
-        const suggestion: AnalysisSuggestion = { ...s };
-        if (this.documentText) {
-          const idx = this.documentText.indexOf(s.original);
-          if (idx >= 0) {
-            suggestion.startOffset = idx;
-            suggestion.endOffset = idx + s.original.length;
-          }
-        }
-        return suggestion;
-      });
-  }
-
   /**
    * For History tab: all Line Edit suggestions for the given result with status (accepted/dismissed/reverted/pending).
    * Preferred path: when server-side suggestions exist, use suggestion.outcome as the source of truth.
