@@ -1209,8 +1209,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     }
 
     const bookmarkType = isStart ? 0 : 1;
-    const useOptimizedKeys = Object.prototype.hasOwnProperty.call(template, 'bkt') ||
-      Object.prototype.hasOwnProperty.call(template, 'n');
+    // Heuristic: optimized SFDT uses compact character-format key 'cf' instead of 'characterFormat'.
+    const useOptimizedKeys = cfKey === 'cf';
     if (useOptimizedKeys) {
       // Optimized SFDT keys (Syncfusion v21.1+ default): 'bkt' for bookmarkType, 'n' for name
       out['bkt'] = bookmarkType;

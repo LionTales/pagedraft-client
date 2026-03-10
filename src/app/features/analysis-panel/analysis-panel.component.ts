@@ -781,13 +781,13 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
    */
   get proofreadSuggestionsForHistory(): AnalysisSuggestion[] {
     const current = this.history[this.selectedIndex];
-    if (!current || (current.analysisType || current.type) !== 'Proofread' || !current.resultText)
-      return [];
-    // When backend AnalysisSuggestion rows exist, use them directly (includes outcome and reason/category).
+    if (!current || (current.analysisType || current.type) !== 'Proofread') return [];
+    // Preferred: when backend AnalysisSuggestion rows exist, use them directly (includes outcome and reason/category).
     if (current.suggestions && current.suggestions.length) {
       return this.mapDtoSuggestions(current);
     }
-    // Legacy/streaming fallback: recompute via diff using stored original document snapshot.
+    // Legacy/streaming fallback: requires resultText so we can diff.
+    if (!current.resultText) return [];
     const runKey = this.proofreadRunKeyForResult(current);
     const originalText = this.proofreadOriginalDocumentByRunKey.get(runKey) ?? this.documentText;
     if (!originalText) return [];
@@ -1626,6 +1626,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.streamingText = '';
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
+    this.lineEditRunSuggestions = [];
     this.emitSuggestionRanges();
 
     this.analysisService.runStream(this.bookId, this.chapterId, {
