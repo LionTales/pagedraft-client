@@ -952,6 +952,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
               this.applySuggestionHighlights([]);
               this.isOpeningDocument = false;
               this.saveCurrentDocument();
+              // When this version was created from Accept suggestion, mark the linked suggestion
+              // as Reverted in the in-memory analysis results so History reflects the outcome.
+              const analysisId = detail.analysisResultId ?? detail.analysisId;
+              if (analysisId && detail.originalText && detail.suggestedText && this.analysisPanel) {
+                this.analysisPanel.markSuggestionReverted(analysisId, detail.originalText, detail.suggestedText);
+                this.analysisPanel.refreshHistory();
+                this.analysisPanel.refreshVersions();
+              }
             }
           } finally {
             this.isOpeningDocument = false;
@@ -1340,14 +1348,15 @@ export class EditorPageComponent implements OnInit, OnDestroy {
    * and getParagraphInternal gets "blockIndex;offset". We use bodyIndex 0 for main content.
    *
    * Walks sections → blocks → inlines in the same order as getTextFromSfdt so the
-   * running character count stays in sync with the plain text the analysis panel uses.
-   * Uses raw (un-normalized) lengths so the returned position is valid for the actual SFDT.
+   * running character count stays in sync with the normalized plain text the analysis panel uses.
+   * Uses normalized lengths for the running counter and converts back to raw offsets via
+   * normalizedOffsetToRawOffset so the returned position is valid for the actual SFDT.
    */
   private plainOffsetToSfdtPosition(sfdtString: string, plainOffset: number): string | null {
     try {
       const doc = JSON.parse(sfdtString) as Record<string, unknown>;
       const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
-      let running = 0;
+      let running = 0; // normalized character count
       let lastPos = '0;0;0;0';
       for (let si = 0; si < sections.length; si++) {
         const section = sections[si];
@@ -1355,16 +1364,36 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         for (let bi = 0; bi < blocks.length; bi++) {
           const block = blocks[bi];
           const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
-          let blockLen = 0;
+          let blockNormLen = 0;
+          let blockRawLen = 0;
           for (const inline of inlines) {
             const text = inline['text'] ?? inline['tlp'];
-            if (typeof text === 'string') blockLen += text.length;
+            if (typeof text === 'string') {
+              blockNormLen += normalizeTextForAnalysis(text).length;
+              blockRawLen += text.length;
+            }
           }
-          if (plainOffset <= running + blockLen) {
-            return `${si};0;${bi};${plainOffset - running}`;
+          if (plainOffset <= running + blockNormLen) {
+            // Offset falls within this block; walk inlines again to map normalized offset to raw offset.
+            let blockRunning = running;
+            for (const inline of inlines) {
+              const text = inline['text'] ?? inline['tlp'];
+              if (typeof text !== 'string') continue;
+              const normLen = normalizeTextForAnalysis(text).length;
+              const startNorm = blockRunning;
+              const endNorm = blockRunning + normLen;
+              if (plainOffset <= endNorm) {
+                const offsetInInlineNorm = plainOffset - startNorm;
+                const rawOffset = normalizedOffsetToRawOffset(text, offsetInInlineNorm);
+                return `${si};0;${bi};${rawOffset}`;
+              }
+              blockRunning = endNorm;
+            }
+            // Fallback: if we couldn't map precisely, snap to end of block.
+            return `${si};0;${bi};${blockRawLen}`;
           }
-          running += blockLen;
-          lastPos = `${si};0;${bi};${blockLen}`;
+          running += blockNormLen;
+          lastPos = `${si};0;${bi};${blockRawLen}`;
         }
       }
       return lastPos;

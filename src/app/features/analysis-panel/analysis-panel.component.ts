@@ -923,6 +923,34 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return status === 'archived';
   }
 
+  /** Mark a suggestion as Reverted in in-memory analysis results so History reflects version reverts. */
+  markSuggestionReverted(analysisId: string, originalText: string, suggestedText: string): void {
+    if (!analysisId || !originalText || !suggestedText) return;
+    const id = analysisId.toLowerCase();
+    const normOriginal = this.normalizeKeyText(originalText);
+    const normSuggested = this.normalizeKeyText(suggestedText);
+
+    const updateResult = (result: AnalysisResultDto | null | undefined): void => {
+      if (!result?.suggestions?.length || (result.id || '').toLowerCase() !== id) return;
+      const dto = result.suggestions.find(x =>
+        this.normalizeKeyText(x.originalText ?? '') === normOriginal &&
+        this.normalizeKeyText(x.suggestedText ?? '') === normSuggested
+      );
+      if (dto) {
+        dto.outcome = 'Reverted';
+      }
+    };
+
+    if (this.latestResult) {
+      updateResult(this.latestResult);
+    }
+    if (this.allAnalyses?.length) {
+      for (const r of this.allAnalyses) {
+        updateResult(r);
+      }
+    }
+  }
+
   /** Parse version label "Original: X → Suggested: Y" for display. */
   versionLabelOriginal(label: string | null | undefined): string | null {
     if (!label || !label.includes(' → Suggested: ')) return null;
@@ -1528,7 +1556,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       next: (result) => {
         this.isRunning = false;
         this.runError = null;
-        this.history = [result, ...this.history];
+        // Keep allAnalyses and activeAnalyses in sync so re-analysis checks see the latest run.
+        this.allAnalyses = [result, ...this.allAnalyses];
+        this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
+        this.history = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
         this.selectedIndex = 0;
         this.latestResult = result;
         this.activeSubTab = 'run';
@@ -1807,8 +1838,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.isRunning = false;
         this.runError = null;
         this.setLastRunDuration();
-        // Prepend to history and select as latest
-        this.history = [result, ...this.history];
+        // Keep allAnalyses and activeAnalyses in sync so re-analysis checks see the latest run.
+        this.allAnalyses = [result, ...this.allAnalyses];
+        this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
+        this.history = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
         this.selectedIndex = 0;
         this.latestResult = result;
         this.activeSubTab = 'run';
