@@ -1399,6 +1399,39 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.emitSuggestionRanges();
   }
 
+  /**
+   * Restore Line Edit suggestions for the Run tab from the given result.
+   * Prefers server-side suggestions (including outcome), and falls back to structuredResult
+   * when no suggestions DTOs exist. Filters out suggestions that are already accepted,
+   * dismissed, reverted, or superseded so they don't reappear on the Run tab.
+   */
+  private restoreLineEditStateFromResult(result: AnalysisResultDto): void {
+    if ((result.analysisType || result.type) !== 'LineEdit') return;
+
+    const mapped = this.mapDtoSuggestions(result);
+    const base: AnalysisSuggestion[] = mapped.length
+      ? mapped
+      : (() => {
+          const lineEdit = this.getLineEdit(result);
+          return lineEdit ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, result) : [];
+        })();
+
+    const id = (result.id || '').toLowerCase();
+    const keyPrefix = id ? `${id}-` : '';
+
+    this.lineEditRunSuggestions = base.filter(s => {
+      const outcome = (s.outcome || '').toLowerCase();
+      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'reverted' || outcome === 'superseded') {
+        return false;
+      }
+      if (!keyPrefix) return true;
+      const orig = this.normalizeKeyText(s.original);
+      const sugg = this.normalizeKeyText(s.suggested);
+      const key = `${keyPrefix}${orig}-${sugg}`;
+      return !this.acceptedLineEditKeys.has(key) && !this.dismissedLineEditKeys.has(key);
+    });
+  }
+
   /** True when documentText is known to be for the current chapter/scene (so safe to restore from latestResult). */
   private get documentMatchesCurrentContext(): boolean {
     if (this.documentChapterId !== this.chapterId) return false;
@@ -1477,15 +1510,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           if (latestType === 'Proofread' && this.documentMatchesCurrentContext && this.documentText) {
             this.restoreProofreadStateFromLatestResult();
           } else if (latestType === 'LineEdit') {
-            const mappedLineEdit = this.mapDtoSuggestions(this.latestResult);
-            if (mappedLineEdit.length) {
-              this.lineEditRunSuggestions = mappedLineEdit;
-            } else {
-              const lineEdit = this.getLineEdit(this.latestResult);
-              this.lineEditRunSuggestions = lineEdit
-                ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, this.latestResult)
-                : [];
-            }
+            this.restoreLineEditStateFromResult(this.latestResult);
           }
         }
         this.cdr.detectChanges();
@@ -1609,15 +1634,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           this.emitSuggestionRanges();
           this.autoShowFirstSuggestion();
         } else if ((result.analysisType || result.type) === 'LineEdit') {
-          const mapped = this.mapDtoSuggestions(result);
-          if (mapped.length) {
-            this.lineEditRunSuggestions = mapped;
-          } else {
-            const lineEdit = this.getLineEdit(result);
-            this.lineEditRunSuggestions = lineEdit
-              ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, result)
-              : [];
-          }
+          this.restoreLineEditStateFromResult(result);
         }
         this.startProgressPollingIfNeeded(result);
         this.setLastRunDuration();
@@ -1899,15 +1916,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           this.emitSuggestionRanges();
           this.autoShowFirstSuggestion();
         } else if ((result.analysisType || result.type) === 'LineEdit') {
-          const mapped = this.mapDtoSuggestions(result);
-          if (mapped.length) {
-            this.lineEditRunSuggestions = mapped;
-          } else {
-            const lineEdit = this.getLineEdit(result);
-            this.lineEditRunSuggestions = lineEdit
-              ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, result)
-              : [];
-          }
+          this.restoreLineEditStateFromResult(result);
         }
         this.analysisCompleted.emit();
       },
