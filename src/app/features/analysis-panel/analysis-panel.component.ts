@@ -1004,15 +1004,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const analysisId = v.analysisResultId ?? v.analysisId;
     if (!analysisId || v.originalText == null || v.suggestedText == null || !this.bookId || !this.chapterId) return;
 
-    // Re-apply the suggestion in the editor without creating another version.
-    this.applyCorrection.emit({
-      text: v.suggestedText,
-      originalText: v.originalText,
-      analysisId,
-      skipCreatingVersion: true
-    });
-
-    // Find the matching suggestion row so we can persist outcome=Accepted using the new API.
     const aidLower = analysisId.toLowerCase();
     const orig = this.normalizeKeyText(v.originalText);
     const sugg = this.normalizeKeyText(v.suggestedText);
@@ -1023,8 +1014,26 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     );
 
     if (!dto?.id) {
+      // Legacy analyses without persisted suggestions: still re-apply in the editor and refresh
+      // History/Versions so the UI no longer shows this version as "reverted".
+      this.applyCorrection.emit({
+        text: v.suggestedText,
+        originalText: v.originalText,
+        analysisId,
+        skipCreatingVersion: true
+      });
+      this.refreshHistory();
+      this.refreshVersions();
       return;
     }
+
+    // Re-apply the suggestion in the editor without creating another version.
+    this.applyCorrection.emit({
+      text: v.suggestedText,
+      originalText: v.originalText,
+      analysisId,
+      skipCreatingVersion: true
+    });
 
     // Update in-memory outcome so History uses the new status immediately.
     dto.outcome = 'Accepted';
@@ -1044,7 +1053,11 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           this.loadHistory(true);
           this.loadVersions();
         },
-        error: () => {}
+        error: () => {
+          // Even if PATCH fails, refresh so UI reflects whatever the server currently has.
+          this.refreshHistory();
+          this.refreshVersions();
+        }
       });
   }
 
@@ -1192,7 +1205,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         result.push({ suggestion: s, status });
       }
 
-      return result.sort((a, b) => AnalysisPanelComponent.suggestionStatusOrder(a.status) - AnalysisPanelComponent.suggestionStatusOrder(b.status));
+      return this.sortHistoryItemsWithRecentFirst(
+        result,
+        s => {
+          const orig = this.normalizeKeyText(s.original);
+          const sugg = this.normalizeKeyText(s.suggested);
+          return `${keyPrefix}${orig}-${sugg}`;
+        }
+      );
     }
 
     // Legacy: fall back to structuredResult + SuggestionOutcomeDto.
@@ -1209,7 +1229,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       if (this.dismissedLineEditKeys.has(key)) return { suggestion: s, status: 'dismissed' as const };
       return { suggestion: s, status: 'pending' as const };
     });
-    return keyBased.sort((a, b) => AnalysisPanelComponent.suggestionStatusOrder(a.status) - AnalysisPanelComponent.suggestionStatusOrder(b.status));
+    return this.sortHistoryItemsWithRecentFirst(
+      keyBased,
+      s => {
+        const orig = this.normalizeKeyText(s.original);
+        const sugg = this.normalizeKeyText(s.suggested);
+        return `${keyPrefix}${orig}-${sugg}`;
+      }
+    );
   }
 
   /** Filtered by historySuggestionStatusFilter for Line Edit history. */
@@ -1256,7 +1283,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const id = (current.id || '').toLowerCase();
     const orig = this.normalizeKeyText(suggestion.original);
     const sugg = this.normalizeKeyText(suggestion.suggested);
-    this.acceptedLineEditKeys.add(`${id}-${orig}-${sugg}`);
+    const key = `${id}-${orig}-${sugg}`;
+    this.acceptedLineEditKeys.add(key);
+    this.trackRecentOutcomeKey(key);
     // Remove from the current Run tab suggestions so accepted items disappear immediately
     this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(x => x !== suggestion);
     if (this.bookId && this.chapterId && current.id && suggestion.id) {
@@ -1271,7 +1300,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const id = (current.id || '').toLowerCase();
     const orig = this.normalizeKeyText(suggestion.original);
     const sugg = this.normalizeKeyText(suggestion.suggested);
-    this.dismissedLineEditKeys.add(`${id}-${orig}-${sugg}`);
+    const key = `${id}-${orig}-${sugg}`;
+    this.dismissedLineEditKeys.add(key);
+    this.trackRecentOutcomeKey(key);
     // Remove from the current Run tab suggestions so dismissed items disappear immediately
     this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(x => x !== suggestion);
     if (this.bookId && this.chapterId && current.id && suggestion.id) {
