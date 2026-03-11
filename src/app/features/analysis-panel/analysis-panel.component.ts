@@ -701,7 +701,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI. */
   private mapDtoSuggestions(result: AnalysisResultDto | null | undefined): AnalysisSuggestion[] {
-    const list: AnalysisSuggestionDto[] = (result?.suggestions ?? []) || [];
+    const list: AnalysisSuggestionDto[] = result?.suggestions ?? [];
     const mapped = list.map(dto => ({
       id: dto.id,
       startOffset: dto.startOffset,
@@ -959,8 +959,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       return;
     }
 
-    const calls = Array.from(updatedSuggestionIds).map(id =>
-      this.analysisService.updateSuggestionOutcome(this.bookId!, this.chapterId!, id, 'Reverted')
+    const calls = Array.from(updatedSuggestionIds).map(suggestionId =>
+      this.analysisService.updateSuggestionOutcome(this.bookId!, this.chapterId!, suggestionId, 'Reverted')
     );
 
     forkJoin(calls).subscribe({
