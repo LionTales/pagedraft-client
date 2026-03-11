@@ -1811,7 +1811,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const base = this.allAnalyses;
     this.history = filterType
       ? base.filter(r => (r.analysisType || r.type) === filterType)
-      : base;
+      : base.slice();
   }
 
 
@@ -2251,7 +2251,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return window.confirm(message);
   }
 
-  /** Count pending suggestions (no outcome) on Active analyses matching the current selected type. */
+  /** Count pending suggestions (no outcome) on Active analyses matching the current selected type.
+   * Uses raw DTO suggestions so the count is not reduced by mapDtoSuggestions display heuristics. */
   private getPendingSuggestionCountForActive(): number {
     if (!this.activeAnalyses?.length) return 0;
     const type = this.selectedAnalysisType;
@@ -2260,8 +2261,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     for (const analysis of this.activeAnalyses) {
       const analysisType = analysis.analysisType || analysis.type;
       if (analysisType !== type) continue;
-      const suggestions = this.mapDtoSuggestions(analysis, false);
-      total += suggestions.filter(s => {
+      const dtos = analysis.suggestions ?? [];
+      total += dtos.filter(s => {
         const outcome = (s.outcome || '').toLowerCase();
         return !outcome || outcome === 'pending';
       }).length;
