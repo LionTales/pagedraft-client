@@ -154,7 +154,7 @@ import { SuggestionCardComponent } from './suggestion-card.component';
           </ng-template>
         </article>
         <ng-template #emptyRun>
-          <p class="muted" *ngIf="!proofreadSuggestions.length && !(latestResult && getLineEdit(latestResult))">No analysis run yet for this {{ sceneId ? 'scene' : 'chapter' }}.</p>
+          <p class="muted" *ngIf="!proofreadSuggestions.length && !(latestResult && getLineEdit(latestResult)) && !lineEditRunSuggestions.length">No analysis run yet for this {{ sceneId ? 'scene' : 'chapter' }}.</p>
         </ng-template>
       </section>
 
