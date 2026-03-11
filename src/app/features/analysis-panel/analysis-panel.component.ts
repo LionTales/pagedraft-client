@@ -1111,10 +1111,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     suggestions: Array<{ original: string; suggested: string; reason: string; category: string }>,
     current: AnalysisResultDto
   ): AnalysisSuggestion[] {
+    const normalizedDoc = this.documentText ? normalizeTextForAnalysis(this.documentText) : null;
     return suggestions.map(s => {
       const suggestion: AnalysisSuggestion = { ...s };
-      if (this.documentText) {
-        const normalizedDoc = normalizeTextForAnalysis(this.documentText);
+      if (normalizedDoc) {
         const normalizedOriginal = normalizeTextForAnalysis(s.original || '');
         if (normalizedOriginal) {
           const idx = normalizedDoc.indexOf(normalizedOriginal);
@@ -1812,6 +1812,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
+    this.hasRestoredLineEditForCurrentContext = false;
     this.emitSuggestionRanges();
 
     this.analysisService.runStream(this.bookId, this.chapterId, {
