@@ -1275,10 +1275,15 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         text: suggestion.suggested,
         startOffset,
         endOffset,
-        originalText: suggestion.original
+        originalText: suggestion.original,
+        analysisId: current.id
       });
     } else {
-      this.applyCorrection.emit({ text: suggestion.suggested, originalText: suggestion.original });
+      this.applyCorrection.emit({
+        text: suggestion.suggested,
+        originalText: suggestion.original,
+        analysisId: current.id
+      });
     }
     const id = (current.id || '').toLowerCase();
     const orig = this.normalizeKeyText(suggestion.original);
