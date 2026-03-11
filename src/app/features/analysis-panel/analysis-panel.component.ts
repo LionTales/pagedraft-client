@@ -1112,7 +1112,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return suggestions.map(s => {
       const suggestion: AnalysisSuggestion = { ...s };
       if (this.documentText) {
-        const normalizedDoc = this.documentText;
+        const normalizedDoc = normalizeTextForAnalysis(this.documentText);
         const normalizedOriginal = normalizeTextForAnalysis(s.original || '');
         if (normalizedOriginal) {
           const idx = normalizedDoc.indexOf(normalizedOriginal);
@@ -1618,9 +1618,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       const status = (r.status || '').toLowerCase();
       return !status || status === 'active';
     });
-    // History tab shows only Archived analyses (those explicitly marked as such),
-    // further filtered by historyFilterType when set.
-    const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'archived');
+    // History tab shows analyses that are not explicitly Active (including those that
+    // do not yet have a status set), further filtered by historyFilterType when set.
+    const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
     this.history = this.historyFilterType
       ? archived.filter(r => (r.analysisType || r.type) === this.historyFilterType)
       : archived;
