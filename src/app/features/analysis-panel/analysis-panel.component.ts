@@ -1275,7 +1275,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   }
 
   onExplainSuggestion(s: AnalysisSuggestion): void {
-    if (!s.id || !this.bookId || !this.chapterId || this.explainingSuggestionId) return;
+    if (!s.id || !this.bookId || !this.chapterId) return;
     this.explainingSuggestionId = s.id;
     this.cdr.detectChanges();
     this.analysisService.explainSuggestion(this.bookId, this.chapterId, s.id).subscribe({
@@ -1612,10 +1612,15 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   /** Recompute activeAnalyses and history from the current allAnalyses, honoring historyFilterType. */
   private rebuildHistoryFromAllAnalyses(): void {
     // Cache Active analyses (by status) for re-analysis lifecycle checks.
-    this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
-    // History tab shows only Archived analyses (or those without a status yet, treated as Archived),
+    // Treat missing/empty status as Active so freshly completed runs participate
+    // in re-analysis warnings until the backend marks them Archived.
+    this.activeAnalyses = this.allAnalyses.filter(r => {
+      const status = (r.status || '').toLowerCase();
+      return !status || status === 'active';
+    });
+    // History tab shows only Archived analyses (those explicitly marked as such),
     // further filtered by historyFilterType when set.
-    const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
+    const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'archived');
     this.history = this.historyFilterType
       ? archived.filter(r => (r.analysisType || r.type) === this.historyFilterType)
       : archived;
