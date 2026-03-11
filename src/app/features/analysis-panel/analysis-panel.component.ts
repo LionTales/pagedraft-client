@@ -1439,10 +1439,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         // History tab shows only Archived analyses (or those without a status yet, treated as Archived).
         this.history = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
         this.selectedIndex = 0;
-        // Prepend streaming run (no id) so it appears in History and Accepted/Dismissed keys match
-        if (this.latestResult && !this.latestResult.id) {
-          this.history = [this.latestResult, ...this.history];
-        }
         // Full reload: clear outcome key sets so displayed state is exactly what the API returned (avoids stale Reverted/Accepted and duplicate display).
         if (!mergeWithExisting) {
           this.acceptedProofreadHistoryKeys.clear();
@@ -1450,9 +1446,16 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           this.acceptedLineEditKeys.clear();
           this.dismissedLineEditKeys.clear();
         }
-        const first = this.allAnalyses[0];
-        if (first && (first.analysisType || first.type) === 'Proofread') {
-          this.latestResult = first;
+        // Prepend streaming run (no id) so it appears in History and Accepted/Dismissed keys match
+        if (this.latestResult && !this.latestResult.id) {
+          this.history = [this.latestResult, ...this.history];
+        }
+        // For restoration, prefer any existing streaming latestResult; otherwise use newest saved result.
+        const proofreadCandidate = this.latestResult && !this.latestResult.id
+          ? this.latestResult
+          : this.history[0];
+        if (proofreadCandidate && (proofreadCandidate.analysisType || proofreadCandidate.type) === 'Proofread') {
+          this.latestResult = proofreadCandidate;
           if (this.documentMatchesCurrentContext && this.documentText) {
             this.restoreProofreadStateFromLatestResult();
           }
@@ -1578,7 +1581,15 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           this.emitSuggestionRanges();
           this.autoShowFirstSuggestion();
         } else if ((result.analysisType || result.type) === 'LineEdit') {
-          this.lineEditRunSuggestions = this.mapDtoSuggestions(result);
+          const mapped = this.mapDtoSuggestions(result);
+          if (mapped.length) {
+            this.lineEditRunSuggestions = mapped;
+          } else {
+            const lineEdit = this.getLineEdit(result);
+            this.lineEditRunSuggestions = lineEdit
+              ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, result)
+              : [];
+          }
         }
         this.startProgressPollingIfNeeded(result);
         this.setLastRunDuration();
@@ -1860,7 +1871,15 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           this.emitSuggestionRanges();
           this.autoShowFirstSuggestion();
         } else if ((result.analysisType || result.type) === 'LineEdit') {
-          this.lineEditRunSuggestions = this.mapDtoSuggestions(result);
+          const mapped = this.mapDtoSuggestions(result);
+          if (mapped.length) {
+            this.lineEditRunSuggestions = mapped;
+          } else {
+            const lineEdit = this.getLineEdit(result);
+            this.lineEditRunSuggestions = lineEdit
+              ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, result)
+              : [];
+          }
         }
         this.analysisCompleted.emit();
       },
