@@ -1409,7 +1409,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.loadTemplates();
     }
     if (changes['documentText']) {
-      // Only restore when we have no suggestions yet and document text is for the current chapter,
+      // Only restore when we have no suggestions yet and document text is for the current chapter/scene,
       // and we haven't already restored for this context (avoids re-diffing on every edit).
       if (
         !this.hasRestoredProofreadForCurrentContext &&
@@ -1417,6 +1417,18 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.documentMatchesCurrentContext
       ) {
         this.restoreProofreadStateFromLatestResult();
+      }
+
+      // For Line Edit, when we have a latestResult and the document now matches the current context,
+      // restore run-tab suggestions once (so offsets are computed against the correct document).
+      if (
+        this.latestResult &&
+        (this.latestResult.analysisType || this.latestResult.type) === 'LineEdit' &&
+        this.lineEditRunSuggestions.length === 0 &&
+        this.documentMatchesCurrentContext &&
+        this.documentText
+      ) {
+        this.restoreLineEditStateFromResult(this.latestResult);
       }
     }
   }
@@ -1556,7 +1568,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           const latestType = this.latestResult.analysisType || this.latestResult.type;
           if (latestType === 'Proofread' && this.documentMatchesCurrentContext && this.documentText) {
             this.restoreProofreadStateFromLatestResult();
-          } else if (latestType === 'LineEdit') {
+          } else if (latestType === 'LineEdit' && this.documentMatchesCurrentContext && this.documentText) {
             this.restoreLineEditStateFromResult(this.latestResult);
           }
         }
