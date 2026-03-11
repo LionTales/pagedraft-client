@@ -705,14 +705,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     result: AnalysisResultDto | null | undefined,
     adjustOffsets: boolean = true
   ): AnalysisSuggestion[] {
-    const list: AnalysisSuggestionDto[] = (result?.suggestions ?? []).slice().sort((a, b) => {
-      const ao = (a as any).orderIndex as number | undefined;
-      const bo = (b as any).orderIndex as number | undefined;
-      if (ao == null && bo == null) return 0;
-      if (ao == null) return 1;
-      if (bo == null) return -1;
-      return ao - bo;
-    });
+    const list: AnalysisSuggestionDto[] = (result?.suggestions ?? [])
+      .slice()
+      .sort((a, b) => a.orderIndex - b.orderIndex);
     const mapped = list.map(dto => ({
       id: dto.id,
       startOffset: dto.startOffset,
@@ -1534,8 +1529,11 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     if (!this.bookId || !this.chapterId) return;
     const loadingChapterId = this.chapterId;
     const loadingSceneId = this.sceneId ?? undefined;
+    const loadingHistoryFilterType = this.historyFilterType ?? null;
     const existingHistory = this.allAnalyses;
-    this.analysisService.getHistory(this.bookId, this.chapterId, this.historyFilterType ?? undefined, this.sceneId ?? undefined).subscribe({
+    this.analysisService
+      .getHistory(this.bookId, this.chapterId, loadingHistoryFilterType ?? undefined, this.sceneId ?? undefined)
+      .subscribe({
       next: (items) => {
         // Ignore if user switched chapter/scene before this response
         if (this.chapterId !== loadingChapterId || (this.sceneId ?? undefined) !== loadingSceneId) return;
@@ -1543,7 +1541,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         // When merging (async flows) or when a history type filter is active, merge the API results
         // into the existing full list so other types and Active analyses are preserved.
         // Only when loading unfiltered history for the first time do we replace the list entirely.
-        const shouldMerge = mergeWithExisting || !!this.historyFilterType;
+        const shouldMerge = mergeWithExisting || !!loadingHistoryFilterType;
         this.allAnalyses = shouldMerge
           ? this.mergeHistoryWithExisting(fromApi, existingHistory)
           : fromApi;
