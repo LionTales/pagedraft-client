@@ -695,6 +695,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   currentProgressPercent: number | null = null;
   /** Line Edit suggestions for the current Run tab (from server-side AnalysisSuggestion rows). */
   lineEditRunSuggestions: AnalysisSuggestion[] = [];
+  /** True after we've restored Line Edit suggestions for the current chapter/scene (so we don't re-run mapping on every documentText change while user edits). */
+  private hasRestoredLineEditForCurrentContext = false;
   /** Cached list of Active analyses (by status) for the current chapter/scene, used for re-analysis warnings. */
   private activeAnalyses: AnalysisResultDto[] = [];
   /** ID of the suggestion currently being explained via the Why? button (null = none loading). */
@@ -1404,6 +1406,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.acceptedLineEditKeys.clear();
       this.streamingText = '';
       this.hasRestoredProofreadForCurrentContext = false;
+      this.hasRestoredLineEditForCurrentContext = false;
       this.explainingSuggestionId = null;
       // Reset history filter so we load all types for the new chapter and can restore Proofread state
       this.historyFilterType = null;
@@ -1431,11 +1434,13 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       if (
         this.latestResult &&
         (this.latestResult.analysisType || this.latestResult.type) === 'LineEdit' &&
+        !this.hasRestoredLineEditForCurrentContext &&
         this.lineEditRunSuggestions.length === 0 &&
         this.documentMatchesCurrentContext &&
         this.documentText
       ) {
         this.restoreLineEditStateFromResult(this.latestResult);
+        this.hasRestoredLineEditForCurrentContext = true;
       }
     }
   }
@@ -1502,6 +1507,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       const key = `${keyPrefix}${orig}-${sugg}`;
       return !this.acceptedLineEditKeys.has(key) && !this.dismissedLineEditKeys.has(key);
     });
+    this.hasRestoredLineEditForCurrentContext = true;
   }
 
   /** True when documentText is known to be for the current chapter/scene (so safe to restore from latestResult). */
@@ -1691,6 +1697,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
+      this.hasRestoredLineEditForCurrentContext = false;
     this.emitSuggestionRanges();
 
     this.analysisService.run(this.bookId, this.chapterId, {
@@ -1750,6 +1757,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
+      this.hasRestoredLineEditForCurrentContext = false;
     this.emitSuggestionRanges();
 
     const requestBody = {
