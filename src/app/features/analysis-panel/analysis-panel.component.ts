@@ -995,6 +995,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   /** True when this version's suggestion has a Reverted outcome (so we grey it out and show Redo). */
   isVersionReverted(v: DocumentVersionDto): boolean {
+    // This implementation only supports analyses that have server-side suggestions loaded into allAnalyses.
+    // Legacy analyses without persisted suggestions will always return false here and are not supported in this app.
     const aid = (v.analysisResultId ?? v.analysisId) ?? '';
     if (!aid || v.originalText == null || v.suggestedText == null) return false;
     const orig = this.normalizeKeyText(v.originalText);
@@ -1723,7 +1725,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.allAnalyses = shouldMerge
           ? this.mergeHistoryWithExisting(fromApi, existingHistory)
           : fromApi;
-        this.rebuildHistoryFromAllAnalyses();
+        this.rebuildHistoryFromAllAnalyses(loadingHistoryFilterType);
         this.selectedIndex = 0;
         // Full reload: clear outcome key sets so displayed state is exactly what the API returned (avoids stale Reverted/Accepted and duplicate display).
         // When we're merely changing the history filter or merging async results, keep in-memory
@@ -1800,15 +1802,15 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return merged;
   }
 
-  /** Recompute activeAnalyses and history from the current allAnalyses, honoring historyFilterType. */
-  private rebuildHistoryFromAllAnalyses(): void {
+  /** Recompute activeAnalyses and history from the current allAnalyses, honoring the given history filter. */
+  private rebuildHistoryFromAllAnalyses(filterType: string | null = this.historyFilterType): void {
     // Cache Active analyses (by status) for re-analysis lifecycle checks.
     this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
     // History should reflect all runs (Active + non-Active); rely on status badges/ordering
     // in the future rather than hiding Active analyses when Archived ones exist.
     const base = this.allAnalyses;
-    this.history = this.historyFilterType
-      ? base.filter(r => (r.analysisType || r.type) === this.historyFilterType)
+    this.history = filterType
+      ? base.filter(r => (r.analysisType || r.type) === filterType)
       : base;
   }
 
