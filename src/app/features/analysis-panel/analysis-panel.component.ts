@@ -112,12 +112,14 @@ import { SuggestionCardComponent } from './suggestion-card.component';
             </app-suggestion-card>
           </div>
         </div>
-        <!-- Line Edit (Run): overallFeedback + server-side suggestion cards -->
-        <ng-container *ngIf="latestResult && getLineEdit(latestResult) as lineEdit">
+        <!-- Line Edit (Run): overallFeedback (when available) + server-side suggestion cards -->
+        <ng-container *ngIf="latestResult && (latestResult.analysisType || latestResult.type) === 'LineEdit'">
           <article class="result-view">
             <h4>{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
-            <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
-            <div class="line-edit-suggestions">
+            <ng-container *ngIf="getLineEdit(latestResult) as lineEdit">
+              <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
+            </ng-container>
+            <div class="line-edit-suggestions" *ngIf="lineEditRunSuggestions.length > 0">
               <app-suggestion-card
                 *ngFor="let s of lineEditRunSuggestions"
                 [suggestion]="s"
@@ -1570,11 +1572,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       if (this.bookId && this.chapterId) {
         this.loadTemplates();
         this.loadHistory();
-        // If the Versions tab is currently active when chapter/scene changes,
-        // eagerly reload versions so the list reflects the new context.
-        if (this.activeSubTab === 'versions') {
-          this.loadVersions();
-        }
+        // Eagerly load versions for the new context so Versions tab and
+        // version-related helpers (isVersionReverted / isVersionLocked)
+        // have up-to-date data regardless of the currently active sub-tab.
+        this.loadVersions();
       }
     }
     if (changes['bookLanguage'] && this.bookId && this.chapterId) {
