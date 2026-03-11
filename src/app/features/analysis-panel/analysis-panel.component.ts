@@ -132,7 +132,12 @@ import { SuggestionCardComponent } from './suggestion-card.component';
             </div>
           </article>
         </ng-container>
-        <article class="result-view" *ngIf="(streamingText || latestResult) && !(latestResult && (latestResult.analysisType || latestResult.type) === 'Proofread' && proofreadSuggestions.length) && !(latestResult && getLineEdit(latestResult)); else emptyRun">
+        <article
+          class="result-view"
+          *ngIf="(streamingText || latestResult)
+                 && !(latestResult && (latestResult.analysisType || latestResult.type) === 'Proofread' && proofreadSuggestions.length)
+                 && !(latestResult && (latestResult.analysisType || latestResult.type) === 'LineEdit' && lineEditRunSuggestions.length)
+                 && !(latestResult && getLineEdit(latestResult)); else emptyRun">
           <h4 *ngIf="streamingText">Live result</h4>
           <h4 *ngIf="!streamingText && latestResult">{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
           <p class="proofread-length-hint muted" *ngIf="showProofreadLengthHint">
@@ -198,8 +203,10 @@ import { SuggestionCardComponent } from './suggestion-card.component';
             </div>
           </ng-container>
           <!-- Line Edit (history): read-only list with Accepted/Dismissed status -->
-          <ng-container *ngIf="getLineEdit(current) as lineEdit">
-            <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
+          <ng-container *ngIf="(current.analysisType || current.type) === 'LineEdit'">
+            <ng-container *ngIf="getLineEdit(current) as lineEdit">
+              <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
+            </ng-container>
             <div class="line-edit-suggestions" *ngIf="lineEditSuggestionsWithStatus(current).length > 0">
               <h4>Suggestions — what happened</h4>
               <div class="history-outcome-filter">
