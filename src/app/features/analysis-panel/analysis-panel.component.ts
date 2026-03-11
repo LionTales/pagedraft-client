@@ -1513,14 +1513,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.allAnalyses = shouldMerge
           ? this.mergeHistoryWithExisting(fromApi, existingHistory)
           : fromApi;
-        // Cache Active analyses (by status) for re-analysis lifecycle checks.
-        this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
-        // History tab shows only Archived analyses (or those without a status yet, treated as Archived),
-        // further filtered by historyFilterType when set.
-        const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
-        this.history = this.historyFilterType
-          ? archived.filter(r => (r.analysisType || r.type) === this.historyFilterType)
-          : archived;
+        this.rebuildHistoryFromAllAnalyses();
         this.selectedIndex = 0;
         // Full reload: clear outcome key sets so displayed state is exactly what the API returned (avoids stale Reverted/Accepted and duplicate display).
         if (!mergeWithExisting) {
@@ -1581,6 +1574,18 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     }
     merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return merged;
+  }
+
+  /** Recompute activeAnalyses and history from the current allAnalyses, honoring historyFilterType. */
+  private rebuildHistoryFromAllAnalyses(): void {
+    // Cache Active analyses (by status) for re-analysis lifecycle checks.
+    this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
+    // History tab shows only Archived analyses (or those without a status yet, treated as Archived),
+    // further filtered by historyFilterType when set.
+    const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
+    this.history = this.historyFilterType
+      ? archived.filter(r => (r.analysisType || r.type) === this.historyFilterType)
+      : archived;
   }
 
 
@@ -1661,8 +1666,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.runError = null;
         // Keep allAnalyses and activeAnalyses in sync so re-analysis checks see the latest run.
         this.allAnalyses = [result, ...this.allAnalyses];
-        this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
-        this.history = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
+        this.rebuildHistoryFromAllAnalyses();
         this.selectedIndex = 0;
         this.latestResult = result;
         this.activeSubTab = 'run';
@@ -1949,8 +1953,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.setLastRunDuration();
         // Keep allAnalyses and activeAnalyses in sync so re-analysis checks see the latest run.
         this.allAnalyses = [result, ...this.allAnalyses];
-        this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
-        this.history = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
+        this.rebuildHistoryFromAllAnalyses();
         this.selectedIndex = 0;
         this.latestResult = result;
         this.activeSubTab = 'run';
