@@ -1460,6 +1460,26 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
             this.restoreProofreadStateFromLatestResult();
           }
         }
+        // For streaming Line Edit runs, once the server-side result (with structuredResult but no suggestions DTOs)
+        // is available in history, replace the synthetic streaming latestResult with the persisted one and
+        // recompute suggestion cards from structuredResult so the Run tab shows Line Edit suggestions again.
+        if (this.latestResult && !this.latestResult.id) {
+          const latestLineEdit = this.allAnalyses.find(r =>
+            !!(r.id && r.id.trim()) && (r.analysisType || r.type) === 'LineEdit'
+          );
+          if (latestLineEdit) {
+            this.latestResult = latestLineEdit;
+            const mappedLineEdit = this.mapDtoSuggestions(latestLineEdit);
+            if (mappedLineEdit.length) {
+              this.lineEditRunSuggestions = mappedLineEdit;
+            } else {
+              const lineEdit = this.getLineEdit(latestLineEdit);
+              this.lineEditRunSuggestions = lineEdit
+                ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, latestLineEdit)
+                : [];
+            }
+          }
+        }
         this.cdr.detectChanges();
       },
       error: () => {
