@@ -1624,9 +1624,12 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       const status = (r.status || '').toLowerCase();
       return !status || status === 'active';
     });
-    // History tab shows analyses that are not explicitly Active (including those that
-    // do not yet have a status set), further filtered by historyFilterType when set.
-    const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
+    // History tab shows analyses whose status is explicitly non-Active. Results without a status
+    // are treated as Active-only to avoid double-counting them in both Active and History lists.
+    const archived = this.allAnalyses.filter(r => {
+      const status = (r.status || '').toLowerCase();
+      return !!status && status !== 'active';
+    });
     this.history = this.historyFilterType
       ? archived.filter(r => (r.analysisType || r.type) === this.historyFilterType)
       : archived;
