@@ -728,9 +728,26 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           const searchStart = Math.max(0, s.startOffset - searchRadius);
           const searchEnd = Math.min(doc.length, s.endOffset + searchRadius);
           const region = doc.slice(searchStart, searchEnd);
-          const idx = region.indexOf(s.original);
-          if (idx >= 0) {
-            s.startOffset = searchStart + idx;
+
+          // Find the occurrence of s.original within the search window whose
+          // absolute position is closest to the original startOffset. This
+          // avoids snapping to the first repeated word in the region.
+          let bestRelativeIdx = -1;
+          let bestDistance = Number.MAX_SAFE_INTEGER;
+          let scanIdx = region.indexOf(s.original);
+          while (scanIdx >= 0) {
+            const absPos = searchStart + scanIdx;
+            const distance = Math.abs(absPos - s.startOffset);
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              bestRelativeIdx = scanIdx;
+              if (distance === 0) break;
+            }
+            scanIdx = region.indexOf(s.original, scanIdx + 1);
+          }
+
+          if (bestRelativeIdx >= 0) {
+            s.startOffset = searchStart + bestRelativeIdx;
             s.endOffset = s.startOffset + s.original.length;
           }
         }
@@ -1111,6 +1128,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     // Remove from the current Run tab suggestions so accepted items disappear immediately
     this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(x => x !== suggestion);
     if (this.bookId && this.chapterId && current.id && suggestion.id) {
+      this.applyOutcomeToSuggestionDtos(suggestion.id, 'Accepted');
       this.analysisService
         .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Accepted')
         .subscribe({ error: () => {} });
@@ -1125,6 +1143,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     // Remove from the current Run tab suggestions so dismissed items disappear immediately
     this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(x => x !== suggestion);
     if (this.bookId && this.chapterId && current.id && suggestion.id) {
+      this.applyOutcomeToSuggestionDtos(suggestion.id, 'Dismissed');
       this.analysisService
         .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Dismissed')
         .subscribe({ error: () => {} });
@@ -1172,6 +1191,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       const key = this.proofreadSuggestionKey(this.latestResult, s);
       this.acceptedProofreadHistoryKeys.add(key);
       if (this.bookId && this.chapterId && this.latestResult.id && s.id) {
+        this.applyOutcomeToSuggestionDtos(s.id, 'Accepted');
         this.analysisService
           .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Accepted')
           .subscribe({ error: () => {} });
@@ -1191,6 +1211,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       const key = this.proofreadSuggestionKey(this.latestResult, s);
       this.dismissedProofreadHistoryKeys.add(key);
       if (this.bookId && this.chapterId && this.latestResult.id && s.id) {
+        this.applyOutcomeToSuggestionDtos(s.id, 'Dismissed');
         this.analysisService
           .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Dismissed')
           .subscribe({ error: () => {} });
@@ -1213,6 +1234,26 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       const dto = result.suggestions.find(x => x.id && x.id === suggestionId);
       if (dto) {
         dto.explanation = explanation;
+      }
+    }
+  }
+
+  private applyOutcomeToSuggestionDtos(
+    suggestionId: string,
+    outcome: 'Accepted' | 'Dismissed' | 'Reverted' | 'Superseded'
+  ): void {
+    const sources: AnalysisResultDto[] = [];
+    if (this.latestResult) {
+      sources.push(this.latestResult);
+    }
+    if (this.allAnalyses?.length) {
+      sources.push(...this.allAnalyses);
+    }
+    for (const result of sources) {
+      if (!result?.suggestions?.length) continue;
+      const dto = result.suggestions.find(x => x.id && x.id === suggestionId);
+      if (dto) {
+        dto.outcome = outcome;
       }
     }
   }
@@ -1250,6 +1291,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const key = this.proofreadSuggestionKey(current, s);
     this.acceptedProofreadHistoryKeys.add(key);
     if (this.bookId && this.chapterId && current.id && s.id) {
+      this.applyOutcomeToSuggestionDtos(s.id, 'Accepted');
       this.analysisService
         .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Accepted')
         .subscribe({ error: () => {} });
@@ -1265,6 +1307,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const key = this.proofreadSuggestionKey(current, s);
     this.dismissedProofreadHistoryKeys.add(key);
     if (this.bookId && this.chapterId && current.id && s.id) {
+      this.applyOutcomeToSuggestionDtos(s.id, 'Dismissed');
       this.analysisService
         .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Dismissed')
         .subscribe({ error: () => {} });
