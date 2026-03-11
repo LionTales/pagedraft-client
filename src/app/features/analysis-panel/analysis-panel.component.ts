@@ -923,12 +923,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return status === 'archived';
   }
 
-  /** Mark a suggestion as Reverted in in-memory analysis results so History reflects version reverts. */
+  /** Mark a suggestion as Reverted in in-memory analysis results and persist to server so History reflects version reverts. */
   markSuggestionReverted(analysisId: string, originalText: string, suggestedText: string): void {
     if (!analysisId || !originalText || !suggestedText) return;
     const id = analysisId.toLowerCase();
     const normOriginal = this.normalizeKeyText(originalText);
     const normSuggested = this.normalizeKeyText(suggestedText);
+
+    const updatedSuggestionIds = new Set<string>();
 
     const updateResult = (result: AnalysisResultDto | null | undefined): void => {
       if (!result?.suggestions?.length || (result.id || '').toLowerCase() !== id) return;
@@ -938,6 +940,12 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       );
       if (dto) {
         dto.outcome = 'Reverted';
+        if (this.bookId && this.chapterId && dto.id && !updatedSuggestionIds.has(dto.id)) {
+          updatedSuggestionIds.add(dto.id);
+          this.analysisService
+            .updateSuggestionOutcome(this.bookId, this.chapterId, dto.id, 'Reverted')
+            .subscribe({ error: () => {} });
+        }
       }
     };
 
@@ -1083,6 +1091,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const orig = this.normalizeKeyText(suggestion.original);
     const sugg = this.normalizeKeyText(suggestion.suggested);
     this.acceptedLineEditKeys.add(`${id}-${orig}-${sugg}`);
+    // Remove from the current Run tab suggestions so accepted items disappear immediately
+    this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(x => x !== suggestion);
     if (this.bookId && this.chapterId && current.id && suggestion.id) {
       this.analysisService
         .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Accepted')
@@ -1095,6 +1105,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const orig = this.normalizeKeyText(suggestion.original);
     const sugg = this.normalizeKeyText(suggestion.suggested);
     this.dismissedLineEditKeys.add(`${id}-${orig}-${sugg}`);
+    // Remove from the current Run tab suggestions so dismissed items disappear immediately
+    this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(x => x !== suggestion);
     if (this.bookId && this.chapterId && current.id && suggestion.id) {
       this.analysisService
         .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Dismissed')
