@@ -848,7 +848,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           const outcome = (s.outcome || '').toLowerCase();
           if (outcome === 'accepted') status = 'accepted';
           else if (outcome === 'dismissed') status = 'dismissed';
-          else if (outcome === 'reverted') status = 'reverted';
+          else if (outcome === 'reverted' || outcome === 'superseded') status = 'reverted';
           else status = 'pending';
         }
         result.push({ suggestion: s, status });
@@ -1024,7 +1024,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           const outcome = (s.outcome || '').toLowerCase();
           if (outcome === 'accepted') status = 'accepted';
           else if (outcome === 'dismissed') status = 'dismissed';
-          else if (outcome === 'reverted') status = 'reverted';
+          else if (outcome === 'reverted' || outcome === 'superseded') status = 'reverted';
           else status = 'pending';
         }
         result.push({ suggestion: s, status });
@@ -1319,6 +1319,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.proofreadSuggestions = [];
       this.proofreadSuggestionsUnreliable = false;
       this.lineEditRunSuggestions = [];
+      this.history = [];
+      this.allAnalyses = [];
+      this.activeAnalyses = [];
       this.dismissedProofreadHistoryKeys.clear();
       this.acceptedProofreadHistoryKeys.clear();
       this.dismissedLineEditKeys.clear();
