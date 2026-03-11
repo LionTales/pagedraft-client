@@ -1443,7 +1443,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
     this.proofreadSuggestions = all.filter(s => {
       const outcome = (s.outcome || '').toLowerCase();
-      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'superseded') return false;
+      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'reverted' || outcome === 'superseded') return false;
       const key = this.proofreadSuggestionKey(this.latestResult!, s);
       return !this.acceptedProofreadHistoryKeys.has(key) && !this.dismissedProofreadHistoryKeys.has(key);
     });
@@ -1473,7 +1473,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
     this.lineEditRunSuggestions = base.filter(s => {
       const outcome = (s.outcome || '').toLowerCase();
-      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'superseded') {
+      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'reverted' || outcome === 'superseded') {
         return false;
       }
       if (!keyPrefix) return true;
@@ -1525,7 +1525,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.rebuildHistoryFromAllAnalyses();
         this.selectedIndex = 0;
         // Full reload: clear outcome key sets so displayed state is exactly what the API returned (avoids stale Reverted/Accepted and duplicate display).
-        if (!mergeWithExisting) {
+        // When we're merely changing the history filter or merging async results, keep in-memory
+        // Accepted/Dismissed/Reverted sets so the current session's state is preserved.
+        if (!shouldMerge) {
           this.acceptedProofreadHistoryKeys.clear();
           this.dismissedProofreadHistoryKeys.clear();
           this.acceptedLineEditKeys.clear();
@@ -2039,7 +2041,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     for (const analysis of this.activeAnalyses) {
       const analysisType = analysis.analysisType || analysis.type;
       if (analysisType !== type) continue;
-      const suggestions = this.mapDtoSuggestions(analysis);
+      const suggestions = this.mapDtoSuggestions(analysis, false);
       total += suggestions.filter(s => {
         const outcome = (s.outcome || '').toLowerCase();
         return !outcome || outcome === 'pending';
