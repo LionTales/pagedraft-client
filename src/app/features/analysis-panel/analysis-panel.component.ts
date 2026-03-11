@@ -973,6 +973,11 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     }
 
     if (!this.bookId || !this.chapterId || updatedSuggestionIds.size === 0) {
+      // Even when there are no server-side suggestion rows to update (legacy analyses or
+      // runs without suggestions for this text), the editor has already reverted the
+      // document content. Refresh History/Versions so UI reflects the new state.
+      this.refreshHistory();
+      this.refreshVersions();
       return;
     }
 
@@ -1221,26 +1226,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.cdr.detectChanges();
   }
 
-  private applyExplanationToSuggestionDtos(suggestionId: string, explanation: string): void {
-    const sources: AnalysisResultDto[] = [];
-    if (this.latestResult) {
-      sources.push(this.latestResult);
-    }
-    if (this.allAnalyses?.length) {
-      sources.push(...this.allAnalyses);
-    }
-    for (const result of sources) {
-      if (!result?.suggestions?.length) continue;
-      const dto = result.suggestions.find(x => x.id && x.id === suggestionId);
-      if (dto) {
-        dto.explanation = explanation;
-      }
-    }
-  }
-
-  private applyOutcomeToSuggestionDtos(
+  private updateSuggestionDtos(
     suggestionId: string,
-    outcome: 'Accepted' | 'Dismissed' | 'Reverted' | 'Superseded'
+    update: (dto: AnalysisSuggestionDto) => void
   ): void {
     const sources: AnalysisResultDto[] = [];
     if (this.latestResult) {
@@ -1253,9 +1241,24 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       if (!result?.suggestions?.length) continue;
       const dto = result.suggestions.find(x => x.id && x.id === suggestionId);
       if (dto) {
-        dto.outcome = outcome;
+        update(dto);
       }
     }
+  }
+
+  private applyExplanationToSuggestionDtos(suggestionId: string, explanation: string): void {
+    this.updateSuggestionDtos(suggestionId, dto => {
+      dto.explanation = explanation;
+    });
+  }
+
+  private applyOutcomeToSuggestionDtos(
+    suggestionId: string,
+    outcome: 'Accepted' | 'Dismissed' | 'Reverted' | 'Superseded'
+  ): void {
+    this.updateSuggestionDtos(suggestionId, dto => {
+      dto.outcome = outcome;
+    });
   }
 
   onExplainSuggestion(s: AnalysisSuggestion): void {

@@ -864,7 +864,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       // the newly opened document does not retain stale highlight formatting.
       sfdt = this.stripHighlightFromSfdt(sfdt);
       // Offsets from proofread diff are in normalized document text; use currentDocumentPlainText for the slice
-      const currentText = this.currentDocumentPlainText || this.getTextFromSfdt(sfdt) || this.getPlainTextFromEditor();
+      const currentText =
+        this.currentDocumentPlainText ||
+        normalizeTextForAnalysis(this.getTextFromSfdt(sfdt) || this.getPlainTextFromEditor());
       let startOffset = event.startOffset;
       let endOffset = event.endOffset;
       // When offsets missing but originalText provided (e.g. Redo suggestion from Versions), find range in normalized document
@@ -1056,7 +1058,10 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       sfdt = this.stripHighlightFromSfdt(sfdt);
 
       if (ranges.length > 0) {
-        const docLen = this.getTextFromSfdt(sfdt).length || this.getPlainTextFromEditor().length;
+        const docLen =
+          this.currentDocumentPlainText.length ||
+          normalizeTextForAnalysis(this.getTextFromSfdt(sfdt)).length ||
+          normalizeTextForAnalysis(this.getPlainTextFromEditor()).length;
         const validRanges = ranges.filter(({ startOffset, endOffset }) => {
           const spanLen = endOffset - startOffset;
           return docLen <= 0 || spanLen < docLen * 0.9;
