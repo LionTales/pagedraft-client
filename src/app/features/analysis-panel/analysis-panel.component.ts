@@ -104,7 +104,7 @@ import { SuggestionCardComponent } from './suggestion-card.component';
             <app-suggestion-card
               *ngFor="let s of proofreadSuggestions"
               [suggestion]="s"
-              [loadingExplanation]="explainingSuggestionId === s.id"
+              [loadingExplanation]="!!(s.id && explainingSuggestionIds.has(s.id))"
               (accept)="onProofreadAccept(s)"
               (dismiss)="onProofreadDismiss(s)"
               (explain)="onExplainSuggestion($event)"
@@ -120,10 +120,10 @@ import { SuggestionCardComponent } from './suggestion-card.component';
               <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
             </ng-container>
             <div class="line-edit-suggestions" *ngIf="lineEditRunSuggestions.length > 0">
-              <app-suggestion-card
+            <app-suggestion-card
                 *ngFor="let s of lineEditRunSuggestions"
                 [suggestion]="s"
-                [loadingExplanation]="explainingSuggestionId === s.id"
+                [loadingExplanation]="!!(s.id && explainingSuggestionIds.has(s.id))"
                 (accept)="onLineEditAccept(s, latestResult)"
                 (dismiss)="onLineEditDismiss(s, latestResult)"
                 (explain)="onExplainSuggestion($event)"
@@ -196,7 +196,7 @@ import { SuggestionCardComponent } from './suggestion-card.component';
                   [suggestion]="item.suggestion"
                   [readOnly]="true"
                   [status]="item.status"
-                  [loadingExplanation]="explainingSuggestionId === item.suggestion.id"
+                  [loadingExplanation]="!!(item.suggestion.id && explainingSuggestionIds.has(item.suggestion.id))"
                   (explain)="onExplainSuggestion($event)">
                 </app-suggestion-card>
               </div>
@@ -221,7 +221,7 @@ import { SuggestionCardComponent } from './suggestion-card.component';
                 [suggestion]="item.suggestion"
                 [readOnly]="true"
                 [status]="item.status"
-                [loadingExplanation]="explainingSuggestionId === item.suggestion.id"
+                [loadingExplanation]="!!(item.suggestion.id && explainingSuggestionIds.has(item.suggestion.id))"
                 (explain)="onExplainSuggestion($event)">
               </app-suggestion-card>
             </div>
@@ -709,8 +709,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   private hasRestoredLineEditForCurrentContext = false;
   /** Cached list of Active analyses (by status) for the current chapter/scene, used for re-analysis warnings. */
   private activeAnalyses: AnalysisResultDto[] = [];
-  /** ID of the suggestion currently being explained via the Why? button (null = none loading). */
-  explainingSuggestionId: string | null = null;
+  /** IDs of suggestions currently being explained via the Why? button (empty = none loading). */
+  explainingSuggestionIds = new Set<string>();
 
   /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI. */
   private mapDtoSuggestions(
@@ -1441,17 +1441,17 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   onExplainSuggestion(s: AnalysisSuggestion): void {
     if (!s.id || !this.bookId || !this.chapterId) return;
-    this.explainingSuggestionId = s.id;
+    this.explainingSuggestionIds.add(s.id);
     this.cdr.detectChanges();
     this.analysisService.explainSuggestion(this.bookId, this.chapterId, s.id).subscribe({
       next: (res) => {
         s.explanation = res.explanation;
         this.applyExplanationToSuggestionDtos(s.id!, res.explanation);
-        this.explainingSuggestionId = null;
+        this.explainingSuggestionIds.delete(s.id!);
         this.cdr.detectChanges();
       },
       error: () => {
-        this.explainingSuggestionId = null;
+        this.explainingSuggestionIds.delete(s.id!);
         this.cdr.detectChanges();
       }
     });
@@ -1572,7 +1572,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.streamingText = '';
       this.hasRestoredProofreadForCurrentContext = false;
       this.hasRestoredLineEditForCurrentContext = false;
-      this.explainingSuggestionId = null;
+      this.explainingSuggestionIds.clear();
       this.recentOutcomeKeys = [];
       // Clear versions so we don't show versions from another chapter/scene.
       this.versions = [];
