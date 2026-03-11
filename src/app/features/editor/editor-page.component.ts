@@ -1344,6 +1344,11 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     return true;
   }
 
+  private getInlineTextLength(inline: Record<string, unknown>): number {
+    const text = inline['text'] ?? inline['tlp'];
+    return typeof text === 'string' ? normalizeTextForAnalysis(text).length : 0;
+  }
+
   /**
    * Convert a plain-text character offset (matching getTextFromSfdt output) to a
    * Syncfusion hierarchical position string. Syncfusion expects four segments for body content:
@@ -1564,6 +1569,20 @@ export class EditorPageComponent implements OnInit, OnDestroy {
           const cfKey = this.detectCharacterFormatKey(inlines);
           const segment = segments[segIdx++] ?? '';
           let template = inlines[0] ?? {};
+          // Prefer the inline with the longest text content as the style template so we
+          // inherit the dominant font/formatting for the paragraph instead of a tiny run.
+          if (inlines.length > 1) {
+            let best = template;
+            let bestLen = this.getInlineTextLength(best);
+            for (const cand of inlines) {
+              const len = this.getInlineTextLength(cand);
+              if (len > bestLen) {
+                best = cand;
+                bestLen = len;
+              }
+            }
+            template = best;
+          }
           // Preserve RTL so Accept doesn't strip bidi from the document
           if (isRtl) {
             const pf = block['paragraphFormat'] ?? block['pf'];

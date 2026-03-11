@@ -245,7 +245,7 @@ import { SuggestionCardComponent } from './suggestion-card.component';
         <div *ngIf="bookId && chapterId">
           <p class="muted versions-hint">Each accept or save creates a version. Revert to restore the document to that state.</p>
           <div class="versions-list" *ngIf="versions.length; else noVersions">
-            <div class="version-item" *ngFor="let v of versions">
+            <div class="version-item" *ngFor="let v of versions" [class.version-item-reverted]="isVersionReverted(v)">
               <div class="version-info">
                 <span class="version-date">{{ v.createdAt | date:'M/d/yy, h:mm:ss a' }}</span>
                 <ng-container *ngIf="versionLabelOriginal(v.label) && versionLabelSuggested(v.label); else plainLabel">
@@ -257,9 +257,8 @@ import { SuggestionCardComponent } from './suggestion-card.component';
                 </ng-template>
               </div>
               <div class="version-actions">
-                <button
-                  type="button"
-                  class="run-btn secondary btn-revert"
+                <button type="button" class="run-btn secondary btn-redo" *ngIf="isVersionReverted(v)" (click)="onRedoVersion(v)">Redo suggestion</button>
+                <button type="button" class="run-btn secondary btn-revert" *ngIf="!isVersionReverted(v)"
                   [disabled]="isVersionLocked(v)"
                   [title]="isVersionLocked(v) ? 'Cannot revert -- a newer analysis was run on the updated text' : ''"
                   (click)="onRevert(v.id)">
@@ -676,6 +675,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   dismissedProofreadHistoryKeys = new Set<string>();
   /** Keys of accepted Proofread suggestions in History (read-only display). */
   acceptedProofreadHistoryKeys = new Set<string>();
+  /** Keys of suggestions whose outcome changed in this session (most recent first). */
+  private recentOutcomeKeys: string[] = [];
   /** Original document text at the time of each Proofread run (key = chapterId-sceneId-createdAt). Used so History diff shows all suggestions including accepted. */
   private proofreadOriginalDocumentByRunKey = new Map<string, string>();
   /** True after we've restored proofread suggestions for the current chapter/scene (so we don't re-run diff on every documentText change while user edits). */
@@ -767,7 +768,13 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       }
     }
 
-    return mapped;
+    return mapped.filter(s => {
+      const origLen = (s.original ?? '').length;
+      const sugLen = (s.suggested ?? '').length;
+      if (origLen > 60 && sugLen <= 5) return false;
+      if (origLen > 30 && sugLen === 0) return false;
+      return true;
+    });
   }
 
   ngOnDestroy(): void {
@@ -846,9 +853,39 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return (t ?? '').normalize('NFC');
   }
 
+  /** Track a suggestion outcome change in this session so recently-touched items float to the top of History. */
+  private trackRecentOutcomeKey(key: string): void {
+    if (!key) return;
+    this.recentOutcomeKeys = [key, ...this.recentOutcomeKeys.filter(k => k !== key)].slice(0, 50);
+  }
+
   /** Order for History suggestion list: pending first, then accepted, then reverted, then dismissed. */
   private static suggestionStatusOrder(s: 'accepted' | 'dismissed' | 'reverted' | 'pending'): number {
     return s === 'pending' ? 0 : s === 'accepted' ? 1 : s === 'reverted' ? 2 : 3;
+  }
+
+  /**
+   * Sort history items so that suggestions whose outcome changed in this session appear first
+   * (in most-recent change order). Items not touched in this session fall back to status ordering.
+   */
+  private sortHistoryItemsWithRecentFirst(
+    items: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[],
+    keySelector: (s: AnalysisSuggestion) => string
+  ): typeof items {
+    if (!items.length || !this.recentOutcomeKeys.length) {
+      return items.sort(
+        (a, b) => AnalysisPanelComponent.suggestionStatusOrder(a.status) - AnalysisPanelComponent.suggestionStatusOrder(b.status)
+      );
+    }
+    const orderMap = new Map(this.recentOutcomeKeys.map((k, i) => [k, i]));
+    return items.sort((a, b) => {
+      const ka = keySelector(a.suggestion);
+      const kb = keySelector(b.suggestion);
+      const ia = orderMap.has(ka) ? orderMap.get(ka)! : Number.POSITIVE_INFINITY;
+      const ib = orderMap.has(kb) ? orderMap.get(kb)! : Number.POSITIVE_INFINITY;
+      if (ia !== ib) return ia - ib;
+      return AnalysisPanelComponent.suggestionStatusOrder(a.status) - AnalysisPanelComponent.suggestionStatusOrder(b.status);
+    });
   }
 
   /**
@@ -881,7 +918,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         }
         result.push({ suggestion: s, status });
       }
-      return result.sort((a, b) => AnalysisPanelComponent.suggestionStatusOrder(a.status) - AnalysisPanelComponent.suggestionStatusOrder(b.status));
+      return this.sortHistoryItemsWithRecentFirst(result, s => this.proofreadSuggestionKey(current, s));
     }
 
     const keyBased = suggestions.map(s => {
@@ -890,7 +927,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       if (this.dismissedProofreadHistoryKeys.has(key)) return { suggestion: s, status: 'dismissed' as const };
       return { suggestion: s, status: 'pending' as const };
     });
-    return keyBased.sort((a, b) => AnalysisPanelComponent.suggestionStatusOrder(a.status) - AnalysisPanelComponent.suggestionStatusOrder(b.status));
+    return this.sortHistoryItemsWithRecentFirst(keyBased, s => this.proofreadSuggestionKey(current, s));
   }
 
   /** Filtered by historySuggestionStatusFilter for Proofread history. */
@@ -945,6 +982,73 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.revertToVersion.emit(versionId);
   }
 
+  /** True when this version's suggestion has a Reverted outcome (so we grey it out and show Redo). */
+  isVersionReverted(v: DocumentVersionDto): boolean {
+    const aid = (v.analysisResultId ?? v.analysisId) ?? '';
+    if (!aid || v.originalText == null || v.suggestedText == null) return false;
+    const orig = this.normalizeKeyText(v.originalText);
+    const sugg = this.normalizeKeyText(v.suggestedText);
+    const aidLower = aid.toLowerCase();
+    const analysis = this.allAnalyses.find(r => (r.id || '').toLowerCase() === aidLower);
+    if (!analysis?.suggestions?.length) return false;
+    const match = analysis.suggestions.find(s =>
+      this.normalizeKeyText(s.originalText ?? '') === orig &&
+      this.normalizeKeyText(s.suggestedText ?? '') === sugg &&
+      (s.outcome || '').toLowerCase() === 'reverted'
+    );
+    return !!match;
+  }
+
+  /** Re-apply the suggestion (replace original with suggested), set outcome to Accepted, refresh versions and history. */
+  onRedoVersion(v: DocumentVersionDto): void {
+    const analysisId = v.analysisResultId ?? v.analysisId;
+    if (!analysisId || v.originalText == null || v.suggestedText == null || !this.bookId || !this.chapterId) return;
+
+    // Re-apply the suggestion in the editor without creating another version.
+    this.applyCorrection.emit({
+      text: v.suggestedText,
+      originalText: v.originalText,
+      analysisId,
+      skipCreatingVersion: true
+    });
+
+    // Find the matching suggestion row so we can persist outcome=Accepted using the new API.
+    const aidLower = analysisId.toLowerCase();
+    const orig = this.normalizeKeyText(v.originalText);
+    const sugg = this.normalizeKeyText(v.suggestedText);
+    const analysis = this.allAnalyses.find(r => (r.id || '').toLowerCase() === aidLower);
+    const dto = analysis?.suggestions?.find(s =>
+      this.normalizeKeyText(s.originalText ?? '') === orig &&
+      this.normalizeKeyText(s.suggestedText ?? '') === sugg
+    );
+
+    if (!dto?.id) {
+      return;
+    }
+
+    // Update in-memory outcome so History uses the new status immediately.
+    dto.outcome = 'Accepted';
+    if (analysis) {
+      const key = this.proofreadSuggestionKey(analysis, {
+        original: v.originalText,
+        suggested: v.suggestedText
+      });
+      this.trackRecentOutcomeKey(key);
+    }
+
+    this.analysisService
+      .updateSuggestionOutcome(this.bookId, this.chapterId, dto.id, 'Accepted')
+      .subscribe({
+        next: () => {
+          // Refresh lists so Versions/History reflect new outcome and styling.
+          this.loadHistory(true);
+          this.loadVersions();
+        },
+        error: () => {}
+      });
+  }
+
+
   /** True when this version is linked to an Archived analysis result, so Revert should be disabled. */
   isVersionLocked(v: DocumentVersionDto): boolean {
     const status = (v.analysisStatus || '').toLowerCase();
@@ -959,6 +1063,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const normSuggested = this.normalizeKeyText(suggestedText);
 
     const updatedSuggestionIds = new Set<string>();
+    const recentKeys: string[] = [];
 
     const updateResult = (result: AnalysisResultDto | null | undefined): void => {
       if (!result?.suggestions?.length || (result.id || '').toLowerCase() !== id) return;
@@ -971,6 +1076,11 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         if (dto.id) {
           updatedSuggestionIds.add(dto.id);
         }
+        const key = this.proofreadSuggestionKey(result, {
+          original: originalText,
+          suggested: suggestedText
+        });
+        recentKeys.push(key);
       }
     };
 
@@ -982,6 +1092,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         updateResult(r);
       }
     }
+
+    recentKeys.forEach(k => this.trackRecentOutcomeKey(k));
 
     if (!this.bookId || !this.chapterId || updatedSuggestionIds.size === 0) {
       // Even when there are no server-side suggestion rows to update (legacy analyses or
@@ -1210,6 +1322,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     if (this.latestResult) {
       const key = this.proofreadSuggestionKey(this.latestResult, s);
       this.acceptedProofreadHistoryKeys.add(key);
+      this.trackRecentOutcomeKey(key);
       if (this.bookId && this.chapterId && this.latestResult.id && s.id) {
         this.applyOutcomeToSuggestionDtos(s.id, 'Accepted');
         this.analysisService
@@ -1230,6 +1343,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     if (this.latestResult) {
       const key = this.proofreadSuggestionKey(this.latestResult, s);
       this.dismissedProofreadHistoryKeys.add(key);
+      this.trackRecentOutcomeKey(key);
       if (this.bookId && this.chapterId && this.latestResult.id && s.id) {
         this.applyOutcomeToSuggestionDtos(s.id, 'Dismissed');
         this.analysisService
@@ -1408,11 +1522,19 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.hasRestoredProofreadForCurrentContext = false;
       this.hasRestoredLineEditForCurrentContext = false;
       this.explainingSuggestionId = null;
+      this.recentOutcomeKeys = [];
+      // Clear versions so we don't show versions from another chapter/scene.
+      this.versions = [];
       // Reset history filter so we load all types for the new chapter and can restore Proofread state
       this.historyFilterType = null;
       if (this.bookId && this.chapterId) {
         this.loadTemplates();
         this.loadHistory();
+        // If the Versions tab is currently active when chapter/scene changes,
+        // eagerly reload versions so the list reflects the new context.
+        if (this.activeSubTab === 'versions') {
+          this.loadVersions();
+        }
       }
     }
     if (changes['bookLanguage'] && this.bookId && this.chapterId) {
@@ -1620,11 +1742,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   private rebuildHistoryFromAllAnalyses(): void {
     // Cache Active analyses (by status) for re-analysis lifecycle checks.
     this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
-    // History tab shows analyses whose status is not Active, including legacy rows with no status.
+    // Prefer non-Active analyses for History, but if none exist (e.g. new schema where
+    // Status is always Active until the backend starts archiving), fall back to all analyses
+    // so the History tab still shows runs instead of appearing empty.
     const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
+    const base = archived.length ? archived : this.allAnalyses;
     this.history = this.historyFilterType
-      ? archived.filter(r => (r.analysisType || r.type) === this.historyFilterType)
-      : archived;
+      ? base.filter(r => (r.analysisType || r.type) === this.historyFilterType)
+      : base;
   }
 
 
