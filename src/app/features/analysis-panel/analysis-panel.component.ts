@@ -1310,6 +1310,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Accepted')
         .subscribe({ error: () => {} });
     }
+    // After accepting from Run, let offsets be recomputed against the updated document
+    // text on the next documentText change, so remaining suggestions stay aligned.
+    this.lineEditRunSuggestions = [];
+    this.hasRestoredLineEditForCurrentContext = false;
   }
 
   onLineEditDismiss(suggestion: AnalysisSuggestion, current: AnalysisResultDto): void {
