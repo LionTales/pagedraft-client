@@ -8,6 +8,7 @@ import { AnalysisProgressService } from '../../core/services/analysis-progress.s
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
 import { ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
 import { proofreadDiff } from '../../core/utils/proofread-diff';
+import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-analysis';
 import { SuggestionCardComponent } from './suggestion-card.component';
 
 @Component({
@@ -704,7 +705,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     result: AnalysisResultDto | null | undefined,
     adjustOffsets: boolean = true
   ): AnalysisSuggestion[] {
-    const list: AnalysisSuggestionDto[] = result?.suggestions ?? [];
+    const list: AnalysisSuggestionDto[] = (result?.suggestions ?? []).slice().sort((a, b) => {
+      const ao = (a as any).orderIndex as number | undefined;
+      const bo = (b as any).orderIndex as number | undefined;
+      if (ao == null && bo == null) return 0;
+      if (ao == null) return 1;
+      if (bo == null) return -1;
+      return ao - bo;
+    });
     const mapped = list.map(dto => ({
       id: dto.id,
       startOffset: dto.startOffset,
@@ -1109,10 +1117,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return suggestions.map(s => {
       const suggestion: AnalysisSuggestion = { ...s };
       if (this.documentText) {
-        const idx = this.documentText.indexOf(s.original);
-        if (idx >= 0) {
-          suggestion.startOffset = idx;
-          suggestion.endOffset = idx + s.original.length;
+        const normalizedDoc = this.documentText;
+        const normalizedOriginal = normalizeTextForAnalysis(s.original || '');
+        if (normalizedOriginal) {
+          const idx = normalizedDoc.indexOf(normalizedOriginal);
+          if (idx >= 0) {
+            suggestion.startOffset = idx;
+            suggestion.endOffset = idx + normalizedOriginal.length;
+          }
         }
       }
       return suggestion;
