@@ -1574,7 +1574,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         if (this.latestResult && !this.latestResult.id && (this.latestResult.analysisType || this.latestResult.type) === this.selectedAnalysisType) {
           latestCandidate = this.latestResult;
         } else {
-          const allForType = this.allAnalyses
+          const source = this.activeAnalyses.length ? this.activeAnalyses : this.allAnalyses;
+          const allForType = source
             .filter(r => (r.analysisType || r.type) === this.selectedAnalysisType)
             .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
           latestCandidate = allForType[0] ?? null;
@@ -1618,18 +1619,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   /** Recompute activeAnalyses and history from the current allAnalyses, honoring historyFilterType. */
   private rebuildHistoryFromAllAnalyses(): void {
     // Cache Active analyses (by status) for re-analysis lifecycle checks.
-    // Treat missing/empty status as Active so freshly completed runs participate
-    // in re-analysis warnings until the backend marks them Archived.
-    this.activeAnalyses = this.allAnalyses.filter(r => {
-      const status = (r.status || '').toLowerCase();
-      return !status || status === 'active';
-    });
-    // History tab shows analyses whose status is explicitly non-Active. Results without a status
-    // are treated as Active-only to avoid double-counting them in both Active and History lists.
-    const archived = this.allAnalyses.filter(r => {
-      const status = (r.status || '').toLowerCase();
-      return !!status && status !== 'active';
-    });
+    this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
+    // History tab shows analyses whose status is not Active, including legacy rows with no status.
+    const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
     this.history = this.historyFilterType
       ? archived.filter(r => (r.analysisType || r.type) === this.historyFilterType)
       : archived;
