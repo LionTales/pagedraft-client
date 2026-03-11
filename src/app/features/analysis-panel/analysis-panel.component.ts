@@ -1464,7 +1464,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
     this.lineEditRunSuggestions = base.filter(s => {
       const outcome = (s.outcome || '').toLowerCase();
-      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'reverted' || outcome === 'superseded') {
+      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'superseded') {
         return false;
       }
       if (!keyPrefix) return true;
@@ -1670,8 +1670,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           if (this.documentText != null) {
             this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
           }
+          let all: AnalysisSuggestion[] = [];
           const mapped = this.mapDtoSuggestions(result);
-          this.proofreadSuggestions = mapped;
+          if (mapped.length) {
+            all = mapped;
+          } else if (this.documentText && result.resultText) {
+            all = proofreadDiff(this.documentText, result.resultText);
+          }
+          this.proofreadSuggestions = all;
           this.proofreadSuggestionsUnreliable = false;
           this.hasRestoredProofreadForCurrentContext = true;
           this.emitSuggestionRanges();
@@ -1952,8 +1958,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           if (this.documentText != null) {
             this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
           }
+          let all: AnalysisSuggestion[] = [];
           const mapped = this.mapDtoSuggestions(result);
-          this.proofreadSuggestions = mapped;
+          if (mapped.length) {
+            all = mapped;
+          } else if (this.documentText && result.resultText) {
+            all = proofreadDiff(this.documentText, result.resultText);
+          }
+          this.proofreadSuggestions = all;
           this.proofreadSuggestionsUnreliable = false;
           this.hasRestoredProofreadForCurrentContext = true;
           this.emitSuggestionRanges();
