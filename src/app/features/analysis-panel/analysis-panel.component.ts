@@ -700,7 +700,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   explainingSuggestionId: string | null = null;
 
   /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI. */
-  private mapDtoSuggestions(result: AnalysisResultDto | null | undefined): AnalysisSuggestion[] {
+  private mapDtoSuggestions(
+    result: AnalysisResultDto | null | undefined,
+    adjustOffsets: boolean = true
+  ): AnalysisSuggestion[] {
     const list: AnalysisSuggestionDto[] = result?.suggestions ?? [];
     const mapped = list.map(dto => ({
       id: dto.id,
@@ -714,46 +717,49 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       outcome: dto.outcome ?? undefined
     }));
 
-    // Validate and correct offsets: the server's normalized text may differ slightly
+    // Optionally validate and correct offsets: the server's normalized text may differ slightly
     // from the client's (Syncfusion GetText vs manual SFDT walk). If the slice at the
-    // reported offsets doesn't match originalText, search nearby and fix.
-    try {
-      if (this.documentText && mapped.length) {
-        const doc = this.documentText;
-        const searchRadius = 30;
-        for (const s of mapped) {
-          if (s.startOffset == null || s.endOffset == null || !s.original) continue;
-          const slice = doc.slice(s.startOffset, s.endOffset);
-          if (slice === s.original) continue;
-          const searchStart = Math.max(0, s.startOffset - searchRadius);
-          const searchEnd = Math.min(doc.length, s.endOffset + searchRadius);
-          const region = doc.slice(searchStart, searchEnd);
+    // reported offsets doesn't match originalText, search nearby and fix. This is only safe
+    // to apply for the current document; for historical results we keep server offsets as-is.
+    if (adjustOffsets) {
+      try {
+        if (this.documentText && mapped.length) {
+          const doc = this.documentText;
+          const searchRadius = 30;
+          for (const s of mapped) {
+            if (s.startOffset == null || s.endOffset == null || !s.original) continue;
+            const slice = doc.slice(s.startOffset, s.endOffset);
+            if (slice === s.original) continue;
+            const searchStart = Math.max(0, s.startOffset - searchRadius);
+            const searchEnd = Math.min(doc.length, s.endOffset + searchRadius);
+            const region = doc.slice(searchStart, searchEnd);
 
-          // Find the occurrence of s.original within the search window whose
-          // absolute position is closest to the original startOffset. This
-          // avoids snapping to the first repeated word in the region.
-          let bestRelativeIdx = -1;
-          let bestDistance = Number.MAX_SAFE_INTEGER;
-          let scanIdx = region.indexOf(s.original);
-          while (scanIdx >= 0) {
-            const absPos = searchStart + scanIdx;
-            const distance = Math.abs(absPos - s.startOffset);
-            if (distance < bestDistance) {
-              bestDistance = distance;
-              bestRelativeIdx = scanIdx;
-              if (distance === 0) break;
+            // Find the occurrence of s.original within the search window whose
+            // absolute position is closest to the original startOffset. This
+            // avoids snapping to the first repeated word in the region.
+            let bestRelativeIdx = -1;
+            let bestDistance = Number.MAX_SAFE_INTEGER;
+            let scanIdx = region.indexOf(s.original);
+            while (scanIdx >= 0) {
+              const absPos = searchStart + scanIdx;
+              const distance = Math.abs(absPos - s.startOffset);
+              if (distance < bestDistance) {
+                bestDistance = distance;
+                bestRelativeIdx = scanIdx;
+                if (distance === 0) break;
+              }
+              scanIdx = region.indexOf(s.original, scanIdx + 1);
             }
-            scanIdx = region.indexOf(s.original, scanIdx + 1);
-          }
 
-          if (bestRelativeIdx >= 0) {
-            s.startOffset = searchStart + bestRelativeIdx;
-            s.endOffset = s.startOffset + s.original.length;
+            if (bestRelativeIdx >= 0) {
+              s.startOffset = searchStart + bestRelativeIdx;
+              s.endOffset = s.startOffset + s.original.length;
+            }
           }
         }
+      } catch {
+        // best-effort correction only
       }
-    } catch {
-      // best-effort correction only
     }
 
     return mapped;
@@ -801,7 +807,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     if (!current || (current.analysisType || current.type) !== 'Proofread') return [];
     // Preferred: when backend AnalysisSuggestion rows exist, use them directly (includes outcome and reason/category).
     if (current.suggestions && current.suggestions.length) {
-      return this.mapDtoSuggestions(current);
+      return this.mapDtoSuggestions(current, false);
     }
     // Legacy/streaming fallback: requires resultText so we can diff.
     if (!current.resultText) return [];
@@ -1045,7 +1051,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   lineEditSuggestionsWithStatus(current: AnalysisResultDto): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
     // Preferred: use persisted AnalysisSuggestionDto rows when present.
     if (current.suggestions && current.suggestions.length) {
-      const base = this.mapDtoSuggestions(current);
+      const base = this.mapDtoSuggestions(current, false);
       const result: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] = [];
       const id = (current.id || '').toLowerCase();
       const keyPrefix = `${id}-`;
@@ -1530,18 +1536,17 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           this.history = [this.latestResult, ...this.history];
         }
         // Decide which result should be treated as "latest" for the Run tab:
-        // - If we already have a synthetic streaming latestResult, keep it for this pass.
-        // - Otherwise, prefer the most recent Active analysis for the current selected type
-        //   (so pending suggestions survive page refresh), falling back to the newest Archived result.
+        // - If we already have a synthetic streaming latestResult for this type, keep it for this pass.
+        // - Otherwise, prefer the most recent analysis whose type matches the currently selected type,
+        //   so the Run tab never shows results for a different analysis type than the picker.
         let latestCandidate: AnalysisResultDto | null = null;
-        if (this.latestResult && !this.latestResult.id) {
+        if (this.latestResult && !this.latestResult.id && (this.latestResult.analysisType || this.latestResult.type) === this.selectedAnalysisType) {
           latestCandidate = this.latestResult;
         } else {
-          const sortedActive = [...this.activeAnalyses].sort(
-            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-          );
-          const activeForType = sortedActive.find(r => (r.analysisType || r.type) === this.selectedAnalysisType);
-          latestCandidate = activeForType || sortedActive[0] || this.history[0] || null;
+          const allForType = this.allAnalyses
+            .filter(r => (r.analysisType || r.type) === this.selectedAnalysisType)
+            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          latestCandidate = allForType[0] ?? null;
         }
         if (latestCandidate) {
           this.latestResult = latestCandidate;
