@@ -734,8 +734,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           const searchRadius = 30;
           for (const s of mapped) {
             if (s.startOffset == null || s.endOffset == null || !s.original) continue;
+            const normalizedOriginal = normalizeTextForAnalysis(s.original || '');
+            if (!normalizedOriginal) continue;
             const slice = doc.slice(s.startOffset, s.endOffset);
-            if (slice === s.original) continue;
+            if (slice === normalizedOriginal) continue;
             const searchStart = Math.max(0, s.startOffset - searchRadius);
             const searchEnd = Math.min(doc.length, s.endOffset + searchRadius);
             const region = doc.slice(searchStart, searchEnd);
@@ -745,7 +747,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
             // avoids snapping to the first repeated word in the region.
             let bestRelativeIdx = -1;
             let bestDistance = Number.MAX_SAFE_INTEGER;
-            let scanIdx = region.indexOf(s.original);
+            let scanIdx = region.indexOf(normalizedOriginal);
             while (scanIdx >= 0) {
               const absPos = searchStart + scanIdx;
               const distance = Math.abs(absPos - s.startOffset);
@@ -754,12 +756,12 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
                 bestRelativeIdx = scanIdx;
                 if (distance === 0) break;
               }
-              scanIdx = region.indexOf(s.original, scanIdx + 1);
+              scanIdx = region.indexOf(normalizedOriginal, scanIdx + 1);
             }
 
             if (bestRelativeIdx >= 0) {
               s.startOffset = searchStart + bestRelativeIdx;
-              s.endOffset = s.startOffset + s.original.length;
+              s.endOffset = s.startOffset + normalizedOriginal.length;
             }
           }
         }
@@ -1250,7 +1252,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     suggestions: Array<{ original: string; suggested: string; reason: string; category: string }>,
     current: AnalysisResultDto
   ): AnalysisSuggestion[] {
-    const normalizedDoc = this.documentText ? normalizeTextForAnalysis(this.documentText) : null;
+    const normalizedDoc = this.documentText || null;
     return suggestions.map(s => {
       const suggestion: AnalysisSuggestion = { ...s };
       if (normalizedDoc) {
@@ -1739,12 +1741,24 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           latestCandidate = allForType[0] ?? null;
         }
         if (latestCandidate) {
-          this.latestResult = latestCandidate;
-          const latestType = this.latestResult.analysisType || this.latestResult.type;
-          if (latestType === 'Proofread' && this.documentMatchesCurrentContext && this.documentText) {
-            this.restoreProofreadStateFromLatestResult();
-          } else if (latestType === 'LineEdit' && this.documentMatchesCurrentContext && this.documentText) {
-            this.restoreLineEditStateFromResult(this.latestResult);
+          let shouldUpdateLatest = false;
+          if (!this.latestResult) {
+            shouldUpdateLatest = true;
+          } else {
+            const existingTime = new Date(this.latestResult.createdAt).getTime();
+            const candidateTime = new Date(latestCandidate.createdAt).getTime();
+            if (candidateTime >= existingTime) {
+              shouldUpdateLatest = true;
+            }
+          }
+          if (shouldUpdateLatest) {
+            this.latestResult = latestCandidate;
+            const latestType = this.latestResult.analysisType || this.latestResult.type;
+            if (latestType === 'Proofread' && this.documentMatchesCurrentContext && this.documentText) {
+              this.restoreProofreadStateFromLatestResult();
+            } else if (latestType === 'LineEdit' && this.documentMatchesCurrentContext && this.documentText) {
+              this.restoreLineEditStateFromResult(this.latestResult);
+            }
           }
         }
         this.cdr.detectChanges();
@@ -1778,11 +1792,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   private rebuildHistoryFromAllAnalyses(): void {
     // Cache Active analyses (by status) for re-analysis lifecycle checks.
     this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
-    // Prefer non-Active analyses for History, but if none exist (e.g. new schema where
-    // Status is always Active until the backend starts archiving), fall back to all analyses
-    // so the History tab still shows runs instead of appearing empty.
-    const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
-    const base = archived.length ? archived : this.allAnalyses;
+    // History should reflect all runs (Active + non-Active); rely on status badges/ordering
+    // in the future rather than hiding Active analyses when Archived ones exist.
+    const base = this.allAnalyses;
     this.history = this.historyFilterType
       ? base.filter(r => (r.analysisType || r.type) === this.historyFilterType)
       : base;
@@ -1853,7 +1865,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
-      this.hasRestoredLineEditForCurrentContext = false;
+    this.hasRestoredLineEditForCurrentContext = false;
     this.emitSuggestionRanges();
 
     this.analysisService.run(this.bookId, this.chapterId, {
@@ -1913,7 +1925,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
-      this.hasRestoredLineEditForCurrentContext = false;
+    this.hasRestoredLineEditForCurrentContext = false;
     this.emitSuggestionRanges();
 
     const requestBody = {
