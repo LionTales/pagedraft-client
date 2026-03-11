@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Subject } from 'rxjs';
+import { Subject, forkJoin } from 'rxjs';
 import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, AnalysisProgressDto, RunAnalysisRequest } from '../../core/models/analysis';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
@@ -940,11 +940,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       );
       if (dto) {
         dto.outcome = 'Reverted';
-        if (this.bookId && this.chapterId && dto.id && !updatedSuggestionIds.has(dto.id)) {
+        if (dto.id) {
           updatedSuggestionIds.add(dto.id);
-          this.analysisService
-            .updateSuggestionOutcome(this.bookId, this.chapterId, dto.id, 'Reverted')
-            .subscribe({ error: () => {} });
         }
       }
     };
@@ -957,6 +954,26 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         updateResult(r);
       }
     }
+
+    if (!this.bookId || !this.chapterId || updatedSuggestionIds.size === 0) {
+      return;
+    }
+
+    const calls = Array.from(updatedSuggestionIds).map(id =>
+      this.analysisService.updateSuggestionOutcome(this.bookId!, this.chapterId!, id, 'Reverted')
+    );
+
+    forkJoin(calls).subscribe({
+      next: () => {
+        this.refreshHistory();
+        this.refreshVersions();
+      },
+      error: () => {
+        // Even if PATCH fails, refresh to reflect whatever the server currently has.
+        this.refreshHistory();
+        this.refreshVersions();
+      }
+    });
   }
 
   /** Parse version label "Original: X → Suggested: Y" for display. */

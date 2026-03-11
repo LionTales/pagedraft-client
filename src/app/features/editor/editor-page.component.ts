@@ -953,12 +953,10 @@ export class EditorPageComponent implements OnInit, OnDestroy {
               this.isOpeningDocument = false;
               this.saveCurrentDocument();
               // When this version was created from Accept suggestion, mark the linked suggestion
-              // as Reverted in the in-memory analysis results so History reflects the outcome.
+              // as Reverted; the analysis panel will refresh History/Versions after persisting.
               const analysisId = detail.analysisResultId ?? detail.analysisId;
               if (analysisId && detail.originalText && detail.suggestedText && this.analysisPanel) {
                 this.analysisPanel.markSuggestionReverted(analysisId, detail.originalText, detail.suggestedText);
-                this.analysisPanel.refreshHistory();
-                this.analysisPanel.refreshVersions();
               }
             }
           } finally {
