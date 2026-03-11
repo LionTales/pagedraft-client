@@ -1450,14 +1450,35 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         if (this.latestResult && !this.latestResult.id) {
           this.history = [this.latestResult, ...this.history];
         }
-        // For restoration, prefer any existing streaming latestResult; otherwise use newest saved result.
-        const proofreadCandidate = this.latestResult && !this.latestResult.id
-          ? this.latestResult
-          : this.history[0];
-        if (proofreadCandidate && (proofreadCandidate.analysisType || proofreadCandidate.type) === 'Proofread') {
-          this.latestResult = proofreadCandidate;
-          if (this.documentMatchesCurrentContext && this.documentText) {
+        // Decide which result should be treated as "latest" for the Run tab:
+        // - If we already have a synthetic streaming latestResult, keep it for this pass.
+        // - Otherwise, prefer the most recent Active analysis for the current selected type
+        //   (so pending suggestions survive page refresh), falling back to the newest Archived result.
+        let latestCandidate: AnalysisResultDto | null = null;
+        if (this.latestResult && !this.latestResult.id) {
+          latestCandidate = this.latestResult;
+        } else {
+          const sortedActive = [...this.activeAnalyses].sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          const activeForType = sortedActive.find(r => (r.analysisType || r.type) === this.selectedAnalysisType);
+          latestCandidate = activeForType || sortedActive[0] || this.history[0] || null;
+        }
+        if (latestCandidate) {
+          this.latestResult = latestCandidate;
+          const latestType = this.latestResult.analysisType || this.latestResult.type;
+          if (latestType === 'Proofread' && this.documentMatchesCurrentContext && this.documentText) {
             this.restoreProofreadStateFromLatestResult();
+          } else if (latestType === 'LineEdit') {
+            const mappedLineEdit = this.mapDtoSuggestions(this.latestResult);
+            if (mappedLineEdit.length) {
+              this.lineEditRunSuggestions = mappedLineEdit;
+            } else {
+              const lineEdit = this.getLineEdit(this.latestResult);
+              this.lineEditRunSuggestions = lineEdit
+                ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, this.latestResult)
+                : [];
+            }
           }
         }
         // For streaming Line Edit runs, once the server-side result (with structuredResult but no suggestions DTOs)
