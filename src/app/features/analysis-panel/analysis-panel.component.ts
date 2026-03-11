@@ -1302,8 +1302,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const key = `${id}-${orig}-${sugg}`;
     this.acceptedLineEditKeys.add(key);
     this.trackRecentOutcomeKey(key);
-    // Remove from the current Run tab suggestions so accepted items disappear immediately
-    this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(x => x !== suggestion);
     if (this.bookId && this.chapterId && current.id && suggestion.id) {
       this.applyOutcomeToSuggestionDtos(suggestion.id, 'Accepted');
       this.analysisService
