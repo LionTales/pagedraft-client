@@ -1424,20 +1424,27 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     if (!this.bookId || !this.chapterId) return;
     const loadingChapterId = this.chapterId;
     const loadingSceneId = this.sceneId ?? undefined;
-    const existingHistory = mergeWithExisting ? this.allAnalyses : [];
+    const existingHistory = this.allAnalyses;
     this.analysisService.getHistory(this.bookId, this.chapterId, this.historyFilterType ?? undefined, this.sceneId ?? undefined).subscribe({
       next: (items) => {
         // Ignore if user switched chapter/scene before this response
         if (this.chapterId !== loadingChapterId || (this.sceneId ?? undefined) !== loadingSceneId) return;
         const fromApi = items ?? [];
-        // Merge with existing full list (Active + Archived) when requested.
-        this.allAnalyses = mergeWithExisting
+        // When merging (async flows) or when a history type filter is active, merge the API results
+        // into the existing full list so other types and Active analyses are preserved.
+        // Only when loading unfiltered history for the first time do we replace the list entirely.
+        const shouldMerge = mergeWithExisting || !!this.historyFilterType;
+        this.allAnalyses = shouldMerge
           ? this.mergeHistoryWithExisting(fromApi, existingHistory)
           : fromApi;
         // Cache Active analyses (by status) for re-analysis lifecycle checks.
         this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
-        // History tab shows only Archived analyses (or those without a status yet, treated as Archived).
-        this.history = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
+        // History tab shows only Archived analyses (or those without a status yet, treated as Archived),
+        // further filtered by historyFilterType when set.
+        const archived = this.allAnalyses.filter(r => (r.status || '').toLowerCase() !== 'active');
+        this.history = this.historyFilterType
+          ? archived.filter(r => (r.analysisType || r.type) === this.historyFilterType)
+          : archived;
         this.selectedIndex = 0;
         // Full reload: clear outcome key sets so displayed state is exactly what the API returned (avoids stale Reverted/Accepted and duplicate display).
         if (!mergeWithExisting) {
@@ -1477,26 +1484,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
               const lineEdit = this.getLineEdit(this.latestResult);
               this.lineEditRunSuggestions = lineEdit
                 ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, this.latestResult)
-                : [];
-            }
-          }
-        }
-        // For streaming Line Edit runs, once the server-side result (with structuredResult but no suggestions DTOs)
-        // is available in history, replace the synthetic streaming latestResult with the persisted one and
-        // recompute suggestion cards from structuredResult so the Run tab shows Line Edit suggestions again.
-        if (this.latestResult && !this.latestResult.id) {
-          const latestLineEdit = this.allAnalyses.find(r =>
-            !!(r.id && r.id.trim()) && (r.analysisType || r.type) === 'LineEdit'
-          );
-          if (latestLineEdit) {
-            this.latestResult = latestLineEdit;
-            const mappedLineEdit = this.mapDtoSuggestions(latestLineEdit);
-            if (mappedLineEdit.length) {
-              this.lineEditRunSuggestions = mappedLineEdit;
-            } else {
-              const lineEdit = this.getLineEdit(latestLineEdit);
-              this.lineEditRunSuggestions = lineEdit
-                ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, latestLineEdit)
                 : [];
             }
           }
