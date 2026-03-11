@@ -1397,6 +1397,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.acceptedLineEditKeys.clear();
       this.streamingText = '';
       this.hasRestoredProofreadForCurrentContext = false;
+      this.explainingSuggestionId = null;
       // Reset history filter so we load all types for the new chapter and can restore Proofread state
       this.historyFilterType = null;
       if (this.bookId && this.chapterId) {
