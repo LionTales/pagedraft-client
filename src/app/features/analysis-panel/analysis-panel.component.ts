@@ -1460,6 +1460,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     }
     const key = this.proofreadSuggestionKey(current, s);
     this.acceptedProofreadHistoryKeys.add(key);
+    this.trackRecentOutcomeKey(key);
     if (this.bookId && this.chapterId && current.id && s.id) {
       this.applyOutcomeToSuggestionDtos(s.id, 'Accepted');
       this.analysisService
@@ -1476,6 +1477,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   onProofreadHistoryDismiss(s: AnalysisSuggestion, current: AnalysisResultDto): void {
     const key = this.proofreadSuggestionKey(current, s);
     this.dismissedProofreadHistoryKeys.add(key);
+    this.trackRecentOutcomeKey(key);
     if (this.bookId && this.chapterId && current.id && s.id) {
       this.applyOutcomeToSuggestionDtos(s.id, 'Dismissed');
       this.analysisService
