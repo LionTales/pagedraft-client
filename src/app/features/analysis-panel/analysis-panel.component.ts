@@ -1446,7 +1446,12 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       sources.push(this.latestResult);
     }
     if (this.allAnalyses?.length) {
-      sources.push(...this.allAnalyses);
+      for (const r of this.allAnalyses) {
+        // Avoid double-processing the same object when latestResult
+        // is already one of the allAnalyses entries.
+        if (r === this.latestResult) continue;
+        sources.push(r);
+      }
     }
     for (const result of sources) {
       if (!result?.suggestions?.length) continue;
