@@ -231,6 +231,7 @@ const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
       flex: 1;
       min-height: 0;
       display: flex;
+      flex-direction: column;
     }
     .editor-area {
       padding: 1rem;

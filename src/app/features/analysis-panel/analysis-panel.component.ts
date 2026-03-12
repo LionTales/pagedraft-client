@@ -463,6 +463,7 @@ import { SuggestionCardComponent } from './suggestion-card.component';
     .result-view {
       flex: 1;
       min-height: 0;
+      overflow: auto;
       border-radius: 4px;
       border: 1px solid #eee;
       padding: 0.5rem;
