@@ -2245,7 +2245,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   }
 
   /** Count pending suggestions (no outcome) on Active analyses matching the current selected type.
-   * Uses raw DTO suggestions so the count is not reduced by mapDtoSuggestions display heuristics. */
+   * Uses mapDtoSuggestions so the pending count matches what the user actually sees in the UI. */
   private getPendingSuggestionCountForActive(): number {
     if (!this.activeAnalyses?.length) return 0;
     const type = this.selectedAnalysisType;
@@ -2254,8 +2254,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     for (const analysis of this.activeAnalyses) {
       const analysisType = analysis.analysisType || analysis.type;
       if (analysisType !== type) continue;
-      const dtos = analysis.suggestions ?? [];
-      total += dtos.filter(s => {
+      const suggestions = this.mapDtoSuggestions(analysis, false);
+      total += suggestions.filter(s => {
         const outcome = (s.outcome || '').toLowerCase();
         return !outcome || outcome === 'pending';
       }).length;
