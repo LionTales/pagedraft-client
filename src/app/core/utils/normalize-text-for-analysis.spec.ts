@@ -27,10 +27,9 @@ describe('normalizedOffsetToRawOffset', () => {
     const idxB = normalizedOffsetToRawOffset(raw, 1);
     const idxG = normalizedOffsetToRawOffset(raw, 2);
 
-    expect(idxA).toBeGreaterThanOrEqual(0);
-    expect(idxG).toBeLessThanOrEqual(raw.length);
-    expect(idxB).toBeGreaterThan(idxA);
-    expect(idxG).toBeGreaterThan(idxB);
+    expect(idxA).toBe(0);
+    expect(idxB).toBe(2);
+    expect(idxG).toBe(5);
   });
 });
 

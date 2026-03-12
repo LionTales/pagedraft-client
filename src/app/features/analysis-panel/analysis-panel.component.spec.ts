@@ -134,9 +134,10 @@ describe('AnalysisPanelComponent (focused logic)', () => {
   });
 
   it('applyOutcomeToSuggestionDtos updates in-memory DTO across latestResult and allAnalyses', () => {
-    const result = makeResultWithSuggestions();
-    component['latestResult'] = result;
-    (component as any).allAnalyses = [result];
+    const latestResult = makeResultWithSuggestions();
+    const historyResult = makeResultWithSuggestions({ id: 'r-2' });
+    component['latestResult'] = latestResult;
+    (component as any).allAnalyses = [historyResult];
 
     (component as any).applyOutcomeToSuggestionDtos('s-1', 'Accepted');
 
@@ -145,13 +146,15 @@ describe('AnalysisPanelComponent (focused logic)', () => {
   });
 
   it('applyExplanationToSuggestionDtos caches explanation on DTO', () => {
-    const result = makeResultWithSuggestions();
-    component['latestResult'] = result;
-    (component as any).allAnalyses = [result];
+    const latestResult = makeResultWithSuggestions();
+    const historyResult = makeResultWithSuggestions({ id: 'r-2' });
+    component['latestResult'] = latestResult;
+    (component as any).allAnalyses = [historyResult];
 
     (component as any).applyExplanationToSuggestionDtos('s-1', 'because');
 
     expect(component['latestResult']!.suggestions![0].explanation).toBe('because');
+    expect((component as any).allAnalyses[0].suggestions[0].explanation).toBe('because');
   });
 });
 
