@@ -859,6 +859,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   onApplyCorrection(event: ApplyCorrectionEvent): void {
     if (!this.docEditor?.documentEditor || !this.selectedChapterId) return;
     try {
+      // Text that will actually be applied to the document (normalized to stay
+      // consistent with analysis offsets and plain-text views).
+      const appliedText = normalizeTextForAnalysis(event.text);
       let sfdt = this.docEditor.documentEditor.serialize();
       // Always strip suggestion highlights/bookmarks before applying a correction so
       // the newly opened document does not retain stale highlight formatting.
@@ -881,20 +884,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
       let newSfdt: string;
       if (startOffset != null && endOffset != null && currentText) {
-        // Use normalized suggestion text so lengths stay consistent with the
-        // normalized offsets and blockLengths used by replacePlainTextInSfdt.
-        const normalizedSuggestion = normalizeTextForAnalysis(event.text);
         const newText =
-          currentText.slice(0, startOffset) + normalizedSuggestion + currentText.slice(endOffset);
+          currentText.slice(0, startOffset) + appliedText + currentText.slice(endOffset);
         newSfdt = this.replacePlainTextInSfdt(
           sfdt,
           newText,
           startOffset,
           endOffset,
-          normalizedSuggestion.length
+          appliedText.length
         );
       } else {
-        newSfdt = this.buildMinimalSfdt(event.text);
+        newSfdt = this.buildMinimalSfdt(appliedText);
       }
 
       this.isOpeningDocument = true;
@@ -915,7 +915,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
               const maxLen = 35;
               const trunc = (t: string) => (t.length <= maxLen ? t : t.slice(0, maxLen) + '…');
               const label = event.originalText != null
-                ? `Original: ${trunc(event.originalText)} → Suggested: ${trunc(event.text)}`
+                ? `Original: ${trunc(event.originalText)} → Suggested: ${trunc(appliedText)}`
                 : `After accept (${timeLabel})`;
               // Store the document state *before* the replacement so Revert restores original text.
               this.documentVersionService
@@ -927,7 +927,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
                   this.selectedSceneId ?? undefined,
                   event.analysisId ?? undefined,
                   event.originalText ?? undefined,
-                  event.text
+                  appliedText
                 )
                 .subscribe({ error: () => {} });
             }

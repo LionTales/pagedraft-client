@@ -1019,14 +1019,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     // Legacy analyses without persisted suggestions will always return false here and are not supported in this app.
     const aid = (v.analysisResultId ?? v.analysisId) ?? '';
     if (!aid || v.originalText == null || v.suggestedText == null) return false;
-    const orig = this.normalizeKeyText(v.originalText);
-    const sugg = this.normalizeKeyText(v.suggestedText);
+    const orig = normalizeTextForAnalysis(v.originalText);
+    const sugg = normalizeTextForAnalysis(v.suggestedText);
     const aidLower = aid.toLowerCase();
     const analysis = this.allAnalyses.find(r => (r.id || '').toLowerCase() === aidLower);
     if (!analysis?.suggestions?.length) return false;
     const match = analysis.suggestions.find(s =>
-      this.normalizeKeyText(s.originalText ?? '') === orig &&
-      this.normalizeKeyText(s.suggestedText ?? '') === sugg &&
+      normalizeTextForAnalysis(s.originalText ?? '') === orig &&
+      normalizeTextForAnalysis(s.suggestedText ?? '') === sugg &&
       (s.outcome || '').toLowerCase() === 'reverted'
     );
     return !!match;
@@ -1038,12 +1038,12 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     if (!analysisId || v.originalText == null || v.suggestedText == null || !this.bookId || !this.chapterId) return;
 
     const aidLower = analysisId.toLowerCase();
-    const orig = this.normalizeKeyText(v.originalText);
-    const sugg = this.normalizeKeyText(v.suggestedText);
+    const orig = normalizeTextForAnalysis(v.originalText);
+    const sugg = normalizeTextForAnalysis(v.suggestedText);
     const analysis = this.allAnalyses.find(r => (r.id || '').toLowerCase() === aidLower);
     const dto = analysis?.suggestions?.find(s =>
-      this.normalizeKeyText(s.originalText ?? '') === orig &&
-      this.normalizeKeyText(s.suggestedText ?? '') === sugg
+      normalizeTextForAnalysis(s.originalText ?? '') === orig &&
+      normalizeTextForAnalysis(s.suggestedText ?? '') === sugg
     );
 
     if (!dto?.id) {
@@ -1827,11 +1827,15 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   /** Recompute activeAnalyses and history from the current allAnalyses, honoring the given history filter. */
   private rebuildHistoryFromAllAnalyses(filterType: string | null = this.historyFilterType): void {
+    // Always work from a createdAt-descending view so History ordering stays stable
+    // even if the API response order changes or we prepend results locally.
+    const sorted = [...this.allAnalyses].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
     // Cache Active analyses (by status) for re-analysis lifecycle checks.
-    this.activeAnalyses = this.allAnalyses.filter(r => (r.status || '').toLowerCase() === 'active');
-    // History should reflect all runs (Active + non-Active); rely on status badges/ordering
-    // in the future rather than hiding Active analyses when Archived ones exist.
-    const base = this.allAnalyses;
+    this.activeAnalyses = sorted.filter(r => (r.status || '').toLowerCase() === 'active');
+    // History should reflect all runs (Active + non-Active) in newest-first order.
+    const base = sorted;
     this.history = filterType
       ? base.filter(r => (r.analysisType || r.type) === filterType)
       : base.slice();
