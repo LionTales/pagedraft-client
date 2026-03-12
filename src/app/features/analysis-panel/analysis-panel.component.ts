@@ -1800,12 +1800,18 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           if (shouldUpdateLatest) {
             this.latestResult = latestCandidate;
             const latestType = this.latestResult.analysisType || this.latestResult.type;
-            // Avoid clobbering in-progress Run tab work: only auto-restore when the user
-            // is not currently on the Run tab.
-            if (this.activeSubTab !== 'run' && this.documentMatchesCurrentContext && this.documentText) {
-              if (latestType === 'Proofread') {
+            if (this.documentMatchesCurrentContext && this.documentText) {
+              // Avoid clobbering in-progress Run tab work: when the user is on the Run tab,
+              // only auto-restore if we don't already have suggestions for that type.
+              if (
+                latestType === 'Proofread' &&
+                (this.activeSubTab !== 'run' || this.proofreadSuggestions.length === 0)
+              ) {
                 this.restoreProofreadStateFromLatestResult();
-              } else if (latestType === 'LineEdit') {
+              } else if (
+                latestType === 'LineEdit' &&
+                (this.activeSubTab !== 'run' || this.lineEditRunSuggestions.length === 0)
+              ) {
                 this.restoreLineEditStateFromResult(this.latestResult);
               }
             }
