@@ -1748,11 +1748,17 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         if (this.latestResult && !this.latestResult.id && (this.latestResult.analysisType || this.latestResult.type) === this.selectedAnalysisType) {
           latestCandidate = this.latestResult;
         } else {
-          const source = this.activeAnalyses.length ? this.activeAnalyses : this.allAnalyses;
-          const allForType = source
-            .filter(r => (r.analysisType || r.type) === this.selectedAnalysisType)
-            .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-          latestCandidate = allForType[0] ?? null;
+          const activeForType = this.activeAnalyses.filter(
+            r => (r.analysisType || r.type) === this.selectedAnalysisType
+          );
+          const allForType = this.allAnalyses.filter(
+            r => (r.analysisType || r.type) === this.selectedAnalysisType
+          );
+          const candidates = activeForType.length ? activeForType : allForType;
+          candidates.sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          latestCandidate = candidates[0] ?? null;
         }
         if (latestCandidate) {
           let shouldUpdateLatest = false;
