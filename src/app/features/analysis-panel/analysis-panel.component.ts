@@ -1716,7 +1716,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     if (!this.bookId || !this.chapterId) return;
     const loadingChapterId = this.chapterId;
     const loadingSceneId = this.sceneId ?? undefined;
-    const loadingHistoryFilterType = this.historyFilterType ?? null;
     this.analysisService
       // Always load the full unfiltered history for this chapter/scene; historyFilterType
       // is applied client-side so allAnalyses remains a complete dataset for other logic.
@@ -1730,7 +1729,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         // (all types, Active + Archived). Replace it on each load to avoid stale or type-filtered data.
         const shouldMerge = mergeWithExisting;
         this.allAnalyses = fromApi;
-        this.rebuildHistoryFromAllAnalyses(loadingHistoryFilterType);
+        // Use the current historyFilterType at response time so we don't override
+        // a user filter change that happened while this request was in flight.
+        this.rebuildHistoryFromAllAnalyses();
         this.selectedIndex = 0;
         // Full reload: clear outcome key sets so displayed state is exactly what the API returned (avoids stale Reverted/Accepted and duplicate display).
         // When we're merely changing the history filter or merging async results, keep in-memory
