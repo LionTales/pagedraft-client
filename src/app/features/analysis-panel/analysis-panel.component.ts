@@ -962,7 +962,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   setHistoryFilter(type: string | null): void {
     this.historyFilterType = type;
-    this.loadHistory();
+    // When we already have a full history snapshot, just rebuild client-side
+    // from allAnalyses to avoid an extra network round-trip on every filter click.
+    if (this.allAnalyses && this.allAnalyses.length) {
+      this.rebuildHistoryFromAllAnalyses();
+      this.selectedIndex = 0;
+    } else {
+      this.loadHistory();
+    }
   }
 
   /** Call after Revert (or other outcome change) so History tab shows updated suggestion statuses (e.g. Reverted). */
@@ -1785,25 +1792,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         // swallow for now; panel stays empty
       }
     });
-  }
-
-  /** Stable key for an analysis result (for deduplication when merging API + existing). */
-  private historyItemKey(r: AnalysisResultDto): string {
-    return (r.id && r.id.trim()) ? r.id.toLowerCase() : `${r.chapterId}-${r.sceneId ?? ''}-${r.createdAt}`;
-  }
-
-  /** Merge API history with existing in-memory history; existing items not in API are kept (archived). */
-  private mergeHistoryWithExisting(fromApi: AnalysisResultDto[], existing: AnalysisResultDto[]): AnalysisResultDto[] {
-    const apiKeys = new Set(fromApi.map(r => this.historyItemKey(r)));
-    const merged = [...fromApi];
-    for (const item of existing) {
-      if (!apiKeys.has(this.historyItemKey(item))) {
-        merged.push(item);
-        apiKeys.add(this.historyItemKey(item));
-      }
-    }
-    merged.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    return merged;
   }
 
   /** Recompute activeAnalyses and history from the current allAnalyses, honoring the given history filter. */
