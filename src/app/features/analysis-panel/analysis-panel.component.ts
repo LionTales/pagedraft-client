@@ -1710,21 +1710,19 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const loadingChapterId = this.chapterId;
     const loadingSceneId = this.sceneId ?? undefined;
     const loadingHistoryFilterType = this.historyFilterType ?? null;
-    const existingHistory = this.allAnalyses;
     this.analysisService
-      .getHistory(this.bookId, this.chapterId, loadingHistoryFilterType ?? undefined, this.sceneId ?? undefined)
+      // Always load the full unfiltered history for this chapter/scene; historyFilterType
+      // is applied client-side so allAnalyses remains a complete dataset for other logic.
+      .getHistory(this.bookId, this.chapterId, undefined, this.sceneId ?? undefined)
       .subscribe({
       next: (items) => {
         // Ignore if user switched chapter/scene before this response
         if (this.chapterId !== loadingChapterId || (this.sceneId ?? undefined) !== loadingSceneId) return;
         const fromApi = items ?? [];
-        // When merging (async flows) or when a history type filter is active, merge the API results
-        // into the existing full list so other types and Active analyses are preserved.
-        // Only when loading unfiltered history for the first time do we replace the list entirely.
-        const shouldMerge = mergeWithExisting || !!loadingHistoryFilterType;
-        this.allAnalyses = shouldMerge
-          ? this.mergeHistoryWithExisting(fromApi, existingHistory)
-          : fromApi;
+        // allAnalyses should always reflect the latest full server state for this chapter/scene
+        // (all types, Active + Archived). Replace it on each load to avoid stale or type-filtered data.
+        const shouldMerge = mergeWithExisting;
+        this.allAnalyses = fromApi;
         this.rebuildHistoryFromAllAnalyses(loadingHistoryFilterType);
         this.selectedIndex = 0;
         // Full reload: clear outcome key sets so displayed state is exactly what the API returned (avoids stale Reverted/Accepted and duplicate display).
