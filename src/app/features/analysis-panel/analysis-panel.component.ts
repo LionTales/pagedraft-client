@@ -1105,8 +1105,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   markSuggestionReverted(analysisId: string, originalText: string, suggestedText: string): void {
     if (!analysisId || !originalText || !suggestedText) return;
     const id = analysisId.toLowerCase();
-    const normOriginal = this.normalizeKeyText(originalText);
-    const normSuggested = this.normalizeKeyText(suggestedText);
+    const normOriginal = normalizeTextForAnalysis(originalText);
+    const normSuggested = normalizeTextForAnalysis(suggestedText);
 
     const updatedSuggestionIds = new Set<string>();
     const recentKeys: string[] = [];
@@ -1114,8 +1114,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const updateResult = (result: AnalysisResultDto | null | undefined): void => {
       if (!result?.suggestions?.length || (result.id || '').toLowerCase() !== id) return;
       const dto = result.suggestions.find(x =>
-        this.normalizeKeyText(x.originalText ?? '') === normOriginal &&
-        this.normalizeKeyText(x.suggestedText ?? '') === normSuggested
+        normalizeTextForAnalysis(x.originalText ?? '') === normOriginal &&
+        normalizeTextForAnalysis(x.suggestedText ?? '') === normSuggested
       );
       if (dto) {
         dto.outcome = 'Reverted';
@@ -1924,32 +1924,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.selectedIndex = 0;
         this.latestResult = result;
         this.activeSubTab = 'run';
-        if ((result.analysisType || result.type) === 'Proofread') {
-          if (this.documentText != null) {
-            this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
-          }
-          let all: AnalysisSuggestion[] = [];
-          let mapped = this.mapDtoSuggestions(result);
-          // If heuristic filtering removed all server-side suggestions but the API
-          // did return suggestions, fall back to the unfiltered set instead of
-          // synthesizing new ones via proofreadDiff so ids/outcomes/explanations
-          // remain available.
-          if (!mapped.length && (result.suggestions?.length ?? 0) > 0) {
-            mapped = this.mapDtoSuggestions(result, true, false);
-          }
-          if (mapped.length) {
-            all = mapped;
-          } else if (this.documentText && result.resultText) {
-            all = proofreadDiff(this.documentText, result.resultText);
-          }
-          this.proofreadSuggestions = all;
-          this.proofreadSuggestionsUnreliable = false;
-          this.hasRestoredProofreadForCurrentContext = true;
-          this.emitSuggestionRanges();
-          this.autoShowFirstSuggestion();
-        } else if ((result.analysisType || result.type) === 'LineEdit') {
-          this.restoreLineEditStateFromResult(result);
-        }
+        this.applyProofreadOrLineEditResultToRunTab(result);
         this.startProgressPollingIfNeeded(result);
         this.setLastRunDuration();
         this.analysisCompleted.emit();
@@ -1998,6 +1973,37 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.doRunAnalysisSync();
       }
     });
+  }
+
+  /** Apply a freshly completed Proofread or LineEdit result to the Run tab, including suggestions and ranges. */
+  private applyProofreadOrLineEditResultToRunTab(result: AnalysisResultDto): void {
+    const type = result.analysisType || result.type;
+    if (type === 'Proofread') {
+      if (this.documentText != null) {
+        this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
+      }
+      let all: AnalysisSuggestion[] = [];
+      let mapped = this.mapDtoSuggestions(result);
+      // If heuristic filtering removed all server-side suggestions but the API
+      // did return suggestions, fall back to the unfiltered set instead of
+      // synthesizing new ones via proofreadDiff so ids/outcomes/explanations
+      // remain available.
+      if (!mapped.length && (result.suggestions?.length ?? 0) > 0) {
+        mapped = this.mapDtoSuggestions(result, true, false);
+      }
+      if (mapped.length) {
+        all = mapped;
+      } else if (this.documentText && result.resultText) {
+        all = proofreadDiff(this.documentText, result.resultText);
+      }
+      this.proofreadSuggestions = all;
+      this.proofreadSuggestionsUnreliable = false;
+      this.hasRestoredProofreadForCurrentContext = true;
+      this.emitSuggestionRanges();
+      this.autoShowFirstSuggestion();
+    } else if (type === 'LineEdit') {
+      this.restoreLineEditStateFromResult(result);
+    }
   }
 
   runStreaming(): void {
@@ -2220,32 +2226,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         this.selectedIndex = 0;
         this.latestResult = result;
         this.activeSubTab = 'run';
-        if ((result.analysisType || result.type) === 'Proofread') {
-          if (this.documentText != null) {
-            this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
-          }
-          let all: AnalysisSuggestion[] = [];
-          let mapped = this.mapDtoSuggestions(result);
-          // If heuristic filtering removed all server-side suggestions but the API
-          // did return suggestions, fall back to the unfiltered set instead of
-          // synthesizing new ones via proofreadDiff so ids/outcomes/explanations
-          // remain available.
-          if (!mapped.length && (result.suggestions?.length ?? 0) > 0) {
-            mapped = this.mapDtoSuggestions(result, true, false);
-          }
-          if (mapped.length) {
-            all = mapped;
-          } else if (this.documentText && result.resultText) {
-            all = proofreadDiff(this.documentText, result.resultText);
-          }
-          this.proofreadSuggestions = all;
-          this.proofreadSuggestionsUnreliable = false;
-          this.hasRestoredProofreadForCurrentContext = true;
-          this.emitSuggestionRanges();
-          this.autoShowFirstSuggestion();
-        } else if ((result.analysisType || result.type) === 'LineEdit') {
-          this.restoreLineEditStateFromResult(result);
-        }
+        this.applyProofreadOrLineEditResultToRunTab(result);
         this.analysisCompleted.emit();
       },
       error: () => {
