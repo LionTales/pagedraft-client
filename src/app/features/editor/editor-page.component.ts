@@ -881,9 +881,18 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
       let newSfdt: string;
       if (startOffset != null && endOffset != null && currentText) {
+        // Use normalized suggestion text so lengths stay consistent with the
+        // normalized offsets and blockLengths used by replacePlainTextInSfdt.
+        const normalizedSuggestion = normalizeTextForAnalysis(event.text);
         const newText =
-          currentText.slice(0, startOffset) + event.text + currentText.slice(endOffset);
-        newSfdt = this.replacePlainTextInSfdt(sfdt, newText, startOffset, endOffset, event.text.length);
+          currentText.slice(0, startOffset) + normalizedSuggestion + currentText.slice(endOffset);
+        newSfdt = this.replacePlainTextInSfdt(
+          sfdt,
+          newText,
+          startOffset,
+          endOffset,
+          normalizedSuggestion.length
+        );
       } else {
         newSfdt = this.buildMinimalSfdt(event.text);
       }

@@ -1925,7 +1925,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
             this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
           }
           let all: AnalysisSuggestion[] = [];
-          const mapped = this.mapDtoSuggestions(result);
+          let mapped = this.mapDtoSuggestions(result);
+          // If heuristic filtering removed all server-side suggestions but the API
+          // did return suggestions, fall back to the unfiltered set instead of
+          // synthesizing new ones via proofreadDiff so ids/outcomes/explanations
+          // remain available.
+          if (!mapped.length && (result.suggestions?.length ?? 0) > 0) {
+            mapped = this.mapDtoSuggestions(result, true, false);
+          }
           if (mapped.length) {
             all = mapped;
           } else if (this.documentText && result.resultText) {
@@ -2214,7 +2221,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
             this.proofreadOriginalDocumentByRunKey.set(this.proofreadRunKeyForResult(result), this.documentText);
           }
           let all: AnalysisSuggestion[] = [];
-          const mapped = this.mapDtoSuggestions(result);
+          let mapped = this.mapDtoSuggestions(result);
+          // If heuristic filtering removed all server-side suggestions but the API
+          // did return suggestions, fall back to the unfiltered set instead of
+          // synthesizing new ones via proofreadDiff so ids/outcomes/explanations
+          // remain available.
+          if (!mapped.length && (result.suggestions?.length ?? 0) > 0) {
+            mapped = this.mapDtoSuggestions(result, true, false);
+          }
           if (mapped.length) {
             all = mapped;
           } else if (this.documentText && result.resultText) {
