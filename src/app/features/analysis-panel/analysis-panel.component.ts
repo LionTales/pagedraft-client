@@ -112,8 +112,15 @@ import { SuggestionCardComponent } from './suggestion-card.component';
             </app-suggestion-card>
           </div>
         </div>
-        <!-- Line Edit (Run): overallFeedback (when available) + server-side suggestion cards -->
-        <ng-container *ngIf="latestResult && (latestResult.analysisType || latestResult.type) === 'LineEdit'">
+        <!-- Line Edit (Run): overallFeedback (when available) + server-side suggestion cards.
+             Only render when we either have structured Line Edit data or at least one suggestion,
+             so we don't duplicate the generic fallback view. -->
+        <ng-container
+          *ngIf="
+            latestResult
+            && (latestResult.analysisType || latestResult.type) === 'LineEdit'
+            && (lineEditRunSuggestions.length || getLineEdit(latestResult))
+          ">
           <article class="result-view">
             <h4>{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
             <ng-container *ngIf="getLineEdit(latestResult) as lineEdit">
