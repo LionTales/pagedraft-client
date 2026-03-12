@@ -715,7 +715,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI. */
   private mapDtoSuggestions(
     result: AnalysisResultDto | null | undefined,
-    adjustOffsets: boolean = true
+    adjustOffsets: boolean = true,
+    applyHeuristicFilter: boolean = true
   ): AnalysisSuggestion[] {
     const list: AnalysisSuggestionDto[] = (result?.suggestions ?? [])
       .slice()
@@ -779,6 +780,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       }
     }
 
+    if (!applyHeuristicFilter) {
+      return mapped;
+    }
+
     return mapped.filter(s => {
       const origLen = (s.original ?? '').length;
       const sugLen = (s.suggested ?? '').length;
@@ -830,7 +835,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     if (!current || (current.analysisType || current.type) !== 'Proofread') return [];
     // Preferred: when backend AnalysisSuggestion rows exist, use them directly (includes outcome and reason/category).
     if (current.suggestions && current.suggestions.length) {
-      return this.mapDtoSuggestions(current, false);
+      // For history, keep all suggestions (no heuristic length-based filtering).
+      return this.mapDtoSuggestions(current, false, false);
     }
     // Legacy/streaming fallback: requires resultText so we can diff.
     if (!current.resultText) return [];
@@ -1209,7 +1215,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   lineEditSuggestionsWithStatus(current: AnalysisResultDto): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
     // Preferred: use persisted AnalysisSuggestionDto rows when present.
     if (current.suggestions && current.suggestions.length) {
-      const base = this.mapDtoSuggestions(current, false);
+      // For history, keep all suggestions (no heuristic length-based filtering).
+      const base = this.mapDtoSuggestions(current, false, false);
       const result: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] = [];
       const id = (current.id || '').toLowerCase();
       const keyPrefix = `${id}-`;
@@ -1613,7 +1620,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       if (
         !this.hasRestoredProofreadForCurrentContext &&
         this.proofreadSuggestions.length === 0 &&
-        this.documentMatchesCurrentContext
+        this.documentMatchesCurrentContext &&
+        this.documentText
       ) {
         this.restoreProofreadStateFromLatestResult();
       }
@@ -2266,7 +2274,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     for (const analysis of this.activeAnalyses) {
       const analysisType = analysis.analysisType || analysis.type;
       if (analysisType !== type) continue;
-      const suggestions = this.mapDtoSuggestions(analysis, false);
+      // For pending-count calculations, keep all suggestions (no heuristic length-based filtering).
+      const suggestions = this.mapDtoSuggestions(analysis, false, false);
       total += suggestions.filter(s => {
         const outcome = (s.outcome || '').toLowerCase();
         return !outcome || outcome === 'pending';
