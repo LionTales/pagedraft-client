@@ -923,8 +923,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         } else {
           const outcome = (s.outcome || '').toLowerCase();
           if (outcome === 'accepted') status = 'accepted';
-          else if (outcome === 'dismissed') status = 'dismissed';
-          else if (outcome === 'reverted' || outcome === 'superseded') status = 'reverted';
+          else if (outcome === 'dismissed' || outcome === 'superseded') status = 'dismissed';
+          else if (outcome === 'reverted') status = 'reverted';
           else status = 'pending';
         }
         result.push({ suggestion: s, status });
@@ -1226,8 +1226,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         } else {
           const outcome = (s.outcome || '').toLowerCase();
           if (outcome === 'accepted') status = 'accepted';
-          else if (outcome === 'dismissed') status = 'dismissed';
-          else if (outcome === 'reverted' || outcome === 'superseded') status = 'reverted';
+          else if (outcome === 'dismissed' || outcome === 'superseded') status = 'dismissed';
+          else if (outcome === 'reverted') status = 'reverted';
           else status = 'pending';
         }
         result.push({ suggestion: s, status });
