@@ -788,7 +788,6 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       const origLen = (s.original ?? '').length;
       const sugLen = (s.suggested ?? '').length;
       if (origLen > 60 && sugLen <= 5) return false;
-      if (origLen > 30 && sugLen === 0) return false;
       return true;
     });
   }
@@ -1465,6 +1464,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
   onExplainSuggestion(s: AnalysisSuggestion): void {
     if (!s.id || !this.bookId || !this.chapterId) return;
+    if (this.explainingSuggestionIds.has(s.id)) return;
     this.explainingSuggestionIds.add(s.id);
     this.cdr.detectChanges();
     this.analysisService.explainSuggestion(this.bookId, this.chapterId, s.id).subscribe({
@@ -1800,10 +1800,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           if (shouldUpdateLatest) {
             this.latestResult = latestCandidate;
             const latestType = this.latestResult.analysisType || this.latestResult.type;
-            if (latestType === 'Proofread' && this.documentMatchesCurrentContext && this.documentText) {
-              this.restoreProofreadStateFromLatestResult();
-            } else if (latestType === 'LineEdit' && this.documentMatchesCurrentContext && this.documentText) {
-              this.restoreLineEditStateFromResult(this.latestResult);
+            // Avoid clobbering in-progress Run tab work: only auto-restore when the user
+            // is not currently on the Run tab.
+            if (this.activeSubTab !== 'run' && this.documentMatchesCurrentContext && this.documentText) {
+              if (latestType === 'Proofread') {
+                this.restoreProofreadStateFromLatestResult();
+              } else if (latestType === 'LineEdit') {
+                this.restoreLineEditStateFromResult(this.latestResult);
+              }
             }
           }
         }
