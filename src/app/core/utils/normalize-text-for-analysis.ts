@@ -42,8 +42,14 @@ function isIgnoredForNormalization(ch: string): boolean {
 export function normalizedOffsetToRawOffset(rawText: string, normalizedOffset: number): number {
   let ni = 0;
   for (let ri = 0; ri < rawText.length; ri++) {
-    if (ni === normalizedOffset) return ri;
-    if (!isIgnoredForNormalization(rawText[ri])) ni++;
+    const ch = rawText[ri];
+    if (isIgnoredForNormalization(ch)) {
+      continue;
+    }
+    if (ni === normalizedOffset) {
+      return ri;
+    }
+    ni++;
   }
   return rawText.length;
 }
