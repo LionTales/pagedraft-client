@@ -124,40 +124,42 @@ const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
             Book
           </button>
         </nav>
-        @if (rightPanelTab === 'analysis') {
-          <app-analysis-panel
-            [bookId]="bookId"
-            [chapterId]="selectedChapterId"
-            [sceneId]="selectedSceneId"
-            [bookLanguage]="book?.language ?? 'he'"
-            [documentText]="currentDocumentPlainText"
-            [documentChapterId]="documentOwnerChapterId"
-            [documentSceneId]="documentOwnerSceneId"
-            [saveBeforeRun]="saveBeforeRun"
-            (analysisStarted)="onAnalysisStarted()"
-            (analysisCompleted)="onAnalysisCompleted()"
-            (analysisStatus)="onAnalysisStatus($event)"
-            (analysisProgressPercent)="onAnalysisProgressPercent($event)"
-            (applyCorrection)="onApplyCorrection($event)"
-            (showInDocument)="selectRangeInEditor($event)"
-            (suggestionRangesChange)="applySuggestionHighlights($event)"
-            (revertToVersion)="onRevertToVersion($event)">
-          </app-analysis-panel>
-        }
-        @if (rightPanelTab === 'language') {
-          <app-issue-panel
-            [bookId]="bookId ?? undefined"
-            [chapterId]="selectedChapterId ?? undefined"
-            (rewriteApplied)="onApplyCorrection($event)"
-            (issueHighlighted)="onIssueHighlighted($event)">
-          </app-issue-panel>
-        }
-        @if (rightPanelTab === 'book' && bookId && book) {
-          <app-book-dashboard
-            [bookId]="bookId"
-            [bookTitle]="book.title">
-          </app-book-dashboard>
-        }
+        <div class="panel-content">
+          @if (rightPanelTab === 'analysis') {
+            <app-analysis-panel
+              [bookId]="bookId"
+              [chapterId]="selectedChapterId"
+              [sceneId]="selectedSceneId"
+              [bookLanguage]="book?.language ?? 'he'"
+              [documentText]="currentDocumentPlainText"
+              [documentChapterId]="documentOwnerChapterId"
+              [documentSceneId]="documentOwnerSceneId"
+              [saveBeforeRun]="saveBeforeRun"
+              (analysisStarted)="onAnalysisStarted()"
+              (analysisCompleted)="onAnalysisCompleted()"
+              (analysisStatus)="onAnalysisStatus($event)"
+              (analysisProgressPercent)="onAnalysisProgressPercent($event)"
+              (applyCorrection)="onApplyCorrection($event)"
+              (showInDocument)="selectRangeInEditor($event)"
+              (suggestionRangesChange)="applySuggestionHighlights($event)"
+              (revertToVersion)="onRevertToVersion($event)">
+            </app-analysis-panel>
+          }
+          @if (rightPanelTab === 'language') {
+            <app-issue-panel
+              [bookId]="bookId ?? undefined"
+              [chapterId]="selectedChapterId ?? undefined"
+              (rewriteApplied)="onApplyCorrection($event)"
+              (issueHighlighted)="onIssueHighlighted($event)">
+            </app-issue-panel>
+          }
+          @if (rightPanelTab === 'book' && bookId && book) {
+            <app-book-dashboard
+              [bookId]="bookId"
+              [bookTitle]="book.title">
+            </app-book-dashboard>
+          }
+        </div>
       </aside>
     </div>
     @if (analysisRunning) {
@@ -178,11 +180,15 @@ const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
   </div>
   `,
   styles: [`
-    .editor-page-wrapper { position: relative; }
+    .editor-page-wrapper {
+      position: relative;
+      height: 100vh;
+      overflow: hidden;
+    }
     .editor-layout {
       display: grid;
       grid-template-columns: 240px minmax(0, 2fr) 300px;
-      min-height: 100vh;
+      height: 100vh;
     }
     .sidebar { border-right: 1px solid #eee; padding: 1rem; overflow-y: auto; }
     .sidebar-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
@@ -211,6 +217,21 @@ const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
       background: #0078d4;
       color: #fff;
       border-color: #0078d4;
+    }
+    .panel-content {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-content app-analysis-panel,
+    .panel-content app-issue-panel,
+    .panel-content app-book-dashboard {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
     }
     .editor-area {
       padding: 1rem;
