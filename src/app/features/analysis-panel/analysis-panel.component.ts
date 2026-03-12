@@ -864,6 +864,16 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     return r.id ? `${(r.id || '').toLowerCase()}-${o}-${g}` : this.proofreadRunKey(r, s);
   }
 
+  /** Key for a Line Edit suggestion outcome. Uses id when available; otherwise falls back to a stable run-based key. */
+  private lineEditSuggestionKey(r: AnalysisResultDto, s: { original: string; suggested: string }): string {
+    const id = (r.id || '').toLowerCase();
+    const o = this.normalizeKeyText(s.original);
+    const g = this.normalizeKeyText(s.suggested);
+    if (id) return `${id}-${o}-${g}`;
+    const runPart = `${r.chapterId}-${r.sceneId ?? ''}-${r.createdAt}`;
+    return `${runPart}-${o}-${g}`;
+  }
+
   /** Normalize text for key matching (NFC) so API and diff produce the same key. */
   private normalizeKeyText(t: string): string {
     return (t ?? '').normalize('NFC');
@@ -1319,10 +1329,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         analysisId: current.id
       });
     }
-    const id = (current.id || '').toLowerCase();
-    const orig = this.normalizeKeyText(suggestion.original);
-    const sugg = this.normalizeKeyText(suggestion.suggested);
-    const key = `${id}-${orig}-${sugg}`;
+    const key = this.lineEditSuggestionKey(current, {
+      original: suggestion.original,
+      suggested: suggestion.suggested
+    });
     this.acceptedLineEditKeys.add(key);
     this.trackRecentOutcomeKey(key);
     if (this.bookId && this.chapterId && current.id && suggestion.id) {
@@ -1338,10 +1348,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   }
 
   onLineEditDismiss(suggestion: AnalysisSuggestion, current: AnalysisResultDto): void {
-    const id = (current.id || '').toLowerCase();
-    const orig = this.normalizeKeyText(suggestion.original);
-    const sugg = this.normalizeKeyText(suggestion.suggested);
-    const key = `${id}-${orig}-${sugg}`;
+    const key = this.lineEditSuggestionKey(current, {
+      original: suggestion.original,
+      suggested: suggestion.suggested
+    });
     this.dismissedLineEditKeys.add(key);
     this.trackRecentOutcomeKey(key);
     // Remove from the current Run tab suggestions so dismissed items disappear immediately
@@ -1690,18 +1700,15 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           return lineEdit ? this.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, result) : [];
         })();
 
-    const id = (result.id || '').toLowerCase();
-    const keyPrefix = id ? `${id}-` : '';
-
     this.lineEditRunSuggestions = base.filter(s => {
       const outcome = (s.outcome || '').toLowerCase();
       if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'reverted' || outcome === 'superseded') {
         return false;
       }
-      if (!keyPrefix) return true;
-      const orig = this.normalizeKeyText(s.original);
-      const sugg = this.normalizeKeyText(s.suggested);
-      const key = `${keyPrefix}${orig}-${sugg}`;
+      const key = this.lineEditSuggestionKey(result, {
+        original: s.original,
+        suggested: s.suggested
+      });
       return !this.acceptedLineEditKeys.has(key) && !this.dismissedLineEditKeys.has(key);
     });
     this.hasRestoredLineEditForCurrentContext = true;
