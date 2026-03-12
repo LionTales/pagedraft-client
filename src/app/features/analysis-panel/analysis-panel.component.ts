@@ -415,7 +415,8 @@ import { SuggestionCardComponent } from './suggestion-card.component';
     }
     .history-section,
     .run-tab-content,
-    .history-tab-content {
+    .history-tab-content,
+    .versions-tab-content {
       border-top: 1px solid #eee;
       padding-top: 0.5rem;
       display: flex;
@@ -423,6 +424,7 @@ import { SuggestionCardComponent } from './suggestion-card.component';
       gap: 0.5rem;
       flex: 1;
       min-height: 0;
+      overflow: auto;
     }
     .sub-tabs {
       display: flex;
@@ -461,7 +463,6 @@ import { SuggestionCardComponent } from './suggestion-card.component';
     .result-view {
       flex: 1;
       min-height: 0;
-      overflow: auto;
       border-radius: 4px;
       border: 1px solid #eee;
       padding: 0.5rem;
