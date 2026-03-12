@@ -1680,7 +1680,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
     this.proofreadSuggestions = all.filter(s => {
       const outcome = (s.outcome || '').toLowerCase();
-      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'reverted' || outcome === 'superseded') return false;
+      // Treat Reverted as actionable again on the Run tab:
+      // only hide Accepted, Dismissed, and Superseded.
+      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'superseded') return false;
       const key = this.proofreadSuggestionKey(this.latestResult!, s);
       return !this.acceptedProofreadHistoryKeys.has(key) && !this.dismissedProofreadHistoryKeys.has(key);
     });
@@ -1707,7 +1709,9 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
 
     this.lineEditRunSuggestions = base.filter(s => {
       const outcome = (s.outcome || '').toLowerCase();
-      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'reverted' || outcome === 'superseded') {
+      // Treat Reverted as actionable again on the Run tab:
+      // only hide Accepted, Dismissed, and Superseded.
+      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'superseded') {
         return false;
       }
       const key = this.lineEditSuggestionKey(result, {
