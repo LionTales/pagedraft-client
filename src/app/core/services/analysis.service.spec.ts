@@ -1,0 +1,103 @@
+import { TestBed } from '@angular/core/testing';
+import { HttpClientTestingModule, HttpTestingController } from '@angular/common/http/testing';
+import { AnalysisService } from './analysis.service';
+import { RunAnalysisRequest } from '../models/analysis';
+
+describe('AnalysisService', () => {
+  let service: AnalysisService;
+  let http: HttpTestingController;
+
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      imports: [HttpClientTestingModule],
+      providers: [AnalysisService],
+    });
+
+    service = TestBed.inject(AnalysisService);
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    http.verify();
+  });
+
+  it('should GET templates', () => {
+    service.getTemplates().subscribe();
+
+    const req = http.expectOne('/api/templates');
+    expect(req.request.method).toBe('GET');
+    req.flush([]);
+  });
+
+  it('should GET history without filters', () => {
+    service.getHistory('book-1', 'chap-1', null, null).subscribe();
+
+    const req = http.expectOne('/api/books/book-1/chapters/chap-1/analyses');
+    expect(req.request.method).toBe('GET');
+    expect(req.request.params.keys().length).toBe(0);
+    req.flush([]);
+  });
+
+  it('should GET history with type and sceneId', () => {
+    service.getHistory('book-1', 'chap-1', 'Proofread', 'scene-1').subscribe();
+
+    const req = http.expectOne(r =>
+      r.url === '/api/books/book-1/chapters/chap-1/analyses' &&
+      r.params.get('analysisType') === 'Proofread' &&
+      r.params.get('sceneId') === 'scene-1');
+    expect(req.request.method).toBe('GET');
+    req.flush([]);
+  });
+
+  it('should PATCH suggestion outcome', () => {
+    service.updateSuggestionOutcome('book-1', 'chap-1', 'sug-1', 'Accepted').subscribe();
+
+    const req = http.expectOne('/api/books/book-1/chapters/chap-1/suggestions/sug-1/outcome');
+    expect(req.request.method).toBe('PATCH');
+    expect(req.request.body.outcome).toBe('Accepted');
+    req.flush(null);
+  });
+
+  it('should POST explain suggestion', () => {
+    service.explainSuggestion('book-1', 'chap-1', 'sug-1').subscribe();
+
+    const req = http.expectOne('/api/books/book-1/chapters/chap-1/suggestions/sug-1/explain');
+    expect(req.request.method).toBe('POST');
+    req.flush({ explanation: 'because' });
+  });
+
+  it('should POST run analysis with optional sceneId', () => {
+    const body: RunAnalysisRequest = { analysisType: 'Proofread', language: 'he', stream: false };
+
+    service.run('book-1', 'chap-1', body, 'scene-1').subscribe();
+
+    const req = http.expectOne(r =>
+      r.url === '/api/books/book-1/chapters/chap-1/analyze' &&
+      r.params.get('sceneId') === 'scene-1');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body.analysisType).toBe('Proofread');
+    req.flush({});
+  });
+
+  it('should POST start async analysis job', () => {
+    const body: RunAnalysisRequest = { analysisType: 'Proofread', language: 'he', stream: false };
+
+    service.startAsync('book-1', 'chap-1', body, 'scene-1').subscribe();
+
+    const req = http.expectOne(r =>
+      r.url === '/api/books/book-1/chapters/chap-1/analysis-jobs' &&
+      r.params.get('sceneId') === 'scene-1');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body.analysisType).toBe('Proofread');
+    req.flush({ jobId: 'job-1', analysisType: 'Proofread', scope: 'Chapter' });
+  });
+
+  it('should GET analysis by job id', () => {
+    service.getByJob('book-1', 'chap-1', 'job-1').subscribe();
+
+    const req = http.expectOne('/api/books/book-1/chapters/chap-1/analysis-jobs/job-1');
+    expect(req.request.method).toBe('GET');
+    req.flush({});
+  });
+});
+
