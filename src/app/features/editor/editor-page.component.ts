@@ -18,6 +18,14 @@ import { BookDashboardComponent } from '../book-dashboard/book-dashboard.compone
 import { LanguageIssue } from '../../core/models/language-engine';
 import { normalizeTextForAnalysis, normalizedOffsetToRawOffset } from '../../core/utils/normalize-text-for-analysis';
 
+/** Convert a suggestion UUID to a Syncfusion-safe bookmark name (letters, digits, underscores only). */
+function suggestionBookmarkName(suggestionId: string): string {
+  return 'sg_' + suggestionId.replace(/-/g, '_');
+}
+
+/** Prefix used by suggestionBookmarkName -- kept in sync for cleanup matching. */
+const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
+
 @Component({
   selector: 'app-editor-page',
   standalone: true,
@@ -383,8 +391,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   }
   private pendingLoadTarget: { chapterId: string; sceneId?: string } | null = null;
   private isOpeningDocument = false;
-  /** Last suggestion ranges applied for highlights; re-applied after document replace (e.g. Accept). */
-  private lastSuggestionRanges: { startOffset: number; endOffset: number }[] = [];
+  /** Last suggestion ranges applied for highlights; used for re-application when needed. */
+  private lastSuggestionRanges: { suggestionId?: string; startOffset: number; endOffset: number }[] = [];
 
   constructor(
     private route: ActivatedRoute,
@@ -851,9 +859,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   onApplyCorrection(event: ApplyCorrectionEvent): void {
     if (!this.docEditor?.documentEditor || !this.selectedChapterId) return;
     try {
-      const sfdt = this.docEditor.documentEditor.serialize();
+      // Text that will actually be applied to the document (normalized to stay
+      // consistent with analysis offsets and plain-text views).
+      const appliedText = normalizeTextForAnalysis(event.text);
+      let sfdt = this.docEditor.documentEditor.serialize();
+      // Always strip suggestion highlights/bookmarks before applying a correction so
+      // the newly opened document does not retain stale highlight formatting.
+      sfdt = this.stripHighlightFromSfdt(sfdt);
       // Offsets from proofread diff are in normalized document text; use currentDocumentPlainText for the slice
-      const currentText = this.currentDocumentPlainText || this.getTextFromSfdt(sfdt) || this.getPlainTextFromEditor();
+      const currentText =
+        this.currentDocumentPlainText ||
+        normalizeTextForAnalysis(this.getTextFromSfdt(sfdt) || this.getPlainTextFromEditor());
       let startOffset = event.startOffset;
       let endOffset = event.endOffset;
       // When offsets missing but originalText provided (e.g. Redo suggestion from Versions), find range in normalized document
@@ -869,10 +885,16 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       let newSfdt: string;
       if (startOffset != null && endOffset != null && currentText) {
         const newText =
-          currentText.slice(0, startOffset) + event.text + currentText.slice(endOffset);
-        newSfdt = this.replacePlainTextInSfdt(sfdt, newText, startOffset, endOffset, event.text.length);
+          currentText.slice(0, startOffset) + appliedText + currentText.slice(endOffset);
+        newSfdt = this.replacePlainTextInSfdt(
+          sfdt,
+          newText,
+          startOffset,
+          endOffset,
+          appliedText.length
+        );
       } else {
-        newSfdt = this.buildMinimalSfdt(event.text);
+        newSfdt = this.buildMinimalSfdt(appliedText);
       }
 
       this.isOpeningDocument = true;
@@ -883,14 +905,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
             this.hasPendingChanges = true;
             this.contentChanged$.next();
             this.refreshDocumentPlainText();
-            this.applySuggestionHighlights(this.lastSuggestionRanges);
+            // After a correction, suggestion offsets may be stale; let the analysis panel
+            // recompute and emit fresh ranges based on the updated document instead of
+            // re-applying the previous highlight ranges directly.
+            this.lastSuggestionRanges = [];
             if (this.bookId && !event.skipCreatingVersion) {
               const now = new Date();
               const timeLabel = now.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit', second: '2-digit' });
               const maxLen = 35;
               const trunc = (t: string) => (t.length <= maxLen ? t : t.slice(0, maxLen) + '…');
               const label = event.originalText != null
-                ? `Original: ${trunc(event.originalText)} → Suggested: ${trunc(event.text)}`
+                ? `Original: ${trunc(event.originalText)} → Suggested: ${trunc(appliedText)}`
                 : `After accept (${timeLabel})`;
               // Store the document state *before* the replacement so Revert restores original text.
               this.documentVersionService
@@ -902,7 +927,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
                   this.selectedSceneId ?? undefined,
                   event.analysisId ?? undefined,
                   event.originalText ?? undefined,
-                  event.text
+                  appliedText
                 )
                 .subscribe({ error: () => {} });
             }
@@ -938,21 +963,11 @@ export class EditorPageComponent implements OnInit, OnDestroy {
               this.applySuggestionHighlights([]);
               this.isOpeningDocument = false;
               this.saveCurrentDocument();
-              // Record revert as history action so the suggestion shows as Reverted in History tab.
+              // When this version was created from Accept suggestion, mark the linked suggestion
+              // as Reverted; the analysis panel will refresh History/Versions after persisting.
               const analysisId = detail.analysisResultId ?? detail.analysisId;
-              if (this.bookId && this.selectedChapterId && analysisId && detail.originalText != null && detail.suggestedText != null) {
-                this.analysisService
-                  .saveSuggestionOutcome(this.bookId, this.selectedChapterId, analysisId, detail.originalText, detail.suggestedText, 'Reverted')
-                  .subscribe({
-                    next: () => {
-                      // Defer refresh so server has committed and GET returns updated outcomes; force panel to reload history and versions and update view.
-                      setTimeout(() => {
-                        this.analysisPanel?.refreshHistory();
-                        this.analysisPanel?.refreshVersions();
-                      }, 100);
-                    },
-                    error: () => {}
-                  });
+              if (analysisId && detail.originalText && detail.suggestedText && this.analysisPanel) {
+                this.analysisPanel.markSuggestionReverted(analysisId, detail.originalText, detail.suggestedText);
               }
             }
           } finally {
@@ -967,12 +982,12 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /**
    * Scroll the editor into view and select the text range for the suggestion.
    *
-   * Uses Syncfusion Search API (find + navigate) when originalText is provided, so
-   * selection uses the editor's own coordinate system. We do not use hierarchical-index
-   * fallback because it incorrectly moves the cursor to the start; the same range is
-   * already shown via yellow highlights from applySuggestionHighlights.
+   * Navigation priority:
+   *  1. selectBookmark() -- first-class Syncfusion anchor, survives edits.
+   *  2. Offset-based selection via plainOffsetToSfdtPosition (fallback for suggestions without IDs).
+   *  3. searchModule.find() (last resort).
    */
-  selectRangeInEditor(payload: { startOffset: number; endOffset: number; originalText?: string }): void {
+  selectRangeInEditor(payload: { suggestionId?: string; startOffset: number; endOffset: number; originalText?: string }): void {
     const editor = this.docEditor?.documentEditor;
     if (!editor) return;
 
@@ -980,6 +995,38 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
     const doSelect = (): void => {
       try {
+        // Primary: bookmark-based navigation (precise, survives user edits).
+        if (payload.suggestionId && editor.selection?.selectBookmark) {
+          const bmName = suggestionBookmarkName(payload.suggestionId);
+          try {
+            editor.selection.selectBookmark(bmName);
+            if (editor.selection.text?.length) {
+              editor.focusIn();
+              return;
+            }
+          } catch {
+            // Bookmark not found or API error -- fall through to offset-based path.
+          }
+        }
+
+        // Fallback 1: offset-based selection mapped to SFDT hierarchical positions.
+        const { startOffset, endOffset } = payload;
+        if (startOffset != null && endOffset != null && endOffset > startOffset) {
+          try {
+            const sfdt = editor.serialize();
+            const startPos = this.plainOffsetToSfdtPosition(sfdt, startOffset);
+            const endPos = this.plainOffsetToSfdtPosition(sfdt, endOffset);
+            if (startPos && endPos && editor.selection?.select) {
+              editor.selection.select(startPos, endPos);
+              editor.focusIn();
+              return;
+            }
+          } catch {
+            // Ignore offset selection failures and continue to search-based fallback.
+          }
+        }
+
+        // Fallback 2: search API (last resort -- may land on wrong occurrence).
         const searchModule = (editor as unknown as { searchModule?: { find: (text: string) => { startOffset: string; endOffset: string } | null; navigate: (r: { startOffset: string; endOffset: string }) => void } }).searchModule;
         if (originalText && searchModule?.find && searchModule?.navigate) {
           const result = searchModule.find(originalText);
@@ -989,8 +1036,6 @@ export class EditorPageComponent implements OnInit, OnDestroy {
             return;
           }
         }
-        // No selection change when Search doesn't find the text – avoids moving cursor to start.
-        // The word is already highlighted yellow via applySuggestionHighlights.
       } catch {
         // ignore
       }
@@ -1011,7 +1056,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
    * can yield empty selection when the runtime structure differs). Re-opens the document
    * with highlights applied. Highlights are stripped before save.
    */
-  applySuggestionHighlights(ranges: { startOffset: number; endOffset: number }[]): void {
+  applySuggestionHighlights(ranges: { suggestionId?: string; startOffset: number; endOffset: number }[]): void {
     const editor = this.docEditor?.documentEditor;
     if (!editor || !this.selectedChapterId) return;
 
@@ -1022,7 +1067,10 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       sfdt = this.stripHighlightFromSfdt(sfdt);
 
       if (ranges.length > 0) {
-        const docLen = this.getTextFromSfdt(sfdt).length || this.getPlainTextFromEditor().length;
+        const docLen =
+          this.currentDocumentPlainText.length ||
+          normalizeTextForAnalysis(this.getTextFromSfdt(sfdt)).length ||
+          normalizeTextForAnalysis(this.getPlainTextFromEditor()).length;
         const validRanges = ranges.filter(({ startOffset, endOffset }) => {
           const spanLen = endOffset - startOffset;
           return docLen <= 0 || spanLen < docLen * 0.9;
@@ -1051,7 +1099,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
    */
   private applyHighlightRangesToSfdt(
     sfdtString: string,
-    ranges: { startOffset: number; endOffset: number }[]
+    ranges: { suggestionId?: string; startOffset: number; endOffset: number }[]
   ): string {
     if (ranges.length === 0) return sfdtString;
     try {
@@ -1086,7 +1134,12 @@ export class EditorPageComponent implements OnInit, OnDestroy {
             }
 
             let posRaw = 0;
-            for (const [spanStart, spanEnd] of spans) {
+            for (const span of spans) {
+              const spanStart = span.start;
+              const spanEnd = span.end;
+              const bookmarkName = span.suggestionId ? suggestionBookmarkName(span.suggestionId) : undefined;
+              const isFirstPart = spanStart === span.fullStart;
+              const isLastPart = spanEnd === span.fullEnd;
               const startNormInInline = spanStart - blockStart;
               const endNormInInline = spanEnd - blockStart;
               const startRaw = normalizedOffsetToRawOffset(text, startNormInInline);
@@ -1095,7 +1148,13 @@ export class EditorPageComponent implements OnInit, OnDestroy {
                 newInlines.push(this.createInlineForHighlight(text.slice(posRaw, startRaw), inline, false, textKey, cfKey));
               }
               if (endRaw > startRaw) {
+                if (bookmarkName && isFirstPart) {
+                  newInlines.push(this.createBookmarkInline(inline, bookmarkName, true, cfKey));
+                }
                 newInlines.push(this.createInlineForHighlight(text.slice(startRaw, endRaw), inline, true, textKey, cfKey));
+                if (bookmarkName && isLastPart) {
+                  newInlines.push(this.createBookmarkInline(inline, bookmarkName, false, cfKey));
+                }
               }
               posRaw = endRaw;
             }
@@ -1117,15 +1176,15 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private getHighlightSpansInRange(
     blockStart: number,
     blockEnd: number,
-    ranges: { startOffset: number; endOffset: number }[]
-  ): Array<[number, number]> {
-    const spans: Array<[number, number]> = [];
-    for (const { startOffset, endOffset } of ranges) {
+    ranges: { suggestionId?: string; startOffset: number; endOffset: number }[]
+  ): Array<{ start: number; end: number; suggestionId?: string; fullStart: number; fullEnd: number }> {
+    const spans: Array<{ start: number; end: number; suggestionId?: string; fullStart: number; fullEnd: number }> = [];
+    for (const { suggestionId, startOffset, endOffset } of ranges) {
       const start = Math.max(blockStart, startOffset);
       const end = Math.min(blockEnd, endOffset);
-      if (start < end) spans.push([start, end]);
+      if (start < end) spans.push({ start, end, suggestionId, fullStart: startOffset, fullEnd: endOffset });
     }
-    return spans.sort((a, b) => a[0] - b[0]);
+    return spans.sort((a, b) => a.start - b.start);
   }
 
   private detectTextKey(inlines: Array<Record<string, unknown>>): 'text' | 'tlp' {
@@ -1156,6 +1215,35 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     return out;
   }
 
+  private createBookmarkInline(
+    template: Record<string, unknown>,
+    name: string,
+    isStart: boolean,
+    cfKey: string
+  ): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+
+    const cf = template[cfKey] as Record<string, unknown> | undefined;
+    if (cf && typeof cf === 'object') {
+      out[cfKey] = { ...cf };
+    }
+
+    const bookmarkType = isStart ? 0 : 1;
+    // Heuristic: optimized SFDT uses compact character-format key 'cf' instead of 'characterFormat'.
+    const useOptimizedKeys = cfKey === 'cf';
+    if (useOptimizedKeys) {
+      // Optimized SFDT keys (Syncfusion v21.1+ default): 'bkt' for bookmarkType, 'n' for name
+      out['bkt'] = bookmarkType;
+      out['n'] = name;
+    } else {
+      // Standard SFDT keys
+      out['bookmarkType'] = bookmarkType;
+      out['name'] = name;
+    }
+
+    return out;
+  }
+
   private createInlineForHighlight(
     text: string,
     template: Record<string, unknown>,
@@ -1182,6 +1270,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /**
    * Remove all highlight formatting from SFDT JSON so saved document does not persist suggestion highlights.
    * Handles both standard keys and Syncfusion v32 optimized keys.
+   *
+   * Also strips suggestion bookmarks (suggestion-*), removing dedicated bookmark-only
+   * inlines so the saved document does not retain navigation markers.
    */
   private stripHighlightFromSfdt(sfdtString: string): string {
     try {
@@ -1191,6 +1282,10 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
         for (const block of blocks) {
           const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
+          const inlinesKey = block['inlines'] != null ? 'inlines' : 'i';
+          const textKey = this.detectTextKey(inlines);
+          const cfKey = this.detectCharacterFormatKey(inlines);
+          const cleaned: Record<string, unknown>[] = [];
           for (const inline of inlines) {
             const cf = inline['characterFormat'] ?? inline['cf'];
             if (cf && typeof cf === 'object') {
@@ -1198,13 +1293,70 @@ export class EditorPageComponent implements OnInit, OnDestroy {
               delete fmt['highlightColor'];
               delete fmt['hc'];
             }
+            const name = inline['name'] ?? inline['n'];
+            const bookmarkType = inline['bookmarkType'] ?? inline['bkt'];
+            const isSuggestionBookmark =
+              typeof name === 'string' &&
+              (name.startsWith(SUGGESTION_BOOKMARK_PREFIX) || name.startsWith('suggestion-')) &&
+              (bookmarkType === 0 || bookmarkType === 1);
+            if (!isSuggestionBookmark) {
+              cleaned.push(inline);
+            }
           }
+          // Merge adjacent text inlines with identical formatting to prevent SFDT
+          // fragmentation from repeated highlight apply/strip cycles.
+          block[inlinesKey] = this.mergeAdjacentTextInlines(cleaned, textKey, cfKey);
         }
       }
       return JSON.stringify(doc);
     } catch {
       return sfdtString;
     }
+  }
+
+  private mergeAdjacentTextInlines(
+    inlines: Record<string, unknown>[],
+    textKey: string,
+    cfKey: string
+  ): Record<string, unknown>[] {
+    const result: Record<string, unknown>[] = [];
+    for (const inline of inlines) {
+      const text = inline[textKey];
+      if (typeof text !== 'string') {
+        result.push(inline);
+        continue;
+      }
+      if (result.length > 0) {
+        const prev = result[result.length - 1];
+        const prevText = prev[textKey];
+        if (typeof prevText === 'string' && this.canMergeTextInlines(prev, inline, textKey)) {
+          prev[textKey] = prevText + text;
+          continue;
+        }
+      }
+      result.push({ ...inline });
+    }
+    return result;
+  }
+
+  private canMergeTextInlines(
+    a: Record<string, unknown>,
+    b: Record<string, unknown>,
+    textKey: string
+  ): boolean {
+    const aKeys = Object.keys(a).filter(k => k !== textKey);
+    const bKeys = Object.keys(b).filter(k => k !== textKey);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+      if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) return false;
+    }
+    return true;
+  }
+
+  private getInlineTextLength(inline: Record<string, unknown>): number {
+    const text = inline['text'] ?? inline['tlp'];
+    return typeof text === 'string' ? normalizeTextForAnalysis(text).length : 0;
   }
 
   /**
@@ -1214,14 +1366,15 @@ export class EditorPageComponent implements OnInit, OnDestroy {
    * and getParagraphInternal gets "blockIndex;offset". We use bodyIndex 0 for main content.
    *
    * Walks sections → blocks → inlines in the same order as getTextFromSfdt so the
-   * running character count stays in sync with the plain text the analysis panel uses.
-   * Uses raw (un-normalized) lengths so the returned position is valid for the actual SFDT.
+   * running character count stays in sync with the normalized plain text the analysis panel uses.
+   * Uses normalized lengths for the running counter and converts back to raw offsets via
+   * normalizedOffsetToRawOffset so the returned position is valid for the actual SFDT.
    */
   private plainOffsetToSfdtPosition(sfdtString: string, plainOffset: number): string | null {
     try {
       const doc = JSON.parse(sfdtString) as Record<string, unknown>;
       const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
-      let running = 0;
+      let running = 0; // normalized character count
       let lastPos = '0;0;0;0';
       for (let si = 0; si < sections.length; si++) {
         const section = sections[si];
@@ -1229,16 +1382,40 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         for (let bi = 0; bi < blocks.length; bi++) {
           const block = blocks[bi];
           const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
-          let blockLen = 0;
+          let blockNormLen = 0;
+          let blockRawLen = 0;
           for (const inline of inlines) {
             const text = inline['text'] ?? inline['tlp'];
-            if (typeof text === 'string') blockLen += text.length;
+            if (typeof text === 'string') {
+              blockNormLen += normalizeTextForAnalysis(text).length;
+              blockRawLen += text.length;
+            }
           }
-          if (plainOffset <= running + blockLen) {
-            return `${si};0;${bi};${plainOffset - running}`;
+          if (plainOffset <= running + blockNormLen) {
+            // Offset falls within this block; walk inlines again to map normalized offset
+            // to a raw offset within the entire block (accumulating raw lengths).
+            let blockRunningNorm = running;
+            let blockRunningRaw = 0;
+            for (const inline of inlines) {
+              const text = inline['text'] ?? inline['tlp'];
+              if (typeof text !== 'string') continue;
+              const normLen = normalizeTextForAnalysis(text).length;
+              const startNorm = blockRunningNorm;
+              const endNorm = blockRunningNorm + normLen;
+              if (plainOffset <= endNorm) {
+                const offsetInInlineNorm = plainOffset - startNorm;
+                const rawOffsetInInline = normalizedOffsetToRawOffset(text, offsetInInlineNorm);
+                const rawOffsetInBlock = blockRunningRaw + rawOffsetInInline;
+                return `${si};0;${bi};${rawOffsetInBlock}`;
+              }
+              blockRunningNorm = endNorm;
+              blockRunningRaw += text.length;
+            }
+            // Fallback: if we couldn't map precisely, snap to end of block.
+            return `${si};0;${bi};${blockRawLen}`;
           }
-          running += blockLen;
-          lastPos = `${si};0;${bi};${blockLen}`;
+          running += blockNormLen;
+          lastPos = `${si};0;${bi};${blockRawLen}`;
         }
       }
       return lastPos;
@@ -1402,6 +1579,20 @@ export class EditorPageComponent implements OnInit, OnDestroy {
           const cfKey = this.detectCharacterFormatKey(inlines);
           const segment = segments[segIdx++] ?? '';
           let template = inlines[0] ?? {};
+          // Prefer the inline with the longest text content as the style template so we
+          // inherit the dominant font/formatting for the paragraph instead of a tiny run.
+          if (inlines.length > 1) {
+            let best = template;
+            let bestLen = this.getInlineTextLength(best);
+            for (const cand of inlines) {
+              const len = this.getInlineTextLength(cand);
+              if (len > bestLen) {
+                best = cand;
+                bestLen = len;
+              }
+            }
+            template = best;
+          }
           // Preserve RTL so Accept doesn't strip bidi from the document
           if (isRtl) {
             const pf = block['paragraphFormat'] ?? block['pf'];

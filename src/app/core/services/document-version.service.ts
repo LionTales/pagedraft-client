@@ -15,6 +15,8 @@ export interface DocumentVersionDto {
   analysisResultId?: string | null;
   originalText?: string | null;
   suggestedText?: string | null;
+  /** Status of the linked analysis result, when present (e.g. 'Active' or 'Archived'). */
+  analysisStatus?: string | null;
 }
 
 export interface DocumentVersionDetailDto extends DocumentVersionDto {
@@ -23,6 +25,7 @@ export interface DocumentVersionDetailDto extends DocumentVersionDto {
   analysisResultId?: string | null;
   originalText?: string | null;
   suggestedText?: string | null;
+  analysisStatus?: string | null;
 }
 
 @Injectable({ providedIn: 'root' })

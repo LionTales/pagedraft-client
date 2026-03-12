@@ -37,6 +37,21 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
         </div>
         <span class="suggestion-category" *ngIf="suggestion.category">{{ suggestion.category }}</span>
       </div>
+      <div class="suggestion-explanation" *ngIf="suggestion.explanation">
+        {{ suggestion.explanation }}
+      </div>
+      <div class="suggestion-explain-action" *ngIf="suggestion.id && !suggestion.explanation">
+        <button
+          type="button"
+          class="btn-why"
+          *ngIf="!loadingExplanation"
+          (click)="explain.emit(suggestion); $event.stopPropagation()">
+          Why?
+        </button>
+        <span class="explain-loading" *ngIf="loadingExplanation">
+          <span class="spinner-sm"></span> Explaining…
+        </span>
+      </div>
       <div class="suggestion-actions" *ngIf="!readOnly">
         <button type="button" class="btn-accept" *ngIf="hasChange" (click)="accept.emit(suggestion); $event.stopPropagation()">Accept</button>
         <button type="button" class="btn-dismiss" (click)="dismiss.emit(suggestion); $event.stopPropagation()">{{ hasChange ? 'Dismiss' : 'OK' }}</button>
@@ -99,6 +114,53 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
       color: #0078d4;
       margin-top: 0.2rem;
     }
+    .suggestion-explanation {
+      font-size: 0.8rem;
+      line-height: 1.45;
+      color: #3b5575;
+      background: #f0f5fb;
+      border-inline-start: 3px solid #a8c4e6;
+      padding: 0.35rem 0.5rem;
+      border-radius: 4px;
+    }
+    .suggestion-explain-action {
+      display: flex;
+      align-items: center;
+    }
+    .btn-why {
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      border: 1px solid #c8c8c8;
+      background: #fff;
+      color: #555;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .btn-why:hover {
+      background: #f0f5fb;
+      border-color: #0078d4;
+      color: #0078d4;
+    }
+    .explain-loading {
+      font-size: 0.75rem;
+      color: #888;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+    .spinner-sm {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #ddd;
+      border-top-color: #0078d4;
+      border-radius: 50%;
+      animation: spin-why 0.7s linear infinite;
+    }
+    @keyframes spin-why {
+      to { transform: rotate(360deg); }
+    }
     .suggestion-actions {
       display: flex;
       flex-wrap: wrap;
@@ -160,9 +222,12 @@ export class SuggestionCardComponent implements OnChanges {
   @Input() readOnly = false;
   /** In read-only mode: 'accepted' | 'dismissed' | 'reverted' | 'pending'. */
   @Input() status?: 'accepted' | 'dismissed' | 'reverted' | 'pending';
+  /** True while the parent is fetching an explanation for this suggestion from the API. */
+  @Input() loadingExplanation = false;
   @Output() accept = new EventEmitter<AnalysisSuggestion>();
   @Output() dismiss = new EventEmitter<AnalysisSuggestion>();
   @Output() showInDocument = new EventEmitter<AnalysisSuggestion>();
+  @Output() explain = new EventEmitter<AnalysisSuggestion>();
 
   private _originalFragments: DiffFragment[] = [];
   private _suggestedFragments: DiffFragment[] = [];
