@@ -966,9 +966,13 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     // from allAnalyses to avoid an extra network round-trip on every filter click.
     if (this.allAnalyses && this.allAnalyses.length) {
       this.rebuildHistoryFromAllAnalyses();
-      // Preserve any in-flight streaming run (no id) in the History list, same as loadHistory does.
+      // Preserve any in-flight streaming run (no id) in the History list,
+      // but only when its analysis type matches the current history filter (or when showing All).
       if (this.latestResult && !this.latestResult.id) {
-        this.history = [this.latestResult, ...this.history];
+        const latestType = this.latestResult.analysisType || this.latestResult.type;
+        if (!this.historyFilterType || latestType === this.historyFilterType) {
+          this.history = [this.latestResult, ...this.history];
+        }
       }
       this.selectedIndex = 0;
     } else {
@@ -1746,9 +1750,13 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
           this.acceptedLineEditKeys.clear();
           this.dismissedLineEditKeys.clear();
         }
-        // Prepend streaming run (no id) so it appears in History and Accepted/Dismissed keys match
+        // Prepend streaming run (no id) so it appears in History and Accepted/Dismissed keys match,
+        // but only when its analysis type matches the current history filter (or when showing All).
         if (this.latestResult && !this.latestResult.id) {
-          this.history = [this.latestResult, ...this.history];
+          const latestType = this.latestResult.analysisType || this.latestResult.type;
+          if (!this.historyFilterType || latestType === this.historyFilterType) {
+            this.history = [this.latestResult, ...this.history];
+          }
         }
         // Decide which result should be treated as "latest" for the Run tab:
         // - If we already have a synthetic streaming latestResult for this type, keep it for this pass.

@@ -1339,6 +1339,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     const bKeys = Object.keys(b).filter(k => k !== textKey);
     if (aKeys.length !== bKeys.length) return false;
     for (const key of aKeys) {
+      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
       if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) return false;
     }
     return true;
