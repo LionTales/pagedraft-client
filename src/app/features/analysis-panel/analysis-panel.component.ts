@@ -966,6 +966,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     // from allAnalyses to avoid an extra network round-trip on every filter click.
     if (this.allAnalyses && this.allAnalyses.length) {
       this.rebuildHistoryFromAllAnalyses();
+      // Preserve any in-flight streaming run (no id) in the History list, same as loadHistory does.
+      if (this.latestResult && !this.latestResult.id) {
+        this.history = [this.latestResult, ...this.history];
+      }
       this.selectedIndex = 0;
     } else {
       this.loadHistory();
