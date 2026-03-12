@@ -192,6 +192,8 @@ const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
       display: flex;
       flex-direction: column;
       min-height: 0;
+      max-height: 100vh;
+      overflow-y: auto;
     }
     .panel-tabs {
       display: flex;
