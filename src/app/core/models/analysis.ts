@@ -1,6 +1,7 @@
 export interface AnalysisResultDto {
   id: string;
   chapterId: string;
+  jobId?: string | null;
   type: string;
   resultText: string;
   modelName: string;
@@ -11,6 +12,12 @@ export interface AnalysisResultDto {
   sceneId?: string | null;
   bookId?: string | null;
   language?: string | null;
+  /** True when API detected Proofread result nearly identical to input (possible length limit). */
+  proofreadNoChangesHint?: boolean;
+  /** Active/Archived status of this analysis result. */
+  status?: string | null;
+  /** Server-side suggestions for this analysis run (Proofread and Line Edit). */
+  suggestions?: AnalysisSuggestionDto[] | null;
 }
 
 export interface RunAnalysisRequest {
@@ -39,5 +46,53 @@ export interface PromptTemplateDto {
   templateText: string;
   isBuiltIn: boolean;
   language: string;
+}
+
+/** Unified suggestion model used in the UI for Proofread and Line Edit. */
+export interface AnalysisSuggestion {
+  id?: string;
+  startOffset?: number;
+  endOffset?: number;
+  original: string;
+  suggested: string;
+  reason?: string;
+  category?: string;
+  explanation?: string;
+  outcome?: string | null;
+}
+
+/** Server-side suggestion DTO returned from the backend. */
+export interface AnalysisSuggestionDto {
+  id: string;
+  analysisResultId: string;
+  originalText: string;
+  suggestedText: string;
+  startOffset: number;
+  endOffset: number;
+  reason?: string | null;
+  category?: string | null;
+  explanation?: string | null;
+  outcome?: string | null;
+  orderIndex: number;
+}
+
+export interface AnalysisProgressDto {
+  jobId: string;
+  analysisType: string;
+  scope: string;
+  bookId?: string | null;
+  chapterId?: string | null;
+  sceneId?: string | null;
+  status: string;
+  currentChunk: number;
+  totalChunks: number;
+  message: string;
+  estimatedCompletionPercent: number;
+}
+
+export interface StartAnalysisJobResponse {
+  jobId: string;
+  analysisType: string;
+  scope: string;
 }
 

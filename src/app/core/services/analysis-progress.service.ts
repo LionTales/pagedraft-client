@@ -1,0 +1,31 @@
+import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable, interval, takeUntil, switchMap, takeWhile } from 'rxjs';
+import { AnalysisProgressDto } from '../models/analysis';
+
+@Injectable({ providedIn: 'root' })
+export class AnalysisProgressService {
+  constructor(private http: HttpClient) {}
+
+  pollProgress(
+    bookId: string,
+    chapterId: string,
+    jobId: string,
+    stop$: Observable<unknown>,
+    intervalMs = 5000
+  ): Observable<AnalysisProgressDto> {
+    const url = `/api/books/${bookId}/chapters/${chapterId}/analysis-progress/${jobId}`;
+    return interval(intervalMs).pipe(
+      takeUntil(stop$),
+      switchMap(() => this.http.get<AnalysisProgressDto>(url)),
+      // Stop emitting once we hit a terminal state; caller can also stop via stop$
+      takeWhile(p => !this.isTerminalStatus(p?.status), true)
+    );
+  }
+
+  private isTerminalStatus(status: string | null | undefined): boolean {
+    const s = (status ?? '').toLowerCase();
+    return s === 'succeeded' || s === 'failed' || s === 'canceled';
+  }
+}
+
