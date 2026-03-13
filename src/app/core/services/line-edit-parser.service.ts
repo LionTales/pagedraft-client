@@ -91,15 +91,17 @@ export class LineEditParserService {
     documentText: string | null
   ): AnalysisSuggestion[] {
     const normalizedDoc = documentText || null;
+    let searchFromIndex = 0;
     return suggestions.map(s => {
       const suggestion: AnalysisSuggestion = { ...s };
       if (normalizedDoc) {
         const normalizedOriginal = normalizeTextForAnalysis(s.original || '');
         if (normalizedOriginal) {
-          const idx = normalizedDoc.indexOf(normalizedOriginal);
+          const idx = normalizedDoc.indexOf(normalizedOriginal, searchFromIndex);
           if (idx >= 0) {
             suggestion.startOffset = idx;
             suggestion.endOffset = idx + normalizedOriginal.length;
+            searchFromIndex = suggestion.endOffset;
           }
         }
       }
@@ -117,21 +119,25 @@ export class LineEditParserService {
     }
 
     let changed = false;
+    let searchFromIndex = 0;
     const updated = suggestions.map(s => {
       if (s.startOffset != null && s.endOffset != null) {
+        searchFromIndex = s.endOffset;
         return s;
       }
       const normalizedOriginal = normalizeTextForAnalysis(s.original || '');
       if (!normalizedOriginal) {
         return s;
       }
-      const idx = normalizedDoc.indexOf(normalizedOriginal);
+      const idx = normalizedDoc.indexOf(normalizedOriginal, searchFromIndex);
       if (idx >= 0) {
         changed = true;
+        const endOffset = idx + normalizedOriginal.length;
+        searchFromIndex = endOffset;
         return {
           ...s,
           startOffset: idx,
-          endOffset: idx + normalizedOriginal.length
+          endOffset
         };
       }
       return s;
