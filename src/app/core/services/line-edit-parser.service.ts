@@ -1,0 +1,233 @@
+import { Injectable } from '@angular/core';
+import { AnalysisResultDto, AnalysisSuggestion } from '../models/analysis';
+import { normalizeTextForAnalysis } from '../utils/normalize-text-for-analysis';
+
+export interface ParsedLineEdit {
+  suggestions: Array<{
+    original: string;
+    suggested: string;
+    reason: string;
+    category: string;
+  }>;
+  overallFeedback: string;
+}
+
+@Injectable({ providedIn: 'root' })
+export class LineEditParserService {
+  private readonly loggedLineEditDiagnostics = new Set<string>();
+
+  getLineEdit(current: AnalysisResultDto): ParsedLineEdit | null {
+    if ((current.analysisType || current.type) !== 'LineEdit') return null;
+    const raw = current.structuredResult || current.resultText || '';
+    if (!raw.trim()) return null;
+
+    try {
+      const cleaned = raw.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, ' ');
+
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(cleaned) as Record<string, unknown>;
+      } catch (primaryError) {
+        const parseFailKey = this.lineEditDiagnosticKey(current.id, 'parse-fail');
+        if (!this.loggedLineEditDiagnostics.has(parseFailKey)) {
+          this.loggedLineEditDiagnostics.add(parseFailKey);
+          console.warn(
+            '[LineEdit] JSON.parse failed on cleaned payload before salvage',
+            primaryError,
+            {
+              cleanedLength: cleaned.length,
+              cleanedPreview: cleaned.substring(0, 300),
+              rawPreview: raw.substring(0, 300)
+            }
+          );
+        }
+
+        const salvaged = this.trySalvageTruncatedLineEditJson(current.id, cleaned);
+        if (!salvaged) {
+          throw primaryError;
+        }
+        const salvageOkKey = this.lineEditDiagnosticKey(current.id, 'salvage-ok');
+        if (!this.loggedLineEditDiagnostics.has(salvageOkKey)) {
+          this.loggedLineEditDiagnostics.add(salvageOkKey);
+          console.info('[LineEdit] Salvage attempt succeeded, retrying JSON.parse with repaired payload', {
+            originalLength: cleaned.length,
+            salvagedLength: salvaged.length
+          });
+        }
+        data = JSON.parse(salvaged) as Record<string, unknown>;
+      }
+
+      const suggestions = data['suggestions'];
+      if (!Array.isArray(suggestions)) return null;
+
+      return {
+        suggestions: suggestions.map((s: Record<string, unknown>) => ({
+          original: String(s?.['original'] ?? ''),
+          suggested: String(s?.['suggested'] ?? ''),
+          reason: String(s?.['reason'] ?? ''),
+          category: String(s?.['category'] ?? '')
+        })),
+        overallFeedback: String(data['overallFeedback'] ?? '')
+      };
+    } catch (e) {
+      const parseErrorKey = this.lineEditDiagnosticKey(current.id, 'parse-error');
+      if (!this.loggedLineEditDiagnostics.has(parseErrorKey)) {
+        this.loggedLineEditDiagnostics.add(parseErrorKey);
+        console.warn(
+          '[LineEdit] Failed to parse structured result',
+          e,
+          {
+            structuredResult: current.structuredResult ? current.structuredResult.substring(0, 200) : undefined,
+            resultText: current.resultText ? current.resultText.substring(0, 200) : undefined
+          }
+        );
+      }
+      return null;
+    }
+  }
+
+  toLineEditSuggestionsWithOffsets(
+    suggestions: Array<{ original: string; suggested: string; reason: string; category: string }>,
+    documentText: string | null
+  ): AnalysisSuggestion[] {
+    const normalizedDoc = documentText || null;
+    return suggestions.map(s => {
+      const suggestion: AnalysisSuggestion = { ...s };
+      if (normalizedDoc) {
+        const normalizedOriginal = normalizeTextForAnalysis(s.original || '');
+        if (normalizedOriginal) {
+          const idx = normalizedDoc.indexOf(normalizedOriginal);
+          if (idx >= 0) {
+            suggestion.startOffset = idx;
+            suggestion.endOffset = idx + normalizedOriginal.length;
+          }
+        }
+      }
+      return suggestion;
+    });
+  }
+
+  recomputeLineEditOffsets(
+    suggestions: AnalysisSuggestion[],
+    documentText: string | null
+  ): { suggestions: AnalysisSuggestion[]; changed: boolean } {
+    const normalizedDoc = documentText || null;
+    if (!normalizedDoc) {
+      return { suggestions, changed: false };
+    }
+
+    let changed = false;
+    const updated = suggestions.map(s => {
+      if (s.startOffset != null && s.endOffset != null) {
+        return s;
+      }
+      const normalizedOriginal = normalizeTextForAnalysis(s.original || '');
+      if (!normalizedOriginal) {
+        return s;
+      }
+      const idx = normalizedDoc.indexOf(normalizedOriginal);
+      if (idx >= 0) {
+        changed = true;
+        return {
+          ...s,
+          startOffset: idx,
+          endOffset: idx + normalizedOriginal.length
+        };
+      }
+      return s;
+    });
+
+    return { suggestions: changed ? updated : suggestions, changed };
+  }
+
+  private lineEditDiagnosticKey(resultId: string | null | undefined, type: string): string {
+    const id = (resultId || '').toLowerCase() || 'unknown';
+    return `${id}:${type}`;
+  }
+
+  private trySalvageTruncatedLineEditJson(resultId: string | null | undefined, raw: string): string | null {
+    const keyIndex = raw.indexOf('"suggestions"');
+    if (keyIndex === -1) {
+      const key = this.lineEditDiagnosticKey(resultId, 'salvage-no-suggestions-key');
+      if (!this.loggedLineEditDiagnostics.has(key)) {
+        this.loggedLineEditDiagnostics.add(key);
+        console.info('[LineEdit] Salvage: no "suggestions" key found in payload; skipping salvage.');
+      }
+      return null;
+    }
+
+    const arrayStart = raw.indexOf('[', keyIndex);
+    if (arrayStart === -1) {
+      const key = this.lineEditDiagnosticKey(resultId, 'salvage-no-array');
+      if (!this.loggedLineEditDiagnostics.has(key)) {
+        this.loggedLineEditDiagnostics.add(key);
+        console.info('[LineEdit] Salvage: no suggestions array "[" found after key; skipping salvage.');
+      }
+      return null;
+    }
+
+    let inString = false;
+    let escape = false;
+    let depthCurly = 0;
+    let depthSquare = 0;
+    let lastObjectEnd = -1;
+
+    for (let i = arrayStart; i < raw.length; i++) {
+      const c = raw[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (c === '\\') {
+        escape = true;
+        continue;
+      }
+      if (c === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+
+      if (c === '[') {
+        depthSquare++;
+      } else if (c === ']') {
+        depthSquare--;
+      } else if (c === '{') {
+        depthCurly++;
+      } else if (c === '}') {
+        depthCurly--;
+        if (depthSquare === 1 && depthCurly === 0) {
+          lastObjectEnd = i;
+        }
+      }
+    }
+
+    if (lastObjectEnd === -1) {
+      const key = this.lineEditDiagnosticKey(resultId, 'salvage-no-closed-objects');
+      if (!this.loggedLineEditDiagnostics.has(key)) {
+        this.loggedLineEditDiagnostics.add(key);
+        console.info('[LineEdit] Salvage: no fully closed suggestion objects found; skipping salvage.', {
+          rawLength: raw.length
+        });
+      }
+      return null;
+    }
+
+    const head = raw.slice(0, arrayStart + 1);
+    const body = raw.slice(arrayStart + 1, lastObjectEnd + 1);
+
+    const repairKey = this.lineEditDiagnosticKey(resultId, 'salvage-repair');
+    if (!this.loggedLineEditDiagnostics.has(repairKey)) {
+      this.loggedLineEditDiagnostics.add(repairKey);
+      console.info('[LineEdit] Salvage: repairing truncated LineEdit JSON', {
+        rawLength: raw.length,
+        arrayStart,
+        lastObjectEnd,
+        keptChars: body.length
+      });
+    }
+
+    return `${head}${body}]} `;
+  }
+}
+

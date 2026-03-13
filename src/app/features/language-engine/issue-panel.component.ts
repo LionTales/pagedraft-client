@@ -14,6 +14,8 @@ export interface ApplyCorrectionEvent {
   analysisId?: string;
   /** When true, do not create a new document version (e.g. Redo re-applies an existing suggestion without adding another revert snapshot). */
   skipCreatingVersion?: boolean;
+  /** Optional: stable id of the AnalysisSuggestion row that produced this correction (for linking document versions). */
+  suggestionId?: string;
 }
 
 @Component({

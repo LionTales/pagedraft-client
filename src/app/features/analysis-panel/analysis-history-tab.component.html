@@ -1,0 +1,87 @@
+<section class="history-tab-content">
+  <div class="history-header" *ngIf="history.length || streamingText; else emptyHistory">
+    <span class="history-label">History</span>
+    <div class="history-filter">
+      <button type="button" [class.active]="!historyFilterType" (click)="onSetHistoryFilter(null)">All</button>
+      <button type="button" *ngFor="let opt of analysisTypes" [class.active]="historyFilterType === opt.value"
+        (click)="onSetHistoryFilter(opt.value)">{{ opt.label }}</button>
+    </div>
+  </div>
+  <nav class="tabs" *ngIf="history.length">
+    <button
+      type="button"
+      *ngFor="let item of history; let i = index"
+      [class.active]="i === selectedIndex"
+      (click)="selectedIndex = i">
+      {{ item.analysisType || item.type }} · {{ item.createdAt | date:'short' }}
+    </button>
+  </nav>
+  <article class="result-view" *ngIf="history.length && currentHistoryItem as current">
+    <h4>{{ current.analysisType || current.type }} ({{ current.modelName }})</h4>
+    <!-- Proofread (history): read-only list of suggestions with Accepted/Dismissed status -->
+    <ng-container *ngIf="(current.analysisType || current.type) === 'Proofread' && proofreadHistoryItemsWithStatus.length > 0">
+      <div class="suggestions-block">
+        <h4>Suggestions — what happened</h4>
+        <div class="history-outcome-filter">
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">All</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">Accepted</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'dismissed'" (click)="historySuggestionStatusFilter = 'dismissed'">Dismissed</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'reverted'" (click)="historySuggestionStatusFilter = 'reverted'">Reverted</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">Pending</button>
+        </div>
+        <div class="suggestions-list">
+          <app-suggestion-card
+            *ngFor="let item of filteredProofreadHistoryItemsWithStatus"
+            [suggestion]="item.suggestion"
+            [readOnly]="true"
+            [status]="item.status"
+            [loadingExplanation]="!!(item.suggestion.id && explainingSuggestionIds.has(item.suggestion.id))"
+            (explain)="explainSuggestionEvent.emit($event)">
+          </app-suggestion-card>
+        </div>
+      </div>
+    </ng-container>
+    <!-- Line Edit (history): read-only list with Accepted/Dismissed status -->
+    <ng-container *ngIf="(current.analysisType || current.type) === 'LineEdit'">
+      <ng-container *ngIf="getLineEdit(current) as lineEdit">
+        <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
+      </ng-container>
+      <div class="line-edit-suggestions" *ngIf="lineEditSuggestionsWithStatus(current).length > 0">
+        <h4>Suggestions — what happened</h4>
+        <div class="history-outcome-filter">
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">All</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">Accepted</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'dismissed'" (click)="historySuggestionStatusFilter = 'dismissed'">Dismissed</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'reverted'" (click)="historySuggestionStatusFilter = 'reverted'">Reverted</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">Pending</button>
+        </div>
+        <app-suggestion-card
+          *ngFor="let item of filteredLineEditSuggestionsWithStatus(current)"
+          [suggestion]="item.suggestion"
+          [readOnly]="true"
+          [status]="item.status"
+          [loadingExplanation]="!!(item.suggestion.id && explainingSuggestionIds.has(item.suggestion.id))"
+          (explain)="explainSuggestionEvent.emit($event)">
+        </app-suggestion-card>
+      </div>
+    </ng-container>
+    <!-- Other structured (metric cards) -->
+    <div class="metric-cards" *ngIf="!getLineEdit(current) && (current.analysisType || current.type) !== 'Proofread' && current.structuredResult && metricCards(current.structuredResult).length; else textResult">
+      <div class="metric-card" *ngFor="let card of metricCards(current.structuredResult)">
+        <span class="metric-label">{{ card.label }}</span>
+        <span class="metric-value">{{ card.value }}</span>
+      </div>
+    </div>
+    <ng-template #textResult>
+      <ul class="analysis-list" *ngIf="!getLineEdit(current) && !isProofreadWithSuggestions() && analysisItems(current.resultText).length > 1; else singleHistory">
+        <li *ngFor="let item of analysisItems(current.resultText)">{{ item }}</li>
+      </ul>
+      <ng-template #singleHistory>
+        <p class="analysis-single" *ngIf="!getLineEdit(current) && !isProofreadWithSuggestions()">{{ current.resultText }}</p>
+      </ng-template>
+    </ng-template>
+  </article>
+  <ng-template #emptyHistory>
+    <p class="muted">No analysis history yet for this {{ sceneId ? 'scene' : 'chapter' }}.</p>
+  </ng-template>
+</section>

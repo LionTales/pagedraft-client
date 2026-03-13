@@ -1,0 +1,93 @@
+<section class="run-tab-content">
+  <!-- Proofread: show suggestion cards from diff (only when type picker is Proofread) -->
+  <div class="suggestions-block" *ngIf="selectedAnalysisType === 'Proofread' && proofreadSuggestions.length > 0">
+    <h4>Suggestions</h4>
+    <p class="run-duration muted" *ngIf="lastRunDurationLabel">Run time: {{ lastRunDurationLabel }}</p>
+    <div class="suggestions-list">
+      <app-suggestion-card
+        *ngFor="let s of proofreadSuggestions"
+        [suggestion]="s"
+        [loadingExplanation]="!!(s.id && explainingSuggestionIds.has(s.id))"
+        (accept)="proofreadAccept.emit(s)"
+        (dismiss)="proofreadDismiss.emit(s)"
+        (explain)="explainSuggestion.emit($event)"
+        (showInDocument)="showInDocumentEvent.emit(s)">
+      </app-suggestion-card>
+    </div>
+  </div>
+  <!-- Line Edit (Run): overallFeedback (when available) + server-side suggestion cards.
+       Only render when we either have structured Line Edit data or at least one suggestion,
+       so we don't duplicate the generic fallback view. -->
+  <ng-container
+    *ngIf="
+      latestResult
+      && (latestResult.analysisType || latestResult.type) === 'LineEdit'
+      && (lineEditRunSuggestions.length || getLineEdit(latestResult))
+    ">
+    <article class="result-view">
+      <h4>{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
+      <p class="run-duration muted" *ngIf="lastRunDurationLabel">Run time: {{ lastRunDurationLabel }}</p>
+      <ng-container *ngIf="getLineEdit(latestResult) as lineEdit">
+        <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
+      </ng-container>
+      <div class="line-edit-category-filter" *ngIf="lineEditRunSuggestions.length > 0">
+        <button
+          type="button"
+          *ngFor="let cat of lineEditCategoryOptions"
+          [class.active]="lineEditCategoryFilter === cat"
+          (click)="lineEditCategoryFilter = cat">
+          {{ cat === 'all' ? 'All' : getCategoryLabel(cat, latestResult.language || bookLanguage || 'he') }}
+        </button>
+      </div>
+      <div class="line-edit-suggestions" *ngIf="filteredLineEditRunSuggestions.length > 0">
+        <app-suggestion-card
+          *ngFor="let s of filteredLineEditRunSuggestions"
+          [suggestion]="s"
+          [loadingExplanation]="!!(s.id && explainingSuggestionIds.has(s.id))"
+          (accept)="onLineEditAcceptClick(s)"
+          (dismiss)="onLineEditDismissClick(s)"
+          (explain)="explainSuggestion.emit($event)"
+          (showInDocument)="showInDocumentEvent.emit(s)">
+        </app-suggestion-card>
+      </div>
+    </article>
+  </ng-container>
+  <article
+    class="result-view"
+    *ngIf="(streamingText || latestResult)
+           && !(latestResult && (latestResult.analysisType || latestResult.type) === 'Proofread' && proofreadSuggestions.length)
+           && !(latestResult && (latestResult.analysisType || latestResult.type) === 'LineEdit' && lineEditRunSuggestions.length)
+           && !(latestResult && getLineEdit(latestResult)); else emptyRun">
+    <h4 *ngIf="streamingText">Live result</h4>
+    <h4 *ngIf="!streamingText && latestResult">{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
+    <p class="proofread-length-hint muted" *ngIf="showProofreadLengthHint">
+      No changes suggested. The text may be too long for the model, or the result wasn't a proper proofread—try a shorter section (e.g. one scene).
+    </p>
+    <p class="proofread-all-good" *ngIf="isProofreadWithNoSuggestions && !showProofreadLengthHint">
+      No changes suggested—text looks good. All suggestions have been applied to the document.
+    </p>
+    <ul class="analysis-list" *ngIf="runDisplayText && !isProofreadWithNoSuggestions && analysisItems(runDisplayText).length > 1; else singleRunBlock">
+      <li *ngFor="let item of analysisItems(runDisplayText)">{{ item }}</li>
+    </ul>
+    <ng-template #singleRunBlock>
+      <p class="analysis-single" *ngIf="runDisplayText && !isProofreadWithNoSuggestions">{{ runDisplayText }}</p>
+    </ng-template>
+  </article>
+  <ng-template #emptyRun>
+    <div *ngIf="latestResult && (latestResult.analysisType || latestResult.type) === 'LineEdit' && !lineEditRunSuggestions.length && !getLineEdit(latestResult); else noRunYet">
+      <p class="muted">Could not parse structured line edit results.</p>
+      <button
+        type="button"
+        class="run-btn secondary"
+        (click)="showRawLineEdit = !showRawLineEdit">
+        {{ showRawLineEdit ? 'Hide' : 'Show' }} raw response
+      </button>
+      <pre *ngIf="showRawLineEdit" class="analysis-single">{{ latestResult.resultText }}</pre>
+    </div>
+    <ng-template #noRunYet>
+      <p class="muted" *ngIf="!proofreadSuggestions.length && !lineEditRunSuggestions.length && !(latestResult && getLineEdit(latestResult))">
+        No analysis run yet for this {{ sceneId ? 'scene' : 'chapter' }}.
+      </p>
+    </ng-template>
+  </ng-template>
+</section>

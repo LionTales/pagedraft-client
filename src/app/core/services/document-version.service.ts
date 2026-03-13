@@ -13,6 +13,8 @@ export interface DocumentVersionDto {
   analysisId?: string | null;
   /** Same as analysisId; API returns this name (camelCase of AnalysisResultId). */
   analysisResultId?: string | null;
+   /** Stable id of the AnalysisSuggestion that produced this version, when known. */
+   suggestionId?: string | null;
   originalText?: string | null;
   suggestedText?: string | null;
   /** Status of the linked analysis result, when present (e.g. 'Active' or 'Archived'). */
@@ -23,6 +25,7 @@ export interface DocumentVersionDetailDto extends DocumentVersionDto {
   contentSfdt: string;
   analysisId?: string | null;
   analysisResultId?: string | null;
+  suggestionId?: string | null;
   originalText?: string | null;
   suggestedText?: string | null;
   analysisStatus?: string | null;
@@ -45,13 +48,22 @@ export class DocumentVersionService {
     label?: string | null,
     sceneId?: string | null,
     analysisId?: string | null,
+    suggestionId?: string | null,
     originalText?: string | null,
     suggestedText?: string | null
   ): Observable<DocumentVersionDto> {
     let url = `/api/books/${bookId}/chapters/${chapterId}/versions`;
     if (sceneId) url += `?sceneId=${encodeURIComponent(sceneId)}`;
-    const body: { contentSfdt: string; label: string | null; analysisId?: string; originalText?: string; suggestedText?: string } = { contentSfdt, label: label || null };
+    const body: {
+      contentSfdt: string;
+      label: string | null;
+      analysisId?: string;
+      suggestionId?: string;
+      originalText?: string;
+      suggestedText?: string;
+    } = { contentSfdt, label: label || null };
     if (analysisId) body.analysisId = analysisId;
+    if (suggestionId) body.suggestionId = suggestionId;
     if (originalText != null) body.originalText = originalText;
     if (suggestedText != null) body.suggestedText = suggestedText;
     return this.http.post<DocumentVersionDto>(url, body);

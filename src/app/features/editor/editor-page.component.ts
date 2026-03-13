@@ -16,15 +16,9 @@ import { AnalysisPanelComponent } from '../analysis-panel/analysis-panel.compone
 import { IssuePanelComponent, ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
 import { BookDashboardComponent } from '../book-dashboard/book-dashboard.component';
 import { LanguageIssue } from '../../core/models/language-engine';
-import { normalizeTextForAnalysis, normalizedOffsetToRawOffset } from '../../core/utils/normalize-text-for-analysis';
-
-/** Convert a suggestion UUID to a Syncfusion-safe bookmark name (letters, digits, underscores only). */
-function suggestionBookmarkName(suggestionId: string): string {
-  return 'sg_' + suggestionId.replace(/-/g, '_');
-}
-
-/** Prefix used by suggestionBookmarkName -- kept in sync for cleanup matching. */
-const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
+import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-analysis';
+import { EditorTextService } from '../../core/services/editor-text.service';
+import { SfdtManipulationService, suggestionBookmarkName } from '../../core/services/sfdt-manipulation.service';
 
 @Component({
   selector: 'app-editor-page',
@@ -38,339 +32,8 @@ const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
     BookDashboardComponent
   ],
   providers: [ToolbarService],
-  template: `
-    <div class="editor-page-wrapper">
-      <div class="editor-layout">
-      <aside class="sidebar">
-        <div class="sidebar-header">
-          <h3>Chapters</h3>
-          @if (bookId) {
-            <button type="button" class="import-btn" (click)="goToImport()">Import DOCX</button>
-          }
-        </div>
-        @if (book) {
-          <app-chapter-tree
-            [chapters]="book.chapters"
-            [selectedChapterId]="selectedChapterId"
-            [selectedSceneId]="selectedSceneId"
-            [expandedChapters]="expandedChapterIds"
-            [scenesMap]="scenesByChapter"
-            (chapterSelected)="selectChapter($event)"
-            (sceneSelected)="selectScene($event)"
-            (toggleExpandChapter)="onToggleExpandChapter($event)"
-            (reorder)="onReorder($event)"
-            (addChapter)="addChapter()"
-            (renameChapter)="renameChapter($event)"
-            (deleteChapter)="deleteChapter($event)"
-            (splitScenes)="onSplitScenes($event)">
-          </app-chapter-tree>
-        }
-      </aside>
-      <main class="editor-area">
-        @if (selectedChapterId) {
-          <div class="editor-shell" [attr.dir]="editorDirection">
-            <div class="editor-status">
-              <span *ngIf="isSaving">שומר…</span>
-              <span *ngIf="!isSaving && hasPendingChanges">שינויים ממתינים לשמירה</span>
-              <span *ngIf="!isSaving && !hasPendingChanges">כל השינויים נשמרו</span>
-              @if (selectedSceneId) {
-                <span class="scope-badge">Scene</span>
-              }
-              <span class="direction-btns">
-                <button type="button" class="dir-btn" title="Right-to-left (RTL)" (click)="setSelectionRtl()">RTL</button>
-                <button type="button" class="dir-btn" title="Left-to-right (LTR)" (click)="setSelectionLtr()">LTR</button>
-              </span>
-              <button type="button" class="save-btn" [disabled]="!hasPendingChanges || isSaving" (click)="saveCurrentDocument()">שמור</button>
-              <button type="button" class="back-btn" (click)="goBackToBooks()">חזרה לספרים</button>
-            </div>
-            <ejs-documenteditorcontainer
-              #docEditor
-              [enableToolbar]="true"
-              [toolbarMode]="'Toolbar'"
-              [showPropertiesPane]="false"
-              [enableRtl]="editorDirection === 'rtl'"
-              [locale]="editorCulture"
-              [height]="'100%'"
-              serviceUrl="/api/documenteditor/"
-              (created)="onEditorCreated()"
-              (contentChange)="onContentChange()">
-            </ejs-documenteditorcontainer>
-          </div>
-        } @else {
-          <p>Select a chapter or scene from the sidebar.</p>
-        }
-      </main>
-      <aside class="panel">
-        <nav class="panel-tabs">
-          <button
-            type="button"
-            class="panel-tab"
-            [class.active]="rightPanelTab === 'analysis'"
-            (click)="rightPanelTab = 'analysis'">
-            Analysis
-          </button>
-          <button
-            type="button"
-            class="panel-tab"
-            [class.active]="rightPanelTab === 'language'"
-            (click)="rightPanelTab = 'language'">
-            Language
-          </button>
-          <button
-            type="button"
-            class="panel-tab"
-            [class.active]="rightPanelTab === 'book'"
-            (click)="rightPanelTab = 'book'">
-            Book
-          </button>
-        </nav>
-        <div class="panel-content">
-          @if (rightPanelTab === 'analysis') {
-            <app-analysis-panel
-              [bookId]="bookId"
-              [chapterId]="selectedChapterId"
-              [sceneId]="selectedSceneId"
-              [bookLanguage]="book?.language ?? 'he'"
-              [documentText]="currentDocumentPlainText"
-              [documentChapterId]="documentOwnerChapterId"
-              [documentSceneId]="documentOwnerSceneId"
-              [saveBeforeRun]="saveBeforeRun"
-              (analysisStarted)="onAnalysisStarted()"
-              (analysisCompleted)="onAnalysisCompleted()"
-              (analysisStatus)="onAnalysisStatus($event)"
-              (analysisProgressPercent)="onAnalysisProgressPercent($event)"
-              (applyCorrection)="onApplyCorrection($event)"
-              (showInDocument)="selectRangeInEditor($event)"
-              (suggestionRangesChange)="applySuggestionHighlights($event)"
-              (revertToVersion)="onRevertToVersion($event)">
-            </app-analysis-panel>
-          }
-          @if (rightPanelTab === 'language') {
-            <app-issue-panel
-              [bookId]="bookId ?? undefined"
-              [chapterId]="selectedChapterId ?? undefined"
-              (rewriteApplied)="onApplyCorrection($event)"
-              (issueHighlighted)="onIssueHighlighted($event)">
-            </app-issue-panel>
-          }
-          @if (rightPanelTab === 'book' && bookId && book) {
-            <app-book-dashboard
-              [bookId]="bookId"
-              [bookTitle]="book.title">
-            </app-book-dashboard>
-          }
-        </div>
-      </aside>
-    </div>
-    @if (analysisRunning) {
-      <div class="analysis-overlay" role="status" aria-live="polite" aria-label="Analysis in progress">
-        <div class="analysis-overlay-card">
-          <h3 class="analysis-overlay-title">Run analysis</h3>
-          <div class="analysis-spinner"></div>
-          <p class="analysis-overlay-message">{{ analysisStatusText }}</p>
-          <div class="analysis-progress-wrapper" *ngIf="analysisStatusPercent !== null">
-            <div class="analysis-progress-bar">
-              <div class="analysis-progress-fill" [style.width.%]="analysisStatusPercent"></div>
-            </div>
-            <span class="analysis-progress-label">{{ analysisStatusPercent }}%</span>
-          </div>
-        </div>
-      </div>
-    }
-  </div>
-  `,
-  styles: [`
-    .editor-page-wrapper {
-      position: relative;
-      height: 100vh;
-      overflow: hidden;
-    }
-    .editor-layout {
-      display: grid;
-      grid-template-columns: 240px minmax(0, 2fr) 300px;
-      height: 100vh;
-    }
-    .sidebar { border-right: 1px solid #eee; padding: 1rem; overflow-y: auto; }
-    .sidebar-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
-    .panel {
-      border-left: 1px solid #eee;
-      padding: 0.5rem 1rem 1rem;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-    .panel-tabs {
-      display: flex;
-      gap: 0.25rem;
-      margin-bottom: 0.5rem;
-    }
-    .panel-tab {
-      padding: 0.35rem 0.6rem;
-      border: 1px solid #ddd;
-      background: #fff;
-      cursor: pointer;
-      font-size: 0.85rem;
-      border-radius: 4px;
-    }
-    .panel-tab:hover { background: #f5f5f5; }
-    .panel-tab.active {
-      background: #0078d4;
-      color: #fff;
-      border-color: #0078d4;
-    }
-    .panel-content {
-      flex: 1;
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-    .panel-content app-analysis-panel,
-    .panel-content app-issue-panel,
-    .panel-content app-book-dashboard {
-      flex: 1;
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-    }
-    .editor-area {
-      padding: 1rem;
-      display: flex;
-      align-items: stretch;
-      height: calc(100vh - 2rem);
-      box-sizing: border-box;
-    }
-    .editor-shell {
-      display: flex;
-      flex-direction: column;
-      width: 100%;
-    }
-    .editor-status {
-      display: flex;
-      justify-content: flex-end;
-      font-size: 0.75rem;
-      color: #555;
-      margin-bottom: 0.25rem;
-      gap: 0.5rem;
-    }
-    .editor-area ejs-documenteditorcontainer {
-      display: flex;
-      flex-direction: column;
-      width: 100%;
-      height: 100%;
-    }
-    .editor-area ejs-documenteditorcontainer > * {
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-height: 0;
-    }
-    .editor-area ejs-documenteditorcontainer .e-de-ctnr {
-      flex: 1;
-      min-height: 0;
-      width: 100%;
-    }
-    .badge { font-size: 0.75rem; color: #666; }
-    .scope-badge { font-size: 0.7rem; color: #0078d4; margin-inline-start: 0.5rem; }
-    .save-btn, .back-btn {
-      margin-inline-start: 0.5rem;
-      padding: 0.25rem 0.5rem;
-      font-size: 0.8rem;
-      border: 1px solid #0078d4;
-      border-radius: 4px;
-      background: #fff;
-      color: #0078d4;
-      cursor: pointer;
-    }
-    .save-btn:hover:not(:disabled) { background: #e6f0ff; }
-    .save-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .back-btn { border-color: #666; color: #333; }
-    .back-btn:hover { background: #f5f5f5; }
-    .direction-btns { display: inline-flex; gap: 0.2rem; margin-inline-start: 0.5rem; }
-    .dir-btn {
-      padding: 0.2rem 0.4rem;
-      font-size: 0.75rem;
-      border: 1px solid #888;
-      border-radius: 4px;
-      background: #fff;
-      color: #333;
-      cursor: pointer;
-    }
-    .dir-btn:hover { background: #eee; }
-    .add-chapter { width: 100%; margin-bottom: 0.75rem; padding: 0.5rem; cursor: pointer; }
-    .import-btn { padding: 0.35rem 0.5rem; font-size: 0.8rem; cursor: pointer; }
-    .analysis-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 9999;
-      background: rgba(255, 255, 255, 0.85);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      pointer-events: auto;
-    }
-    .analysis-overlay-card {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 1rem;
-      padding: 1.5rem 2rem;
-      background: #fff;
-      border-radius: 8px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.12);
-      border: 1px solid #eee;
-      min-width: 260px;
-      max-width: 360px;
-    }
-    .analysis-overlay-title {
-      margin: 0;
-      font-size: 1rem;
-      font-weight: 600;
-      color: #222;
-    }
-    .analysis-spinner {
-      width: 40px;
-      height: 40px;
-      border: 3px solid #e0e0e0;
-      border-top-color: #0078d4;
-      border-radius: 50%;
-      animation: analysis-spin 0.8s linear infinite;
-    }
-    @keyframes analysis-spin {
-      to { transform: rotate(360deg); }
-    }
-    .analysis-overlay-message {
-      margin: 0;
-      font-size: 0.95rem;
-      color: #333;
-      text-align: center;
-    }
-    .analysis-progress-wrapper {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      width: 100%;
-      margin-top: 0.25rem;
-    }
-    .analysis-progress-bar {
-      flex: 1;
-      height: 6px;
-      border-radius: 999px;
-      background: #f0f0f0;
-      overflow: hidden;
-    }
-    .analysis-progress-fill {
-      height: 100%;
-      background: linear-gradient(90deg, #0078d4, #4ba3ff);
-      transition: width 0.25s ease-out;
-    }
-    .analysis-progress-label {
-      font-size: 0.75rem;
-      color: #555;
-      min-width: 2.5rem;
-      text-align: right;
-    }
-  `]
+  templateUrl: './editor-page.component.html',
+  styleUrl: './editor-page.component.scss'
 })
 export class EditorPageComponent implements OnInit, OnDestroy {
   @ViewChild('docEditor', { static: false })
@@ -423,7 +86,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     private sceneService: SceneService,
     private syncService: SyncService,
     private documentVersionService: DocumentVersionService,
-    private analysisService: AnalysisService
+    private analysisService: AnalysisService,
+    private sfdtService: SfdtManipulationService,
+    private editorTextService: EditorTextService
   ) {}
 
   ngOnInit(): void {
@@ -586,37 +251,6 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /** Valid empty SFDT with one paragraph so selection/layout have a valid target (avoids Syncfusion length/currentWidget errors). RTL-friendly for Hebrew. */
   private static readonly EMPTY_SFDT = '{"sections":[{"blocks":[{"paragraphFormat":{"bidi":true},"inlines":[{"characterFormat":{"bidi":true},"text":""}]}],"headersFooters":{}}]}';
 
-  /**
-   * Ensure all paragraphs and inlines in SFDT have bidi: true so RTL punctuation and layout render correctly.
-   * Call when loading content for a Hebrew (or other RTL) book so existing content is not treated as LTR.
-   */
-  private ensureSfdtRtl(sfdtString: string): string {
-    if (this.editorDirection !== 'rtl') return sfdtString;
-    try {
-      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
-      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
-      for (const section of sections) {
-        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
-        for (const block of blocks) {
-          const pf = block['paragraphFormat'] ?? block['pf'];
-          if (pf && typeof pf === 'object') {
-            (pf as Record<string, unknown>)['bidi'] = true;
-          }
-          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
-          for (const inline of inlines) {
-            const cf = inline['characterFormat'] ?? inline['cf'];
-            if (cf && typeof cf === 'object') {
-              (cf as Record<string, unknown>)['bidi'] = true;
-            }
-          }
-        }
-      }
-      return JSON.stringify(doc);
-    } catch {
-      return sfdtString;
-    }
-  }
-
   selectChapter(ch: ChapterSummaryDto): void {
     const load = () => {
       this.selectedChapterId = ch.id;
@@ -677,14 +311,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     this.chapterService.getById(this.bookId, chapterId).subscribe(dto => {
       const raw = dto.contentSfdt?.trim();
       let sfdt = raw && raw !== '{"sections":[{"blocks":[]}]}' ? raw : EditorPageComponent.EMPTY_SFDT;
-      sfdt = this.ensureSfdtRtl(sfdt);
+      sfdt = this.sfdtService.ensureSfdtRtl(sfdt, this.editorDirection === 'rtl');
       this.isOpeningDocument = true;
       setTimeout(() => {
         try {
           if (!this.docEditor?.documentEditor || this.selectedChapterId !== chapterId || this.selectedSceneId) return;
           this.docEditor.documentEditor.open(sfdt);
           this.hasPendingChanges = false;
-          this.currentDocumentPlainText = normalizeTextForAnalysis(this.getTextFromSfdt(sfdt));
+          this.currentDocumentPlainText = this.editorTextService.refreshDocumentPlainText(this.docEditor, this.selectedChapterId);
           this.documentOwnerChapterId = chapterId;
           this.documentOwnerSceneId = null;
         } finally {
@@ -699,14 +333,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     this.sceneService.getById(this.bookId, chapterId, sceneId).subscribe(dto => {
       const raw = dto.contentSfdt?.trim();
       let sfdt = raw && raw !== '{"sections":[{"blocks":[]}]}' ? raw : EditorPageComponent.EMPTY_SFDT;
-      sfdt = this.ensureSfdtRtl(sfdt);
+      sfdt = this.sfdtService.ensureSfdtRtl(sfdt, this.editorDirection === 'rtl');
       this.isOpeningDocument = true;
       setTimeout(() => {
         try {
           if (!this.docEditor?.documentEditor || this.selectedSceneId !== sceneId) return;
           this.docEditor.documentEditor.open(sfdt);
           this.hasPendingChanges = false;
-          this.currentDocumentPlainText = normalizeTextForAnalysis(this.getTextFromSfdt(sfdt));
+          this.currentDocumentPlainText = this.editorTextService.refreshDocumentPlainText(this.docEditor, this.selectedChapterId);
           this.documentOwnerChapterId = chapterId;
           this.documentOwnerSceneId = sceneId;
         } finally {
@@ -765,7 +399,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     let sfdt: string;
     try {
       sfdt = this.docEditor.documentEditor.serialize();
-      sfdt = this.stripHighlightFromSfdt(sfdt);
+      sfdt = this.sfdtService.stripHighlightFromSfdt(sfdt);
     } catch {
       if (onCompleted) onCompleted();
       return;
@@ -886,11 +520,13 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       let sfdt = this.docEditor.documentEditor.serialize();
       // Always strip suggestion highlights/bookmarks before applying a correction so
       // the newly opened document does not retain stale highlight formatting.
-      sfdt = this.stripHighlightFromSfdt(sfdt);
+      sfdt = this.sfdtService.stripHighlightFromSfdt(sfdt);
       // Offsets from proofread diff are in normalized document text; use currentDocumentPlainText for the slice
+      const textFromSfdt = this.editorTextService.getTextFromSfdt(sfdt);
+      const fallbackPlain = textFromSfdt || this.editorTextService.getPlainTextFromEditor(this.docEditor);
       const currentText =
         this.currentDocumentPlainText ||
-        normalizeTextForAnalysis(this.getTextFromSfdt(sfdt) || this.getPlainTextFromEditor());
+        (fallbackPlain ? normalizeTextForAnalysis(fallbackPlain) : '');
       let startOffset = event.startOffset;
       let endOffset = event.endOffset;
       // When offsets missing but originalText provided (e.g. Redo suggestion from Versions), find range in normalized document
@@ -907,15 +543,16 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       if (startOffset != null && endOffset != null && currentText) {
         const newText =
           currentText.slice(0, startOffset) + appliedText + currentText.slice(endOffset);
-        newSfdt = this.replacePlainTextInSfdt(
+        newSfdt = this.sfdtService.replacePlainTextInSfdt(
           sfdt,
           newText,
+          this.editorDirection === 'rtl',
           startOffset,
           endOffset,
           appliedText.length
         );
       } else {
-        newSfdt = this.buildMinimalSfdt(appliedText);
+        newSfdt = this.sfdtService.buildMinimalSfdt(appliedText);
       }
 
       this.isOpeningDocument = true;
@@ -932,12 +569,18 @@ export class EditorPageComponent implements OnInit, OnDestroy {
             this.lastSuggestionRanges = [];
             if (this.bookId && !event.skipCreatingVersion) {
               const now = new Date();
-              const timeLabel = now.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit', second: '2-digit' });
+              const timeLabel = now.toLocaleTimeString('en-US', {
+                hour12: true,
+                hour: 'numeric',
+                minute: '2-digit',
+                second: '2-digit'
+              });
               const maxLen = 35;
               const trunc = (t: string) => (t.length <= maxLen ? t : t.slice(0, maxLen) + '…');
-              const label = event.originalText != null
-                ? `Original: ${trunc(event.originalText)} → Suggested: ${trunc(appliedText)}`
-                : `After accept (${timeLabel})`;
+              const label =
+                event.originalText != null
+                  ? `Original: ${trunc(event.originalText)} → Suggested: ${trunc(appliedText)}`
+                  : `After accept (${timeLabel})`;
               // Store the document state *before* the replacement so Revert restores original text.
               this.documentVersionService
                 .create(
@@ -947,6 +590,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
                   label,
                   this.selectedSceneId ?? undefined,
                   event.analysisId ?? undefined,
+                  event.suggestionId ?? undefined,
                   event.originalText ?? undefined,
                   appliedText
                 )
@@ -971,7 +615,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     this.documentVersionService.get(this.bookId, this.selectedChapterId, versionId).subscribe({
       next: (detail) => {
         let sfdt = detail.contentSfdt;
-        if (sfdt) sfdt = this.ensureSfdtRtl(sfdt);
+        if (sfdt) sfdt = this.sfdtService.ensureSfdtRtl(sfdt, this.editorDirection === 'rtl');
         if (!this.docEditor?.documentEditor || !sfdt) return;
         this.isOpeningDocument = true;
         setTimeout(() => {
@@ -982,13 +626,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
               this.contentChanged$.next();
               this.refreshDocumentPlainText();
               this.applySuggestionHighlights([]);
-              this.isOpeningDocument = false;
               this.saveCurrentDocument();
               // When this version was created from Accept suggestion, mark the linked suggestion
-              // as Reverted; the analysis panel will refresh History/Versions after persisting.
+              // as Reverted; prefer SuggestionId when present, and fall back to text-based matching
+              // for legacy versions that predate SuggestionId.
               const analysisId = detail.analysisResultId ?? detail.analysisId;
-              if (analysisId && detail.originalText && detail.suggestedText && this.analysisPanel) {
-                this.analysisPanel.markSuggestionReverted(analysisId, detail.originalText, detail.suggestedText);
+              if (this.analysisPanel && analysisId) {
+                if (detail.suggestionId) {
+                  this.analysisPanel.markSuggestionReverted(analysisId, detail.originalText ?? '', detail.suggestedText ?? '', detail.suggestionId);
+                } else if (detail.originalText && detail.suggestedText) {
+                  this.analysisPanel.markSuggestionReverted(analysisId, detail.originalText, detail.suggestedText);
+                }
               }
             }
           } finally {
@@ -1008,7 +656,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
    *  2. Offset-based selection via plainOffsetToSfdtPosition (fallback for suggestions without IDs).
    *  3. searchModule.find() (last resort).
    */
-  selectRangeInEditor(payload: { suggestionId?: string; startOffset: number; endOffset: number; originalText?: string }): void {
+  selectRangeInEditor(payload: { suggestionId?: string; startOffset?: number; endOffset?: number; originalText?: string }): void {
     const editor = this.docEditor?.documentEditor;
     if (!editor) return;
 
@@ -1035,12 +683,15 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         if (startOffset != null && endOffset != null && endOffset > startOffset) {
           try {
             const sfdt = editor.serialize();
-            const startPos = this.plainOffsetToSfdtPosition(sfdt, startOffset);
-            const endPos = this.plainOffsetToSfdtPosition(sfdt, endOffset);
+            const startPos = this.sfdtService.plainOffsetToSfdtPosition(sfdt, startOffset);
+            const endPos = this.sfdtService.plainOffsetToSfdtPosition(sfdt, endOffset);
             if (startPos && endPos && editor.selection?.select) {
               editor.selection.select(startPos, endPos);
-              editor.focusIn();
-              return;
+              const selected = editor.selection.text || '';
+              if (selected.length > 0) {
+                editor.focusIn();
+                return;
+              }
             }
           } catch {
             // Ignore offset selection failures and continue to search-based fallback.
@@ -1085,18 +736,24 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
     try {
       let sfdt = editor.serialize();
-      sfdt = this.stripHighlightFromSfdt(sfdt);
+      sfdt = this.sfdtService.stripHighlightFromSfdt(sfdt);
 
       if (ranges.length > 0) {
-        const docLen =
-          this.currentDocumentPlainText.length ||
-          normalizeTextForAnalysis(this.getTextFromSfdt(sfdt)).length ||
-          normalizeTextForAnalysis(this.getPlainTextFromEditor()).length;
-        const validRanges = ranges.filter(({ startOffset, endOffset }) => {
-          const spanLen = endOffset - startOffset;
-          return docLen <= 0 || spanLen < docLen * 0.9;
-        });
-        sfdt = this.applyHighlightRangesToSfdt(sfdt, validRanges);
+        let docLen = this.currentDocumentPlainText.length;
+        if (!docLen) {
+          const fromSfdt = this.editorTextService.getTextFromSfdt(sfdt);
+          const fallback = fromSfdt || this.editorTextService.getPlainTextFromEditor(this.docEditor);
+          if (fallback) {
+            docLen = normalizeTextForAnalysis(fallback).length;
+          }
+        }
+        const validRanges = docLen
+          ? ranges.filter(({ startOffset, endOffset }) => {
+              const spanLen = endOffset - startOffset;
+              return spanLen < docLen * 0.9;
+            })
+          : ranges;
+        sfdt = this.sfdtService.applyHighlightRangesToSfdt(sfdt, validRanges);
       }
 
       this.isOpeningDocument = true;
@@ -1114,522 +771,12 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  /**
-   * Apply Yellow highlight to the given plain-text character ranges in the SFDT.
-   * Uses the same key convention as the serialized document (standard or Syncfusion v32 optimized).
-   */
-  private applyHighlightRangesToSfdt(
-    sfdtString: string,
-    ranges: { suggestionId?: string; startOffset: number; endOffset: number }[]
-  ): string {
-    if (ranges.length === 0) return sfdtString;
-    try {
-      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
-      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
-      let running = 0; // normalized character count (ranges are in normalized document text)
-
-      for (const section of sections) {
-        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
-        for (const block of blocks) {
-          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
-          const newInlines: Record<string, unknown>[] = [];
-          const inlinesKey = block['inlines'] != null ? 'inlines' : 'i';
-          const textKey = this.detectTextKey(inlines);
-          const cfKey = this.detectCharacterFormatKey(inlines);
-
-          for (const inline of inlines) {
-            const text = inline['text'] ?? inline['tlp'];
-            if (typeof text !== 'string') {
-              newInlines.push({ ...inline });
-              continue;
-            }
-            const normLen = normalizeTextForAnalysis(text).length;
-            const blockStart = running;
-            const blockEnd = running + normLen;
-            running = blockEnd;
-
-            const spans = this.getHighlightSpansInRange(blockStart, blockEnd, ranges);
-            if (spans.length === 0) {
-              newInlines.push(this.inlineWithoutHighlight(inline, cfKey));
-              continue;
-            }
-
-            let posRaw = 0;
-            for (const span of spans) {
-              const spanStart = span.start;
-              const spanEnd = span.end;
-              const bookmarkName = span.suggestionId ? suggestionBookmarkName(span.suggestionId) : undefined;
-              const isFirstPart = spanStart === span.fullStart;
-              const isLastPart = spanEnd === span.fullEnd;
-              const startNormInInline = spanStart - blockStart;
-              const endNormInInline = spanEnd - blockStart;
-              const startRaw = normalizedOffsetToRawOffset(text, startNormInInline);
-              const endRaw = normalizedOffsetToRawOffset(text, endNormInInline);
-              if (startRaw > posRaw) {
-                newInlines.push(this.createInlineForHighlight(text.slice(posRaw, startRaw), inline, false, textKey, cfKey));
-              }
-              if (endRaw > startRaw) {
-                if (bookmarkName && isFirstPart) {
-                  newInlines.push(this.createBookmarkInline(inline, bookmarkName, true, cfKey));
-                }
-                newInlines.push(this.createInlineForHighlight(text.slice(startRaw, endRaw), inline, true, textKey, cfKey));
-                if (bookmarkName && isLastPart) {
-                  newInlines.push(this.createBookmarkInline(inline, bookmarkName, false, cfKey));
-                }
-              }
-              posRaw = endRaw;
-            }
-            if (posRaw < text.length) {
-              newInlines.push(this.createInlineForHighlight(text.slice(posRaw), inline, false, textKey, cfKey));
-            }
-          }
-
-          block[inlinesKey] = newInlines;
-        }
-      }
-
-      return JSON.stringify(doc);
-    } catch {
-      return sfdtString;
-    }
-  }
-
-  private getHighlightSpansInRange(
-    blockStart: number,
-    blockEnd: number,
-    ranges: { suggestionId?: string; startOffset: number; endOffset: number }[]
-  ): Array<{ start: number; end: number; suggestionId?: string; fullStart: number; fullEnd: number }> {
-    const spans: Array<{ start: number; end: number; suggestionId?: string; fullStart: number; fullEnd: number }> = [];
-    for (const { suggestionId, startOffset, endOffset } of ranges) {
-      const start = Math.max(blockStart, startOffset);
-      const end = Math.min(blockEnd, endOffset);
-      if (start < end) spans.push({ start, end, suggestionId, fullStart: startOffset, fullEnd: endOffset });
-    }
-    return spans.sort((a, b) => a.start - b.start);
-  }
-
-  private detectTextKey(inlines: Array<Record<string, unknown>>): 'text' | 'tlp' {
-    for (const inline of inlines) {
-      if (inline['tlp'] !== undefined) return 'tlp';
-      if (inline['text'] !== undefined) return 'text';
-    }
-    return 'text';
-  }
-
-  private detectCharacterFormatKey(inlines: Array<Record<string, unknown>>): 'characterFormat' | 'cf' {
-    for (const inline of inlines) {
-      if (inline['cf'] !== undefined) return 'cf';
-      if (inline['characterFormat'] !== undefined) return 'characterFormat';
-    }
-    return 'characterFormat';
-  }
-
-  private inlineWithoutHighlight(inline: Record<string, unknown>, cfKey: string): Record<string, unknown> {
-    const out = { ...inline };
-    const cf = out[cfKey] as Record<string, unknown> | undefined;
-    if (cf && typeof cf === 'object') {
-      const fmt = { ...cf };
-      delete fmt['highlightColor'];
-      delete fmt['hc'];
-      out[cfKey] = fmt;
-    }
-    return out;
-  }
-
-  private createBookmarkInline(
-    template: Record<string, unknown>,
-    name: string,
-    isStart: boolean,
-    cfKey: string
-  ): Record<string, unknown> {
-    const out: Record<string, unknown> = {};
-
-    const cf = template[cfKey] as Record<string, unknown> | undefined;
-    if (cf && typeof cf === 'object') {
-      out[cfKey] = { ...cf };
-    }
-
-    const bookmarkType = isStart ? 0 : 1;
-    // Heuristic: optimized SFDT uses compact character-format key 'cf' instead of 'characterFormat'.
-    const useOptimizedKeys = cfKey === 'cf';
-    if (useOptimizedKeys) {
-      // Optimized SFDT keys (Syncfusion v21.1+ default): 'bkt' for bookmarkType, 'n' for name
-      out['bkt'] = bookmarkType;
-      out['n'] = name;
-    } else {
-      // Standard SFDT keys
-      out['bookmarkType'] = bookmarkType;
-      out['name'] = name;
-    }
-
-    return out;
-  }
-
-  private createInlineForHighlight(
-    text: string,
-    template: Record<string, unknown>,
-    highlight: boolean,
-    textKey: string,
-    cfKey: string
-  ): Record<string, unknown> {
-    const out = { ...template };
-    out[textKey] = text;
-
-    const cf = template[cfKey] as Record<string, unknown> | undefined;
-    const fmt = (cf && typeof cf === 'object') ? { ...cf } : {};
-    if (highlight) {
-      fmt['highlightColor'] = 'Yellow';
-      fmt['hc'] = 'Yellow';
-    } else {
-      delete fmt['highlightColor'];
-      delete fmt['hc'];
-    }
-    out[cfKey] = fmt;
-    return out;
-  }
-
-  /**
-   * Remove all highlight formatting from SFDT JSON so saved document does not persist suggestion highlights.
-   * Handles both standard keys and Syncfusion v32 optimized keys.
-   *
-   * Also strips suggestion bookmarks (suggestion-*), removing dedicated bookmark-only
-   * inlines so the saved document does not retain navigation markers.
-   */
-  private stripHighlightFromSfdt(sfdtString: string): string {
-    try {
-      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
-      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
-      for (const section of sections) {
-        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
-        for (const block of blocks) {
-          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
-          const inlinesKey = block['inlines'] != null ? 'inlines' : 'i';
-          const textKey = this.detectTextKey(inlines);
-          const cfKey = this.detectCharacterFormatKey(inlines);
-          const cleaned: Record<string, unknown>[] = [];
-          for (const inline of inlines) {
-            const cf = inline['characterFormat'] ?? inline['cf'];
-            if (cf && typeof cf === 'object') {
-              const fmt = cf as Record<string, unknown>;
-              delete fmt['highlightColor'];
-              delete fmt['hc'];
-            }
-            const name = inline['name'] ?? inline['n'];
-            const bookmarkType = inline['bookmarkType'] ?? inline['bkt'];
-            const isSuggestionBookmark =
-              typeof name === 'string' &&
-              (name.startsWith(SUGGESTION_BOOKMARK_PREFIX) || name.startsWith('suggestion-')) &&
-              (bookmarkType === 0 || bookmarkType === 1);
-            if (!isSuggestionBookmark) {
-              cleaned.push(inline);
-            }
-          }
-          // Merge adjacent text inlines with identical formatting to prevent SFDT
-          // fragmentation from repeated highlight apply/strip cycles.
-          block[inlinesKey] = this.mergeAdjacentTextInlines(cleaned, textKey, cfKey);
-        }
-      }
-      return JSON.stringify(doc);
-    } catch {
-      return sfdtString;
-    }
-  }
-
-  private mergeAdjacentTextInlines(
-    inlines: Record<string, unknown>[],
-    textKey: string,
-    cfKey: string
-  ): Record<string, unknown>[] {
-    const result: Record<string, unknown>[] = [];
-    for (const inline of inlines) {
-      const text = inline[textKey];
-      if (typeof text !== 'string') {
-        result.push(inline);
-        continue;
-      }
-      if (result.length > 0) {
-        const prev = result[result.length - 1];
-        const prevText = prev[textKey];
-        if (typeof prevText === 'string' && this.canMergeTextInlines(prev, inline, textKey)) {
-          prev[textKey] = prevText + text;
-          continue;
-        }
-      }
-      result.push({ ...inline });
-    }
-    return result;
-  }
-
-  private canMergeTextInlines(
-    a: Record<string, unknown>,
-    b: Record<string, unknown>,
-    textKey: string
-  ): boolean {
-    const aKeys = Object.keys(a).filter(k => k !== textKey);
-    const bKeys = Object.keys(b).filter(k => k !== textKey);
-    if (aKeys.length !== bKeys.length) return false;
-    for (const key of aKeys) {
-      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
-      if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) return false;
-    }
-    return true;
-  }
-
-  private getInlineTextLength(inline: Record<string, unknown>): number {
-    const text = inline['text'] ?? inline['tlp'];
-    return typeof text === 'string' ? normalizeTextForAnalysis(text).length : 0;
-  }
-
-  /**
-   * Convert a plain-text character offset (matching getTextFromSfdt output) to a
-   * Syncfusion hierarchical position string. Syncfusion expects four segments for body content:
-   * "sectionIndex;bodyIndex;blockIndex;offset" so that getBodyWidget consumes two segments
-   * and getParagraphInternal gets "blockIndex;offset". We use bodyIndex 0 for main content.
-   *
-   * Walks sections → blocks → inlines in the same order as getTextFromSfdt so the
-   * running character count stays in sync with the normalized plain text the analysis panel uses.
-   * Uses normalized lengths for the running counter and converts back to raw offsets via
-   * normalizedOffsetToRawOffset so the returned position is valid for the actual SFDT.
-   */
-  private plainOffsetToSfdtPosition(sfdtString: string, plainOffset: number): string | null {
-    try {
-      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
-      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
-      let running = 0; // normalized character count
-      let lastPos = '0;0;0;0';
-      for (let si = 0; si < sections.length; si++) {
-        const section = sections[si];
-        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
-        for (let bi = 0; bi < blocks.length; bi++) {
-          const block = blocks[bi];
-          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
-          let blockNormLen = 0;
-          let blockRawLen = 0;
-          for (const inline of inlines) {
-            const text = inline['text'] ?? inline['tlp'];
-            if (typeof text === 'string') {
-              blockNormLen += normalizeTextForAnalysis(text).length;
-              blockRawLen += text.length;
-            }
-          }
-          if (plainOffset <= running + blockNormLen) {
-            // Offset falls within this block; walk inlines again to map normalized offset
-            // to a raw offset within the entire block (accumulating raw lengths).
-            let blockRunningNorm = running;
-            let blockRunningRaw = 0;
-            for (const inline of inlines) {
-              const text = inline['text'] ?? inline['tlp'];
-              if (typeof text !== 'string') continue;
-              const normLen = normalizeTextForAnalysis(text).length;
-              const startNorm = blockRunningNorm;
-              const endNorm = blockRunningNorm + normLen;
-              if (plainOffset <= endNorm) {
-                const offsetInInlineNorm = plainOffset - startNorm;
-                const rawOffsetInInline = normalizedOffsetToRawOffset(text, offsetInInlineNorm);
-                const rawOffsetInBlock = blockRunningRaw + rawOffsetInInline;
-                return `${si};0;${bi};${rawOffsetInBlock}`;
-              }
-              blockRunningNorm = endNorm;
-              blockRunningRaw += text.length;
-            }
-            // Fallback: if we couldn't map precisely, snap to end of block.
-            return `${si};0;${bi};${blockRawLen}`;
-          }
-          running += blockNormLen;
-          lastPos = `${si};0;${bi};${blockRawLen}`;
-        }
-      }
-      return lastPos;
-    } catch {
-      return null;
-    }
-  }
 
   /** Update currentDocumentPlainText from the editor content (for analysis panel). Call before run so diff uses latest text. */
   refreshDocumentPlainText(): void {
-    if (!this.docEditor?.documentEditor || !this.selectedChapterId) return;
-    try {
-      const sfdt = this.docEditor.documentEditor.serialize();
-      const text = this.getTextFromSfdt(sfdt);
-      if (text) {
-        this.currentDocumentPlainText = normalizeTextForAnalysis(text);
-        return;
-      }
-    } catch { /* fall through to selection fallback */ }
-    const fallback = this.getPlainTextFromEditor();
-    if (fallback) this.currentDocumentPlainText = normalizeTextForAnalysis(fallback);
-  }
-
-  /** Fallback: extract plain text via Syncfusion's selection API (works regardless of SFDT format). */
-  private getPlainTextFromEditor(): string {
-    const editor = this.docEditor?.documentEditor;
-    if (!editor?.selection) return '';
-    try {
-      const startPos = editor.selection.startOffset;
-      const endPos = editor.selection.endOffset;
-      editor.selection.selectAll();
-      const text = editor.selection.text || '';
-      editor.selection.select(startPos, endPos);
-      return text;
-    } catch {
-      return '';
-    }
-  }
-
-  /**
-   * Extract plain text from SFDT JSON by walking sections/blocks/inlines.
-   * Handles both standard keys and Syncfusion v32 optimized keys (sec, b, i, tlp).
-   */
-  private getTextFromSfdt(sfdtString: string): string {
-    try {
-      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
-      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
-      const parts: string[] = [];
-      for (const section of sections) {
-        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
-        for (const block of blocks) {
-          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
-          for (const inline of inlines) {
-            const text = inline['text'] ?? inline['tlp'];
-            if (typeof text === 'string') parts.push(text);
-          }
-        }
-      }
-      return parts.join('');
-    } catch {
-      return '';
-    }
-  }
-
-  /** Build minimal SFDT with one paragraph containing the given text (RTL-friendly). */
-  private buildMinimalSfdt(text: string): string {
-    const escaped = JSON.stringify(text);
-    return `{"sections":[{"blocks":[{"paragraphFormat":{"bidi":true},"inlines":[{"characterFormat":{"bidi":true},"text":${escaped}}]}],"headersFooters":{}}]}`;
-  }
-
-  /**
-   * Replace the document's plain text with newPlainText inside the existing SFDT structure.
-   * Preserves sections/blocks and key format (standard or optimized). Strips highlights.
-   * When replaceStartOffset/replaceEndOffset/replaceTextLength are provided (range replace),
-   * computes new block boundaries so segments stay aligned after length-changing edits.
-   * Used by Accept suggestion so structure and formatting keys stay correct.
-   */
-  private replacePlainTextInSfdt(
-    sfdtString: string,
-    newPlainText: string,
-    replaceStartOffset?: number,
-    replaceEndOffset?: number,
-    replaceTextLength?: number
-  ): string {
-    try {
-      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
-      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
-
-      // Collect character length per block using normalized text (same order as getTextFromSfdt)
-      const blockLengths: number[] = [];
-      for (const section of sections) {
-        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
-        for (const block of blocks) {
-          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
-          let raw = '';
-          for (const inline of inlines) {
-            const t = inline['text'] ?? inline['tlp'];
-            if (typeof t === 'string') raw += t;
-          }
-          blockLengths.push(normalizeTextForAnalysis(raw).length);
-        }
-      }
-
-      let segments: string[];
-      const hasReplaceRange =
-        replaceStartOffset != null && replaceEndOffset != null && replaceTextLength != null;
-
-      if (hasReplaceRange && blockLengths.length > 0) {
-        // Compute new end position for each block after the replacement so segment slicing matches newPlainText length.
-        const offsetDelta = replaceTextLength - (replaceEndOffset - replaceStartOffset);
-        let running = 0;
-        const newEnds: number[] = [];
-        for (const len of blockLengths) {
-          const blockStart = running;
-          const blockEnd = running + len;
-          running = blockEnd;
-          if (blockEnd <= replaceStartOffset) {
-            newEnds.push(blockEnd);
-          } else if (blockStart >= replaceEndOffset) {
-            newEnds.push(blockEnd + offsetDelta);
-          } else if (blockEnd <= replaceEndOffset) {
-            newEnds.push(replaceStartOffset + replaceTextLength);
-          } else {
-            newEnds.push(replaceStartOffset + replaceTextLength + (blockEnd - replaceEndOffset));
-          }
-        }
-        segments = [];
-        let prev = 0;
-        for (const end of newEnds) {
-          segments.push(newPlainText.slice(prev, end));
-          prev = end;
-        }
-      } else {
-        // No range replace or single block: split by original block lengths
-        segments = [];
-        let pos = 0;
-        if (blockLengths.length === 0) {
-          segments.push(newPlainText);
-        } else {
-          for (let i = 0; i < blockLengths.length; i++) {
-            const len = blockLengths[i];
-            if (i === blockLengths.length - 1) {
-              segments.push(newPlainText.slice(pos));
-            } else {
-              segments.push(newPlainText.slice(pos, pos + len));
-              pos += len;
-            }
-          }
-        }
-      }
-
-      // Replace each block's inlines with a single inline containing the segment
-      let segIdx = 0;
-      const isRtl = this.editorDirection === 'rtl';
-      for (const section of sections) {
-        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
-        for (const block of blocks) {
-          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
-          const inlinesKey = block['inlines'] != null ? 'inlines' : 'i';
-          const textKey = this.detectTextKey(inlines);
-          const cfKey = this.detectCharacterFormatKey(inlines);
-          const segment = segments[segIdx++] ?? '';
-          let template = inlines[0] ?? {};
-          // Prefer the inline with the longest text content as the style template so we
-          // inherit the dominant font/formatting for the paragraph instead of a tiny run.
-          if (inlines.length > 1) {
-            let best = template;
-            let bestLen = this.getInlineTextLength(best);
-            for (const cand of inlines) {
-              const len = this.getInlineTextLength(cand);
-              if (len > bestLen) {
-                best = cand;
-                bestLen = len;
-              }
-            }
-            template = best;
-          }
-          // Preserve RTL so Accept doesn't strip bidi from the document
-          if (isRtl) {
-            const pf = block['paragraphFormat'] ?? block['pf'];
-            if (pf && typeof pf === 'object') (pf as Record<string, unknown>)['bidi'] = true;
-            const tCf = template[cfKey] as Record<string, unknown> | undefined;
-            if (tCf && typeof tCf === 'object') tCf['bidi'] = true;
-            else if (cfKey) template = { ...template, [cfKey]: { ...(template[cfKey] as object), bidi: true } };
-          }
-          const newInline = this.createInlineForHighlight(segment, template, false, textKey, cfKey);
-          block[inlinesKey] = [newInline];
-        }
-      }
-
-      return JSON.stringify(doc);
-    } catch {
-      return sfdtString;
+    const text = this.editorTextService.refreshDocumentPlainText(this.docEditor, this.selectedChapterId);
+    if (text) {
+      this.currentDocumentPlainText = text;
     }
   }
 }

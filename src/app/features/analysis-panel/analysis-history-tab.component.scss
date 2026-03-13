@@ -1,0 +1,153 @@
+:host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.history-tab-content {
+  border-top: 1px solid #eee;
+  padding-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.history-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+.history-label { font-size: 0.85rem; color: #555; }
+.history-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+.history-filter button {
+  border: 1px solid #ddd;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  background: #fafafa;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.history-filter button.active {
+  background: #e6f0ff;
+  border-color: #0078d4;
+}
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.tabs button {
+  border: 1px solid #ddd;
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  background: #fafafa;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.tabs button.active {
+  background: #e6f0ff;
+  border-color: #0078d4;
+}
+.result-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 4px;
+  border: 1px solid #eee;
+  padding: 0.5rem;
+  background: #fff;
+}
+.result-view pre {
+  white-space: pre-wrap;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 0.9rem;
+  margin: 0;
+}
+.suggestions-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.suggestions-block h4 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.suggestions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.history-outcome-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 0.35rem;
+}
+.history-outcome-filter button {
+  border: 1px solid #ddd;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  background: #fafafa;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.history-outcome-filter button.active {
+  background: #e6f0ff;
+  border-color: #0078d4;
+}
+.metric-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.metric-card {
+  border: 1px solid #eee;
+  border-radius: 4px;
+  padding: 0.5rem;
+  background: #f9f9f9;
+}
+.metric-label { display: block; font-size: 0.75rem; color: #666; }
+.metric-value { font-size: 0.95rem; font-weight: 500; }
+.analysis-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.analysis-list li {
+  margin-bottom: 0.35rem;
+}
+.analysis-list li:last-child {
+  margin-bottom: 0;
+}
+.analysis-single {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.line-edit-overall {
+  margin: 0 0 0.75rem 0;
+  font-size: 0.9rem;
+  color: #333;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #eee;
+}
+.line-edit-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.muted {
+  color: #666;
+  font-size: 0.85rem;
+}

@@ -10,6 +10,12 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
   template: `
     <div class="suggestion-card" (click)="onCardClick($event)">
       <div class="suggestion-fields">
+        <span
+          class="suggestion-category"
+          [ngClass]="'suggestion-category category-' + (suggestion.category || '').toLowerCase()"
+          *ngIf="suggestion.category">
+          {{ getCategoryLabel(suggestion.category) }}
+        </span>
         <div class="suggestion-original" *ngIf="suggestion.original !== suggestion.suggested && suggestion.original">
           <span class="suggestion-label">Original:</span>
           <span class="suggestion-inline">
@@ -35,7 +41,6 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
         <div class="suggestion-reason" *ngIf="suggestion.reason">
           <span class="suggestion-label">Reason:</span> {{ suggestion.reason }}
         </div>
-        <span class="suggestion-category" *ngIf="suggestion.category">{{ suggestion.category }}</span>
       </div>
       <div class="suggestion-explanation" *ngIf="suggestion.explanation">
         {{ suggestion.explanation }}
@@ -58,9 +63,11 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
         <button
           type="button"
           class="btn-show"
-          *ngIf="hasChange && suggestion.startOffset != null && suggestion.endOffset != null"
+          [class.btn-show-approx]="!hasOffsets"
+          *ngIf="hasChange && suggestion.original"
+          [title]="hasOffsets ? '' : 'Approximate location (search-based)'"
           (click)="showInDocument.emit(suggestion); $event.stopPropagation()">
-          Show
+          Show{{ hasOffsets ? '' : ' ≈' }}
         </button>
       </div>
       <div class="suggestion-status" *ngIf="readOnly && status !== undefined">
@@ -109,10 +116,56 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
     .frag-delete { color: #c00; text-decoration: line-through; }
     .frag-insert { color: #060; font-weight: 500; }
     .suggestion-category {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
       font-size: 0.7rem;
       text-transform: uppercase;
-      color: #0078d4;
-      margin-top: 0.2rem;
+      border-radius: 999px;
+      padding: 0.1rem 0.4rem;
+      margin-bottom: 0.2rem;
+      background: #e6f0ff;
+      color: #074799;
+    }
+    .suggestion-category::before {
+      content: '';
+      display: inline-block;
+      width: 0.4rem;
+      height: 0.4rem;
+      border-radius: 999px;
+      background: currentColor;
+    }
+    .suggestion-category.category-consistency {
+      background: #fff4e0;
+      color: #b45f06;
+    }
+    .suggestion-category.category-continuity {
+      background: #ffe9e5;
+      color: #c0392b;
+    }
+    .suggestion-category.category-clarity {
+      background: #e6f4ff;
+      color: #1565c0;
+    }
+    .suggestion-category.category-flow {
+      background: #e5f6ff;
+      color: #0277bd;
+    }
+    .suggestion-category.category-word-choice {
+      background: #e8f0fe;
+      color: #1a73e8;
+    }
+    .suggestion-category.category-structure {
+      background: #e3f2fd;
+      color: #0d47a1;
+    }
+    .suggestion-category.category-redundancy {
+      background: #f3e5f5;
+      color: #6a1b9a;
+    }
+    .suggestion-category.category-style {
+      background: #e0f2f1;
+      color: #00695c;
     }
     .suggestion-explanation {
       font-size: 0.8rem;
@@ -188,6 +241,10 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
       color: #0078d4;
       border-color: #0078d4;
     }
+    .btn-show.btn-show-approx {
+      border-style: dashed;
+      opacity: 0.8;
+    }
     .suggestion-status {
       margin-top: 0.25rem;
     }
@@ -246,7 +303,7 @@ export class SuggestionCardComponent implements OnChanges {
   }
 
   onFieldsClick(): void {
-    if (!this.readOnly && this.suggestion.startOffset != null && this.suggestion.endOffset != null) {
+    if (!this.readOnly && this.hasChange && this.suggestion.original) {
       this.showInDocument.emit(this.suggestion);
     }
   }
@@ -262,11 +319,35 @@ export class SuggestionCardComponent implements OnChanges {
     return !!this.suggestion && this.suggestion.original !== this.suggestion.suggested;
   }
 
+  /** True when both startOffset and endOffset are populated (precise navigation available). */
+  get hasOffsets(): boolean {
+    return this.suggestion?.startOffset != null && this.suggestion?.endOffset != null;
+  }
+
   get originalFragments(): DiffFragment[] {
     return this._originalFragments;
   }
 
   get suggestedFragments(): DiffFragment[] {
     return this._suggestedFragments;
+  }
+
+  getCategoryLabel(category: string): string {
+    const key = (category || '').toLowerCase();
+
+    const enLabels: Record<string, string> = {
+      consistency: 'Consistency',
+      continuity: 'Continuity',
+      clarity: 'Clarity',
+      flow: 'Flow',
+      'word-choice': 'Word choice',
+      structure: 'Structure',
+      redundancy: 'Redundancy',
+      style: 'Style'
+    };
+
+    // Suggestion-level language is not available here; the caller should supply
+    // localized category keys. Fallback to English mapping or the raw key.
+    return enLabels[key] ?? category;
   }
 }

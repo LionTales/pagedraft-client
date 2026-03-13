@@ -1,0 +1,32 @@
+<div class="versions-tab-content">
+  <p class="muted" *ngIf="!bookId || !chapterId">Select a chapter to see versions.</p>
+  <div *ngIf="bookId && chapterId">
+    <p class="muted versions-hint">Each accept or save creates a version. Revert to restore the document to that state.</p>
+    <div class="versions-list" *ngIf="versions.length; else noVersions">
+    <div class="version-item" *ngFor="let v of versions" [class.version-item-reverted]="isVersionReverted(v)">
+      <div class="version-info">
+        <span class="version-date">{{ v.createdAt | date:'M/d/yy, h:mm:ss a' }}</span>
+        <ng-container *ngIf="versionLabelOriginal(v.label) && versionLabelSuggested(v.label); else plainLabel">
+          <span class="version-original">Original: {{ versionLabelOriginal(v.label) }}</span>
+          <span class="version-suggested">Suggested: {{ versionLabelSuggested(v.label) }}</span>
+        </ng-container>
+        <ng-template #plainLabel>
+          <span class="version-label" *ngIf="v.label">{{ v.label }}</span>
+        </ng-template>
+      </div>
+      <div class="version-actions">
+        <button type="button" class="run-btn secondary btn-redo" *ngIf="isVersionReverted(v)" (click)="redoVersion.emit(v)">Redo suggestion</button>
+        <button type="button" class="run-btn secondary btn-revert" *ngIf="!isVersionReverted(v)"
+          [disabled]="isVersionLocked(v)"
+          [title]="isVersionLocked(v) ? 'Cannot revert -- a newer analysis was run on the updated text' : ''"
+          (click)="revert.emit(v.id)">
+          Revert
+        </button>
+      </div>
+    </div>
+  </div>
+  <ng-template #noVersions>
+    <p class="muted">No versions yet for this {{ sceneId ? 'scene' : 'chapter' }}. Accept a suggestion or save to create one.</p>
+  </ng-template>
+  </div>
+</div>
