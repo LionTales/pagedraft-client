@@ -18,6 +18,10 @@ Run `ng build` to build the project. The build artifacts will be stored in the `
 
 Run `ng test` to execute the unit tests via [Karma](https://karma-runner.github.io).
 
+## CI (GitHub Actions)
+
+On every push and pull request to `master`, the **CI** workflow runs the frontend test suite. To require this check before merging into `master`: **Settings → Branches → Branch protection rules** (for `master`) → enable **Require status checks to pass** → select **CI** (or "Frontend tests").
+
 ## Running end-to-end tests
 
 Run `ng e2e` to execute the end-to-end tests via a platform of your choice. To use this command, you need to first add a package that implements end-to-end testing capabilities.
