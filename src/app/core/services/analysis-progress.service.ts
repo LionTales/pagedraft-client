@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, interval, takeUntil, switchMap, takeWhile } from 'rxjs';
+import { Observable, timer, takeUntil, switchMap, takeWhile } from 'rxjs';
 import { AnalysisProgressDto } from '../models/analysis';
 
 @Injectable({ providedIn: 'root' })
@@ -15,7 +15,8 @@ export class AnalysisProgressService {
     intervalMs = 5000
   ): Observable<AnalysisProgressDto> {
     const url = `/api/books/${bookId}/chapters/${chapterId}/analysis-progress/${jobId}`;
-    return interval(intervalMs).pipe(
+    // First poll immediately so we're more likely to see "Part 1 of N" / "analyzing first part…"; then every intervalMs.
+    return timer(0, intervalMs).pipe(
       takeUntil(stop$),
       switchMap(() => this.http.get<AnalysisProgressDto>(url)),
       // Stop emitting once we hit a terminal state; caller can also stop via stop$

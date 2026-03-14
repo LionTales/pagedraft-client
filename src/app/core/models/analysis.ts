@@ -86,6 +86,7 @@ export interface AnalysisProgressDto {
   status: string;
   currentChunk: number;
   totalChunks: number;
+  completedChunks: number;
   message: string;
   estimatedCompletionPercent: number;
 }
@@ -94,5 +95,11 @@ export interface StartAnalysisJobResponse {
   jobId: string;
   analysisType: string;
   scope: string;
+}
+
+/** Server config for when to use chunked (analysis-jobs) flow; matches API GET /api/config/analysis-chunk-thresholds. */
+export interface AnalysisChunkThresholdsDto {
+  proofreadChunkTargetWords: number;
+  lineEditChunkTargetWords: number;
 }
 

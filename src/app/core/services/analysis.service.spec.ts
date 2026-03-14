@@ -99,5 +99,16 @@ describe('AnalysisService', () => {
     expect(req.request.method).toBe('GET');
     req.flush({});
   });
+
+  it('should GET chunk thresholds from config endpoint', () => {
+    const expected = { proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 };
+    let result: any;
+    service.getChunkThresholds().subscribe(r => result = r);
+
+    const req = http.expectOne('/api/config/analysis-chunk-thresholds');
+    expect(req.request.method).toBe('GET');
+    req.flush(expected);
+    expect(result).toEqual(expected);
+  });
 });
 

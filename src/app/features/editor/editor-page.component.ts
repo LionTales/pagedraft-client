@@ -475,10 +475,13 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       return;
     }
     if (percent == null || Number.isNaN(percent)) {
-      this.analysisStatusPercent = null;
       return;
     }
-    this.analysisStatusPercent = Math.max(0, Math.min(100, Math.round(percent)));
+    const next = Math.max(0, Math.min(100, Math.round(percent)));
+    // Keep progress bar non-decreasing so out-of-order backend updates don't show the bar going backwards.
+    this.analysisStatusPercent = this.analysisStatusPercent != null
+      ? Math.max(this.analysisStatusPercent, next)
+      : next;
   }
 
   /** Save if needed, then navigate to books list. Used by Back to books button and canDeactivate (browser back). */
