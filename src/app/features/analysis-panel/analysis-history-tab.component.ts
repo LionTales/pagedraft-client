@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '../../core/models/analysis';
-import { LineEditParserService } from '../../core/services/line-edit-parser.service';
+import { LineEditParserService, ParsedLineEdit } from '../../core/services/line-edit-parser.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
 import { proofreadDiff } from '../../core/utils/proofread-diff';
 import { SuggestionCardComponent } from './suggestion-card.component';
@@ -39,6 +39,10 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   private _lineEditSuggestionsWithStatusCache: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] | null = null;
   private _lineEditSuggestionsWithStatusCacheResultId: string | null = null;
 
+  /** Cached parsed LineEdit for the current history item; avoids repeated JSON.parse in template. */
+  private _lineEditCache: ParsedLineEdit | null = null;
+  private _lineEditCacheResultId: string | null = null;
+
   constructor(
     private lineEditParser: LineEditParserService,
     private suggestionKeyService: SuggestionKeyService
@@ -52,6 +56,8 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     if (lineEditCacheKeys.some(k => changes[k])) {
       this._lineEditSuggestionsWithStatusCache = null;
       this._lineEditSuggestionsWithStatusCacheResultId = null;
+      this._lineEditCache = null;
+      this._lineEditCacheResultId = null;
     }
   }
 
@@ -205,8 +211,23 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     return list.filter(item => item.status === this.historySuggestionStatusFilter);
   }
 
-  getLineEdit(current: AnalysisResultDto) {
+  getLineEdit(current: AnalysisResultDto): ParsedLineEdit | null {
     return this.lineEditParser.getLineEdit(current);
+  }
+
+  /**
+   * Cached parsed LineEdit for the current history item. Use in template instead of getLineEdit(current)
+   * so JSON.parse runs at most once per change detection when the current item changes.
+   */
+  get lineEditForCurrent(): ParsedLineEdit | null {
+    const current = this.currentHistoryItem;
+    if (!current || (current.analysisType || current.type) !== 'LineEdit') return null;
+    const cacheKey = `${this.selectedIndex}:${current.id ?? ''}`;
+    if (this._lineEditCacheResultId !== cacheKey) {
+      this._lineEditCache = this.lineEditParser.getLineEdit(current);
+      this._lineEditCacheResultId = cacheKey;
+    }
+    return this._lineEditCache;
   }
 
   metricCards(structuredResult: string): { label: string; value: string }[] {

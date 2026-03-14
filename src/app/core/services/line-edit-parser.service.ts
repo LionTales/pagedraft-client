@@ -172,11 +172,6 @@ export class LineEditParserService {
         continue;
       }
       if (raw[i] === '"') {
-        if (escape) {
-          escape = false;
-          i++;
-          continue;
-        }
         if (!inString && raw.substring(i, i + keyPattern.length) === keyPattern) {
           let j = i + keyPattern.length;
           while (j < raw.length && /\s/.test(raw[j])) j++;

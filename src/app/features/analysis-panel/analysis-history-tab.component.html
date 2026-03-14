@@ -43,7 +43,7 @@
     </ng-container>
     <!-- Line Edit (history): read-only list with Accepted/Dismissed status -->
     <ng-container *ngIf="(current.analysisType || current.type) === 'LineEdit'">
-      <ng-container *ngIf="getLineEdit(current) as lineEdit">
+      <ng-container *ngIf="lineEditForCurrent as lineEdit">
         <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
       </ng-container>
       <div class="line-edit-suggestions" *ngIf="filteredLineEditSuggestionsWithStatusForCurrent.length > 0">
@@ -66,18 +66,18 @@
       </div>
     </ng-container>
     <!-- Other structured (metric cards) -->
-    <div class="metric-cards" *ngIf="!getLineEdit(current) && (current.analysisType || current.type) !== 'Proofread' && current.structuredResult && metricCards(current.structuredResult).length; else textResult">
+    <div class="metric-cards" *ngIf="!lineEditForCurrent && (current.analysisType || current.type) !== 'Proofread' && current.structuredResult && metricCards(current.structuredResult).length; else textResult">
       <div class="metric-card" *ngFor="let card of metricCards(current.structuredResult)">
         <span class="metric-label">{{ card.label }}</span>
         <span class="metric-value">{{ card.value }}</span>
       </div>
     </div>
     <ng-template #textResult>
-      <ul class="analysis-list" *ngIf="!getLineEdit(current) && !isProofreadWithSuggestions() && analysisItems(current.resultText).length > 1; else singleHistory">
+      <ul class="analysis-list" *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions() && analysisItems(current.resultText).length > 1; else singleHistory">
         <li *ngFor="let item of analysisItems(current.resultText)">{{ item }}</li>
       </ul>
       <ng-template #singleHistory>
-        <p class="analysis-single" *ngIf="!getLineEdit(current) && !isProofreadWithSuggestions()">{{ current.resultText }}</p>
+        <p class="analysis-single" *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions()">{{ current.resultText }}</p>
       </ng-template>
     </ng-template>
   </article>
