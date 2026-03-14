@@ -218,6 +218,7 @@ export class SfdtManipulationService {
         replaceStartOffset != null && replaceEndOffset != null && replaceTextLength != null;
 
       if (hasReplaceRange && blockLengths.length > 0) {
+        // Offsets and newPlainText are in normalized space (normalizeTextForAnalysis strips \n).
         const offsetDelta = replaceTextLength - (replaceEndOffset - replaceStartOffset);
         let running = 0;
         const newEnds: number[] = [];
@@ -225,7 +226,7 @@ export class SfdtManipulationService {
         for (const len of blockLengths) {
           const blockStart = running;
           const blockEnd = running + len;
-          running = blockEnd + BLOCK_SEPARATOR.length;
+          running = blockEnd; // no separator: normalized text has no \n between blocks
 
           let candidateEnd: number;
           if (blockEnd <= replaceStartOffset) {
@@ -251,7 +252,7 @@ export class SfdtManipulationService {
             segments.push(newPlainText.slice(prev));
           } else {
             segments.push(newPlainText.slice(prev, end));
-            prev = end + BLOCK_SEPARATOR.length;
+            prev = end; // normalized text has no separator between blocks
           }
         }
       } else {
@@ -260,13 +261,14 @@ export class SfdtManipulationService {
         if (blockLengths.length === 0) {
           segments.push(newPlainText);
         } else {
+          // newPlainText is normalized (no \n between blocks).
           for (let i = 0; i < blockLengths.length; i++) {
             const len = blockLengths[i];
             if (i === blockLengths.length - 1) {
               segments.push(newPlainText.slice(pos));
             } else {
               segments.push(newPlainText.slice(pos, pos + len));
-              pos += len + BLOCK_SEPARATOR.length;
+              pos += len; // no separator in normalized text
             }
           }
         }
@@ -313,8 +315,9 @@ export class SfdtManipulationService {
   }
 
   /**
-   * Convert a plain-text character offset (matching sfdt-text.getTextFromSfdt output) to a
-   * Syncfusion hierarchical position string ("sectionIndex;bodyIndex;blockIndex;offset").
+   * Convert a plain-text character offset to a Syncfusion hierarchical position string
+   * ("sectionIndex;bodyIndex;blockIndex;offset"). Expects plainOffset in normalized space
+   * (normalizeTextForAnalysis(documentText), which strips \n between blocks).
    */
   plainOffsetToSfdtPosition(sfdtString: string, plainOffset: number): string | null {
     try {
@@ -357,7 +360,7 @@ export class SfdtManipulationService {
             }
             return `${si};0;${bi};${blockRawLen}`;
           }
-          running += blockNormLen + BLOCK_SEPARATOR.length;
+          running += blockNormLen; // no separator: plainOffset is in normalized space
           lastPos = `${si};0;${bi};${blockRawLen}`;
         }
       }
