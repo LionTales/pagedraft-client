@@ -88,10 +88,12 @@ describe('SfdtManipulationService', () => {
         }]
       });
       expect(getTextFromSfdt(sfdt)).toBe('Hello\nworld');
+      // plainOffset is in normalized space (no \n): "Helloworld" has length 10
       expect(service.plainOffsetToSfdtPosition(sfdt, 0)).toBe('0;0;0;0');
-      expect(service.plainOffsetToSfdtPosition(sfdt, 5)).toBe('0;0;0;5');
-      expect(service.plainOffsetToSfdtPosition(sfdt, 6)).toBe('0;0;1;0');
-      expect(service.plainOffsetToSfdtPosition(sfdt, 11)).toBe('0;0;1;5');
+      expect(service.plainOffsetToSfdtPosition(sfdt, 4)).toBe('0;0;0;4'); // last char of first para
+      expect(service.plainOffsetToSfdtPosition(sfdt, 5)).toBe('0;0;1;0'); // first char of second para
+      expect(service.plainOffsetToSfdtPosition(sfdt, 6)).toBe('0;0;1;1');
+      expect(service.plainOffsetToSfdtPosition(sfdt, 10)).toBe('0;0;1;5'); // one past last = end of block 1
     });
   });
 

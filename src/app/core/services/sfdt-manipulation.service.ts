@@ -340,7 +340,7 @@ export class SfdtManipulationService {
               blockRawLen += text.length;
             }
           }
-          if (plainOffset <= running + blockNormLen) {
+          if (plainOffset < running + blockNormLen) {
             let blockRunningNorm = running;
             let blockRunningRaw = 0;
             for (const inline of inlines) {
@@ -349,7 +349,7 @@ export class SfdtManipulationService {
               const normLen = normalizeTextForAnalysis(text).length;
               const startNorm = blockRunningNorm;
               const endNorm = blockRunningNorm + normLen;
-              if (plainOffset <= endNorm) {
+              if (plainOffset < endNorm) {
                 const offsetInInlineNorm = plainOffset - startNorm;
                 const rawOffsetInInline = normalizedOffsetToRawOffset(text, offsetInInlineNorm);
                 const rawOffsetInBlock = blockRunningRaw + rawOffsetInInline;
