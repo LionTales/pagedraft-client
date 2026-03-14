@@ -71,7 +71,6 @@ export class LineEditParserService {
         overallFeedback: String(data['overallFeedback'] ?? '')
       };
     } catch (e) {
-      const raw = current.structuredResult || current.resultText || '';
       const parseErrorKey = this.lineEditDiagnosticKey(current.id, 'parse-error');
       if (!this.shouldSkipDiagnostic(parseErrorKey, this.diagnosticFingerprint(raw))) {
         console.warn(

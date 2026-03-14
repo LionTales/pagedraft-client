@@ -243,9 +243,14 @@ export class SfdtManipulationService {
         }
         segments = [];
         let prev = 0;
-        for (const end of newEnds) {
-          segments.push(newPlainText.slice(prev, end));
-          prev = end;
+        for (let i = 0; i < newEnds.length; i++) {
+          const end = newEnds[i];
+          if (i === newEnds.length - 1) {
+            segments.push(newPlainText.slice(prev));
+          } else {
+            segments.push(newPlainText.slice(prev, end));
+            prev = end;
+          }
         }
       } else {
         segments = [];
