@@ -46,7 +46,7 @@
       <ng-container *ngIf="getLineEdit(current) as lineEdit">
         <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
       </ng-container>
-      <div class="line-edit-suggestions" *ngIf="lineEditSuggestionsWithStatus(current).length > 0">
+      <div class="line-edit-suggestions" *ngIf="filteredLineEditSuggestionsWithStatusForCurrent.length > 0">
         <h4>Suggestions — what happened</h4>
         <div class="history-outcome-filter">
           <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">All</button>
@@ -56,7 +56,7 @@
           <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">Pending</button>
         </div>
         <app-suggestion-card
-          *ngFor="let item of filteredLineEditSuggestionsWithStatus(current)"
+          *ngFor="let item of filteredLineEditSuggestionsWithStatusForCurrent"
           [suggestion]="item.suggestion"
           [readOnly]="true"
           [status]="item.status"

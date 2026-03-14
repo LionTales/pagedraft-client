@@ -105,16 +105,18 @@ export class SfdtManipulationService {
               if (startRaw > posRaw) {
                 newInlines.push(this.createInlineForHighlight(text.slice(posRaw, startRaw), inline, false, textKey, cfKey));
               }
-              if (endRaw > startRaw) {
+              // Clamp to posRaw so overlapping spans (e.g. from offset adjustment) don't duplicate text
+              const startOutput = Math.max(startRaw, posRaw);
+              if (startOutput < endRaw) {
                 if (bookmarkName && isFirstPart) {
                   newInlines.push(this.createBookmarkInline(inline, bookmarkName, true, cfKey));
                 }
-                newInlines.push(this.createInlineForHighlight(text.slice(startRaw, endRaw), inline, true, textKey, cfKey));
+                newInlines.push(this.createInlineForHighlight(text.slice(startOutput, endRaw), inline, true, textKey, cfKey));
                 if (bookmarkName && isLastPart) {
                   newInlines.push(this.createBookmarkInline(inline, bookmarkName, false, cfKey));
                 }
               }
-              posRaw = endRaw;
+              posRaw = Math.max(posRaw, endRaw);
             }
             if (posRaw < text.length) {
               newInlines.push(this.createInlineForHighlight(text.slice(posRaw), inline, false, textKey, cfKey));

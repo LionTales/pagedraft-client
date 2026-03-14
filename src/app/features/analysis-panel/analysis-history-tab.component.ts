@@ -35,6 +35,10 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   selectedIndex = 0;
   historySuggestionStatusFilter: 'all' | 'accepted' | 'dismissed' | 'reverted' | 'pending' = 'all';
 
+  /** Cached result of lineEditSuggestionsWithStatus for the current history item; invalidated by ngOnChanges. */
+  private _lineEditSuggestionsWithStatusCache: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] | null = null;
+  private _lineEditSuggestionsWithStatusCacheResultId: string | null = null;
+
   constructor(
     private lineEditParser: LineEditParserService,
     private suggestionKeyService: SuggestionKeyService
@@ -43,6 +47,11 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['history']) {
       this.selectedIndex = 0;
+    }
+    const lineEditCacheKeys = ['history', 'selectedIndex', 'acceptedLineEditKeys', 'dismissedLineEditKeys', 'documentText'];
+    if (lineEditCacheKeys.some(k => changes[k])) {
+      this._lineEditSuggestionsWithStatusCache = null;
+      this._lineEditSuggestionsWithStatusCacheResultId = null;
     }
   }
 
@@ -172,6 +181,25 @@ export class AnalysisHistoryTabComponent implements OnChanges {
 
   filteredLineEditSuggestionsWithStatus(current: AnalysisResultDto): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
     const list = this.lineEditSuggestionsWithStatus(current);
+    if (this.historySuggestionStatusFilter === 'all') return list;
+    return list.filter(item => item.status === this.historySuggestionStatusFilter);
+  }
+
+  /**
+   * Cached list of line-edit suggestions with status for the current history item, then filtered by
+   * historySuggestionStatusFilter. Use this in the template instead of calling
+   * lineEditSuggestionsWithStatus(current) and filteredLineEditSuggestionsWithStatus(current) so
+   * the work runs at most once per change detection (and only when cache is invalidated).
+   */
+  get filteredLineEditSuggestionsWithStatusForCurrent(): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
+    const current = this.currentHistoryItem;
+    if (!current || (current.analysisType || current.type) !== 'LineEdit') return [];
+    const resultId = current.id ?? '';
+    if (this._lineEditSuggestionsWithStatusCacheResultId !== resultId) {
+      this._lineEditSuggestionsWithStatusCache = this.lineEditSuggestionsWithStatus(current);
+      this._lineEditSuggestionsWithStatusCacheResultId = resultId;
+    }
+    const list = this._lineEditSuggestionsWithStatusCache ?? [];
     if (this.historySuggestionStatusFilter === 'all') return list;
     return list.filter(item => item.status === this.historySuggestionStatusFilter);
   }
