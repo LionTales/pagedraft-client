@@ -90,7 +90,7 @@ export class LineEditParserService {
     suggestions: Array<{ original: string; suggested: string; reason: string; category: string }>,
     documentText: string | null
   ): AnalysisSuggestion[] {
-    const normalizedDoc = documentText || null;
+    const normalizedDoc = documentText != null ? normalizeTextForAnalysis(documentText) : null;
     let searchFromIndex = 0;
     return suggestions.map(s => {
       const suggestion: AnalysisSuggestion = { ...s };
@@ -113,7 +113,7 @@ export class LineEditParserService {
     suggestions: AnalysisSuggestion[],
     documentText: string | null
   ): { suggestions: AnalysisSuggestion[]; changed: boolean } {
-    const normalizedDoc = documentText || null;
+    const normalizedDoc = documentText != null ? normalizeTextForAnalysis(documentText) : null;
     if (!normalizedDoc) {
       return { suggestions, changed: false };
     }

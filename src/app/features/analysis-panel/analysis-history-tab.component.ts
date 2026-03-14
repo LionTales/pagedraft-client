@@ -48,7 +48,7 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     if (changes['history']) {
       this.selectedIndex = 0;
     }
-    const lineEditCacheKeys = ['history', 'selectedIndex', 'acceptedLineEditKeys', 'dismissedLineEditKeys', 'documentText'];
+    const lineEditCacheKeys = ['history', 'acceptedLineEditKeys', 'dismissedLineEditKeys', 'documentText'];
     if (lineEditCacheKeys.some(k => changes[k])) {
       this._lineEditSuggestionsWithStatusCache = null;
       this._lineEditSuggestionsWithStatusCacheResultId = null;
@@ -195,9 +195,10 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     const current = this.currentHistoryItem;
     if (!current || (current.analysisType || current.type) !== 'LineEdit') return [];
     const resultId = current.id ?? '';
-    if (this._lineEditSuggestionsWithStatusCacheResultId !== resultId) {
+    const cacheKey = `${this.selectedIndex}:${resultId}`;
+    if (this._lineEditSuggestionsWithStatusCacheResultId !== cacheKey) {
       this._lineEditSuggestionsWithStatusCache = this.lineEditSuggestionsWithStatus(current);
-      this._lineEditSuggestionsWithStatusCacheResultId = resultId;
+      this._lineEditSuggestionsWithStatusCacheResultId = cacheKey;
     }
     const list = this._lineEditSuggestionsWithStatusCache ?? [];
     if (this.historySuggestionStatusFilter === 'all') return list;
