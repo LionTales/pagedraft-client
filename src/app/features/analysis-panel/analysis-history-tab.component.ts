@@ -185,17 +185,11 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     return this.suggestionKeyService.sortHistoryItemsWithRecentFirst(keyBased, s => keyFor(s));
   }
 
-  filteredLineEditSuggestionsWithStatus(current: AnalysisResultDto): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
-    const list = this.lineEditSuggestionsWithStatus(current);
-    if (this.historySuggestionStatusFilter === 'all') return list;
-    return list.filter(item => item.status === this.historySuggestionStatusFilter);
-  }
-
   /**
    * Cached list of line-edit suggestions with status for the current history item, then filtered by
    * historySuggestionStatusFilter. Use this in the template instead of calling
-   * lineEditSuggestionsWithStatus(current) and filteredLineEditSuggestionsWithStatus(current) so
-   * the work runs at most once per change detection (and only when cache is invalidated).
+   * lineEditSuggestionsWithStatus(current) so the work runs at most once per change detection
+   * (and only when cache is invalidated).
    */
   get filteredLineEditSuggestionsWithStatusForCurrent(): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
     const current = this.currentHistoryItem;
