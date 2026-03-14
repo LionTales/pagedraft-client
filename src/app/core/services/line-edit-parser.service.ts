@@ -14,7 +14,8 @@ export interface ParsedLineEdit {
 
 @Injectable({ providedIn: 'root' })
 export class LineEditParserService {
-  private readonly loggedLineEditDiagnostics = new Set<string>();
+  private readonly maxDiagnosticEntries = 2000;
+  private readonly loggedLineEditDiagnostics = new Map<string, string>();
 
   getLineEdit(current: AnalysisResultDto): ParsedLineEdit | null {
     if ((current.analysisType || current.type) !== 'LineEdit') return null;
@@ -28,9 +29,9 @@ export class LineEditParserService {
       try {
         data = JSON.parse(cleaned) as Record<string, unknown>;
       } catch (primaryError) {
+        const cleanedFingerprint = this.diagnosticFingerprint(cleaned);
         const parseFailKey = this.lineEditDiagnosticKey(current.id, 'parse-fail');
-        if (!this.loggedLineEditDiagnostics.has(parseFailKey)) {
-          this.loggedLineEditDiagnostics.add(parseFailKey);
+        if (!this.shouldSkipDiagnostic(parseFailKey, cleanedFingerprint)) {
           console.warn(
             '[LineEdit] JSON.parse failed on cleaned payload before salvage',
             primaryError,
@@ -46,9 +47,9 @@ export class LineEditParserService {
         if (!salvaged) {
           throw primaryError;
         }
+        const salvagedFingerprint = this.diagnosticFingerprint(salvaged);
         const salvageOkKey = this.lineEditDiagnosticKey(current.id, 'salvage-ok');
-        if (!this.loggedLineEditDiagnostics.has(salvageOkKey)) {
-          this.loggedLineEditDiagnostics.add(salvageOkKey);
+        if (!this.shouldSkipDiagnostic(salvageOkKey, salvagedFingerprint)) {
           console.info('[LineEdit] Salvage attempt succeeded, retrying JSON.parse with repaired payload', {
             originalLength: cleaned.length,
             salvagedLength: salvaged.length
@@ -70,9 +71,9 @@ export class LineEditParserService {
         overallFeedback: String(data['overallFeedback'] ?? '')
       };
     } catch (e) {
+      const raw = current.structuredResult || current.resultText || '';
       const parseErrorKey = this.lineEditDiagnosticKey(current.id, 'parse-error');
-      if (!this.loggedLineEditDiagnostics.has(parseErrorKey)) {
-        this.loggedLineEditDiagnostics.add(parseErrorKey);
+      if (!this.shouldSkipDiagnostic(parseErrorKey, this.diagnosticFingerprint(raw))) {
         console.warn(
           '[LineEdit] Failed to parse structured result',
           e,
@@ -208,8 +209,7 @@ export class LineEditParserService {
     const keyIndex = this.indexOfJsonKey(raw, 'suggestions');
     if (keyIndex === -1) {
       const key = this.lineEditDiagnosticKey(resultId, 'salvage-no-suggestions-key');
-      if (!this.loggedLineEditDiagnostics.has(key)) {
-        this.loggedLineEditDiagnostics.add(key);
+      if (!this.shouldSkipDiagnostic(key, this.diagnosticFingerprint(raw))) {
         console.info('[LineEdit] Salvage: no "suggestions" key found in payload; skipping salvage.');
       }
       return null;
@@ -218,8 +218,7 @@ export class LineEditParserService {
     const arrayStart = this.indexOfArrayStartAfterKey(raw, keyIndex);
     if (arrayStart === -1) {
       const key = this.lineEditDiagnosticKey(resultId, 'salvage-no-array');
-      if (!this.loggedLineEditDiagnostics.has(key)) {
-        this.loggedLineEditDiagnostics.add(key);
+      if (!this.shouldSkipDiagnostic(key, this.diagnosticFingerprint(raw))) {
         console.info('[LineEdit] Salvage: no suggestions array "[" found after key; skipping salvage.');
       }
       return null;
@@ -272,8 +271,7 @@ export class LineEditParserService {
 
     if (invalidStructure || lastObjectEnd === -1) {
       const key = this.lineEditDiagnosticKey(resultId, 'salvage-no-closed-objects');
-      if (!this.loggedLineEditDiagnostics.has(key)) {
-        this.loggedLineEditDiagnostics.add(key);
+      if (!this.shouldSkipDiagnostic(key, this.diagnosticFingerprint(raw))) {
         console.info('[LineEdit] Salvage: no fully closed suggestion objects found; skipping salvage.', {
           rawLength: raw.length
         });
@@ -287,8 +285,7 @@ export class LineEditParserService {
     // Assumes ParsedLineEdit schema: single top-level object with "suggestions" array and "overallFeedback".
     // Closing with ]} is valid only for this flat shape; nested objects/arrays would need more brackets.
     const repairKey = this.lineEditDiagnosticKey(resultId, 'salvage-repair');
-    if (!this.loggedLineEditDiagnostics.has(repairKey)) {
-      this.loggedLineEditDiagnostics.add(repairKey);
+    if (!this.shouldSkipDiagnostic(repairKey, this.diagnosticFingerprint(raw))) {
       console.info('[LineEdit] Salvage: repairing truncated LineEdit JSON', {
         rawLength: raw.length,
         arrayStart,
@@ -298,6 +295,32 @@ export class LineEditParserService {
     }
 
     return `${head}${body}]} `;
+  }
+
+  private diagnosticFingerprint(source: string | null | undefined): string {
+    const text = (source ?? '').substring(0, 500);
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) {
+      hash = (hash * 31 + text.charCodeAt(i)) | 0;
+    }
+    return `${text.length}:${hash}`;
+  }
+
+  private shouldSkipDiagnostic(key: string, fingerprint: string): boolean {
+    const existing = this.loggedLineEditDiagnostics.get(key);
+    if (existing === fingerprint) {
+      return true;
+    }
+
+    this.loggedLineEditDiagnostics.set(key, fingerprint);
+    if (this.loggedLineEditDiagnostics.size > this.maxDiagnosticEntries) {
+      const oldestKey = this.loggedLineEditDiagnostics.keys().next().value as string | undefined;
+      if (oldestKey !== undefined) {
+        this.loggedLineEditDiagnostics.delete(oldestKey);
+      }
+    }
+
+    return false;
   }
 }
 
