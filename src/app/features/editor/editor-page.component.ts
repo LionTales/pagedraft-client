@@ -583,17 +583,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
                   : `After accept (${timeLabel})`;
               // Store the document state *before* the replacement so Revert restores original text.
               this.documentVersionService
-                .create(
-                  this.bookId,
-                  this.selectedChapterId,
-                  sfdt,
+                .create(this.bookId, this.selectedChapterId, sfdt, {
                   label,
-                  this.selectedSceneId ?? undefined,
-                  event.analysisId ?? undefined,
-                  event.suggestionId ?? undefined,
-                  event.originalText ?? undefined,
-                  appliedText
-                )
+                  sceneId: this.selectedSceneId ?? undefined,
+                  analysisId: event.analysisId ?? undefined,
+                  suggestionId: event.suggestionId ?? undefined,
+                  originalText: event.originalText ?? undefined,
+                  suggestedText: appliedText
+                })
                 .subscribe({ error: () => {} });
             }
           }
