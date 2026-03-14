@@ -125,14 +125,14 @@ describe('AnalysisRunOrchestrationService', () => {
     });
   });
 
-  describe('setLastRunDuration', () => {
+  describe('formatRunDuration', () => {
     it('returns null when runStartedAt is null', () => {
-      expect(service.setLastRunDuration(null)).toBeNull();
+      expect(service.formatRunDuration(null)).toBeNull();
     });
 
     it('returns a seconds label for recent timestamps', () => {
       const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      const label = service.setLastRunDuration(now - 5000);
+      const label = service.formatRunDuration(now - 5000, now);
       expect(label).toMatch(/^\d+s$/);
     });
   });

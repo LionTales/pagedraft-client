@@ -128,10 +128,15 @@ export class AnalysisRunOrchestrationService {
     return { status, message, progressPercent };
   }
 
-  /** Compute a human-readable duration label from a run start timestamp. */
-  setLastRunDuration(runStartedAt: number | null): string | null {
+  /**
+   * Compute a human-readable duration label from a run start timestamp.
+   * Pure function: pass the same clock source for start and (optionally) end to avoid mixing performance.now() and Date.now().
+   * @param runStartedAt Start time from performance.now() or Date.now() (must match endTime clock if provided).
+   * @param endTime Optional end time; if omitted, uses the same clock as runStartedAt would use (performance.now() or Date.now()).
+   */
+  formatRunDuration(runStartedAt: number | null, endTime?: number): string | null {
     if (runStartedAt == null) return null;
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const now = endTime ?? (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const ms = Math.max(0, now - runStartedAt);
     const seconds = Math.round(ms / 1000);
     if (seconds < 60) return `${seconds}s`;

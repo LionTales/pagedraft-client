@@ -1055,11 +1055,11 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         if (event.rawStatus === 'failed') {
           this.isRunning = false;
           this.runError = `${this.selectedAnalysisType || 'Analysis'} failed – see error message.`;
-          this.lastRunDurationLabel = this.orchestrationService.setLastRunDuration(this.runStartedAt);
+          this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
           this.analysisCompleted.emit();
         } else if (event.rawStatus === 'canceled') {
           this.isRunning = false;
-          this.lastRunDurationLabel = this.orchestrationService.setLastRunDuration(this.runStartedAt);
+          this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
           this.analysisCompleted.emit();
         }
         break;
@@ -1078,7 +1078,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       case 'error':
         this.isRunning = false;
         this.runError = event.message;
-        this.lastRunDurationLabel = this.orchestrationService.setLastRunDuration(this.runStartedAt);
+        this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
         this.analysisCompleted.emit();
         break;
     }
@@ -1093,7 +1093,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.latestResult = result;
     this.activeSubTab = 'run';
     this.applyProofreadOrLineEditResultToRunTab(result);
-    this.lastRunDurationLabel = this.orchestrationService.setLastRunDuration(this.runStartedAt);
+    this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
     this.analysisCompleted.emit();
   }
 
@@ -1113,14 +1113,14 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.autoShowFirstSuggestion();
     }
     this.loadHistory(true);
-    this.lastRunDurationLabel = this.orchestrationService.setLastRunDuration(this.runStartedAt);
+    this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
     this.analysisCompleted.emit();
   }
 
   private onRunFinished(): void {
     if (!this.isRunning) return;
     this.isRunning = false;
-    this.lastRunDurationLabel = this.orchestrationService.setLastRunDuration(this.runStartedAt);
+    this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
     this.analysisCompleted.emit();
     this.cdr.detectChanges();
   }

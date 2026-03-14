@@ -237,7 +237,7 @@ export class LineEditParserService {
         escape = false;
         continue;
       }
-      if (c === '\\') {
+      if (c === '\\' && inString) {
         escape = true;
         continue;
       }
@@ -275,6 +275,8 @@ export class LineEditParserService {
     const head = raw.slice(0, arrayStart + 1);
     const body = raw.slice(arrayStart + 1, lastObjectEnd + 1);
 
+    // Assumes ParsedLineEdit schema: single top-level object with "suggestions" array and "overallFeedback".
+    // Closing with ]} is valid only for this flat shape; nested objects/arrays would need more brackets.
     const repairKey = this.lineEditDiagnosticKey(resultId, 'salvage-repair');
     if (!this.loggedLineEditDiagnostics.has(repairKey)) {
       this.loggedLineEditDiagnostics.add(repairKey);

@@ -42,7 +42,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
             stopProgressPolling: () => {},
             confirmReanalysisIfPendingSuggestions: () => true,
             emitInitialStatusForRun: () => 'Running…',
-            setLastRunDuration: () => null,
+            formatRunDuration: () => null,
             runAnalysisAfterSave: () => EMPTY,
             doRunStreaming: () => EMPTY,
           },
