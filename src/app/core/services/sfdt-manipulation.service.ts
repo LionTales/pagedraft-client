@@ -1,5 +1,6 @@
 import { Injectable } from '@angular/core';
 import { normalizeTextForAnalysis, normalizedOffsetToRawOffset } from '../utils/normalize-text-for-analysis';
+import { BLOCK_SEPARATOR } from '../utils/sfdt-text';
 
 /** Convert a suggestion UUID to a Syncfusion-safe bookmark name (letters, digits, underscores only). */
 export function suggestionBookmarkName(suggestionId: string): string {
@@ -121,7 +122,7 @@ export class SfdtManipulationService {
               newInlines.push(this.createInlineForHighlight(text.slice(posRaw), inline, false, textKey, cfKey));
             }
           }
-
+          running += BLOCK_SEPARATOR.length;
           block[inlinesKey] = newInlines;
         }
       }
@@ -223,7 +224,7 @@ export class SfdtManipulationService {
         for (const len of blockLengths) {
           const blockStart = running;
           const blockEnd = running + len;
-          running = blockEnd;
+          running = blockEnd + BLOCK_SEPARATOR.length;
 
           let candidateEnd: number;
           if (blockEnd <= replaceStartOffset) {
@@ -249,7 +250,7 @@ export class SfdtManipulationService {
             segments.push(newPlainText.slice(prev));
           } else {
             segments.push(newPlainText.slice(prev, end));
-            prev = end;
+            prev = end + BLOCK_SEPARATOR.length;
           }
         }
       } else {
@@ -264,7 +265,7 @@ export class SfdtManipulationService {
               segments.push(newPlainText.slice(pos));
             } else {
               segments.push(newPlainText.slice(pos, pos + len));
-              pos += len;
+              pos += len + BLOCK_SEPARATOR.length;
             }
           }
         }
@@ -355,7 +356,7 @@ export class SfdtManipulationService {
             }
             return `${si};0;${bi};${blockRawLen}`;
           }
-          running += blockNormLen;
+          running += blockNormLen + BLOCK_SEPARATOR.length;
           lastPos = `${si};0;${bi};${blockRawLen}`;
         }
       }

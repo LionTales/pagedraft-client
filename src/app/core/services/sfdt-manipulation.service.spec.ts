@@ -77,6 +77,22 @@ describe('SfdtManipulationService', () => {
       expect(service.plainOffsetToSfdtPosition(sfdt, 0)).toBe('0;0;0;0');
       expect(service.plainOffsetToSfdtPosition(sfdt, 5)).toBe('0;0;0;5');
     });
+
+    it('accounts for block separator between paragraphs', () => {
+      const sfdt = JSON.stringify({
+        sections: [{
+          blocks: [
+            { inlines: [{ text: 'Hello' }] },
+            { inlines: [{ text: 'world' }] }
+          ]
+        }]
+      });
+      expect(getTextFromSfdt(sfdt)).toBe('Hello\nworld');
+      expect(service.plainOffsetToSfdtPosition(sfdt, 0)).toBe('0;0;0;0');
+      expect(service.plainOffsetToSfdtPosition(sfdt, 5)).toBe('0;0;0;5');
+      expect(service.plainOffsetToSfdtPosition(sfdt, 6)).toBe('0;0;1;0');
+      expect(service.plainOffsetToSfdtPosition(sfdt, 11)).toBe('0;0;1;5');
+    });
   });
 
   describe('suggestionBookmarkName', () => {

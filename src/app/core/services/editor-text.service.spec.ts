@@ -23,7 +23,7 @@ describe('EditorTextService', () => {
           ]
         }]
       });
-      expect(service.getTextFromSfdt(sfdt)).toBe('First paragraphSecond paragraph');
+      expect(service.getTextFromSfdt(sfdt)).toBe('First paragraph\nSecond paragraph');
     });
 
     it('extracts text from optimized-key SFDT (v32)', () => {
