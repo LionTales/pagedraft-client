@@ -4,6 +4,7 @@ import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '..
 import { LineEditParserService, ParsedLineEdit } from '../../core/services/line-edit-parser.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
 import { proofreadDiff } from '../../core/utils/proofread-diff';
+import { analysisItems as splitAnalysisItems } from '../../core/utils/analysis-items';
 import { SuggestionCardComponent } from './suggestion-card.component';
 
 @Component({
@@ -43,6 +44,10 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   private _lineEditCache: ParsedLineEdit | null = null;
   private _lineEditCacheResultId: string | null = null;
 
+  /** Cached metric cards for the current structured result; avoids repeated JSON.parse in template. */
+  private _metricCardsCache: { label: string; value: string }[] | null = null;
+  private _metricCardsCacheResultKey: string | null = null;
+
   constructor(
     private lineEditParser: LineEditParserService,
     private suggestionKeyService: SuggestionKeyService
@@ -58,6 +63,8 @@ export class AnalysisHistoryTabComponent implements OnChanges {
       this._lineEditSuggestionsWithStatusCacheResultId = null;
       this._lineEditCache = null;
       this._lineEditCacheResultId = null;
+      this._metricCardsCache = null;
+      this._metricCardsCacheResultKey = null;
     }
   }
 
@@ -224,6 +231,21 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     return this._lineEditCache;
   }
 
+  /**
+   * Cached metric cards for the current history item. Use in template instead of metricCards(current.structuredResult)
+   * so JSON.parse runs at most once per change detection when the current item or its structuredResult changes.
+   */
+  get metricCardsForCurrent(): { label: string; value: string }[] {
+    const current = this.currentHistoryItem;
+    if (!current?.structuredResult) return [];
+    const cacheKey = `${this.selectedIndex}:${current.id ?? ''}:${current.structuredResult}`;
+    if (this._metricCardsCacheResultKey !== cacheKey) {
+      this._metricCardsCache = this.metricCards(current.structuredResult);
+      this._metricCardsCacheResultKey = cacheKey;
+    }
+    return this._metricCardsCache ?? [];
+  }
+
   metricCards(structuredResult: string): { label: string; value: string }[] {
     try {
       const data = JSON.parse(structuredResult) as Record<string, unknown>;
@@ -253,11 +275,7 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   }
 
   analysisItems(text: string): string[] {
-    if (!text?.trim()) return [];
-    const trimmed = text.trim();
-    if (!/\d+\.\s/.test(trimmed)) return [trimmed];
-    const parts = trimmed.split(/\s*\d+\.\s*/).map(s => s.trim()).filter(Boolean);
-    return parts.length ? parts : [trimmed];
+    return splitAnalysisItems(text);
   }
 
   onSetHistoryFilter(type: string | null): void {

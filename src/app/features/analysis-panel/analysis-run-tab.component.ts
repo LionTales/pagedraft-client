@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
+import { analysisItems as splitAnalysisItems } from '../../core/utils/analysis-items';
 import { SuggestionCardComponent } from './suggestion-card.component';
 
 @Component({
@@ -110,11 +111,7 @@ export class AnalysisRunTabComponent {
   }
 
   analysisItems(text: string): string[] {
-    if (!text?.trim()) return [];
-    const trimmed = text.trim();
-    if (!/\d+\.\s/.test(trimmed)) return [trimmed];
-    const parts = trimmed.split(/\s*\d+\.\s*/).map(s => s.trim()).filter(Boolean);
-    return parts.length ? parts : [trimmed];
+    return splitAnalysisItems(text);
   }
 
   onLineEditAcceptClick(s: AnalysisSuggestion): void {

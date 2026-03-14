@@ -68,8 +68,8 @@
       </div>
     </ng-container>
     <!-- Other structured (metric cards) -->
-    <div class="metric-cards" *ngIf="!lineEditForCurrent && (current.analysisType || current.type) !== 'Proofread' && current.structuredResult && metricCards(current.structuredResult).length; else textResult">
-      <div class="metric-card" *ngFor="let card of metricCards(current.structuredResult)">
+    <div class="metric-cards" *ngIf="!lineEditForCurrent && (current.analysisType || current.type) !== 'Proofread' && current.structuredResult && metricCardsForCurrent.length; else textResult">
+      <div class="metric-card" *ngFor="let card of metricCardsForCurrent">
         <span class="metric-label">{{ card.label }}</span>
         <span class="metric-value">{{ card.value }}</span>
       </div>
