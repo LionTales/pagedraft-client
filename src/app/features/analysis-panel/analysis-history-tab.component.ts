@@ -48,6 +48,10 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   private _metricCardsCache: { label: string; value: string }[] | null = null;
   private _metricCardsCacheResultKey: string | null = null;
 
+  /** Cached proofread suggestions with status for the current history item; invalidated by ngOnChanges. */
+  private _proofreadHistoryItemsWithStatusCache: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] | null = null;
+  private _proofreadHistoryItemsWithStatusCacheResultId: string | null = null;
+
   constructor(
     private lineEditParser: LineEditParserService,
     private suggestionKeyService: SuggestionKeyService
@@ -65,6 +69,11 @@ export class AnalysisHistoryTabComponent implements OnChanges {
       this._lineEditCacheResultId = null;
       this._metricCardsCache = null;
       this._metricCardsCacheResultKey = null;
+    }
+    const proofreadCacheKeys = ['history', 'acceptedProofreadHistoryKeys', 'dismissedProofreadHistoryKeys', 'documentText', 'proofreadOriginalDocumentByRunKey'];
+    if (proofreadCacheKeys.some(k => changes[k])) {
+      this._proofreadHistoryItemsWithStatusCache = null;
+      this._proofreadHistoryItemsWithStatusCacheResultId = null;
     }
   }
 
@@ -109,6 +118,10 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   get proofreadHistoryItemsWithStatus(): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
     const current = this.currentHistoryItem;
     if (!current) return [];
+    const cacheKey = `${this.selectedIndex}:${current.id ?? ''}`;
+    if (this._proofreadHistoryItemsWithStatusCacheResultId === cacheKey) {
+      return this._proofreadHistoryItemsWithStatusCache ?? [];
+    }
     const suggestions = this.proofreadSuggestionsForHistory;
     const result: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] = [];
 
@@ -129,16 +142,18 @@ export class AnalysisHistoryTabComponent implements OnChanges {
         }
         result.push({ suggestion: s, status });
       }
-      return this.suggestionKeyService.sortHistoryItemsWithRecentFirst(result, s => this.suggestionKeyService.proofreadSuggestionKey(current, s));
+      this._proofreadHistoryItemsWithStatusCache = this.suggestionKeyService.sortHistoryItemsWithRecentFirst(result, s => this.suggestionKeyService.proofreadSuggestionKey(current, s));
+    } else {
+      const keyBased = suggestions.map(s => {
+        const key = this.suggestionKeyService.proofreadSuggestionKey(current, s);
+        if (this.acceptedProofreadHistoryKeys.has(key)) return { suggestion: s, status: 'accepted' as const };
+        if (this.dismissedProofreadHistoryKeys.has(key)) return { suggestion: s, status: 'dismissed' as const };
+        return { suggestion: s, status: 'pending' as const };
+      });
+      this._proofreadHistoryItemsWithStatusCache = this.suggestionKeyService.sortHistoryItemsWithRecentFirst(keyBased, s => this.suggestionKeyService.proofreadSuggestionKey(current, s));
     }
-
-    const keyBased = suggestions.map(s => {
-      const key = this.suggestionKeyService.proofreadSuggestionKey(current, s);
-      if (this.acceptedProofreadHistoryKeys.has(key)) return { suggestion: s, status: 'accepted' as const };
-      if (this.dismissedProofreadHistoryKeys.has(key)) return { suggestion: s, status: 'dismissed' as const };
-      return { suggestion: s, status: 'pending' as const };
-    });
-    return this.suggestionKeyService.sortHistoryItemsWithRecentFirst(keyBased, s => this.suggestionKeyService.proofreadSuggestionKey(current, s));
+    this._proofreadHistoryItemsWithStatusCacheResultId = cacheKey;
+    return this._proofreadHistoryItemsWithStatusCache ?? [];
   }
 
   get filteredProofreadHistoryItemsWithStatus(): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {

@@ -114,10 +114,10 @@ export class AnalysisRunOrchestrationService {
       phase = 'failed – see error message';
     } else if (status === 'canceled') {
       phase = 'canceled';
-    } else if (total > 0 && current === 1) {
-      phase = 'analyzing first part…';
     } else if (total > 0 && current === total) {
       phase = 'final part…';
+    } else if (total > 0 && current === 1) {
+      phase = 'analyzing first part…';
     } else if (total > 0 && current > 1) {
       phase = 'analyzing middle sections…';
     } else if (status === 'pending') {
