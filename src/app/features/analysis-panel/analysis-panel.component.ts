@@ -454,7 +454,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       original: suggestion.original,
       suggested: suggestion.suggested
     });
-    this.acceptedLineEditKeys.add(key);
+    this.acceptedLineEditKeys = new Set([...this.acceptedLineEditKeys, key]);
     this.suggestionKeyService.trackRecentOutcomeKey(key);
     if (this.bookId && this.chapterId && current.id && suggestion.id) {
       this.applyOutcomeToSuggestionDtos(suggestion.id, 'Accepted');
@@ -472,7 +472,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       original: suggestion.original,
       suggested: suggestion.suggested
     });
-    this.dismissedLineEditKeys.add(key);
+    this.dismissedLineEditKeys = new Set([...this.dismissedLineEditKeys, key]);
     this.suggestionKeyService.trackRecentOutcomeKey(key);
     // Remove from the current Run tab suggestions so dismissed items disappear immediately
     this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(x => x !== suggestion);
@@ -535,7 +535,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     }
     if (this.latestResult) {
       const key = this.suggestionKeyService.proofreadSuggestionKey(this.latestResult, s);
-      this.acceptedProofreadHistoryKeys.add(key);
+      this.acceptedProofreadHistoryKeys = new Set([...this.acceptedProofreadHistoryKeys, key]);
       this.suggestionKeyService.trackRecentOutcomeKey(key);
       if (this.bookId && this.chapterId && this.latestResult.id && s.id) {
         this.applyOutcomeToSuggestionDtos(s.id, 'Accepted');
@@ -554,7 +554,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     this.proofreadSuggestions = this.proofreadSuggestions.filter(x => x !== s);
     if (this.latestResult) {
       const key = this.suggestionKeyService.proofreadSuggestionKey(this.latestResult, s);
-      this.dismissedProofreadHistoryKeys.add(key);
+      this.dismissedProofreadHistoryKeys = new Set([...this.dismissedProofreadHistoryKeys, key]);
       this.suggestionKeyService.trackRecentOutcomeKey(key);
       if (this.bookId && this.chapterId && this.latestResult.id && s.id) {
         this.applyOutcomeToSuggestionDtos(s.id, 'Dismissed');
@@ -628,7 +628,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.applyCorrection.emit({ text: s.suggested, originalText: s.original, analysisId: current.id });
     }
     const key = this.suggestionKeyService.proofreadSuggestionKey(current, s);
-    this.acceptedProofreadHistoryKeys.add(key);
+    this.acceptedProofreadHistoryKeys = new Set([...this.acceptedProofreadHistoryKeys, key]);
     this.suggestionKeyService.trackRecentOutcomeKey(key);
     if (this.bookId && this.chapterId && current.id && s.id) {
       this.applyOutcomeToSuggestionDtos(s.id, 'Accepted');
@@ -644,7 +644,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   onProofreadHistoryDismiss(event: { suggestion: AnalysisSuggestion; result: AnalysisResultDto }): void {
     const { suggestion: s, result: current } = event;
     const key = this.suggestionKeyService.proofreadSuggestionKey(current, s);
-    this.dismissedProofreadHistoryKeys.add(key);
+    this.dismissedProofreadHistoryKeys = new Set([...this.dismissedProofreadHistoryKeys, key]);
     this.suggestionKeyService.trackRecentOutcomeKey(key);
     if (this.bookId && this.chapterId && current.id && s.id) {
       this.applyOutcomeToSuggestionDtos(s.id, 'Dismissed');
@@ -700,10 +700,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       this.history = [];
       this.allAnalyses = [];
       this.activeAnalyses = [];
-      this.dismissedProofreadHistoryKeys.clear();
-      this.acceptedProofreadHistoryKeys.clear();
-      this.dismissedLineEditKeys.clear();
-      this.acceptedLineEditKeys.clear();
+      this.dismissedProofreadHistoryKeys = new Set();
+      this.acceptedProofreadHistoryKeys = new Set();
+      this.dismissedLineEditKeys = new Set();
+      this.acceptedLineEditKeys = new Set();
       this.streamingText = '';
       this.hasRestoredProofreadForCurrentContext = false;
       this.hasRestoredLineEditForCurrentContext = false;
@@ -873,10 +873,10 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
         // When we're merely changing the history filter or merging async results, keep in-memory
         // Accepted/Dismissed/Reverted sets so the current session's state is preserved.
         if (!shouldMerge) {
-          this.acceptedProofreadHistoryKeys.clear();
-          this.dismissedProofreadHistoryKeys.clear();
-          this.acceptedLineEditKeys.clear();
-          this.dismissedLineEditKeys.clear();
+          this.acceptedProofreadHistoryKeys = new Set();
+          this.dismissedProofreadHistoryKeys = new Set();
+          this.acceptedLineEditKeys = new Set();
+          this.dismissedLineEditKeys = new Set();
         }
         // Prepend streaming run (no id) so it appears in History and Accepted/Dismissed keys match,
         // but only when its analysis type matches the current history filter (or when showing All).
