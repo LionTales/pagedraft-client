@@ -122,7 +122,8 @@ export class SfdtManipulationService {
               newInlines.push(this.createInlineForHighlight(text.slice(posRaw), inline, false, textKey, cfKey));
             }
           }
-          running += BLOCK_SEPARATOR.length;
+          // Do not add BLOCK_SEPARATOR.length: ranges are in normalizeTextForAnalysis(documentText),
+          // which strips \n, so the normalized offset space has no separator between blocks.
           block[inlinesKey] = newInlines;
         }
       }

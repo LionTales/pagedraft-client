@@ -34,8 +34,8 @@ export type AnalysisRunEvent =
   | { kind: 'streaming-complete'; latestResult: AnalysisResultDto }
   | { kind: 'error'; message: string };
 
-/** Parsed progress update returned by handleProgressUpdate. */
-export interface ProgressUpdateResult {
+/** Parsed progress update returned by handleProgressUpdate (internal use). */
+interface ProgressUpdateResult {
   status: string;
   message: string;
   progressPercent: number | null;
