@@ -1,0 +1,131 @@
+<div class="analysis-panel">
+  <header class="panel-header">
+    <h3>Analysis</h3>
+  </header>
+
+  <section class="type-picker-section">
+    <div class="type-picker" role="group" aria-label="Analysis type">
+      <button
+        type="button"
+        *ngFor="let opt of analysisTypes"
+        [class.active]="selectedAnalysisType === opt.value"
+        (click)="onSelectAnalysisType(opt.value)">
+        {{ opt.label }}
+      </button>
+    </div>
+  </section>
+
+  <section class="prompt-section" *ngIf="selectedAnalysisType === 'Custom'">
+    <label class="prompt-label">Custom prompt</label>
+    <textarea
+      [(ngModel)]="prompt"
+      rows="4"
+      class="prompt-input"
+      placeholder="Describe what you want the AI to analyze (Hebrew supported)...">
+    </textarea>
+    <button type="button" class="run-btn secondary" [disabled]="!prompt" (click)="saveAsTemplate()">
+      Save as template
+    </button>
+  </section>
+
+  <section class="actions-section">
+    <div class="actions-row">
+      <button
+        type="button"
+        class="run-btn"
+        [disabled]="!canRun || isRunning"
+        (click)="runAnalysis()">
+        {{ isRunning ? 'Running…' : 'Run analysis' }}
+      </button>
+      <button
+        type="button"
+        class="run-btn secondary"
+        [disabled]="!canRun || isRunning"
+        (click)="runStreaming()">
+        {{ isRunning ? 'Streaming…' : 'Run with streaming' }}
+      </button>
+    </div>
+    <p class="run-error" *ngIf="runError">{{ runError }}</p>
+    <label class="highlight-option" *ngIf="selectedAnalysisType === 'Proofread'">
+      <input type="checkbox" [(ngModel)]="highlightSuggestionsInDocument" (ngModelChange)="onHighlightOptionChange()">
+      <span>Highlight suggestion words in document</span>
+    </label>
+  </section>
+
+  <nav class="sub-tabs" aria-label="Run, History, or Versions">
+    <button
+      type="button"
+      class="sub-tab"
+      [class.active]="activeSubTab === 'run'"
+      (click)="activeSubTab = 'run'">
+      Run
+    </button>
+    <button
+      type="button"
+      class="sub-tab"
+      [class.active]="activeSubTab === 'history'"
+      (click)="activeSubTab = 'history'">
+      History
+    </button>
+    <button
+      type="button"
+      class="sub-tab"
+      [class.active]="activeSubTab === 'versions'"
+      (click)="activeSubTab = 'versions'; loadVersions()">
+      Versions
+    </button>
+  </nav>
+
+  <app-analysis-run-tab
+    *ngIf="activeSubTab === 'run'"
+    [selectedAnalysisType]="selectedAnalysisType"
+    [proofreadSuggestions]="proofreadSuggestions"
+    [proofreadSuggestionsUnreliable]="proofreadSuggestionsUnreliable"
+    [lineEditRunSuggestions]="lineEditRunSuggestions"
+    [latestResult]="latestResult"
+    [lastRunDurationLabel]="lastRunDurationLabel"
+    [streamingText]="streamingText"
+    [explainingSuggestionIds]="explainingSuggestionIds"
+    [bookLanguage]="bookLanguage"
+    [sceneId]="sceneId"
+    (proofreadAccept)="onProofreadAccept($event)"
+    (proofreadDismiss)="onProofreadDismiss($event)"
+    (lineEditAccept)="onLineEditAccept($event.suggestion, $event.result)"
+    (lineEditDismiss)="onLineEditDismiss($event.suggestion, $event.result)"
+    (showInDocumentEvent)="onShowInDocument($event)"
+    (explainSuggestion)="onExplainSuggestion($event)">
+  </app-analysis-run-tab>
+
+  <app-analysis-history-tab
+    *ngIf="activeSubTab === 'history'"
+    [history]="history"
+    [analysisTypes]="analysisTypes"
+    [historyFilterType]="historyFilterType"
+    [streamingText]="streamingText"
+    [sceneId]="sceneId"
+    [explainingSuggestionIds]="explainingSuggestionIds"
+    [documentText]="documentText"
+    [acceptedProofreadHistoryKeys]="acceptedProofreadHistoryKeys"
+    [dismissedProofreadHistoryKeys]="dismissedProofreadHistoryKeys"
+    [acceptedLineEditKeys]="acceptedLineEditKeys"
+    [dismissedLineEditKeys]="dismissedLineEditKeys"
+    [proofreadOriginalDocumentByRunKey]="proofreadOriginalDocumentByRunKey"
+    (historyFilterChange)="setHistoryFilter($event)"
+    (proofreadHistoryAccept)="onProofreadHistoryAccept($event)"
+    (proofreadHistoryDismiss)="onProofreadHistoryDismiss($event)"
+    (explainSuggestionEvent)="onExplainSuggestion($event)">
+  </app-analysis-history-tab>
+
+  <app-analysis-versions-tab
+    *ngIf="activeSubTab === 'versions'"
+    [versions]="versions"
+    [bookId]="bookId"
+    [chapterId]="chapterId"
+    [sceneId]="sceneId"
+    [allAnalyses]="allAnalyses"
+    [latestResult]="latestResult"
+    (revert)="onRevert($event)"
+    (redoVersion)="onRedoVersion($event)">
+  </app-analysis-versions-tab>
+</div>
+

@@ -1,0 +1,141 @@
+<div class="editor-page-wrapper">
+  <div class="editor-layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h3>Chapters</h3>
+        @if (bookId) {
+          <button type="button" class="import-btn" (click)="goToImport()">Import DOCX</button>
+        }
+      </div>
+      @if (book) {
+        <app-chapter-tree
+          [chapters]="book.chapters"
+          [selectedChapterId]="selectedChapterId"
+          [selectedSceneId]="selectedSceneId"
+          [expandedChapters]="expandedChapterIds"
+          [scenesMap]="scenesByChapter"
+          (chapterSelected)="selectChapter($event)"
+          (sceneSelected)="selectScene($event)"
+          (toggleExpandChapter)="onToggleExpandChapter($event)"
+          (reorder)="onReorder($event)"
+          (addChapter)="addChapter()"
+          (renameChapter)="renameChapter($event)"
+          (deleteChapter)="deleteChapter($event)"
+          (splitScenes)="onSplitScenes($event)">
+        </app-chapter-tree>
+      }
+    </aside>
+    <main class="editor-area">
+      @if (selectedChapterId) {
+        <div class="editor-shell" [attr.dir]="editorDirection">
+          <div class="editor-status">
+            <span *ngIf="isSaving">שומר…</span>
+            <span *ngIf="!isSaving && hasPendingChanges">שינויים ממתינים לשמירה</span>
+            <span *ngIf="!isSaving && !hasPendingChanges">כל השינויים נשמרו</span>
+            @if (selectedSceneId) {
+              <span class="scope-badge">Scene</span>
+            }
+            <span class="direction-btns">
+              <button type="button" class="dir-btn" title="Right-to-left (RTL)" (click)="setSelectionRtl()">RTL</button>
+              <button type="button" class="dir-btn" title="Left-to-right (LTR)" (click)="setSelectionLtr()">LTR</button>
+            </span>
+            <button type="button" class="save-btn" [disabled]="!hasPendingChanges || isSaving" (click)="saveCurrentDocument()">שמור</button>
+            <button type="button" class="back-btn" (click)="goBackToBooks()">חזרה לספרים</button>
+          </div>
+          <ejs-documenteditorcontainer
+            #docEditor
+            [enableToolbar]="true"
+            [toolbarMode]="'Toolbar'"
+            [showPropertiesPane]="false"
+            [enableRtl]="editorDirection === 'rtl'"
+            [locale]="editorCulture"
+            [height]="'100%'"
+            serviceUrl="/api/documenteditor/"
+            (created)="onEditorCreated()
+            "
+            (contentChange)="onContentChange()">
+          </ejs-documenteditorcontainer>
+        </div>
+      } @else {
+        <p>Select a chapter or scene from the sidebar.</p>
+      }
+    </main>
+    <aside class="panel">
+      <nav class="panel-tabs">
+        <button
+          type="button"
+          class="panel-tab"
+          [class.active]="rightPanelTab === 'analysis'"
+          (click)="rightPanelTab = 'analysis'">
+          Analysis
+        </button>
+        <button
+          type="button"
+          class="panel-tab"
+          [class.active]="rightPanelTab === 'language'"
+          (click)="rightPanelTab = 'language'">
+          Language
+        </button>
+        <button
+          type="button"
+          class="panel-tab"
+          [class.active]="rightPanelTab === 'book'"
+          (click)="rightPanelTab = 'book'">
+          Book
+        </button>
+      </nav>
+      <div class="panel-content">
+        @if (rightPanelTab === 'analysis') {
+          <app-analysis-panel
+            [bookId]="bookId"
+            [chapterId]="selectedChapterId"
+            [sceneId]="selectedSceneId"
+            [bookLanguage]="book?.language ?? 'he'"
+            [documentText]="currentDocumentPlainText"
+            [documentChapterId]="documentOwnerChapterId"
+            [documentSceneId]="documentOwnerSceneId"
+            [saveBeforeRun]="saveBeforeRun"
+            (analysisStarted)="onAnalysisStarted()"
+            (analysisCompleted)="onAnalysisCompleted()"
+            (analysisStatus)="onAnalysisStatus($event)"
+            (analysisProgressPercent)="onAnalysisProgressPercent($event)"
+            (applyCorrection)="onApplyCorrection($event)"
+            (showInDocument)="selectRangeInEditor($event)"
+            (suggestionRangesChange)="applySuggestionHighlights($event)"
+            (revertToVersion)="onRevertToVersion($event)">
+          </app-analysis-panel>
+        }
+        @if (rightPanelTab === 'language') {
+          <app-issue-panel
+            [bookId]="bookId ?? undefined"
+            [chapterId]="selectedChapterId ?? undefined"
+            (rewriteApplied)="onApplyCorrection($event)"
+            (issueHighlighted)="onIssueHighlighted($event)">
+          </app-issue-panel>
+        }
+        @if (rightPanelTab === 'book' && bookId && book) {
+          <app-book-dashboard
+            [bookId]="bookId"
+            [bookTitle]="book.title">
+          </app-book-dashboard>
+        }
+      </div>
+    </aside>
+  </div>
+  @if (analysisRunning) {
+    <div class="analysis-overlay" role="status" aria-live="polite" aria-label="Analysis in progress">
+      <div class="analysis-overlay-card">
+        <h3 class="analysis-overlay-title">Run analysis</h3>
+        <div class="analysis-spinner"></div>
+        <p class="analysis-overlay-message">{{ analysisStatusText }}</p>
+        <div class="analysis-progress-wrapper" *ngIf="analysisStatusPercent !== null">
+          <div class="analysis-progress-bar">
+            <div class="analysis-progress-fill" [style.width.%]="analysisStatusPercent"></div>
+          </div>
+          <span class="analysis-progress-label">{{ analysisStatusPercent }}%</span>
+        </div>
+      </div>
+    </div>
+  }
+</div>
+

@@ -13,6 +13,8 @@ export interface DocumentVersionDto {
   analysisId?: string | null;
   /** Same as analysisId; API returns this name (camelCase of AnalysisResultId). */
   analysisResultId?: string | null;
+   /** Stable id of the AnalysisSuggestion that produced this version, when known. */
+   suggestionId?: string | null;
   originalText?: string | null;
   suggestedText?: string | null;
   /** Status of the linked analysis result, when present (e.g. 'Active' or 'Archived'). */
@@ -23,6 +25,7 @@ export interface DocumentVersionDetailDto extends DocumentVersionDto {
   contentSfdt: string;
   analysisId?: string | null;
   analysisResultId?: string | null;
+  suggestionId?: string | null;
   originalText?: string | null;
   suggestedText?: string | null;
   analysisStatus?: string | null;
@@ -38,22 +41,35 @@ export class DocumentVersionService {
     return this.http.get<DocumentVersionDto[]>(url);
   }
 
+  /** Options for version metadata; avoids fragile positional params when adding fields (e.g. suggestionId). */
   create(
     bookId: string,
     chapterId: string,
     contentSfdt: string,
-    label?: string | null,
-    sceneId?: string | null,
-    analysisId?: string | null,
-    originalText?: string | null,
-    suggestedText?: string | null
+    options?: {
+      label?: string | null;
+      sceneId?: string | null;
+      analysisId?: string | null;
+      suggestionId?: string | null;
+      originalText?: string | null;
+      suggestedText?: string | null;
+    }
   ): Observable<DocumentVersionDto> {
+    const opts = options ?? {};
     let url = `/api/books/${bookId}/chapters/${chapterId}/versions`;
-    if (sceneId) url += `?sceneId=${encodeURIComponent(sceneId)}`;
-    const body: { contentSfdt: string; label: string | null; analysisId?: string; originalText?: string; suggestedText?: string } = { contentSfdt, label: label || null };
-    if (analysisId) body.analysisId = analysisId;
-    if (originalText != null) body.originalText = originalText;
-    if (suggestedText != null) body.suggestedText = suggestedText;
+    if (opts.sceneId) url += `?sceneId=${encodeURIComponent(opts.sceneId)}`;
+    const body: {
+      contentSfdt: string;
+      label: string | null;
+      analysisId?: string;
+      suggestionId?: string;
+      originalText?: string;
+      suggestedText?: string;
+    } = { contentSfdt, label: opts.label ?? null };
+    if (opts.analysisId) body.analysisId = opts.analysisId;
+    if (opts.suggestionId) body.suggestionId = opts.suggestionId;
+    if (opts.originalText != null) body.originalText = opts.originalText;
+    if (opts.suggestedText != null) body.suggestedText = opts.suggestedText;
     return this.http.post<DocumentVersionDto>(url, body);
   }
 
