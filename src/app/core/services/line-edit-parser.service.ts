@@ -151,8 +151,66 @@ export class LineEditParserService {
     return `${id}:${type}`;
   }
 
+  /**
+   * Finds the index of a JSON object key in raw JSON text, only when the key is not inside a string value.
+   * Returns the index of the opening quote of the key, or -1.
+   */
+  private indexOfJsonKey(raw: string, keyName: string): number {
+    const keyPattern = `"${keyName}"`;
+    let i = 0;
+    let inString = false;
+    let escape = false;
+    while (i <= raw.length - keyPattern.length) {
+      if (escape) {
+        escape = false;
+        i++;
+        continue;
+      }
+      if (raw[i] === '\\' && inString) {
+        escape = true;
+        i++;
+        continue;
+      }
+      if (raw[i] === '"') {
+        if (escape) {
+          escape = false;
+          i++;
+          continue;
+        }
+        if (!inString && raw.substring(i, i + keyPattern.length) === keyPattern) {
+          let j = i + keyPattern.length;
+          while (j < raw.length && /\s/.test(raw[j])) j++;
+          if (j < raw.length && raw[j] === ':') return i;
+        }
+        inString = !inString;
+        i++;
+        continue;
+      }
+      if (inString) {
+        i++;
+        continue;
+      }
+      i++;
+    }
+    return -1;
+  }
+
+  /**
+   * Finds the index of the '[' that starts the array value of the key whose opening quote is at keyIndex.
+   */
+  private indexOfArrayStartAfterKey(raw: string, keyIndex: number): number {
+    const keyEnd = raw.indexOf('"', keyIndex + 1) + 1;
+    let i = keyEnd;
+    while (i < raw.length && /\s/.test(raw[i])) i++;
+    if (i >= raw.length || raw[i] !== ':') return -1;
+    i++;
+    while (i < raw.length && /\s/.test(raw[i])) i++;
+    if (i >= raw.length || raw[i] !== '[') return -1;
+    return i;
+  }
+
   private trySalvageTruncatedLineEditJson(resultId: string | null | undefined, raw: string): string | null {
-    const keyIndex = raw.indexOf('"suggestions"');
+    const keyIndex = this.indexOfJsonKey(raw, 'suggestions');
     if (keyIndex === -1) {
       const key = this.lineEditDiagnosticKey(resultId, 'salvage-no-suggestions-key');
       if (!this.loggedLineEditDiagnostics.has(key)) {
@@ -162,7 +220,7 @@ export class LineEditParserService {
       return null;
     }
 
-    const arrayStart = raw.indexOf('[', keyIndex);
+    const arrayStart = this.indexOfArrayStartAfterKey(raw, keyIndex);
     if (arrayStart === -1) {
       const key = this.lineEditDiagnosticKey(resultId, 'salvage-no-array');
       if (!this.loggedLineEditDiagnostics.has(key)) {

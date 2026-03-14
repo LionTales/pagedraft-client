@@ -85,6 +85,20 @@ describe('LineEditParserService', () => {
       expect(parsed).not.toBeNull();
       expect(parsed!.suggestions.length).toBe(1);
     });
+
+    it('salvage uses real "suggestions" key and ignores same text inside string values', () => {
+      // Truncated payload where a string value contains the literal "suggestions"; salvage must
+      // latch onto the object key, not the substring inside the reason string. Second suggestion
+      // is incomplete so only the first is salvaged.
+      const truncated =
+        '{"overallFeedback":"ok","suggestions":[{"original":"x","suggested":"y","reason":"ignore \\"suggestions\\" here","category":"c"},{"original":"a","suggested":"b","reason":"r","category":"c"';
+      const result = makeLineEditResult({ structuredResult: truncated });
+      const parsed = service.getLineEdit(result);
+      expect(parsed).not.toBeNull();
+      expect(parsed!.suggestions.length).toBe(1);
+      expect(parsed!.suggestions[0].reason).toBe('ignore "suggestions" here');
+      expect(parsed!.suggestions[0].original).toBe('x');
+    });
   });
 
   describe('recomputeLineEditOffsets', () => {
