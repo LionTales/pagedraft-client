@@ -33,9 +33,11 @@
           <app-suggestion-card
             *ngFor="let item of filteredProofreadHistoryItemsWithStatus"
             [suggestion]="item.suggestion"
-            [readOnly]="true"
+            [readOnly]="item.status !== 'pending'"
             [status]="item.status"
             [loadingExplanation]="!!(item.suggestion.id && explainingSuggestionIds.has(item.suggestion.id))"
+            (accept)="onProofreadHistoryAccept(item.suggestion)"
+            (dismiss)="onProofreadHistoryDismiss(item.suggestion)"
             (explain)="explainSuggestionEvent.emit($event)">
           </app-suggestion-card>
         </div>
