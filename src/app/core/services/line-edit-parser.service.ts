@@ -230,6 +230,7 @@ export class LineEditParserService {
     let depthCurly = 0;
     let depthSquare = 0;
     let lastObjectEnd = -1;
+    let invalidStructure = false;
 
     for (let i = arrayStart; i < raw.length; i++) {
       const c = raw[i];
@@ -251,17 +252,25 @@ export class LineEditParserService {
         depthSquare++;
       } else if (c === ']') {
         depthSquare--;
+        if (depthSquare < 0) {
+          invalidStructure = true;
+          break;
+        }
       } else if (c === '{') {
         depthCurly++;
       } else if (c === '}') {
         depthCurly--;
+        if (depthCurly < 0) {
+          invalidStructure = true;
+          break;
+        }
         if (depthSquare === 1 && depthCurly === 0) {
           lastObjectEnd = i;
         }
       }
     }
 
-    if (lastObjectEnd === -1) {
+    if (invalidStructure || lastObjectEnd === -1) {
       const key = this.lineEditDiagnosticKey(resultId, 'salvage-no-closed-objects');
       if (!this.loggedLineEditDiagnostics.has(key)) {
         this.loggedLineEditDiagnostics.add(key);

@@ -43,7 +43,11 @@ export interface ProgressUpdateResult {
 
 @Injectable({ providedIn: 'root' })
 export class AnalysisRunOrchestrationService {
-  private progressStop$ = new Subject<void>();
+  /**
+   * Shared handle to the most recent polling stop subject.
+   * Each polling run gets its own Subject instance so concurrent runs don't interfere.
+   */
+  private progressStop$ : Subject<void> | null = null;
 
   constructor(
     private analysisService: AnalysisService,
@@ -52,7 +56,18 @@ export class AnalysisRunOrchestrationService {
 
   /** Cancel any active progress polling. Call from component ngOnDestroy. */
   stopProgressPolling(): void {
-    this.progressStop$.next();
+    if (this.progressStop$) {
+      this.progressStop$.next();
+    }
+  }
+
+  /** Create a new stop subject for a polling run, cancelling any previous run first. */
+  private createProgressStop(): Subject<void> {
+    if (this.progressStop$) {
+      this.progressStop$.next();
+    }
+    this.progressStop$ = new Subject<void>();
+    return this.progressStop$;
   }
 
   // ---------------------------------------------------------------------------
@@ -169,7 +184,7 @@ export class AnalysisRunOrchestrationService {
     ctx: AnalysisRunContext,
     saveBeforeRun?: () => Promise<void>
   ): Observable<AnalysisRunEvent> {
-    this.progressStop$.next();
+    this.stopProgressPolling();
     const initialStatus = this.emitInitialStatusForRun(
       ctx.selectedAnalysisType, ctx.documentText
     );
@@ -208,7 +223,7 @@ export class AnalysisRunOrchestrationService {
           return of(resultEvent);
         }),
         catchError((err): Observable<AnalysisRunEvent> => {
-          this.progressStop$.next();
+          this.stopProgressPolling();
           const message = err?.error?.error ?? err?.message ?? 'Analysis failed.';
           return of<AnalysisRunEvent>({ kind: 'error', message });
         })
@@ -283,14 +298,14 @@ export class AnalysisRunOrchestrationService {
   ): Observable<AnalysisRunEvent> {
     if (!bookId || !chapterId || !result.jobId) return EMPTY;
     const type = result.analysisType || result.type;
-    this.progressStop$.next();
+    const stop$ = this.createProgressStop();
     return this.analysisProgressService
-      .pollProgress(bookId, chapterId, result.jobId, this.progressStop$)
+      .pollProgress(bookId, chapterId, result.jobId, stop$)
       .pipe(
         map((p): AnalysisRunEvent => {
           const update = this.handleProgressUpdate(p);
           if (update.status === 'succeeded' || update.status === 'failed' || update.status === 'canceled') {
-            this.progressStop$.next();
+            this.stopProgressPolling();
           }
           return {
             kind: 'progress',
@@ -300,7 +315,7 @@ export class AnalysisRunOrchestrationService {
           };
         }),
         catchError((): Observable<AnalysisRunEvent> => {
-          this.progressStop$.next();
+          this.stopProgressPolling();
           const label = type === 'Custom' ? 'Custom analysis' : `${type} analysis`;
           return of<AnalysisRunEvent>({ kind: 'status', message: `Running ${label}…` });
         })
@@ -319,9 +334,9 @@ export class AnalysisRunOrchestrationService {
   ): Observable<AnalysisRunEvent> {
     if (!bookId || !chapterId) return EMPTY;
     const type = selectedAnalysisType || 'Analysis';
-    this.progressStop$.next();
+    const stop$ = this.createProgressStop();
     return this.analysisProgressService
-      .pollProgress(bookId, chapterId, jobId, this.progressStop$)
+      .pollProgress(bookId, chapterId, jobId, stop$)
       .pipe(
         switchMap((p): Observable<AnalysisRunEvent> => {
           const update = this.handleProgressUpdate(p);
@@ -333,14 +348,14 @@ export class AnalysisRunOrchestrationService {
           };
 
           if (update.status === 'succeeded') {
-            this.progressStop$.next();
+            this.stopProgressPolling();
             return concat(
               of(progressEvent),
               this.loadFinalResultForJob(bookId, chapterId, jobId)
             );
           }
           if (update.status === 'failed' || update.status === 'canceled') {
-            this.progressStop$.next();
+            this.stopProgressPolling();
             if (update.status === 'failed') {
               const errorEvent: AnalysisRunEvent = { kind: 'error', message: `${type} failed – see error message.` };
               return of(progressEvent, errorEvent);
@@ -350,7 +365,7 @@ export class AnalysisRunOrchestrationService {
           return of(progressEvent);
         }),
         catchError((): Observable<AnalysisRunEvent> => {
-          this.progressStop$.next();
+          this.stopProgressPolling();
           const label = type === 'Custom' ? 'Custom analysis' : `${type} analysis`;
           return of<AnalysisRunEvent>({ kind: 'status', message: `Running ${label}…` });
         })

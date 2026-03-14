@@ -219,19 +219,27 @@ export class SfdtManipulationService {
         const offsetDelta = replaceTextLength - (replaceEndOffset - replaceStartOffset);
         let running = 0;
         const newEnds: number[] = [];
+        let lastEnd = 0;
         for (const len of blockLengths) {
           const blockStart = running;
           const blockEnd = running + len;
           running = blockEnd;
+
+          let candidateEnd: number;
           if (blockEnd <= replaceStartOffset) {
-            newEnds.push(blockEnd);
+            candidateEnd = blockEnd;
           } else if (blockStart >= replaceEndOffset) {
-            newEnds.push(blockEnd + offsetDelta);
+            candidateEnd = blockEnd + offsetDelta;
           } else if (blockEnd <= replaceEndOffset) {
-            newEnds.push(replaceStartOffset + replaceTextLength);
+            candidateEnd = replaceStartOffset + replaceTextLength;
           } else {
-            newEnds.push(replaceStartOffset + replaceTextLength + (blockEnd - replaceEndOffset));
+            candidateEnd = replaceStartOffset + replaceTextLength + (blockEnd - replaceEndOffset);
           }
+
+          // Ensure segment boundaries are monotonically increasing so slice(prev, end) is well-formed.
+          const end = Math.max(candidateEnd, lastEnd);
+          newEnds.push(end);
+          lastEnd = end;
         }
         segments = [];
         let prev = 0;
