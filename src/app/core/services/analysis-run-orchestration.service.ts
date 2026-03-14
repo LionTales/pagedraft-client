@@ -322,7 +322,7 @@ export class AnalysisRunOrchestrationService {
           const update = this.handleProgressUpdate(p);
           const progressEvent: AnalysisRunEvent = {
             kind: 'progress',
-            percent: update.progressPercent,
+            percent: update.status === 'succeeded' ? 100 : update.progressPercent,
             message: update.message,
             rawStatus: update.status
           };

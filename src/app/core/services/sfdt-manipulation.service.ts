@@ -1,5 +1,4 @@
 import { Injectable } from '@angular/core';
-import { getTextFromSfdt } from '../utils/sfdt-text';
 import { normalizeTextForAnalysis, normalizedOffsetToRawOffset } from '../utils/normalize-text-for-analysis';
 
 /** Convert a suggestion UUID to a Syncfusion-safe bookmark name (letters, digits, underscores only). */
@@ -299,7 +298,7 @@ export class SfdtManipulationService {
   }
 
   /**
-   * Convert a plain-text character offset (matching getTextFromSfdt output) to a
+   * Convert a plain-text character offset (matching sfdt-text.getTextFromSfdt output) to a
    * Syncfusion hierarchical position string ("sectionIndex;bodyIndex;blockIndex;offset").
    */
   plainOffsetToSfdtPosition(sfdtString: string, plainOffset: number): string | null {
@@ -351,13 +350,6 @@ export class SfdtManipulationService {
     } catch {
       return null;
     }
-  }
-
-  /**
-   * Extract plain text from SFDT JSON (delegates to shared util).
-   */
-  getTextFromSfdt(sfdtString: string): string {
-    return getTextFromSfdt(sfdtString);
   }
 
   /** Build minimal SFDT with one paragraph containing the given text (RTL-friendly). */

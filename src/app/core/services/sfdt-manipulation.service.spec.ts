@@ -1,4 +1,5 @@
 import { TestBed } from '@angular/core/testing';
+import { getTextFromSfdt } from '../utils/sfdt-text';
 import { SfdtManipulationService, suggestionBookmarkName, SUGGESTION_BOOKMARK_PREFIX } from './sfdt-manipulation.service';
 
 describe('SfdtManipulationService', () => {
@@ -13,40 +14,11 @@ describe('SfdtManipulationService', () => {
     expect(service).toBeTruthy();
   });
 
-  describe('getTextFromSfdt', () => {
-    it('extracts plain text from standard-key SFDT', () => {
-      const sfdt = JSON.stringify({
-        sections: [{
-          blocks: [
-            { inlines: [{ text: 'Hello ' }, { text: 'world' }] },
-            { inlines: [{ text: '!' }] }
-          ]
-        }]
-      });
-      expect(service.getTextFromSfdt(sfdt)).toBe('Hello world!');
-    });
-
-    it('extracts plain text from optimized-key (v32) SFDT', () => {
-      const sfdt = JSON.stringify({
-        sec: [{
-          b: [
-            { i: [{ tlp: 'שלום ' }, { tlp: 'עולם' }] }
-          ]
-        }]
-      });
-      expect(service.getTextFromSfdt(sfdt)).toBe('שלום עולם');
-    });
-
-    it('returns empty string for invalid JSON', () => {
-      expect(service.getTextFromSfdt('not json')).toBe('');
-    });
-  });
-
   describe('buildMinimalSfdt', () => {
-    it('round-trips through getTextFromSfdt', () => {
+    it('round-trips through getTextFromSfdt (sfdt-text)', () => {
       const text = 'Hello world';
       const sfdt = service.buildMinimalSfdt(text);
-      expect(service.getTextFromSfdt(sfdt)).toBe(text);
+      expect(getTextFromSfdt(sfdt)).toBe(text);
     });
 
     it('sets bidi: true on paragraph and character formats', () => {
