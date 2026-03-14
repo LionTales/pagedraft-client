@@ -18,6 +18,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
           provide: AnalysisService,
           useValue: {
             getTemplates: () => of([]),
+            getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
             getHistory: () => of([]),
             updateSuggestionOutcome: () => of(void 0),
             explainSuggestion: () => of({ explanation: 'because' }),

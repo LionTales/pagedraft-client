@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
+import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnInit, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subscription, forkJoin } from 'rxjs';
 import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto } from '../../core/models/analysis';
@@ -23,7 +23,7 @@ import { AnalysisVersionsTabComponent } from './analysis-versions-tab.component'
   templateUrl: './analysis-panel.component.html',
   styleUrl: './analysis-panel.component.scss'
 })
-export class AnalysisPanelComponent implements OnChanges, OnDestroy {
+export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   @Input() bookId: string | null = null;
   @Input() chapterId: string | null = null;
   @Input() sceneId: string | null = null;
@@ -102,6 +102,8 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   private activeAnalyses: AnalysisResultDto[] = [];
   /** IDs of suggestions currently being explained via the Why? button (empty = none loading). */
   explainingSuggestionIds = new Set<string>();
+  /** Server chunk thresholds for analysis-jobs vs sync; set from API so client matches server. */
+  chunkThresholds: { proofreadChunkTargetWords: number; lineEditChunkTargetWords: number } | null = null;
   /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI. */
   private mapDtoSuggestions(
     result: AnalysisResultDto | null | undefined,
@@ -179,6 +181,13 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       const sugLen = (s.suggested ?? '').length;
       if (origLen > 60 && sugLen <= 5) return false;
       return true;
+    });
+  }
+
+  ngOnInit(): void {
+    this.analysisService.getChunkThresholds().subscribe({
+      next: (t) => { this.chunkThresholds = t; this.cdr.detectChanges(); },
+      error: () => { /* use defaults in orchestration */ }
     });
   }
 
@@ -989,7 +998,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
     const ctx = this.buildRunContext();
     this.prepareForRun();
     this.analysisStatus.emit(
-      this.orchestrationService.emitInitialStatusForRun(ctx.selectedAnalysisType, ctx.documentText, true)
+      this.orchestrationService.emitInitialStatusForRun(ctx, true)
     );
 
     const startStreaming = () => {
@@ -1030,7 +1039,7 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
   }
 
   private buildRunContext(): AnalysisRunContext {
-    return {
+    const base: AnalysisRunContext = {
       bookId: this.bookId!,
       chapterId: this.chapterId!,
       sceneId: this.sceneId,
@@ -1039,6 +1048,11 @@ export class AnalysisPanelComponent implements OnChanges, OnDestroy {
       language: this.language,
       documentText: this.documentText
     };
+    if (this.chunkThresholds) {
+      base.proofreadChunkTargetWords = this.chunkThresholds.proofreadChunkTargetWords;
+      base.lineEditChunkTargetWords = this.chunkThresholds.lineEditChunkTargetWords;
+    }
+    return base;
   }
 
   private handleRunEvent(event: AnalysisRunEvent): void {

@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { AnalysisResultDto, PromptTemplateDto, RunAnalysisRequest, StartAnalysisJobResponse } from '../models/analysis';
+import { AnalysisResultDto, AnalysisChunkThresholdsDto, PromptTemplateDto, RunAnalysisRequest, StartAnalysisJobResponse } from '../models/analysis';
 
 @Injectable({ providedIn: 'root' })
 export class AnalysisService {
@@ -9,6 +9,11 @@ export class AnalysisService {
 
   getTemplates(): Observable<PromptTemplateDto[]> {
     return this.http.get<PromptTemplateDto[]>(`/api/templates`);
+  }
+
+  /** Chunk thresholds from server (Proofread/LineEdit). Use to decide analysis-jobs vs sync /analyze. */
+  getChunkThresholds(): Observable<AnalysisChunkThresholdsDto> {
+    return this.http.get<AnalysisChunkThresholdsDto>('/api/config/analysis-chunk-thresholds');
   }
 
   getHistory(

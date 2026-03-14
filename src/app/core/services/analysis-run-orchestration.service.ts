@@ -21,6 +21,9 @@ export interface AnalysisRunContext {
   customPrompt: string | null;
   language: string;
   documentText: string;
+  /** When to use analysis-jobs (chunked); from server config. Omit to use defaults (500 Proofread, 1500 LineEdit). */
+  proofreadChunkTargetWords?: number;
+  lineEditChunkTargetWords?: number;
 }
 
 /** Discriminated-union events emitted by the orchestration observables. */
@@ -74,29 +77,37 @@ export class AnalysisRunOrchestrationService {
   // Pure / computational helpers
   // ---------------------------------------------------------------------------
 
-  /** Heuristic: use async job flow for long-running, chunked analyses (Proofread and LineEdit). */
-  shouldUseAsyncJob(analysisType: string, documentText: string | null): boolean {
+  /** Use async job flow (analysis-jobs + analysis-progress) when document exceeds server chunk threshold. */
+  shouldUseAsyncJob(ctx: AnalysisRunContext): boolean {
+    const { selectedAnalysisType: analysisType, documentText, proofreadChunkTargetWords, lineEditChunkTargetWords } = ctx;
     if (analysisType !== 'Proofread' && analysisType !== 'LineEdit') return false;
     if (!documentText?.trim()) return false;
     const words = documentText.trim().split(/\s+/).filter(Boolean).length;
-    if (analysisType === 'Proofread') return words > 500;
-    return words > 1500;
+    const proofreadThreshold = proofreadChunkTargetWords ?? 500;
+    const lineEditThreshold = lineEditChunkTargetWords ?? 1500;
+    if (analysisType === 'Proofread') return words > proofreadThreshold;
+    return words > lineEditThreshold;
   }
 
-  /** Compute the initial human-readable status for the editor's global spinner. */
-  emitInitialStatusForRun(
-    analysisType: string,
-    documentText: string | null,
-    isStreaming: boolean = false
-  ): string {
-    const type = analysisType || 'Analysis';
+  /** Compute the initial human-readable status for the editor's global spinner. Uses ctx chunk thresholds when provided. */
+  emitInitialStatusForRun(ctx: AnalysisRunContext, isStreaming: boolean = false): string {
+    const type = ctx.selectedAnalysisType || 'Analysis';
+    const documentText = ctx.documentText;
+    const proofreadChunk = ctx.proofreadChunkTargetWords ?? 500;
+    const lineEditChunk = ctx.lineEditChunkTargetWords ?? 1500;
     if (type === 'Proofread' && documentText?.trim()) {
       const words = documentText.trim().split(/\s+/).filter(Boolean).length;
-      const chunkSize = 500;
-      const chunks = Math.max(1, Math.ceil(words / chunkSize));
+      const chunks = Math.max(1, Math.ceil(words / proofreadChunk));
       if (chunks > 1) {
         const mode = isStreaming ? 'streaming' : 'chunked';
-        return `Proofread ${mode} · about ${chunks} parts (~${chunkSize} words each)`;
+        return `Proofread ${mode} · about ${chunks} parts (~${proofreadChunk} words each)`;
+      }
+    }
+    if (type === 'LineEdit' && documentText?.trim() && !isStreaming) {
+      const words = documentText.trim().split(/\s+/).filter(Boolean).length;
+      const chunks = Math.max(1, Math.ceil(words / lineEditChunk));
+      if (chunks > 1) {
+        return `Line Edit chunked · about ${chunks} parts (~${lineEditChunk} words each)`;
       }
     }
     const label = type === 'Custom' ? 'Custom analysis' : `${type} analysis`;
@@ -107,37 +118,40 @@ export class AnalysisRunOrchestrationService {
   /** Process a progress DTO into a human-readable status and numeric percent. */
   handleProgressUpdate(p: AnalysisProgressDto): ProgressUpdateResult {
     const status = (p.status || '').toLowerCase();
-    const current = p.currentChunk;
     const total = p.totalChunks || 0;
-    let phase: string;
-    if (status === 'failed') {
-      phase = 'failed – see error message';
-    } else if (status === 'canceled') {
-      phase = 'canceled';
-    } else if (total > 0 && current === total) {
-      phase = 'final part…';
-    } else if (total > 0 && current === 1) {
-      phase = 'analyzing first part…';
-    } else if (total > 0 && current > 1) {
-      phase = 'analyzing middle sections…';
-    } else if (status === 'pending') {
-      phase = 'preparing chunks…';
-    } else {
-      phase = 'running…';
-    }
+    // Use completedChunks (monotonic) for the label so it never goes backwards with parallel execution.
+    const completed = typeof p.completedChunks === 'number' && p.completedChunks >= 0
+      ? p.completedChunks
+      : (total > 0 && typeof p.estimatedCompletionPercent === 'number' && p.estimatedCompletionPercent >= 0
+        ? Math.round((p.estimatedCompletionPercent / 100) * total)
+        : 0);
 
     const rawType = (p.analysisType || '').trim() || 'Proofread';
     const label = rawType === 'LineEdit' ? 'Line Edit' : rawType;
-    const prefix = total > 0 && current > 0
-      ? `${label} ${current}/${total}`
-      : total > 0
-        ? `${label} 0/${total}`
-        : label;
-    const message = `${prefix} – ${phase}`;
+
+    let message: string;
+    if (status === 'failed') {
+      message = `${label} · failed – see error message`;
+    } else if (status === 'canceled') {
+      message = `${label} · canceled`;
+    } else if (total > 0 && completed > 0) {
+      message = `${label} · ${completed} of ${total} completed`;
+    } else if (total > 0) {
+      message = `${label} · analyzing…`;
+    } else if (status === 'pending') {
+      message = `${label} · preparing chunks…`;
+    } else {
+      message = `${label} · running…`;
+    }
 
     let progressPercent: number | null = null;
-    if (typeof p.estimatedCompletionPercent === 'number' && p.estimatedCompletionPercent >= 0) {
+    if (status === 'succeeded') {
+      progressPercent = 100;
+    } else if (typeof p.estimatedCompletionPercent === 'number' && p.estimatedCompletionPercent >= 0) {
       progressPercent = Math.max(0, Math.min(100, p.estimatedCompletionPercent));
+    } else if (total > 0 && completed >= 0) {
+      // Fallback: derive from completedChunks/totalChunks so progress bar updates during run
+      progressPercent = Math.max(0, Math.min(100, Math.round((100 * completed) / total)));
     }
 
     return { status, message, progressPercent };
@@ -185,9 +199,7 @@ export class AnalysisRunOrchestrationService {
     saveBeforeRun?: () => Promise<void>
   ): Observable<AnalysisRunEvent> {
     this.stopProgressPolling();
-    const initialStatus = this.emitInitialStatusForRun(
-      ctx.selectedAnalysisType, ctx.documentText
-    );
+    const initialStatus = this.emitInitialStatusForRun(ctx);
     const run$: Observable<AnalysisRunEvent> = concat(
       of<AnalysisRunEvent>({ kind: 'status', message: initialStatus }),
       defer(() => this.doRunAnalysis(ctx))
@@ -198,9 +210,9 @@ export class AnalysisRunOrchestrationService {
     return run$;
   }
 
-  /** Route to sync or async-job path based on heuristic. */
+  /** Route to sync or async-job path based on server chunk thresholds in ctx. */
   doRunAnalysis(ctx: AnalysisRunContext): Observable<AnalysisRunEvent> {
-    if (this.shouldUseAsyncJob(ctx.selectedAnalysisType, ctx.documentText)) {
+    if (this.shouldUseAsyncJob(ctx)) {
       return this.doRunAnalysisAsyncJob(ctx);
     }
     return this.doRunAnalysisSync(ctx);
@@ -243,8 +255,10 @@ export class AnalysisRunOrchestrationService {
           if (!res?.jobId) {
             return this.doRunAnalysisSync(ctx);
           }
+          const label = ctx.selectedAnalysisType === 'LineEdit' ? 'Line Edit' : (ctx.selectedAnalysisType || 'Analysis');
           return concat(
             of<AnalysisRunEvent>({ kind: 'job-started', jobId: res.jobId }),
+            of<AnalysisRunEvent>({ kind: 'status', message: `${label} · job started, polling analysis-progress…` }),
             this.startProgressPollingForJob(
               ctx.bookId, ctx.chapterId, res.jobId, ctx.selectedAnalysisType
             )
