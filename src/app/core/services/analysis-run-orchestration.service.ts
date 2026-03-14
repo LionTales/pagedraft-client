@@ -305,7 +305,7 @@ export class AnalysisRunOrchestrationService {
         map((p): AnalysisRunEvent => {
           const update = this.handleProgressUpdate(p);
           if (update.status === 'succeeded' || update.status === 'failed' || update.status === 'canceled') {
-            this.stopProgressPolling();
+            stop$.next();
           }
           return {
             kind: 'progress',
@@ -315,7 +315,7 @@ export class AnalysisRunOrchestrationService {
           };
         }),
         catchError((): Observable<AnalysisRunEvent> => {
-          this.stopProgressPolling();
+          stop$.next();
           const label = type === 'Custom' ? 'Custom analysis' : `${type} analysis`;
           return of<AnalysisRunEvent>({ kind: 'status', message: `Running ${label}…` });
         })
@@ -348,14 +348,14 @@ export class AnalysisRunOrchestrationService {
           };
 
           if (update.status === 'succeeded') {
-            this.stopProgressPolling();
+            stop$.next();
             return concat(
               of(progressEvent),
               this.loadFinalResultForJob(bookId, chapterId, jobId)
             );
           }
           if (update.status === 'failed' || update.status === 'canceled') {
-            this.stopProgressPolling();
+            stop$.next();
             if (update.status === 'failed') {
               const errorEvent: AnalysisRunEvent = { kind: 'error', message: `${type} failed – see error message.` };
               return of(progressEvent, errorEvent);
@@ -365,7 +365,7 @@ export class AnalysisRunOrchestrationService {
           return of(progressEvent);
         }),
         catchError((): Observable<AnalysisRunEvent> => {
-          this.stopProgressPolling();
+          stop$.next();
           const label = type === 'Custom' ? 'Custom analysis' : `${type} analysis`;
           return of<AnalysisRunEvent>({ kind: 'status', message: `Running ${label}…` });
         })
