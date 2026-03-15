@@ -549,14 +549,28 @@ export class EditorPageComponent implements OnInit, OnDestroy {
           currentText
         );
         if (relocated.stale) {
-          console.warn(
-            'Suggestion skipped: original text no longer found in current document.',
-            'Original:', event.originalText
-          );
-          return;
+          // Fallback for ad-hoc corrections (e.g. Redo) that only provide text
+          // but no durable offsets/context: when relocateOne cannot uniquely
+          // anchor the text (e.g. multiple identical occurrences without
+          // context), fall back to a simple indexOf search so the correction
+          // still applies instead of silently failing.
+          const normalizedOriginal = normalizeTextForAnalysis(event.originalText);
+          const idx = normalizedOriginal && currentText
+            ? currentText.indexOf(normalizedOriginal)
+            : -1;
+          if (idx === -1) {
+            console.warn(
+              'Suggestion skipped: original text no longer found in current document.',
+              'Original:', event.originalText
+            );
+            return;
+          }
+          startOffset = idx;
+          endOffset = idx + normalizedOriginal.length;
+        } else {
+          startOffset = relocated.relocatedStart;
+          endOffset = relocated.relocatedEnd;
         }
-        startOffset = relocated.relocatedStart;
-        endOffset = relocated.relocatedEnd;
       }
 
       let newSfdt: string;

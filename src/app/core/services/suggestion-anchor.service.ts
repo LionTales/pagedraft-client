@@ -38,7 +38,12 @@ export class SuggestionAnchorService {
 
     if (matches.length > 1 && (suggestion.contextBefore || suggestion.contextAfter)) {
       const best = this.pickBestMatch(matches, needle.length, currentText, suggestion);
-      return { ...suggestion, relocatedStart: best, relocatedEnd: best + needle.length, stale: false };
+      if (best != null) {
+        return { ...suggestion, relocatedStart: best, relocatedEnd: best + needle.length, stale: false };
+      }
+      // Multiple occurrences exist but none match the provided context; treat as
+      // stale instead of anchoring to an arbitrary occurrence.
+      return { ...suggestion, relocatedStart: start, relocatedEnd: end, stale: true };
     }
 
     return { ...suggestion, relocatedStart: start, relocatedEnd: end, stale: true };
@@ -59,9 +64,9 @@ export class SuggestionAnchorService {
     needleLen: number,
     currentText: string,
     suggestion: AnalysisSuggestion
-  ): number {
+  ): number | null {
     let bestPos = positions[0];
-    let bestScore = -1;
+    let bestScore = -Infinity;
 
     for (const pos of positions) {
       let score = 0;
@@ -87,6 +92,14 @@ export class SuggestionAnchorService {
         bestScore = score;
         bestPos = pos;
       }
+    }
+
+    // If none of the occurrences matched any context (score never rose above 0),
+    // treat the suggestion as ambiguous instead of anchoring it to an arbitrary
+    // position. This is consistent with the behavior when there is no context
+    // at all (multiple matches without context → stale).
+    if (bestScore <= 0) {
+      return null;
     }
 
     return bestPos;
