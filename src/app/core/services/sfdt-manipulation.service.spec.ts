@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { getTextFromSfdt } from '../utils/sfdt-text';
-import { SfdtManipulationService, suggestionBookmarkName, SUGGESTION_BOOKMARK_PREFIX } from './sfdt-manipulation.service';
+import { SfdtManipulationService, suggestionBookmarkName, SUGGESTION_BOOKMARK_PREFIX, SCROLL_TARGET_BOOKMARK } from './sfdt-manipulation.service';
 
 describe('SfdtManipulationService', () => {
   let service: SfdtManipulationService;
@@ -61,6 +61,25 @@ describe('SfdtManipulationService', () => {
       expect(inlines.length).toBe(1);
       expect(inlines[0].text).toBe('hello');
       expect(inlines[0].characterFormat.highlightColor).toBeUndefined();
+      expect(inlines[0].characterFormat.bold).toBeTrue();
+    });
+
+    it('strips _scroll_target bookmark inlines alongside suggestion bookmarks', () => {
+      const sfdt = JSON.stringify({
+        sections: [{
+          blocks: [{
+            inlines: [
+              { bookmarkType: 0, name: SCROLL_TARGET_BOOKMARK },
+              { text: 'world', characterFormat: { bold: true } },
+              { bookmarkType: 1, name: SCROLL_TARGET_BOOKMARK },
+            ]
+          }]
+        }]
+      });
+      const stripped = JSON.parse(service.stripHighlightFromSfdt(sfdt));
+      const inlines = stripped.sections[0].blocks[0].inlines;
+      expect(inlines.length).toBe(1);
+      expect(inlines[0].text).toBe('world');
       expect(inlines[0].characterFormat.bold).toBeTrue();
     });
   });

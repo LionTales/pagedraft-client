@@ -8,8 +8,9 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="suggestion-card" (click)="onCardClick($event)">
+    <div class="suggestion-card" [class.stale]="stale" (click)="onCardClick($event)">
       <div class="suggestion-fields">
+        <span class="stale-badge" *ngIf="stale">Text was edited</span>
         <span
           class="suggestion-category"
           [ngClass]="'suggestion-category category-' + (suggestion.category || '').toLowerCase()"
@@ -58,14 +59,15 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
         </span>
       </div>
       <div class="suggestion-actions" *ngIf="!readOnly">
-        <button type="button" class="btn-accept" *ngIf="hasChange" (click)="accept.emit(suggestion); $event.stopPropagation()">Accept</button>
+        <button type="button" class="btn-accept" *ngIf="hasChange" [disabled]="stale" (click)="accept.emit(suggestion); $event.stopPropagation()">Accept</button>
         <button type="button" class="btn-dismiss" (click)="dismiss.emit(suggestion); $event.stopPropagation()">{{ hasChange ? 'Dismiss' : 'OK' }}</button>
         <button
           type="button"
           class="btn-show"
           [class.btn-show-approx]="!hasOffsets"
           *ngIf="hasChange && suggestion.original"
-          [title]="hasOffsets ? '' : 'Approximate location (search-based)'"
+          [disabled]="stale"
+          [title]="stale ? 'Text was edited — location unavailable' : (hasOffsets ? '' : 'Approximate location (search-based)')"
           (click)="showInDocument.emit(suggestion); $event.stopPropagation()">
           Show{{ hasOffsets ? '' : ' ≈' }}
         </button>
@@ -271,6 +273,25 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
       background: #e8f4fd;
       color: #0d6efd;
     }
+    .suggestion-card.stale {
+      opacity: 0.5;
+    }
+    .stale-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      padding: 0.1rem 0.35rem;
+      border-radius: 3px;
+      background: #f0ebe0;
+      color: #8a7340;
+      margin-bottom: 0.15rem;
+      width: fit-content;
+    }
+    .btn-accept:disabled, .btn-show:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
   `]
 })
 export class SuggestionCardComponent implements OnChanges {
@@ -281,6 +302,8 @@ export class SuggestionCardComponent implements OnChanges {
   @Input() status?: 'accepted' | 'dismissed' | 'reverted' | 'pending';
   /** True while the parent is fetching an explanation for this suggestion from the API. */
   @Input() loadingExplanation = false;
+  /** True when the suggestion's original text can no longer be found in the document after user edits. */
+  @Input() stale = false;
   @Output() accept = new EventEmitter<AnalysisSuggestion>();
   @Output() dismiss = new EventEmitter<AnalysisSuggestion>();
   @Output() showInDocument = new EventEmitter<AnalysisSuggestion>();
@@ -303,7 +326,7 @@ export class SuggestionCardComponent implements OnChanges {
   }
 
   onFieldsClick(): void {
-    if (!this.readOnly && this.hasChange && this.suggestion.original) {
+    if (!this.readOnly && !this.stale && this.hasChange && this.suggestion.original) {
       this.showInDocument.emit(this.suggestion);
     }
   }

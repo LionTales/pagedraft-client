@@ -7,6 +7,7 @@
       <app-suggestion-card
         *ngFor="let s of proofreadSuggestions"
         [suggestion]="s"
+        [stale]="s.stale || !!(s.id && staleSuggestionIds.has(s.id))"
         [loadingExplanation]="!!(s.id && explainingSuggestionIds.has(s.id))"
         (accept)="proofreadAccept.emit(s)"
         (dismiss)="proofreadDismiss.emit(s)"
@@ -43,6 +44,7 @@
         <app-suggestion-card
           *ngFor="let s of filteredLineEditRunSuggestions"
           [suggestion]="s"
+          [stale]="s.stale || !!(s.id && staleSuggestionIds.has(s.id))"
           [loadingExplanation]="!!(s.id && explainingSuggestionIds.has(s.id))"
           (accept)="onLineEditAcceptClick(s)"
           (dismiss)="onLineEditDismissClick(s)"

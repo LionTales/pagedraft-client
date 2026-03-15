@@ -7,6 +7,7 @@ import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
+import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
 import { ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
 import { proofreadDiff } from '../../core/utils/proofread-diff';
@@ -45,6 +46,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   @Output() applyCorrection = new EventEmitter<ApplyCorrectionEvent>();
   @Output() showInDocument = new EventEmitter<{ suggestionId?: string; startOffset?: number; endOffset?: number; originalText?: string }>();
   @Output() suggestionRangesChange = new EventEmitter<{ suggestionId?: string; startOffset: number; endOffset: number }[]>();
+  /** Emits a scroll target so the editor stays on this word after the next highlight update (e.g. after dismiss/accept). */
+  @Output() scrollTargetChange = new EventEmitter<{ startOffset: number; endOffset: number; originalText?: string }>();
   @Output() revertToVersion = new EventEmitter<string>();
 
   readonly analysisTypes = ANALYSIS_TYPES;
@@ -100,20 +103,26 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private hasRestoredLineEditForCurrentContext = false;
   /** Cached list of Active analyses (by status) for the current chapter/scene, used for re-analysis warnings. */
   private activeAnalyses: AnalysisResultDto[] = [];
+  /** True when documentText has changed since the last relocation pass; cleared after relocateAll runs. */
+  private offsetsDirty = false;
+  /** Snapshot of documentText at the time analysis results were loaded or last relocated; used to detect edits. */
+  private lastAnalysisDocumentText = '';
   /** IDs of suggestions currently being explained via the Why? button (empty = none loading). */
   explainingSuggestionIds = new Set<string>();
+  /** IDs of suggestions whose originalText can no longer be found in the document (stale after user edit). */
+  staleSuggestionIds = new Set<string>();
   /** Server chunk thresholds for analysis-jobs vs sync; set from API so client matches server. */
   chunkThresholds: { proofreadChunkTargetWords: number; lineEditChunkTargetWords: number } | null = null;
-  /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI. */
+  /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI.
+   *  Offset relocation is handled separately by SuggestionAnchorService in emitSuggestionRanges / onShowInDocument. */
   private mapDtoSuggestions(
     result: AnalysisResultDto | null | undefined,
-    adjustOffsets: boolean = true,
     applyHeuristicFilter: boolean = true
   ): AnalysisSuggestion[] {
     const list: AnalysisSuggestionDto[] = (result?.suggestions ?? [])
       .slice()
       .sort((a, b) => a.orderIndex - b.orderIndex);
-    const mapped = list.map(dto => ({
+    const mapped: AnalysisSuggestion[] = list.map(dto => ({
       id: dto.id,
       startOffset: dto.startOffset,
       endOffset: dto.endOffset,
@@ -122,55 +131,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       reason: dto.reason ?? undefined,
       category: dto.category ?? undefined,
       explanation: dto.explanation ?? undefined,
-      outcome: dto.outcome ?? undefined
+      outcome: dto.outcome ?? undefined,
+      contextBefore: dto.contextBefore ?? undefined,
+      contextAfter: dto.contextAfter ?? undefined
     }));
-
-    // Optionally validate and correct offsets: the server's normalized text may differ slightly
-    // from the client's (Syncfusion GetText vs manual SFDT walk). If the slice at the
-    // reported offsets doesn't match originalText, search nearby and fix. This is only safe
-    // to apply for the current document; for historical results we keep server offsets as-is.
-    if (adjustOffsets) {
-      try {
-        if (this.documentText && mapped.length) {
-          const doc = this.documentText;
-          const searchRadius = 30;
-          for (const s of mapped) {
-            if (s.startOffset == null || s.endOffset == null || !s.original) continue;
-            const normalizedOriginal = normalizeTextForAnalysis(s.original || '');
-            if (!normalizedOriginal) continue;
-            const slice = doc.slice(s.startOffset, s.endOffset);
-            if (slice === normalizedOriginal) continue;
-            const searchStart = Math.max(0, s.startOffset - searchRadius);
-            const searchEnd = Math.min(doc.length, s.endOffset + searchRadius);
-            const region = doc.slice(searchStart, searchEnd);
-
-            // Find the occurrence of s.original within the search window whose
-            // absolute position is closest to the original startOffset. This
-            // avoids snapping to the first repeated word in the region.
-            let bestRelativeIdx = -1;
-            let bestDistance = Number.MAX_SAFE_INTEGER;
-            let scanIdx = region.indexOf(normalizedOriginal);
-            while (scanIdx >= 0) {
-              const absPos = searchStart + scanIdx;
-              const distance = Math.abs(absPos - s.startOffset);
-              if (distance < bestDistance) {
-                bestDistance = distance;
-                bestRelativeIdx = scanIdx;
-                if (distance === 0) break;
-              }
-              scanIdx = region.indexOf(normalizedOriginal, scanIdx + 1);
-            }
-
-            if (bestRelativeIdx >= 0) {
-              s.startOffset = searchStart + bestRelativeIdx;
-              s.endOffset = s.startOffset + normalizedOriginal.length;
-            }
-          }
-        }
-      } catch {
-        // best-effort correction only
-      }
-    }
 
     if (!applyHeuristicFilter) {
       return mapped;
@@ -202,7 +166,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     private cdr: ChangeDetectorRef,
     private orchestrationService: AnalysisRunOrchestrationService,
     private lineEditParser: LineEditParserService,
-    private suggestionKeyService: SuggestionKeyService
+    private suggestionKeyService: SuggestionKeyService,
+    private suggestionAnchorService: SuggestionAnchorService
   ) {}
 
 
@@ -440,6 +405,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   onLineEditAccept(suggestion: AnalysisSuggestion, current: AnalysisResultDto): void {
+    if (suggestion.stale || (suggestion.id && this.staleSuggestionIds.has(suggestion.id))) return;
     const startOffset = suggestion.startOffset;
     const endOffset = suggestion.endOffset;
     if (startOffset != null && endOffset != null) {
@@ -491,11 +457,29 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Dismissed')
         .subscribe({ error: () => {} });
     }
+    if (suggestion.startOffset != null && suggestion.endOffset != null) {
+      this.scrollTargetChange.emit({ startOffset: suggestion.startOffset, endOffset: suggestion.endOffset, originalText: suggestion.original || undefined });
+    }
     this.emitSuggestionRanges();
   }
 
   onShowInDocument(s: AnalysisSuggestion): void {
-    if (s.startOffset != null && s.endOffset != null) {
+    if (this.documentText && s.original) {
+      const relocated = this.suggestionAnchorService.relocateOne(s, this.documentText);
+      s.startOffset = relocated.relocatedStart;
+      s.endOffset = relocated.relocatedEnd;
+      s.stale = relocated.stale;
+      if (s.id) {
+        if (relocated.stale) {
+          this.staleSuggestionIds = new Set([...this.staleSuggestionIds, s.id]);
+        } else {
+          const updated = new Set(this.staleSuggestionIds);
+          updated.delete(s.id);
+          this.staleSuggestionIds = updated;
+        }
+      }
+    }
+    if (s.startOffset != null && s.endOffset != null && !s.stale) {
       this.showInDocument.emit({
         suggestionId: s.id,
         startOffset: s.startOffset,
@@ -525,6 +509,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   onProofreadAccept(s: AnalysisSuggestion): void {
+    if (s.stale || (s.id && this.staleSuggestionIds.has(s.id))) return;
     if (s.startOffset != null && s.endOffset != null) {
       this.applyCorrection.emit({
         text: s.suggested,
@@ -571,6 +556,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           .updateSuggestionOutcome(this.bookId, this.chapterId, s.id, 'Dismissed')
           .subscribe({ error: () => {} });
       }
+    }
+    if (s.startOffset != null && s.endOffset != null) {
+      this.scrollTargetChange.emit({ startOffset: s.startOffset, endOffset: s.endOffset, originalText: s.original || undefined });
     }
     this.emitSuggestionRanges();
     this.cdr.detectChanges();
@@ -683,8 +671,64 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.suggestionRangesChange.emit([]);
       return;
     }
+
+    if (this.offsetsDirty && this.documentText) {
+      const relocated = this.suggestionAnchorService.relocateAll(source, this.documentText);
+      const newStale = new Set<string>();
+      for (let i = 0; i < source.length; i++) {
+        source[i].startOffset = relocated[i].relocatedStart;
+        source[i].endOffset = relocated[i].relocatedEnd;
+        source[i].stale = relocated[i].stale;
+        if (relocated[i].stale && source[i].id) {
+          newStale.add(source[i].id!);
+        }
+      }
+
+      const stalePending = source.filter(s => {
+        if (!s.stale || !s.id) return false;
+        const outcome = (s.outcome || '').toLowerCase();
+        return !outcome || outcome === 'pending';
+      });
+      if (stalePending.length > 0) {
+        const dismissedIds = new Set<string>();
+        for (const s of stalePending) {
+          dismissedIds.add(s.id!);
+          this.applyOutcomeToSuggestionDtos(s.id!, 'Dismissed');
+          if (this.bookId && this.chapterId) {
+            this.analysisService
+              .updateSuggestionOutcome(this.bookId, this.chapterId, s.id!, 'Dismissed')
+              .subscribe({ error: () => {} });
+          }
+          if (this.latestResult && type === 'Proofread') {
+            const key = this.suggestionKeyService.proofreadSuggestionKey(this.latestResult, s);
+            this.dismissedProofreadHistoryKeys = new Set([...this.dismissedProofreadHistoryKeys, key]);
+            this.suggestionKeyService.trackRecentOutcomeKey(key);
+          } else if (this.latestResult && type === 'LineEdit') {
+            const key = this.suggestionKeyService.lineEditSuggestionKey(this.latestResult, {
+              original: s.original,
+              suggested: s.suggested
+            });
+            this.dismissedLineEditKeys = new Set([...this.dismissedLineEditKeys, key]);
+            this.suggestionKeyService.trackRecentOutcomeKey(key);
+          }
+          newStale.delete(s.id!);
+        }
+        if (type === 'Proofread') {
+          this.proofreadSuggestions = this.proofreadSuggestions.filter(s => !s.id || !dismissedIds.has(s.id));
+          source = this.proofreadSuggestions;
+        } else if (type === 'LineEdit') {
+          this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(s => !s.id || !dismissedIds.has(s.id));
+          source = this.lineEditRunSuggestions;
+        }
+      }
+
+      this.staleSuggestionIds = newStale;
+      this.offsetsDirty = false;
+      this.lastAnalysisDocumentText = this.documentText;
+    }
+
     const ranges = source
-      .filter(s => s.startOffset != null && s.endOffset != null)
+      .filter(s => !s.stale && s.startOffset != null && s.endOffset != null)
       .map(s => ({
         suggestionId: s.id,
         startOffset: s.startOffset!,
@@ -716,7 +760,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.streamingText = '';
       this.hasRestoredProofreadForCurrentContext = false;
       this.hasRestoredLineEditForCurrentContext = false;
+      this.offsetsDirty = false;
+      this.lastAnalysisDocumentText = '';
       this.explainingSuggestionIds.clear();
+      this.staleSuggestionIds = new Set();
       // Clear versions so we don't show versions from another chapter/scene.
       this.versions = [];
       // Reset history filter so we load all types for the new chapter and can restore Proofread state
@@ -734,6 +781,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.loadTemplates();
     }
     if (changes['documentText']) {
+      if (this.lastAnalysisDocumentText && this.documentText !== this.lastAnalysisDocumentText) {
+        this.offsetsDirty = true;
+      }
       // Only restore when we have no suggestions yet and document text is for the current chapter/scene,
       // and we haven't already restored for this context (avoids re-diffing on every edit).
       if (
@@ -802,6 +852,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       return !this.acceptedProofreadHistoryKeys.has(key) && !this.dismissedProofreadHistoryKeys.has(key);
     });
     this.hasRestoredProofreadForCurrentContext = true;
+    this.offsetsDirty = true;
     this.emitSuggestionRanges();
   }
 
@@ -834,6 +885,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       return !this.acceptedLineEditKeys.has(key) && !this.dismissedLineEditKeys.has(key);
     });
     this.hasRestoredLineEditForCurrentContext = true;
+    this.offsetsDirty = true;
     this.emitSuggestionRanges();
   }
 
@@ -1029,6 +1081,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
+    this.staleSuggestionIds = new Set();
     this.hasRestoredLineEditForCurrentContext = false;
     this.emitSuggestionRanges();
     this.analysisStarted.emit();
@@ -1123,6 +1176,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.proofreadSuggestions = proofreadDiff(this.documentText, this.streamingText);
       this.proofreadSuggestionsUnreliable = false;
       this.hasRestoredProofreadForCurrentContext = true;
+      this.offsetsDirty = true;
       this.emitSuggestionRanges();
       this.autoShowFirstSuggestion();
     }
@@ -1151,7 +1205,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       let all: AnalysisSuggestion[] = [];
       let mapped = this.mapDtoSuggestions(result);
       if (!mapped.length && (result.suggestions?.length ?? 0) > 0) {
-        mapped = this.mapDtoSuggestions(result, true, false);
+        mapped = this.mapDtoSuggestions(result, false);
       }
       if (mapped.length) {
         all = mapped;
@@ -1161,6 +1215,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.proofreadSuggestions = all;
       this.proofreadSuggestionsUnreliable = false;
       this.hasRestoredProofreadForCurrentContext = true;
+      this.offsetsDirty = true;
       this.emitSuggestionRanges();
       this.autoShowFirstSuggestion();
     } else if (type === 'LineEdit') {
@@ -1179,7 +1234,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       const analysisType = analysis.analysisType || analysis.type;
       if (analysisType !== type) continue;
       // For pending-count calculations, keep all suggestions (no heuristic length-based filtering).
-      const suggestions = this.mapDtoSuggestions(analysis, false, false);
+      const suggestions = this.mapDtoSuggestions(analysis, false);
       total += suggestions.filter(s => {
         const outcome = (s.outcome || '').toLowerCase();
         return !outcome || outcome === 'pending';

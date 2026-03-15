@@ -10,6 +10,9 @@ export function suggestionBookmarkName(suggestionId: string): string {
 /** Prefix used by suggestionBookmarkName — kept in sync for cleanup matching. */
 export const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
 
+/** Temporary bookmark injected for post-accept/dismiss scroll targeting. */
+export const SCROLL_TARGET_BOOKMARK = '_scroll_target';
+
 /**
  * Stateless service for all SFDT (Syncfusion Document Text) JSON parsing and
  * manipulation: highlight application/stripping, plain-text extraction, offset
@@ -135,6 +138,93 @@ export class SfdtManipulationService {
   }
 
   /**
+   * Insert a single bookmark at the given plain-text (normalized) range.
+   * Used so the editor can select that range by bookmark after accept/dismiss
+   * instead of falling back to first-occurrence search.
+   */
+  addBookmarkAtRange(
+    sfdtString: string,
+    startOffset: number,
+    endOffset: number,
+    bookmarkName: string
+  ): string {
+    if (startOffset >= endOffset) return sfdtString;
+    const ranges = [{ startOffset, endOffset }];
+    try {
+      const doc = JSON.parse(sfdtString) as Record<string, unknown>;
+      const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
+      let running = 0;
+
+      for (const section of sections) {
+        const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
+        for (const block of blocks) {
+          const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
+          const newInlines: Record<string, unknown>[] = [];
+          const inlinesKey = block['inlines'] != null ? 'inlines' : 'i';
+          const textKey = this.detectTextKey(inlines);
+          const cfKey = this.detectCharacterFormatKey(inlines);
+
+          for (const inline of inlines) {
+            const text = inline['text'] ?? inline['tlp'];
+            if (typeof text !== 'string') {
+              newInlines.push({ ...inline });
+              continue;
+            }
+            const normLen = normalizeTextForAnalysis(text).length;
+            const blockStart = running;
+            const blockEnd = running + normLen;
+            running = blockEnd;
+
+            const spans = this.getHighlightSpansInRange(blockStart, blockEnd, ranges);
+            if (spans.length === 0) {
+              // Preserve inline as-is (including any existing highlight from other suggestions).
+              newInlines.push({ ...inline });
+              continue;
+            }
+
+            // Preserve existing highlight when splitting for bookmark so we don't strip
+            // Yellow from overlapping suggestion ranges (addBookmarkAtRange runs after applyHighlightRangesToSfdt).
+            const preserveHighlight = this.inlineHasHighlight(inline, cfKey);
+            let posRaw = 0;
+            for (const span of spans) {
+              const spanStart = span.start;
+              const spanEnd = span.end;
+              const isFirstPart = spanStart === span.fullStart;
+              const isLastPart = spanEnd === span.fullEnd;
+              const startNormInInline = spanStart - blockStart;
+              const endNormInInline = spanEnd - blockStart;
+              const startRaw = normalizedOffsetToRawOffset(text, startNormInInline);
+              const endRaw = normalizedOffsetToRawOffset(text, endNormInInline);
+              if (startRaw > posRaw) {
+                newInlines.push(this.createInlineForHighlight(text.slice(posRaw, startRaw), inline, preserveHighlight, textKey, cfKey));
+              }
+              const startOutput = Math.max(startRaw, posRaw);
+              if (startOutput < endRaw) {
+                if (isFirstPart) {
+                  newInlines.push(this.createBookmarkInline(inline, bookmarkName, true, cfKey));
+                }
+                newInlines.push(this.createInlineForHighlight(text.slice(startOutput, endRaw), inline, preserveHighlight, textKey, cfKey));
+                if (isLastPart) {
+                  newInlines.push(this.createBookmarkInline(inline, bookmarkName, false, cfKey));
+                }
+              }
+              posRaw = Math.max(posRaw, endRaw);
+            }
+            if (posRaw < text.length) {
+              newInlines.push(this.createInlineForHighlight(text.slice(posRaw), inline, preserveHighlight, textKey, cfKey));
+            }
+          }
+          block[inlinesKey] = newInlines;
+        }
+      }
+
+      return JSON.stringify(doc);
+    } catch {
+      return sfdtString;
+    }
+  }
+
+  /**
    * Remove all highlight formatting from SFDT JSON so saved document does not
    * persist suggestion highlights. Handles both standard keys and Syncfusion v32
    * optimized keys.
@@ -163,11 +253,11 @@ export class SfdtManipulationService {
             }
             const name = inline['name'] ?? inline['n'];
             const bookmarkType = inline['bookmarkType'] ?? inline['bkt'];
-            const isSuggestionBookmark =
+            const isTemporaryBookmark =
               typeof name === 'string' &&
-              (name.startsWith(SUGGESTION_BOOKMARK_PREFIX) || name.startsWith('suggestion-')) &&
+              (name.startsWith(SUGGESTION_BOOKMARK_PREFIX) || name.startsWith('suggestion-') || name === SCROLL_TARGET_BOOKMARK) &&
               (bookmarkType === 0 || bookmarkType === 1);
-            if (!isSuggestionBookmark) {
+            if (!isTemporaryBookmark) {
               cleaned.push(inline);
             }
           }
@@ -406,6 +496,14 @@ export class SfdtManipulationService {
       if (inline['characterFormat'] !== undefined) return 'characterFormat';
     }
     return 'characterFormat';
+  }
+
+  /** True if the inline has highlight (hc/highlightColor). Used to preserve highlight when splitting in addBookmarkAtRange. */
+  private inlineHasHighlight(inline: Record<string, unknown>, cfKey: string): boolean {
+    const cf = inline[cfKey] as Record<string, unknown> | undefined;
+    if (!cf || typeof cf !== 'object') return false;
+    const hc = cf['hc'] ?? cf['highlightColor'];
+    return typeof hc === 'string' && hc.length > 0;
   }
 
   private inlineWithoutHighlight(inline: Record<string, unknown>, cfKey: string): Record<string, unknown> {
