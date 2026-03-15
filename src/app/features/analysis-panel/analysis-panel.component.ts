@@ -719,7 +719,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           this.lineEditRunSuggestions = this.lineEditRunSuggestions.filter(s => !s.id || !dismissedIds.has(s.id));
           source = this.lineEditRunSuggestions;
         }
-        console.log(`[AnalysisPanel] Auto-dismissed ${stalePending.length} stale suggestion(s) — text was edited`);
       }
 
       this.staleSuggestionIds = newStale;
@@ -1176,6 +1175,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.proofreadSuggestions = proofreadDiff(this.documentText, this.streamingText);
       this.proofreadSuggestionsUnreliable = false;
       this.hasRestoredProofreadForCurrentContext = true;
+      this.offsetsDirty = true;
       this.emitSuggestionRanges();
       this.autoShowFirstSuggestion();
     }
@@ -1214,6 +1214,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.proofreadSuggestions = all;
       this.proofreadSuggestionsUnreliable = false;
       this.hasRestoredProofreadForCurrentContext = true;
+      this.offsetsDirty = true;
       this.emitSuggestionRanges();
       this.autoShowFirstSuggestion();
     } else if (type === 'LineEdit') {
