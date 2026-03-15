@@ -405,6 +405,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   onLineEditAccept(suggestion: AnalysisSuggestion, current: AnalysisResultDto): void {
+    if (suggestion.stale || (suggestion.id && this.staleSuggestionIds.has(suggestion.id))) return;
     const startOffset = suggestion.startOffset;
     const endOffset = suggestion.endOffset;
     if (startOffset != null && endOffset != null) {

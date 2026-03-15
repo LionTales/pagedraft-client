@@ -182,6 +182,9 @@ export class SfdtManipulationService {
               continue;
             }
 
+            // Preserve existing highlight when splitting for bookmark so we don't strip
+            // Yellow from overlapping suggestion ranges (addBookmarkAtRange runs after applyHighlightRangesToSfdt).
+            const preserveHighlight = this.inlineHasHighlight(inline, cfKey);
             let posRaw = 0;
             for (const span of spans) {
               const spanStart = span.start;
@@ -191,18 +194,18 @@ export class SfdtManipulationService {
               const startRaw = normalizedOffsetToRawOffset(text, startNormInInline);
               const endRaw = normalizedOffsetToRawOffset(text, endNormInInline);
               if (startRaw > posRaw) {
-                newInlines.push(this.createInlineForHighlight(text.slice(posRaw, startRaw), inline, false, textKey, cfKey));
+                newInlines.push(this.createInlineForHighlight(text.slice(posRaw, startRaw), inline, preserveHighlight, textKey, cfKey));
               }
               const startOutput = Math.max(startRaw, posRaw);
               if (startOutput < endRaw) {
                 newInlines.push(this.createBookmarkInline(inline, bookmarkName, true, cfKey));
-                newInlines.push(this.createInlineForHighlight(text.slice(startOutput, endRaw), inline, false, textKey, cfKey));
+                newInlines.push(this.createInlineForHighlight(text.slice(startOutput, endRaw), inline, preserveHighlight, textKey, cfKey));
                 newInlines.push(this.createBookmarkInline(inline, bookmarkName, false, cfKey));
               }
               posRaw = Math.max(posRaw, endRaw);
             }
             if (posRaw < text.length) {
-              newInlines.push(this.createInlineForHighlight(text.slice(posRaw), inline, false, textKey, cfKey));
+              newInlines.push(this.createInlineForHighlight(text.slice(posRaw), inline, preserveHighlight, textKey, cfKey));
             }
           }
           block[inlinesKey] = newInlines;
@@ -487,6 +490,14 @@ export class SfdtManipulationService {
       if (inline['characterFormat'] !== undefined) return 'characterFormat';
     }
     return 'characterFormat';
+  }
+
+  /** True if the inline has highlight (hc/highlightColor). Used to preserve highlight when splitting in addBookmarkAtRange. */
+  private inlineHasHighlight(inline: Record<string, unknown>, cfKey: string): boolean {
+    const cf = inline[cfKey] as Record<string, unknown> | undefined;
+    if (!cf || typeof cf !== 'object') return false;
+    const hc = cf['hc'] ?? cf['highlightColor'];
+    return typeof hc === 'string' && hc.length > 0;
   }
 
   private inlineWithoutHighlight(inline: Record<string, unknown>, cfKey: string): Record<string, unknown> {
