@@ -259,6 +259,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   selectChapter(ch: ChapterSummaryDto): void {
     const load = () => {
+      this.resetScrollTarget();
       this.selectedChapterId = ch.id;
       this.selectedSceneId = null;
       if (!this.bookId) return;
@@ -275,6 +276,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   selectScene(event: { scene: SceneSummaryDto; chapterId: string }): void {
     const load = () => {
+      this.resetScrollTarget();
       this.selectedChapterId = event.chapterId;
       this.selectedSceneId = event.scene.id;
       if (!this.bookId) return;
@@ -843,6 +845,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         // Bookmark not found — nothing to scroll to.
       }
     }, 300);
+  }
+
+  private resetScrollTarget(): void {
+    this._pendingScrollTarget = null;
+    if (this._scrollSettleTimer) {
+      clearTimeout(this._scrollSettleTimer);
+      this._scrollSettleTimer = null;
+    }
   }
 
 
