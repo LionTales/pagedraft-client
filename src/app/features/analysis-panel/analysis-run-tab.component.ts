@@ -21,6 +21,7 @@ export class AnalysisRunTabComponent {
   @Input() lastRunDurationLabel: string | null = null;
   @Input() streamingText = '';
   @Input() explainingSuggestionIds = new Set<string>();
+  @Input() staleSuggestionIds = new Set<string>();
   @Input() bookLanguage: string | null = null;
   @Input() sceneId: string | null = null;
 

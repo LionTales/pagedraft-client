@@ -18,7 +18,8 @@ import { BookDashboardComponent } from '../book-dashboard/book-dashboard.compone
 import { LanguageIssue } from '../../core/models/language-engine';
 import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-analysis';
 import { EditorTextService } from '../../core/services/editor-text.service';
-import { SfdtManipulationService, suggestionBookmarkName } from '../../core/services/sfdt-manipulation.service';
+import { SfdtManipulationService, suggestionBookmarkName, SCROLL_TARGET_BOOKMARK } from '../../core/services/sfdt-manipulation.service';
+import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 
 @Component({
   selector: 'app-editor-page',
@@ -77,6 +78,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private isOpeningDocument = false;
   /** Last suggestion ranges applied for highlights; used for re-application when needed. */
   private lastSuggestionRanges: { suggestionId?: string; startOffset: number; endOffset: number }[] = [];
+  /** Scroll target set by accept/dismiss; consumed by scheduleScrollToTarget after the last editor.open() settles. */
+  private _pendingScrollTarget: { startOffset: number; endOffset: number; originalText?: string } | null = null;
+  private _scrollSettleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private route: ActivatedRoute,
@@ -88,7 +92,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     private documentVersionService: DocumentVersionService,
     private analysisService: AnalysisService,
     private sfdtService: SfdtManipulationService,
-    private editorTextService: EditorTextService
+    private editorTextService: EditorTextService,
+    private suggestionAnchorService: SuggestionAnchorService
   ) {}
 
   ngOnInit(): void {
@@ -237,6 +242,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     window.removeEventListener('beforeunload', this.handleBeforeUnload);
     if (this.bookId) this.syncService.leaveBook(this.bookId);
+    if (this._scrollSettleTimer) clearTimeout(this._scrollSettleTimer);
     this.destroy$.next();
     this.destroy$.complete();
   }
@@ -532,14 +538,25 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         (fallbackPlain ? normalizeTextForAnalysis(fallbackPlain) : '');
       let startOffset = event.startOffset;
       let endOffset = event.endOffset;
-      // When offsets missing but originalText provided (e.g. Redo suggestion from Versions), find range in normalized document
-      if ((startOffset == null || endOffset == null) && event.originalText != null && currentText) {
-        const normOriginal = normalizeTextForAnalysis(event.originalText);
-        const idx = currentText.indexOf(normOriginal);
-        if (idx >= 0) {
-          startOffset = idx;
-          endOffset = idx + normOriginal.length;
+      if (event.originalText != null && currentText) {
+        const relocated = this.suggestionAnchorService.relocateOne(
+          {
+            original: event.originalText,
+            suggested: event.text,
+            startOffset: event.startOffset,
+            endOffset: event.endOffset,
+          },
+          currentText
+        );
+        if (relocated.stale) {
+          console.warn(
+            'Suggestion skipped: original text no longer found in current document.',
+            'Original:', event.originalText
+          );
+          return;
         }
+        startOffset = relocated.relocatedStart;
+        endOffset = relocated.relocatedEnd;
       }
 
       let newSfdt: string;
@@ -554,6 +571,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
           endOffset,
           appliedText.length
         );
+        this._pendingScrollTarget = { startOffset, endOffset: startOffset + appliedText.length, originalText: appliedText };
+        newSfdt = this.sfdtService.addBookmarkAtRange(newSfdt, startOffset, startOffset + appliedText.length, SCROLL_TARGET_BOOKMARK);
       } else {
         newSfdt = this.sfdtService.buildMinimalSfdt(appliedText);
       }
@@ -563,6 +582,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         try {
           if (this.docEditor?.documentEditor && this.selectedChapterId) {
             this.docEditor.documentEditor.open(newSfdt);
+            this.scheduleScrollToTarget();
             this.hasPendingChanges = true;
             this.contentChanged$.next();
             this.refreshDocumentPlainText();
@@ -724,15 +744,16 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   /**
    * Apply or clear visible highlights in the document for proofread suggestion ranges.
-   * Modifies the SFDT directly (so we don't rely on selectByHierarchicalIndex, which
-   * can yield empty selection when the runtime structure differs). Re-opens the document
-   * with highlights applied. Highlights are stripped before save.
+   * Skips when isOpeningDocument is true (another open is already pending, e.g. from
+   * onApplyCorrection) to avoid overwriting corrected content with stale SFDT.
    */
   applySuggestionHighlights(ranges: { suggestionId?: string; startOffset: number; endOffset: number }[]): void {
     const editor = this.docEditor?.documentEditor;
     if (!editor || !this.selectedChapterId) return;
 
     this.lastSuggestionRanges = ranges.slice();
+
+    if (this.isOpeningDocument) return;
 
     try {
       let sfdt = editor.serialize();
@@ -756,11 +777,21 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         sfdt = this.sfdtService.applyHighlightRangesToSfdt(sfdt, validRanges);
       }
 
+      if (this._pendingScrollTarget) {
+        sfdt = this.sfdtService.addBookmarkAtRange(
+          sfdt,
+          this._pendingScrollTarget.startOffset,
+          this._pendingScrollTarget.endOffset,
+          SCROLL_TARGET_BOOKMARK
+        );
+      }
+
       this.isOpeningDocument = true;
       setTimeout(() => {
         try {
           if (this.docEditor?.documentEditor && this.selectedChapterId) {
             this.docEditor.documentEditor.open(sfdt);
+            this.scheduleScrollToTarget();
           }
         } finally {
           this.isOpeningDocument = false;
@@ -769,6 +800,35 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     } catch {
       // ignore
     }
+  }
+
+  /** Receive scroll target from analysis panel (e.g. after dismiss) so next open stays on that word. */
+  onScrollTargetChange(target: { startOffset: number; endOffset: number; originalText?: string }): void {
+    this._pendingScrollTarget = target;
+  }
+
+  /**
+   * Debounced scroll: each editor.open() call resets a 300ms timer. When the timer
+   * fires (no more opens for 300ms), select the temporary _scroll_target bookmark
+   * that was injected into the SFDT before the last editor.open(). This is more
+   * reliable than offset-based or search-based selection because the bookmark
+   * survives SFDT restructuring (inline splitting, highlight nodes).
+   */
+  private scheduleScrollToTarget(): void {
+    if (!this._pendingScrollTarget) return;
+    if (this._scrollSettleTimer) clearTimeout(this._scrollSettleTimer);
+    this._scrollSettleTimer = setTimeout(() => {
+      this._scrollSettleTimer = null;
+      this._pendingScrollTarget = null;
+      const editor = this.docEditor?.documentEditor;
+      if (!editor) return;
+      try {
+        editor.selection.selectBookmark(SCROLL_TARGET_BOOKMARK);
+        editor.focusIn();
+      } catch {
+        // Bookmark not found — nothing to scroll to.
+      }
+    }, 300);
   }
 
 

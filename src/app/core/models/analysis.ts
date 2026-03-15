@@ -59,6 +59,9 @@ export interface AnalysisSuggestion {
   category?: string;
   explanation?: string;
   outcome?: string | null;
+  contextBefore?: string;
+  contextAfter?: string;
+  stale?: boolean;
 }
 
 /** Server-side suggestion DTO returned from the backend. */
@@ -74,6 +77,8 @@ export interface AnalysisSuggestionDto {
   explanation?: string | null;
   outcome?: string | null;
   orderIndex: number;
+  contextBefore?: string | null;
+  contextAfter?: string | null;
 }
 
 export interface AnalysisProgressDto {

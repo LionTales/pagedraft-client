@@ -5,6 +5,7 @@ import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisRunOrchestrationService } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '../../core/models/analysis';
+import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 
 describe('AnalysisPanelComponent (focused logic)', () => {
   let component: AnalysisPanelComponent;
@@ -46,6 +47,27 @@ describe('AnalysisPanelComponent (focused logic)', () => {
             formatRunDuration: () => null,
             runAnalysisAfterSave: () => EMPTY,
             doRunStreaming: () => EMPTY,
+          },
+        },
+        {
+          provide: SuggestionAnchorService,
+          useFactory: () => {
+            const spy = jasmine.createSpyObj('SuggestionAnchorService', ['relocateAll', 'relocateOne']);
+            spy.relocateAll.and.callFake((suggestions: any[]) =>
+              suggestions.map((s: any) => ({
+                ...s,
+                relocatedStart: s.startOffset ?? 0,
+                relocatedEnd: s.endOffset ?? (s.startOffset ?? 0) + (s.original?.length ?? 0),
+                stale: false,
+              }))
+            );
+            spy.relocateOne.and.callFake((s: any) => ({
+              ...s,
+              relocatedStart: s.startOffset ?? 0,
+              relocatedEnd: s.endOffset ?? (s.startOffset ?? 0) + (s.original?.length ?? 0),
+              stale: false,
+            }));
+            return spy;
           },
         },
       ],
@@ -93,7 +115,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     };
   }
 
-  it('mapDtoSuggestions respects adjustOffsets and heuristic filter', () => {
+  it('mapDtoSuggestions respects heuristic filter', () => {
     const result = makeResultWithSuggestions({
       suggestions: [
         {
@@ -112,10 +134,8 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       ],
     });
 
-    (component as any).documentText = 'a'.repeat(80);
-
-    const withoutFilter = (component as any).mapDtoSuggestions(result, true, false) as any[];
-    const withFilter = (component as any).mapDtoSuggestions(result, true, true) as any[];
+    const withoutFilter = (component as any).mapDtoSuggestions(result, false) as any[];
+    const withFilter = (component as any).mapDtoSuggestions(result, true) as any[];
 
     expect(withoutFilter.length).toBe(1);
     expect(withFilter.length).toBe(0);
@@ -636,6 +656,124 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
     expect(component['lineEditRunSuggestions'].length).toBe(1);
     expect(component['lineEditRunSuggestions'][0].original).toBe('pending text');
+  });
+
+  // ─── content-anchored suggestion tests ─────────────────────────────
+
+  it('emitSuggestionRanges calls SuggestionAnchorService.relocateAll when offsetsDirty is true', () => {
+    const anchorSpy = TestBed.inject(SuggestionAnchorService) as jasmine.SpyObj<SuggestionAnchorService>;
+    const sug: AnalysisSuggestion = {
+      id: 's-1', original: 'world', suggested: 'friend', startOffset: 6, endOffset: 11,
+    };
+
+    component.latestResult = makeResultWithSuggestions();
+    component.highlightSuggestionsInDocument = true;
+    component['proofreadSuggestions'] = [sug];
+    (component as any).offsetsDirty = true;
+    component.documentText = 'Hello world';
+
+    anchorSpy.relocateAll.and.returnValue([
+      { ...sug, relocatedStart: 6, relocatedEnd: 11, stale: false },
+    ]);
+
+    (component as any).emitSuggestionRanges();
+
+    expect(anchorSpy.relocateAll).toHaveBeenCalledOnceWith([sug], 'Hello world');
+  });
+
+  it('stale suggestions are excluded from emitted highlight ranges', () => {
+    const anchorSpy = TestBed.inject(SuggestionAnchorService) as jasmine.SpyObj<SuggestionAnchorService>;
+    const good: AnalysisSuggestion = {
+      id: 's-good', original: 'hello', suggested: 'hi', startOffset: 0, endOffset: 5,
+    };
+    const stale: AnalysisSuggestion = {
+      id: 's-stale', original: 'removed', suggested: 'gone', startOffset: 10, endOffset: 17, outcome: 'Reverted',
+    };
+
+    component.latestResult = makeResultWithSuggestions();
+    component.highlightSuggestionsInDocument = true;
+    component['proofreadSuggestions'] = [good, stale];
+    (component as any).offsetsDirty = true;
+    component.documentText = 'hello new text removed here';
+
+    anchorSpy.relocateAll.and.returnValue([
+      { ...good, relocatedStart: 0, relocatedEnd: 5, stale: false },
+      { ...stale, relocatedStart: 10, relocatedEnd: 17, stale: true },
+    ]);
+
+    const emitSpy = spyOn(component.suggestionRangesChange, 'emit');
+    (component as any).emitSuggestionRanges();
+
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    const ranges = emitSpy.calls.mostRecent().args[0] as any[];
+    expect(ranges.length).toBe(1);
+    expect(ranges[0].suggestionId).toBe('s-good');
+  });
+
+  it('onProofreadAccept does not emit applyCorrection for stale suggestions', () => {
+    const emitted: any[] = [];
+    component.applyCorrection.subscribe((v: any) => emitted.push(v));
+
+    const staleSug: AnalysisSuggestion = {
+      id: 's-stale', original: 'old', suggested: 'new', startOffset: 0, endOffset: 3, stale: true,
+    };
+    component.staleSuggestionIds = new Set(['s-stale']);
+    component.latestResult = makeResultWithSuggestions();
+
+    component.onProofreadAccept(staleSug);
+
+    expect(emitted.length).toBe(0);
+  });
+
+  it('documentText change sets offsetsDirty to true', () => {
+    (component as any).lastAnalysisDocumentText = 'original text';
+    (component as any).offsetsDirty = false;
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'modified text';
+
+    component.ngOnChanges({
+      documentText: {
+        currentValue: 'modified text',
+        previousValue: 'original text',
+        firstChange: false,
+        isFirstChange: () => false,
+      },
+    });
+
+    expect((component as any).offsetsDirty).toBeTrue();
+  });
+
+  it('auto-dismiss fires for stale Pending suggestions only, not for Accepted or Reverted', () => {
+    const anchorSpy = TestBed.inject(SuggestionAnchorService) as jasmine.SpyObj<SuggestionAnchorService>;
+    const pending: AnalysisSuggestion = {
+      id: 's-pending', original: 'pending text', suggested: 'new1', startOffset: 0, endOffset: 12,
+    };
+    const reverted: AnalysisSuggestion = {
+      id: 's-reverted', original: 'reverted text', suggested: 'new2', startOffset: 20, endOffset: 33, outcome: 'Reverted',
+    };
+    const accepted: AnalysisSuggestion = {
+      id: 's-accepted', original: 'accepted text', suggested: 'new3', startOffset: 40, endOffset: 53, outcome: 'Accepted',
+    };
+
+    component.latestResult = makeResultWithSuggestions();
+    component.highlightSuggestionsInDocument = true;
+    component['proofreadSuggestions'] = [pending, reverted, accepted];
+    (component as any).offsetsDirty = true;
+    component.documentText = 'some completely different document text here';
+
+    anchorSpy.relocateAll.and.returnValue([
+      { ...pending, relocatedStart: 0, relocatedEnd: 12, stale: true },
+      { ...reverted, relocatedStart: 20, relocatedEnd: 33, stale: true },
+      { ...accepted, relocatedStart: 40, relocatedEnd: 53, stale: true },
+    ]);
+
+    (component as any).emitSuggestionRanges();
+
+    const remainingIds = component['proofreadSuggestions'].map((s: AnalysisSuggestion) => s.id);
+    expect(remainingIds).not.toContain('s-pending');
+    expect(remainingIds).toContain('s-reverted');
+    expect(remainingIds).toContain('s-accepted');
   });
 
 });
