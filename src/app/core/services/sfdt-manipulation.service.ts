@@ -189,6 +189,8 @@ export class SfdtManipulationService {
             for (const span of spans) {
               const spanStart = span.start;
               const spanEnd = span.end;
+              const isFirstPart = spanStart === span.fullStart;
+              const isLastPart = spanEnd === span.fullEnd;
               const startNormInInline = spanStart - blockStart;
               const endNormInInline = spanEnd - blockStart;
               const startRaw = normalizedOffsetToRawOffset(text, startNormInInline);
@@ -198,9 +200,13 @@ export class SfdtManipulationService {
               }
               const startOutput = Math.max(startRaw, posRaw);
               if (startOutput < endRaw) {
-                newInlines.push(this.createBookmarkInline(inline, bookmarkName, true, cfKey));
+                if (isFirstPart) {
+                  newInlines.push(this.createBookmarkInline(inline, bookmarkName, true, cfKey));
+                }
                 newInlines.push(this.createInlineForHighlight(text.slice(startOutput, endRaw), inline, preserveHighlight, textKey, cfKey));
-                newInlines.push(this.createBookmarkInline(inline, bookmarkName, false, cfKey));
+                if (isLastPart) {
+                  newInlines.push(this.createBookmarkInline(inline, bookmarkName, false, cfKey));
+                }
               }
               posRaw = Math.max(posRaw, endRaw);
             }
