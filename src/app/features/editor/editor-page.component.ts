@@ -95,6 +95,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private _highlightColorElement: HTMLElement | null = null;
   private _highlightColorInputElement: HTMLElement | null = null;
   private _appliedHighlightColor = 'rgb(255, 255, 0)';
+  private _onHighlightColorClickHandler: ((e: Event) => void) | null = null;
   private _imagePicker: HTMLInputElement | null = null;
   private _onImagePickerChangeHandler: ((e: Event) => void) | null = null;
   private _imageDropdown: DropDownButton | null = null;
@@ -1029,6 +1030,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       try { ed.removeEventListener('selectionChange', this._onEditorSelectionChange); } catch { /* ignore */ }
       try { ed.removeEventListener('documentChange', this._onEditorDocumentChange); } catch { /* ignore */ }
     }
+    try {
+      if (this._highlightColorElement && this._onHighlightColorClickHandler) {
+        const clickable = this._highlightColorElement.querySelectorAll('.e-de-ctnr-hglt-btn, #noColorDiv');
+        clickable.forEach(el => {
+          EventHandler.remove(el as HTMLElement, 'click', this._onHighlightColorClickHandler as any);
+        });
+      }
+    } catch { /* ignore */ }
+    try {
+      this._highlightColorElement?.remove();
+    } catch { /* ignore */ }
     try { this.customToolbar?.destroy(); } catch { /* ignore */ }
     try { this.highlightColorSplitBtn?.destroy(); } catch { /* ignore */ }
     try { this.fontFamilyCombo?.destroy(); } catch { /* ignore */ }
@@ -1048,6 +1060,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     this.fontColorPicker = null;
     this.highlightColorSplitBtn = null;
     this._highlightColorElement = null;
+    this._onHighlightColorClickHandler = null;
     this._highlightColorInputElement = null;
     this._imagePicker = null;
     this._onImagePickerChangeHandler = null;
@@ -1221,6 +1234,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   // ==================== Highlight Color ====================
 
   private initializeHighlightColorElement(): void {
+    if (!this._onHighlightColorClickHandler) {
+      this._onHighlightColorClickHandler = (e: Event) => this.onHighlightColor(e);
+    }
     this._highlightColorElement = createElement('div', {
       styles: 'display:none;width:157px',
       className: 'e-de-cntr-highlight-pane'
@@ -1248,7 +1264,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       }) as HTMLDivElement;
       div.style.backgroundColor = c.bg;
       this._highlightColorElement.appendChild(div);
-      div.addEventListener('click', (e: any) => this.onHighlightColor(e));
+      EventHandler.add(div, 'click', this._onHighlightColorClickHandler as any);
     }
     const nocolor = createElement('div', { className: 'e-hglt-no-color' });
     this._highlightColorElement.appendChild(nocolor);
@@ -1262,7 +1278,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       className: 'e-de-ctnr-hglt-no-color'
     });
     nocolor.appendChild(nocolorLabel);
-    nocolorDiv.addEventListener('click', (e: any) => this.onHighlightColor(e));
+    EventHandler.add(nocolorDiv as HTMLElement, 'click', this._onHighlightColorClickHandler as any);
   }
 
   private createHighlightColorSplitButton(
