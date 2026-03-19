@@ -90,6 +90,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private customToolbar: EjToolbar | null = null;
   private fontFamilyCombo: ComboBox | null = null;
   private fontSizeCombo: ComboBox | null = null;
+  private fontColorPicker: ColorPicker | null = null;
   private highlightColorSplitBtn: SplitButton | null = null;
   private _highlightColorElement: HTMLElement | null = null;
   private _highlightColorInputElement: HTMLElement | null = null;
@@ -894,7 +895,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     const fontFamilies = [
       'Algerian', 'Arial', 'Calibri', 'Cambria', 'Cambria Math', 'Candara',
       'Courier New', 'Georgia', 'Impact', 'Segoe Print', 'Segoe Script',
-      'Segoe UI', 'Symbol', 'Times New Roman', 'Verdana', 'Windings'
+      'Segoe UI', 'Symbol', 'Times New Roman', 'Verdana', 'Wingdings'
     ];
     const fontSizes = [
       '8', '9', '10', '11', '12', '14', '16', '18', '20',
@@ -950,11 +951,11 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         { type: 'Separator' },
         {
           type: 'Input',
-          template: new ColorPicker({
+          template: (this.fontColorPicker = new ColorPicker({
             value: '#000000',
             showButtons: true,
             change: (args: any) => this.onFontColorChange(args),
-          }),
+          })),
         },
         { type: 'Input', template: this.fontFamilyCombo },
         { type: 'Input', template: this.fontSizeCombo },
@@ -1021,12 +1022,16 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private destroyCustomToolbar(): void {
     try { this.customToolbar?.destroy(); } catch { /* ignore */ }
     try { this.highlightColorSplitBtn?.destroy(); } catch { /* ignore */ }
+    try { this.fontFamilyCombo?.destroy(); } catch { /* ignore */ }
+    try { this.fontSizeCombo?.destroy(); } catch { /* ignore */ }
+    try { this.fontColorPicker?.destroy(); } catch { /* ignore */ }
     try { this._imageDropdown?.destroy(); } catch { /* ignore */ }
     try { this._bulletListDropdown?.destroy(); } catch { /* ignore */ }
     try { this._numberedListDropdown?.destroy(); } catch { /* ignore */ }
     this.customToolbar = null;
     this.fontFamilyCombo = null;
     this.fontSizeCombo = null;
+    this.fontColorPicker = null;
     this.highlightColorSplitBtn = null;
     this._highlightColorElement = null;
     this._highlightColorInputElement = null;
@@ -1098,7 +1103,10 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private onFontSizeChange(args: any): void {
     const ed = this.docEditor?.documentEditor;
     if (!ed) return;
-    ed.selection.characterFormat.fontSize = args.value;
+    const raw = args?.value;
+    const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
+    if (!Number.isFinite(parsed)) return;
+    ed.selection.characterFormat.fontSize = parsed;
     ed.focusIn();
   }
 
@@ -1283,8 +1291,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     const hlColor = this.getHighlightColor(color);
     if (hlColor === 'NoColor') {
       ed.selection.characterFormat.highlightColor = null as any;
+    } else {
+      ed.selection.characterFormat.highlightColor = hlColor as HighlightColor;
     }
-    ed.selection.characterFormat.highlightColor = hlColor as HighlightColor;
     if (this._highlightColorInputElement) {
       this._highlightColorInputElement.style.backgroundColor = this._appliedHighlightColor;
     }
