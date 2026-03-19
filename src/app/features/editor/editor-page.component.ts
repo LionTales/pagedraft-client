@@ -984,7 +984,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         { type: 'Separator' },
         { prefixIcon: 'e-btn-icon e-icons e-de-ctnr-image e-icon-left', tooltipText: 'Insert inline picture from a file', id: 'InsertImage' },
         { prefixIcon: 'e-de-ctnr-table', tooltipText: 'Insert a table into the document', id: 'InsertTable' },
-        { prefixIcon: 'e-de-cnt-cmt-add', tooltipText: 'Show comments', id: 'Comments' },
+        { prefixIcon: 'e-de-cnt-cmt-add', tooltipText: 'Add comment', id: 'Comments' },
         { prefixIcon: 'e-de-cnt-track', tooltipText: 'Track Changes', id: 'TrackChanges' },
         { prefixIcon: 'e-de-ctnr-find', tooltipText: 'Find Text', id: 'Find' },
       ]
