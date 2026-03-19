@@ -99,6 +99,12 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private _imageDropdown: DropDownButton | null = null;
   private _bulletListDropdown: DropDownButton | null = null;
   private _numberedListDropdown: DropDownButton | null = null;
+  private readonly _onEditorSelectionChange = () => {
+    setTimeout(() => this.onToolbarSelectionChange(), 20);
+  };
+  private readonly _onEditorDocumentChange = () => {
+    this.enableDisableUndoRedo();
+  };
 
   constructor(
     private route: ActivatedRoute,
@@ -1011,12 +1017,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     const hcEl = document.getElementById('HighlightColor');
     if (hcEl) hcEl.appendChild(highlightMainDiv);
 
-    ed.selectionChange = () => {
-      setTimeout(() => this.onToolbarSelectionChange(), 20);
-    };
-    ed.documentChange = () => {
-      this.enableDisableUndoRedo();
-    };
+    ed.addEventListener('selectionChange', this._onEditorSelectionChange);
+    ed.addEventListener('documentChange', this._onEditorDocumentChange);
   }
 
   private destroyCustomToolbar(): void {
@@ -1135,13 +1137,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       document.getElementById('AlignCenter')?.classList.add('e-btn-toggle');
     }
 
-    if (ed.selection.characterFormat.highlightColor && this._highlightColorInputElement) {
-      this._highlightColorInputElement.style.backgroundColor =
-        ed.selection.characterFormat.highlightColor as string;
-      this.applyHighlightColorAsBackground(
-        ed.selection.characterFormat.highlightColor as HighlightColor
-      );
+    const selHighlight = ed.selection.characterFormat
+      .highlightColor as HighlightColor | null | undefined;
+    if (this._highlightColorInputElement) {
+      const cssColor = this.getCssColorForHighlight(selHighlight);
+      this._appliedHighlightColor = cssColor;
+      this._highlightColorInputElement.style.backgroundColor = cssColor;
     }
+    this.applyHighlightColorAsBackground(selHighlight ?? 'NoColor');
 
     if (this.fontFamilyCombo && ed.selection.characterFormat.fontFamily) {
       this.fontFamilyCombo.value = ed.selection.characterFormat.fontFamily;
@@ -1321,6 +1324,30 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  private getCssColorForHighlight(color: HighlightColor | null | undefined): string {
+    switch (color) {
+      case 'Yellow': return 'rgb(255, 255, 0)';
+      case 'BrightGreen': return 'rgb(0, 255, 0)';
+      case 'Turquoise': return 'rgb(0, 255, 255)';
+      case 'Pink': return 'rgb(255, 0, 255)';
+      case 'Blue': return 'rgb(0, 0, 255)';
+      case 'Red': return 'rgb(255, 0, 0)';
+      case 'DarkBlue': return 'rgb(0, 0, 128)';
+      case 'Teal': return 'rgb(0, 128, 128)';
+      case 'Green': return 'rgb(0, 128, 0)';
+      case 'Violet': return 'rgb(128, 0, 128)';
+      case 'DarkRed': return 'rgb(128, 0, 0)';
+      case 'DarkYellow': return 'rgb(128, 128, 0)';
+      case 'Gray50': return 'rgb(128, 128, 128)';
+      case 'Gray25': return 'rgb(192, 192, 192)';
+      case 'Black': return 'rgb(0, 0, 0)';
+      case 'NoColor':
+        return 'rgb(255, 255, 255)';
+      default:
+        return this._appliedHighlightColor || 'rgb(255, 255, 0)';
+    }
+  }
+
   private applyHighlightColorAsBackground(color: HighlightColor): void {
     if (!this._highlightColorElement) return;
     this.removeSelectedColorDiv();
@@ -1385,8 +1412,12 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private getLevelFormatNumber(): string {
     const ed = this.docEditor?.documentEditor;
     if (!ed) return '%1.';
-    const level = ed.selection.paragraphFormat.listLevelNumber;
-    return '%' + ((level <= 0 ? 0 : level) + 1) + '.';
+    const rawLevel = ed.selection.paragraphFormat.listLevelNumber;
+    const level =
+      typeof rawLevel === 'number' && Number.isFinite(rawLevel) && rawLevel > 0
+        ? rawLevel
+        : 0;
+    return '%' + (level + 1) + '.';
   }
 
   private imageSelect(args: any): void {
