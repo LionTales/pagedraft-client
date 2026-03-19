@@ -96,6 +96,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private _highlightColorInputElement: HTMLElement | null = null;
   private _appliedHighlightColor = 'rgb(255, 255, 0)';
   private _imagePicker: HTMLInputElement | null = null;
+  private _onImagePickerChangeHandler: ((e: Event) => void) | null = null;
   private _imageDropdown: DropDownButton | null = null;
   private _bulletListDropdown: DropDownButton | null = null;
   private _numberedListDropdown: DropDownButton | null = null;
@@ -928,7 +929,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       attrs: { type: 'file', accept: '.jpg,.jpeg,.png,.bmp,.svg' },
       className: 'e-de-ctnr-file-picker'
     }) as HTMLInputElement;
-    EventHandler.add(this._imagePicker, 'change', this.onImagePickerChange.bind(this), this);
+    this._onImagePickerChangeHandler = () => this.onImagePickerChange();
+    EventHandler.add(this._imagePicker, 'change', this._onImagePickerChangeHandler, this);
 
     this.fontFamilyCombo = new ComboBox({
       dataSource: fontFamilies,
@@ -1032,6 +1034,11 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     try { this.fontFamilyCombo?.destroy(); } catch { /* ignore */ }
     try { this.fontSizeCombo?.destroy(); } catch { /* ignore */ }
     try { this.fontColorPicker?.destroy(); } catch { /* ignore */ }
+    try {
+      if (this._imagePicker && this._onImagePickerChangeHandler) {
+        EventHandler.remove(this._imagePicker, 'change', this._onImagePickerChangeHandler);
+      }
+    } catch { /* ignore */ }
     try { this._imageDropdown?.destroy(); } catch { /* ignore */ }
     try { this._bulletListDropdown?.destroy(); } catch { /* ignore */ }
     try { this._numberedListDropdown?.destroy(); } catch { /* ignore */ }
@@ -1043,6 +1050,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     this._highlightColorElement = null;
     this._highlightColorInputElement = null;
     this._imagePicker = null;
+    this._onImagePickerChangeHandler = null;
     this._imageDropdown = null;
     this._bulletListDropdown = null;
     this._numberedListDropdown = null;
@@ -1253,7 +1261,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       innerHTML: 'No color',
       className: 'e-de-ctnr-hglt-no-color'
     });
-    nocolorDiv.appendChild(nocolorLabel);
+    nocolor.appendChild(nocolorLabel);
     nocolorDiv.addEventListener('click', (e: any) => this.onHighlightColor(e));
   }
 
