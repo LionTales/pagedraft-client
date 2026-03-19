@@ -1022,6 +1022,11 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   }
 
   private destroyCustomToolbar(): void {
+    const ed = this.docEditor?.documentEditor;
+    if (ed) {
+      try { ed.removeEventListener('selectionChange', this._onEditorSelectionChange); } catch { /* ignore */ }
+      try { ed.removeEventListener('documentChange', this._onEditorDocumentChange); } catch { /* ignore */ }
+    }
     try { this.customToolbar?.destroy(); } catch { /* ignore */ }
     try { this.highlightColorSplitBtn?.destroy(); } catch { /* ignore */ }
     try { this.fontFamilyCombo?.destroy(); } catch { /* ignore */ }
@@ -1249,7 +1254,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       className: 'e-de-ctnr-hglt-no-color'
     });
     nocolorDiv.appendChild(nocolorLabel);
-    nocolor.addEventListener('click', (e: any) => this.onHighlightColor(e));
+    nocolorDiv.addEventListener('click', (e: any) => this.onHighlightColor(e));
   }
 
   private createHighlightColorSplitButton(
