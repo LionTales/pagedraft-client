@@ -42,17 +42,16 @@
             <button type="button" class="save-btn" [disabled]="!hasPendingChanges || isSaving" (click)="saveCurrentDocument()">שמור</button>
             <button type="button" class="back-btn" (click)="goBackToBooks()">חזרה לספרים</button>
           </div>
+          <div id="custom-toolbar" dir="ltr"></div>
           <ejs-documenteditorcontainer
             #docEditor
-            [enableToolbar]="true"
-            [toolbarMode]="'Toolbar'"
+            [enableToolbar]="false"
             [showPropertiesPane]="false"
             [enableRtl]="editorDirection === 'rtl'"
             [locale]="editorCulture"
             [height]="'100%'"
             serviceUrl="/api/documenteditor/"
-            (created)="onEditorCreated()
-            "
+            (created)="onEditorCreated()"
             (contentChange)="onContentChange()">
           </ejs-documenteditorcontainer>
         </div>
