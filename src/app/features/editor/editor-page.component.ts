@@ -20,6 +20,12 @@ import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-an
 import { EditorTextService } from '../../core/services/editor-text.service';
 import { SfdtManipulationService, suggestionBookmarkName, SCROLL_TARGET_BOOKMARK } from '../../core/services/sfdt-manipulation.service';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
+import { Toolbar as EjToolbar } from '@syncfusion/ej2-navigations';
+import { ComboBox } from '@syncfusion/ej2-dropdowns';
+import { ColorPicker } from '@syncfusion/ej2-inputs';
+import { DropDownButton, SplitButton } from '@syncfusion/ej2-splitbuttons';
+import { HighlightColor } from '@syncfusion/ej2-documenteditor';
+import { createElement, classList, EventHandler } from '@syncfusion/ej2-base';
 
 @Component({
   selector: 'app-editor-page',
@@ -81,6 +87,26 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /** Scroll target set by accept/dismiss; consumed by scheduleScrollToTarget after the last editor.open() settles. */
   private _pendingScrollTarget: { startOffset: number; endOffset: number; originalText?: string } | null = null;
   private _scrollSettleTimer: ReturnType<typeof setTimeout> | null = null;
+  private customToolbar: EjToolbar | null = null;
+  private fontFamilyCombo: ComboBox | null = null;
+  private fontSizeCombo: ComboBox | null = null;
+  private fontColorPicker: ColorPicker | null = null;
+  private highlightColorSplitBtn: SplitButton | null = null;
+  private _highlightColorElement: HTMLElement | null = null;
+  private _highlightColorInputElement: HTMLElement | null = null;
+  private _appliedHighlightColor = 'rgb(255, 255, 0)';
+  private _onHighlightColorClickHandler: ((e: Event) => void) | null = null;
+  private _imagePicker: HTMLInputElement | null = null;
+  private _onImagePickerChangeHandler: ((e: Event) => void) | null = null;
+  private _imageDropdown: DropDownButton | null = null;
+  private _bulletListDropdown: DropDownButton | null = null;
+  private _numberedListDropdown: DropDownButton | null = null;
+  private readonly _onEditorSelectionChange = () => {
+    setTimeout(() => this.onToolbarSelectionChange(), 20);
+  };
+  private readonly _onEditorDocumentChange = () => {
+    this.enableDisableUndoRedo();
+  };
 
   constructor(
     private route: ActivatedRoute,
@@ -243,6 +269,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     window.removeEventListener('beforeunload', this.handleBeforeUnload);
     if (this.bookId) this.syncService.leaveBook(this.bookId);
     if (this._scrollSettleTimer) clearTimeout(this._scrollSettleTimer);
+    this.destroyCustomToolbar();
     this.destroy$.next();
     this.destroy$.complete();
   }
@@ -396,6 +423,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     if (!this.selectedChapterId) return;
     this.hasPendingChanges = true;
     this.contentChanged$.next();
+    this.enableDisableUndoRedo();
   }
 
   /** Public save for the Save button. Only saves when there are pending changes. */
@@ -514,6 +542,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       ed.setDefaultCharacterFormat({ bidi: true });
     }
     this.applyRtlToSelectionDeferred();
+    this.initCustomToolbar();
     const target = this.pendingLoadTarget;
     if (target && this.selectedChapterId === target.chapterId) {
       this.pendingLoadTarget = null;
@@ -862,5 +891,582 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     if (text) {
       this.currentDocumentPlainText = text;
     }
+  }
+
+  // ==================== Custom Toolbar ====================
+
+  private initCustomToolbar(): void {
+    this.destroyCustomToolbar();
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return;
+
+    const fontFamilies = [
+      'Algerian', 'Arial', 'Calibri', 'Cambria', 'Cambria Math', 'Candara',
+      'Courier New', 'Georgia', 'Impact', 'Segoe Print', 'Segoe Script',
+      'Segoe UI', 'Symbol', 'Times New Roman', 'Verdana', 'Wingdings'
+    ];
+    const fontSizes = [
+      '8', '9', '10', '11', '12', '14', '16', '18', '20',
+      '22', '24', '26', '28', '36', '48', '72', '96'
+    ];
+
+    this.initializeHighlightColorElement();
+
+    const highlightMainDiv = createElement('div', {
+      id: 'DocumentEditor_font_properties_color',
+      className: 'e-de-font-clr-picker e-de-ctnr-group-btn',
+      styles: 'display:inline-flex;'
+    });
+    this.highlightColorSplitBtn = this.createHighlightColorSplitButton(
+      'DocumentEditor_highlightColor', 34.5, highlightMainDiv
+    );
+    classList(
+      this.highlightColorSplitBtn.element.nextElementSibling!.firstElementChild!,
+      ['e-de-ctnr-highlight', 'e-icons'], ['e-caret']
+    );
+    this._highlightColorInputElement = this.highlightColorSplitBtn.element.firstChild as HTMLElement;
+
+    this._imagePicker = createElement('input', {
+      attrs: { type: 'file', accept: '.jpg,.jpeg,.png,.bmp,.svg' },
+      className: 'e-de-ctnr-file-picker'
+    }) as HTMLInputElement;
+    this._onImagePickerChangeHandler = () => this.onImagePickerChange();
+    EventHandler.add(this._imagePicker, 'change', this._onImagePickerChangeHandler, this);
+
+    this.fontFamilyCombo = new ComboBox({
+      dataSource: fontFamilies,
+      width: 120,
+      index: 2,
+      allowCustom: true,
+      change: (args: any) => this.onFontFamilyChange(args),
+      showClearButton: false,
+    });
+
+    this.fontSizeCombo = new ComboBox({
+      dataSource: fontSizes,
+      width: 80,
+      allowCustom: true,
+      index: 2,
+      change: (args: any) => this.onFontSizeChange(args),
+      showClearButton: false,
+    });
+
+    this.customToolbar = new EjToolbar({
+      clicked: (arg: any) => this.onToolbarButtonClick(arg),
+      items: [
+        { prefixIcon: 'e-de-ctnr-bold e-icons', tooltipText: 'Bold', id: 'bold' },
+        { prefixIcon: 'e-de-ctnr-italic e-icons', tooltipText: 'Italic', id: 'italic' },
+        { prefixIcon: 'e-de-ctnr-underline e-icons', tooltipText: 'Underline', id: 'underline' },
+        { type: 'Separator' },
+        {
+          type: 'Input',
+          template: (this.fontColorPicker = new ColorPicker({
+            value: '#000000',
+            showButtons: true,
+            change: (args: any) => this.onFontColorChange(args),
+          })),
+        },
+        { type: 'Input', template: this.fontFamilyCombo },
+        { type: 'Input', template: this.fontSizeCombo },
+        { type: 'Separator' },
+        { prefixIcon: 'e-de-ctnr-alignleft e-icons', tooltipText: 'Align Left', id: 'AlignLeft' },
+        { prefixIcon: 'e-de-ctnr-aligncenter e-icons', tooltipText: 'Align Center', id: 'AlignCenter' },
+        { prefixIcon: 'e-de-ctnr-alignright e-icons', tooltipText: 'Align Right', id: 'AlignRight' },
+        { type: 'Separator' },
+        { prefixIcon: 'e-de-ctnr-undo', tooltipText: 'Undo', id: 'Undo' },
+        { prefixIcon: 'e-de-ctnr-redo', tooltipText: 'Redo', id: 'Redo' },
+        { type: 'Separator' },
+        { tooltipText: 'Text Highlight color', id: 'HighlightColor' },
+        { prefixIcon: 'e-de-ctnr-increaseindent e-icons', tooltipText: 'Increase Indent', id: 'IncreaseIndent' },
+        { prefixIcon: 'e-de-ctnr-decreaseindent e-icons', tooltipText: 'Decrease Indent', id: 'DecreaseIndent' },
+        { type: 'Separator' },
+        { prefixIcon: 'e-de-ctnr-bullets e-icons', tooltipText: 'Bullets', id: 'BulletList' },
+        { prefixIcon: 'e-de-ctnr-numbering e-icons', tooltipText: 'Numbering', id: 'NumberedList' },
+        { type: 'Separator' },
+        { prefixIcon: 'e-btn-icon e-icons e-de-ctnr-image e-icon-left', tooltipText: 'Insert inline picture from a file', id: 'InsertImage' },
+        { prefixIcon: 'e-de-ctnr-table', tooltipText: 'Insert a table into the document', id: 'InsertTable' },
+        { prefixIcon: 'e-de-cnt-cmt-add', tooltipText: 'Add comment', id: 'Comments' },
+        { prefixIcon: 'e-de-cnt-track', tooltipText: 'Track Changes', id: 'TrackChanges' },
+        { prefixIcon: 'e-de-ctnr-find', tooltipText: 'Find Text', id: 'Find' },
+      ]
+    });
+    this.customToolbar.appendTo('#custom-toolbar');
+
+    this._imageDropdown = new DropDownButton({
+      items: [{ text: 'Upload from computer', id: 'imageLocal', iconCss: 'e-icons e-de-ctnr-upload' }],
+      cssClass: 'e-de-toolbar-btn-first e-caret-hide',
+      select: (args: any) => this.imageSelect(args)
+    });
+    this._imageDropdown.appendTo('#InsertImage');
+
+    this._bulletListDropdown = new DropDownButton({
+      items: [
+        { text: 'None' }, { text: 'Dot' }, { text: 'Circle' },
+        { text: 'Square' }, { text: 'Flower' }, { text: 'Arrow' }, { text: 'Tick' }
+      ],
+      select: (args: any) => this.bulletListAction(args)
+    });
+    this._bulletListDropdown.appendTo('#BulletList');
+
+    this._numberedListDropdown = new DropDownButton({
+      items: [
+        { text: 'None' }, { text: 'NumberDot' }, { text: 'UpRoman' },
+        { text: 'UpLetter' }, { text: 'LowLetter' }, { text: 'LowRoman' }
+      ],
+      select: (args: any) => this.numberListAction(args)
+    });
+    this._numberedListDropdown.appendTo('#NumberedList');
+
+    const hcEl = document.getElementById('HighlightColor');
+    if (hcEl) hcEl.appendChild(highlightMainDiv);
+
+    ed.addEventListener('selectionChange', this._onEditorSelectionChange);
+    ed.addEventListener('documentChange', this._onEditorDocumentChange);
+  }
+
+  private destroyCustomToolbar(): void {
+    const ed = this.docEditor?.documentEditor;
+    if (ed) {
+      try { ed.removeEventListener('selectionChange', this._onEditorSelectionChange); } catch { /* ignore */ }
+      try { ed.removeEventListener('documentChange', this._onEditorDocumentChange); } catch { /* ignore */ }
+    }
+    try {
+      if (this._highlightColorElement && this._onHighlightColorClickHandler) {
+        const clickable = this._highlightColorElement.querySelectorAll('.e-de-ctnr-hglt-btn, #noColorDiv');
+        clickable.forEach(el => {
+          EventHandler.remove(el as HTMLElement, 'click', this._onHighlightColorClickHandler as any);
+        });
+      }
+    } catch { /* ignore */ }
+    try {
+      this._highlightColorElement?.remove();
+    } catch { /* ignore */ }
+    try { this.highlightColorSplitBtn?.destroy(); } catch { /* ignore */ }
+    try { this.fontFamilyCombo?.destroy(); } catch { /* ignore */ }
+    try { this.fontSizeCombo?.destroy(); } catch { /* ignore */ }
+    try { this.fontColorPicker?.destroy(); } catch { /* ignore */ }
+    try {
+      if (this._imagePicker && this._onImagePickerChangeHandler) {
+        EventHandler.remove(this._imagePicker, 'change', this._onImagePickerChangeHandler);
+      }
+    } catch { /* ignore */ }
+    try { this._imageDropdown?.destroy(); } catch { /* ignore */ }
+    try { this._bulletListDropdown?.destroy(); } catch { /* ignore */ }
+    try { this._numberedListDropdown?.destroy(); } catch { /* ignore */ }
+    try { this.customToolbar?.destroy(); } catch { /* ignore */ }
+    this.customToolbar = null;
+    this.fontFamilyCombo = null;
+    this.fontSizeCombo = null;
+    this.fontColorPicker = null;
+    this.highlightColorSplitBtn = null;
+    this._highlightColorElement = null;
+    this._onHighlightColorClickHandler = null;
+    this._highlightColorInputElement = null;
+    this._imagePicker = null;
+    this._onImagePickerChangeHandler = null;
+    this._imageDropdown = null;
+    this._bulletListDropdown = null;
+    this._numberedListDropdown = null;
+  }
+
+  private onToolbarButtonClick(arg: any): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return;
+    switch (arg.item.id) {
+      case 'bold':
+        ed.editor.toggleBold();
+        break;
+      case 'italic':
+        ed.editor.toggleItalic();
+        break;
+      case 'underline':
+        ed.editor.toggleUnderline('Single');
+        break;
+      case 'AlignLeft':
+        ed.editor.toggleTextAlignment('Left');
+        break;
+      case 'AlignRight':
+        ed.editor.toggleTextAlignment('Right');
+        break;
+      case 'AlignCenter':
+        ed.editor.toggleTextAlignment('Center');
+        break;
+      case 'Undo':
+        ed.editorHistory.undo();
+        break;
+      case 'Redo':
+        ed.editorHistory.redo();
+        break;
+      case 'IncreaseIndent':
+        ed.editor.increaseIndent();
+        break;
+      case 'DecreaseIndent':
+        ed.editor.decreaseIndent();
+        break;
+      case 'InsertTable':
+        ed.showDialog('Table');
+        break;
+      case 'Comments':
+        (ed.editor as any).isUserInsert = true;
+        ed.editor.insertComment('');
+        (ed.editor as any).isUserInsert = false;
+        break;
+      case 'TrackChanges':
+        ed.enableTrackChanges = !ed.enableTrackChanges;
+        this.toggleTrackChangesButton();
+        break;
+      case 'Find':
+        ed.showOptionsPane();
+        break;
+    }
+  }
+
+  private onFontFamilyChange(args: any): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed || !args?.isInteracted) return;
+    ed.selection.characterFormat.fontFamily = args.value;
+    ed.focusIn();
+  }
+
+  private onFontSizeChange(args: any): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed || !args?.isInteracted) return;
+    const raw = args?.value;
+    const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
+    if (!Number.isFinite(parsed)) return;
+    ed.selection.characterFormat.fontSize = parsed;
+    ed.focusIn();
+  }
+
+  private onFontColorChange(args: any): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return;
+    ed.selection.characterFormat.fontColor = args.currentValue.hex;
+    ed.focusIn();
+  }
+
+  private onToolbarSelectionChange(): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed?.selection) return;
+
+    this.enableDisableFontOptions();
+
+    const pf = ed.selection.paragraphFormat;
+    for (const id of ['AlignLeft', 'AlignCenter', 'AlignRight']) {
+      document.getElementById(id)?.classList.remove('e-btn-toggle');
+    }
+    if (pf.textAlignment === 'Left') {
+      document.getElementById('AlignLeft')?.classList.add('e-btn-toggle');
+    } else if (pf.textAlignment === 'Right') {
+      document.getElementById('AlignRight')?.classList.add('e-btn-toggle');
+    } else if (pf.textAlignment === 'Center') {
+      document.getElementById('AlignCenter')?.classList.add('e-btn-toggle');
+    }
+
+    const selHighlight = ed.selection.characterFormat
+      .highlightColor as HighlightColor | null | undefined;
+    if (this._highlightColorInputElement) {
+      const cssColor = this.getCssColorForHighlight(selHighlight);
+      this._appliedHighlightColor = cssColor;
+      this._highlightColorInputElement.style.backgroundColor = cssColor;
+    }
+    this.applyHighlightColorAsBackground(selHighlight ?? 'NoColor');
+
+    if (this.fontFamilyCombo && ed.selection.characterFormat.fontFamily) {
+      this.fontFamilyCombo.value = ed.selection.characterFormat.fontFamily;
+    }
+    if (this.fontSizeCombo && ed.selection.characterFormat.fontSize) {
+      this.fontSizeCombo.value = ed.selection.characterFormat.fontSize.toString();
+    }
+    if (this.fontColorPicker && ed.selection.characterFormat.fontColor) {
+      this.fontColorPicker.value = ed.selection.characterFormat.fontColor;
+    }
+  }
+
+  private enableDisableFontOptions(): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed?.selection) return;
+    const cf = ed.selection.characterFormat;
+    const properties = [cf.bold, cf.italic, cf.underline];
+    const ids = ['bold', 'italic', 'underline'];
+    for (let i = 0; i < properties.length; i++) {
+      this.changeActiveState(properties[i], ids[i]);
+    }
+  }
+
+  private changeActiveState(property: any, btnId: string): void {
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    if (
+      (typeof property === 'boolean' && property) ||
+      (typeof property === 'string' && property !== 'None')
+    ) {
+      btn.classList.add('e-btn-toggle');
+    } else {
+      btn.classList.remove('e-btn-toggle');
+    }
+  }
+
+  private enableDisableUndoRedo(): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return;
+    const undoBtn = document.getElementById('Undo');
+    if (undoBtn) {
+      if (ed.editorHistory.canUndo()) undoBtn.classList.remove('e-overlay');
+      else undoBtn.classList.add('e-overlay');
+    }
+    const redoBtn = document.getElementById('Redo');
+    if (redoBtn) {
+      if (ed.editorHistory.canRedo()) redoBtn.classList.remove('e-overlay');
+      else redoBtn.classList.add('e-overlay');
+    }
+  }
+
+  private toggleTrackChangesButton(): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return;
+    const el = document.getElementById('TrackChanges');
+    if (!el) return;
+    if (ed.enableTrackChanges) {
+      classList(el, ['e-btn-toggle'], []);
+    } else {
+      classList(el, [], ['e-btn-toggle']);
+    }
+  }
+
+  // ==================== Highlight Color ====================
+
+  private initializeHighlightColorElement(): void {
+    if (!this._onHighlightColorClickHandler) {
+      this._onHighlightColorClickHandler = (e: Event) => this.onHighlightColor(e);
+    }
+    this._highlightColorElement = createElement('div', {
+      styles: 'display:none;width:157px',
+      className: 'e-de-cntr-highlight-pane'
+    });
+    const colors: { bg: string; id: string }[] = [
+      { bg: '#ffff00', id: 'yellowDiv' },
+      { bg: '#00ff00', id: 'brightGreenDiv' },
+      { bg: '#00ffff', id: 'turquoiseDiv' },
+      { bg: '#ff00ff', id: 'hotPinkDiv' },
+      { bg: '#0000ff', id: 'blueDiv' },
+      { bg: '#ff0000', id: 'redDiv' },
+      { bg: '#000080', id: 'darkBlueDiv' },
+      { bg: '#008080', id: 'tealDiv' },
+      { bg: '#008000', id: 'greenDiv' },
+      { bg: '#800080', id: 'violetDiv' },
+      { bg: '#800000', id: 'darkRedDiv' },
+      { bg: '#808000', id: 'darkYellowDiv' },
+      { bg: '#808080', id: 'gray50Div' },
+      { bg: '#c0c0c0', id: 'gray25Div' },
+      { bg: '#000000', id: 'blackDiv' },
+    ];
+    for (const c of colors) {
+      const div = createElement('div', {
+        className: 'e-de-ctnr-hglt-btn', id: c.id
+      }) as HTMLDivElement;
+      div.style.backgroundColor = c.bg;
+      this._highlightColorElement.appendChild(div);
+      EventHandler.add(div, 'click', this._onHighlightColorClickHandler as any);
+    }
+    const nocolor = createElement('div', { className: 'e-hglt-no-color' });
+    this._highlightColorElement.appendChild(nocolor);
+    const nocolorDiv = createElement('div', {
+      styles: 'width:24px;height:24px;background-color:#ffffff;margin:3px;',
+      id: 'noColorDiv'
+    });
+    nocolor.appendChild(nocolorDiv);
+    const nocolorLabel = createElement('div', {
+      innerHTML: 'No color',
+      className: 'e-de-ctnr-hglt-no-color'
+    });
+    nocolor.appendChild(nocolorLabel);
+    EventHandler.add(nocolorDiv as HTMLElement, 'click', this._onHighlightColorClickHandler as any);
+  }
+
+  private createHighlightColorSplitButton(
+    id: string, _width: number, divElement: HTMLElement
+  ): SplitButton {
+    const buttonEl = createElement('button', {
+      id, attrs: { type: 'button' }
+    }) as HTMLButtonElement;
+    divElement.appendChild(buttonEl);
+    const splitBtn = new SplitButton({
+      cssClass: 'e-de-btn-hghlclr',
+      iconCss: 'e-de-ctnr-hglt-color',
+      target: this._highlightColorElement!,
+      close: () => {
+        if (this._highlightColorElement) this._highlightColorElement.style.display = 'none';
+      },
+      beforeOpen: () => {
+        if (this._highlightColorElement) this._highlightColorElement.style.display = 'block';
+      }
+    });
+    splitBtn.appendTo(buttonEl);
+    splitBtn.click = () => {
+      if (this._highlightColorInputElement) {
+        this.applyHighlightColor(this._highlightColorInputElement.style.backgroundColor);
+      }
+    };
+    (splitBtn.element.firstChild as HTMLElement).style.backgroundColor = 'rgb(255, 255, 0)';
+    return splitBtn;
+  }
+
+  private onHighlightColor(event: any): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed?.selection) return;
+    this.applyHighlightColor(event.currentTarget.style.backgroundColor);
+    this.highlightColorSplitBtn?.toggle();
+  }
+
+  private applyHighlightColor(color: string): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return;
+    this._appliedHighlightColor = color;
+    const hlColor = this.getHighlightColor(color);
+    if (hlColor === 'NoColor') {
+      ed.selection.characterFormat.highlightColor = null as any;
+    } else {
+      ed.selection.characterFormat.highlightColor = hlColor as HighlightColor;
+    }
+    if (this._highlightColorInputElement) {
+      this._highlightColorInputElement.style.backgroundColor = this._appliedHighlightColor;
+    }
+    ed.focusIn();
+  }
+
+  private getHighlightColor(color: string): HighlightColor {
+    switch (color) {
+      case 'rgb(255, 255, 0)': return 'Yellow';
+      case 'rgb(0, 255, 0)': return 'BrightGreen';
+      case 'rgb(0, 255, 255)': return 'Turquoise';
+      case 'rgb(255, 0, 255)': return 'Pink';
+      case 'rgb(0, 0, 255)': return 'Blue';
+      case 'rgb(255, 0, 0)': return 'Red';
+      case 'rgb(0, 0, 128)': return 'DarkBlue';
+      case 'rgb(0, 128, 128)': return 'Teal';
+      case 'rgb(0, 128, 0)': return 'Green';
+      case 'rgb(128, 0, 128)': return 'Violet';
+      case 'rgb(128, 0, 0)': return 'DarkRed';
+      case 'rgb(128, 128, 0)': return 'DarkYellow';
+      case 'rgb(128, 128, 128)': return 'Gray50';
+      case 'rgb(192, 192, 192)': return 'Gray25';
+      case 'rgb(0, 0, 0)': return 'Black';
+      default: return 'NoColor';
+    }
+  }
+
+  private getCssColorForHighlight(color: HighlightColor | null | undefined): string {
+    switch (color) {
+      case 'Yellow': return 'rgb(255, 255, 0)';
+      case 'BrightGreen': return 'rgb(0, 255, 0)';
+      case 'Turquoise': return 'rgb(0, 255, 255)';
+      case 'Pink': return 'rgb(255, 0, 255)';
+      case 'Blue': return 'rgb(0, 0, 255)';
+      case 'Red': return 'rgb(255, 0, 0)';
+      case 'DarkBlue': return 'rgb(0, 0, 128)';
+      case 'Teal': return 'rgb(0, 128, 128)';
+      case 'Green': return 'rgb(0, 128, 0)';
+      case 'Violet': return 'rgb(128, 0, 128)';
+      case 'DarkRed': return 'rgb(128, 0, 0)';
+      case 'DarkYellow': return 'rgb(128, 128, 0)';
+      case 'Gray50': return 'rgb(128, 128, 128)';
+      case 'Gray25': return 'rgb(192, 192, 192)';
+      case 'Black': return 'rgb(0, 0, 0)';
+      case 'NoColor':
+        return 'rgb(255, 255, 255)';
+      default:
+        return this._appliedHighlightColor || 'rgb(255, 255, 0)';
+    }
+  }
+
+  private applyHighlightColorAsBackground(color: HighlightColor): void {
+    if (!this._highlightColorElement) return;
+    this.removeSelectedColorDiv();
+    const colorMap: Record<string, string> = {
+      'NoColor': 'noColorDiv', 'Yellow': 'yellowDiv', 'BrightGreen': 'brightGreenDiv',
+      'Turquoise': 'turquoiseDiv', 'Pink': 'hotPinkDiv', 'Blue': 'blueDiv',
+      'Red': 'redDiv', 'DarkBlue': 'darkBlueDiv', 'Teal': 'tealDiv',
+      'Green': 'greenDiv', 'Violet': 'violetDiv', 'DarkRed': 'darkRedDiv',
+      'DarkYellow': 'darkYellowDiv', 'Gray50': 'gray50Div', 'Gray25': 'gray25Div',
+      'Black': 'blackDiv'
+    };
+    const divId = colorMap[color as string];
+    if (divId) {
+      this._highlightColorElement.querySelector('#' + divId)?.classList.add('e-color-selected');
+    }
+  }
+
+  private removeSelectedColorDiv(): void {
+    if (!this._highlightColorElement) return;
+    const allIds = [
+      'noColorDiv', 'yellowDiv', 'brightGreenDiv', 'turquoiseDiv', 'hotPinkDiv',
+      'blueDiv', 'redDiv', 'darkBlueDiv', 'tealDiv', 'greenDiv', 'violetDiv',
+      'darkRedDiv', 'darkYellowDiv', 'gray50Div', 'gray25Div', 'blackDiv'
+    ];
+    for (const id of allIds) {
+      this._highlightColorElement.querySelector('#' + id)?.classList.remove('e-color-selected');
+    }
+  }
+
+  // ==================== Lists & Image ====================
+
+  private bulletListAction(args: any): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return;
+    switch (args.item.text) {
+      case 'None': ed.editor.clearList(); break;
+      case 'Dot': ed.editor.applyBullet(String.fromCharCode(61623), 'Symbol'); break;
+      case 'Circle': ed.editor.applyBullet(String.fromCharCode(61551) + String.fromCharCode(32), 'Symbol'); break;
+      case 'Square': ed.editor.applyBullet(String.fromCharCode(61607), 'Wingdings'); break;
+      case 'Flower': ed.editor.applyBullet(String.fromCharCode(61558), 'Wingdings'); break;
+      case 'Arrow': ed.editor.applyBullet(String.fromCharCode(61656), 'Wingdings'); break;
+      case 'Tick': ed.editor.applyBullet(String.fromCharCode(61692), 'Wingdings'); break;
+    }
+    setTimeout(() => ed.focusIn(), 30);
+  }
+
+  private numberListAction(args: any): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return;
+    const fmt = this.getLevelFormatNumber();
+    switch (args.item.text) {
+      case 'None': ed.editor.clearList(); break;
+      case 'NumberDot': ed.editor.applyNumbering(fmt, 'Arabic'); break;
+      case 'UpRoman': ed.editor.applyNumbering(fmt, 'UpRoman'); break;
+      case 'UpLetter': ed.editor.applyNumbering(fmt, 'UpLetter'); break;
+      case 'LowLetter': ed.editor.applyNumbering(fmt, 'LowLetter'); break;
+      case 'LowRoman': ed.editor.applyNumbering(fmt, 'LowRoman'); break;
+    }
+    setTimeout(() => ed.focusIn(), 30);
+  }
+
+  private getLevelFormatNumber(): string {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return '%1.';
+    const rawLevel = ed.selection.paragraphFormat.listLevelNumber;
+    const level =
+      typeof rawLevel === 'number' && Number.isFinite(rawLevel) && rawLevel > 0
+        ? rawLevel
+        : 0;
+    return '%' + (level + 1) + '.';
+  }
+
+  private imageSelect(args: any): void {
+    if (args.item.id === 'imageLocal' && this._imagePicker) {
+      this._imagePicker.value = '';
+      this._imagePicker.click();
+    }
+    setTimeout(() => this.docEditor?.documentEditor?.focusIn(), 30);
+  }
+
+  private onImagePickerChange(): void {
+    if (!this._imagePicker?.files?.length) return;
+    const file = this._imagePicker.files[0];
+    const reader = new FileReader();
+    reader.onload = () => {
+      this.docEditor?.documentEditor?.editor.insertImage(reader.result as string);
+    };
+    reader.readAsDataURL(file);
   }
 }
