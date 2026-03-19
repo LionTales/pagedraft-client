@@ -1140,7 +1140,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   private onFontColorChange(args: any): void {
     const ed = this.docEditor?.documentEditor;
-    if (!ed || !args?.isInteracted) return;
+    if (!ed) return;
     ed.selection.characterFormat.fontColor = args.currentValue.hex;
     ed.focusIn();
   }
