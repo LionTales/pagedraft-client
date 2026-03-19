@@ -1041,7 +1041,6 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     try {
       this._highlightColorElement?.remove();
     } catch { /* ignore */ }
-    try { this.customToolbar?.destroy(); } catch { /* ignore */ }
     try { this.highlightColorSplitBtn?.destroy(); } catch { /* ignore */ }
     try { this.fontFamilyCombo?.destroy(); } catch { /* ignore */ }
     try { this.fontSizeCombo?.destroy(); } catch { /* ignore */ }
@@ -1054,6 +1053,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     try { this._imageDropdown?.destroy(); } catch { /* ignore */ }
     try { this._bulletListDropdown?.destroy(); } catch { /* ignore */ }
     try { this._numberedListDropdown?.destroy(); } catch { /* ignore */ }
+    try { this.customToolbar?.destroy(); } catch { /* ignore */ }
     this.customToolbar = null;
     this.fontFamilyCombo = null;
     this.fontSizeCombo = null;
@@ -1123,14 +1123,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   private onFontFamilyChange(args: any): void {
     const ed = this.docEditor?.documentEditor;
-    if (!ed) return;
+    if (!ed || !args?.isInteracted) return;
     ed.selection.characterFormat.fontFamily = args.value;
     ed.focusIn();
   }
 
   private onFontSizeChange(args: any): void {
     const ed = this.docEditor?.documentEditor;
-    if (!ed) return;
+    if (!ed || !args?.isInteracted) return;
     const raw = args?.value;
     const parsed = typeof raw === 'number' ? raw : parseFloat(String(raw));
     if (!Number.isFinite(parsed)) return;
@@ -1177,6 +1177,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     }
     if (this.fontSizeCombo && ed.selection.characterFormat.fontSize) {
       this.fontSizeCombo.value = ed.selection.characterFormat.fontSize.toString();
+    }
+    if (this.fontColorPicker && ed.selection.characterFormat.fontColor) {
+      this.fontColorPicker.value = ed.selection.characterFormat.fontColor;
     }
   }
 
