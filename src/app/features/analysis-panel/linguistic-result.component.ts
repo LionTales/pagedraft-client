@@ -342,16 +342,24 @@ export class LinguisticResultComponent implements OnChanges {
     if (!rawJson) {
       return { summary: '', deviations: [], consistencyIssues: [], labels, dir, parseFailed: true, emptyStructured: false };
     }
-    let parsed: Partial<LinguisticAnalysis> & { summary?: string };
+    let parsed: unknown;
     try {
-      parsed = JSON.parse(rawJson) as Partial<LinguisticAnalysis> & { summary?: string };
+      parsed = JSON.parse(rawJson);
     } catch {
       return { summary: '', deviations: [], consistencyIssues: [], labels, dir, parseFailed: true, emptyStructured: false };
     }
 
-    const summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
+    // JSON.parse returns non-object primitives for valid JSON like `null`, `123` or `"text"`. Reading
+    // fields off those (e.g. `parsed.summary` when parsed is null) throws during change detection and
+    // breaks the Run/History tab, so treat anything that is not a plain object as a parse failure.
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { summary: '', deviations: [], consistencyIssues: [], labels, dir, parseFailed: true, emptyStructured: false };
+    }
+    const obj = parsed as Partial<LinguisticAnalysis> & { summary?: string };
 
-    const rawDeviations = Array.isArray(parsed.deviations) ? parsed.deviations : [];
+    const summary = typeof obj.summary === 'string' ? obj.summary.trim() : '';
+
+    const rawDeviations = Array.isArray(obj.deviations) ? obj.deviations : [];
     const deviations: LinguisticDeviationRow[] = rawDeviations
       .filter(d => d && typeof d === 'object')
       .map(d => {
@@ -366,7 +374,7 @@ export class LinguisticResultComponent implements OnChanges {
         };
       });
 
-    const rawIssues = Array.isArray(parsed.consistencyIssues) ? parsed.consistencyIssues : [];
+    const rawIssues = Array.isArray(obj.consistencyIssues) ? obj.consistencyIssues : [];
     const consistencyIssues: LinguisticConsistencyChip[] = rawIssues
       .filter(i => i && typeof i === 'object' && (i.type === 'register' || i.type === 'tense' || i.type === 'pov'))
       .map(i => ({

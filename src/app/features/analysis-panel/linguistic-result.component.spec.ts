@@ -212,6 +212,25 @@ describe('LinguisticResultComponent', () => {
   });
 
   // =========================================================================
+  // 5a. Non-object JSON payloads must not crash change detection
+  // =========================================================================
+
+  describe('non-object JSON payloads', () => {
+    for (const payload of ['null', '123', '"just a string"', 'true', '[]']) {
+      it(`treats JSON \`${payload}\` as a parse failure without throwing`, () => {
+        // Reproduces the crash: detectChanges() evaluates the `view` getter, which used to read
+        // parsed.summary off a non-object (e.g. null) and throw.
+        expect(() => setResult(makeLinguisticResult(payload))).not.toThrow();
+        expect(() => component.view).not.toThrow();
+
+        const parseError = fixture.debugElement.query(By.css('[data-testid="linguistic-parse-error"]'));
+        expect(parseError).not.toBeNull();
+        expect(fixture.debugElement.query(By.css('[data-testid="deviation-row"]'))).toBeNull();
+      });
+    }
+  });
+
+  // =========================================================================
   // 5b. resultText fallback when structuredResult is absent
   // =========================================================================
 
