@@ -222,4 +222,20 @@ describe('AnalysisRunOrchestrationService', () => {
       expect(status).toContain('streaming');
     });
   });
+
+  describe('doRunStreaming', () => {
+    it('stamps the synthetic streaming-complete result with the run language', () => {
+      const events: any[] = [];
+      service
+        .doRunStreaming(ctx({ selectedAnalysisType: 'LinguisticAnalysis', language: 'en' }))
+        .subscribe(e => events.push(e));
+
+      const complete = events.find(e => e.kind === 'streaming-complete');
+      expect(complete).withContext('a streaming-complete event should be emitted').toBeTruthy();
+      // Without the language stamp, LinguisticResultComponent defaults to Hebrew (RTL + Hebrew labels),
+      // so an English run would render with the wrong direction/labels.
+      expect(complete.latestResult.language).toBe('en');
+      expect(complete.latestResult.analysisType).toBe('LinguisticAnalysis');
+    });
+  });
 });

@@ -294,7 +294,10 @@ export class AnalysisRunOrchestrationService {
               resultText: accumulated,
               modelName: '',
               createdAt: new Date().toISOString(),
-              analysisType: ctx.selectedAnalysisType
+              analysisType: ctx.selectedAnalysisType,
+              // Stamp the language the run used. Without it LinguisticResultComponent treats a missing
+              // language as Hebrew (RTL + Hebrew labels), so English results would render incorrectly.
+              language: ctx.language
             };
             subscriber.next({ kind: 'streaming-complete', latestResult });
             subscriber.complete();

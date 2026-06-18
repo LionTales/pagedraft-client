@@ -210,4 +210,28 @@ describe('LinguisticResultComponent', () => {
       expect(component.view).toBeNull();
     });
   });
+
+  // =========================================================================
+  // 6. Result language drives text direction (RTL default, LTR for English)
+  // =========================================================================
+
+  describe('result language drives text direction', () => {
+    const structured = JSON.stringify({ deviations: [], consistencyIssues: [] });
+
+    it('defaults to RTL/Hebrew when the result has no language', () => {
+      setResult(makeLinguisticResult(structured, { language: '' }));
+
+      expect(component.view!.dir).toBe('rtl');
+      const view = fixture.debugElement.query(By.css('[data-testid="linguistic-view"]'));
+      expect((view.nativeElement as HTMLElement).getAttribute('dir')).toBe('rtl');
+    });
+
+    it('renders LTR when the result language is English', () => {
+      setResult(makeLinguisticResult(structured, { language: 'en' }));
+
+      expect(component.view!.dir).toBe('ltr');
+      const view = fixture.debugElement.query(By.css('[data-testid="linguistic-view"]'));
+      expect((view.nativeElement as HTMLElement).getAttribute('dir')).toBe('ltr');
+    });
+  });
 });
