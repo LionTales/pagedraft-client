@@ -54,12 +54,22 @@
       </div>
     </article>
   </ng-container>
+  <!-- Linguistic analysis (Run): structured deviations + consistency view (shared component).
+       Shown only after a run completes (not during streaming). -->
+  <article
+    class="result-view"
+    *ngIf="latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis'">
+    <h4>{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
+    <p class="run-duration muted" *ngIf="lastRunDurationLabel">Run time: {{ lastRunDurationLabel }}</p>
+    <app-linguistic-result [result]="latestResult"></app-linguistic-result>
+  </article>
   <article
     class="result-view"
     *ngIf="(streamingText || latestResult)
            && !(latestResult && (latestResult.analysisType || latestResult.type) === 'Proofread' && proofreadSuggestions.length)
            && !(latestResult && (latestResult.analysisType || latestResult.type) === 'LineEdit' && lineEditRunSuggestions.length)
-           && !(latestResult && getLineEdit(latestResult)); else emptyRun">
+           && !(latestResult && getLineEdit(latestResult))
+           && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis'); else emptyRun">
     <h4 *ngIf="streamingText">Live result</h4>
     <h4 *ngIf="!streamingText && latestResult">{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
     <p class="proofread-length-hint muted" *ngIf="showProofreadLengthHint">
@@ -87,7 +97,7 @@
       <pre *ngIf="showRawLineEdit" class="analysis-single">{{ latestResult.resultText }}</pre>
     </div>
     <ng-template #noRunYet>
-      <p class="muted" *ngIf="!proofreadSuggestions.length && !lineEditRunSuggestions.length && !(latestResult && getLineEdit(latestResult))">
+      <p class="muted" data-testid="no-run-yet" *ngIf="!proofreadSuggestions.length && !lineEditRunSuggestions.length && !(latestResult && getLineEdit(latestResult)) && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis')">
         No analysis run yet for this {{ sceneId ? 'scene' : 'chapter' }}.
       </p>
     </ng-template>

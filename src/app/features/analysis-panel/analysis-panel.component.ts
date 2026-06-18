@@ -1166,6 +1166,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   private onStreamingCompleted(latestResult: AnalysisResultDto): void {
     this.isRunning = false;
+    // LinguisticAnalysis streams its structured JSON object, but the synthetic streaming result carries
+    // it only as raw resultText. Surface it as structuredResult so the dedicated linguistic view renders
+    // deviations/consistency instead of falling back to the "could not parse" raw view.
+    if (
+      (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis'
+      && !latestResult.structuredResult
+      && latestResult.resultText
+    ) {
+      latestResult.structuredResult = latestResult.resultText;
+    }
     this.latestResult = latestResult;
     this.activeSubTab = 'run';
     if (this.selectedAnalysisType === 'Proofread' && this.documentText != null && this.streamingText) {
@@ -1180,6 +1190,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.emitSuggestionRanges();
       this.autoShowFirstSuggestion();
     }
+    // Clear the live-stream buffer now the run is complete: the dedicated linguistic/line-edit blocks
+    // require !streamingText to render, and runDisplayText falls back to the persisted resultText.
+    this.streamingText = '';
     this.loadHistory(true);
     this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
     this.analysisCompleted.emit();

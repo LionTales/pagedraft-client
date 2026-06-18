@@ -744,6 +744,59 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect((component as any).offsetsDirty).toBeTrue();
   });
 
+  // ─── streaming completion: clear streamingText + surface linguistic structuredResult ──
+
+  function makeStreamingResult(overrides: Partial<AnalysisResultDto> = {}): AnalysisResultDto {
+    return {
+      id: '',
+      chapterId: 'chap-1',
+      type: 'LinguisticAnalysis',
+      analysisType: 'LinguisticAnalysis',
+      resultText: '',
+      modelName: '',
+      createdAt: new Date().toISOString(),
+      ...overrides,
+    } as AnalysisResultDto;
+  }
+
+  it('onStreamingCompleted clears streamingText so post-run views can render', () => {
+    component['streamingText'] = 'a streamed summary response';
+    const result = makeStreamingResult({
+      type: 'Summarization',
+      analysisType: 'Summarization',
+      resultText: 'a streamed summary response',
+    });
+
+    (component as any).onStreamingCompleted(result);
+
+    expect(component['streamingText']).toBe('');
+    // Non-linguistic types are not given a synthetic structuredResult.
+    expect(component['latestResult']!.structuredResult).toBeUndefined();
+  });
+
+  it('onStreamingCompleted surfaces the streamed JSON as structuredResult for LinguisticAnalysis', () => {
+    const json = JSON.stringify({
+      deviations: [{ metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' }],
+      consistencyIssues: [],
+    });
+    component['streamingText'] = json;
+    const result = makeStreamingResult({ resultText: json });
+
+    (component as any).onStreamingCompleted(result);
+
+    expect(component['streamingText']).toBe('');
+    expect(component['latestResult']!.structuredResult).toBe(json);
+  });
+
+  it('onStreamingCompleted does not overwrite an existing structuredResult', () => {
+    const existing = JSON.stringify({ deviations: [], consistencyIssues: [] });
+    const result = makeStreamingResult({ resultText: 'raw', structuredResult: existing });
+
+    (component as any).onStreamingCompleted(result);
+
+    expect(component['latestResult']!.structuredResult).toBe(existing);
+  });
+
   it('auto-dismiss fires for stale Pending suggestions only, not for Accepted or Reverted', () => {
     const anchorSpy = TestBed.inject(SuggestionAnchorService) as jasmine.SpyObj<SuggestionAnchorService>;
     const pending: AnalysisSuggestion = {

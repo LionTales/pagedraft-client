@@ -6,11 +6,12 @@ import { SuggestionKeyService } from '../../core/services/suggestion-key.service
 import { proofreadDiff } from '../../core/utils/proofread-diff';
 import { analysisItems as splitAnalysisItems } from '../../core/utils/analysis-items';
 import { SuggestionCardComponent } from './suggestion-card.component';
+import { LinguisticResultComponent } from './linguistic-result.component';
 
 @Component({
   selector: 'app-analysis-history-tab',
   standalone: true,
-  imports: [CommonModule, SuggestionCardComponent],
+  imports: [CommonModule, SuggestionCardComponent, LinguisticResultComponent],
   templateUrl: './analysis-history-tab.component.html',
   styleUrl: './analysis-history-tab.component.scss'
 })

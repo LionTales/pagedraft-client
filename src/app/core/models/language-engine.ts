@@ -47,6 +47,8 @@ export interface LinguisticAnalysis {
   morphologyMetrics?: Record<string, any>;
   styleMetrics?: Record<string, any>;
   grammaticalityScore?: number;
+  deviations?: { metric: string; sceneValue: number; chapterBaseline: number; note: string }[];
+  consistencyIssues?: { type: 'register' | 'tense' | 'pov'; span: string; description: string }[];
 }
 
 export interface LiteraryAnalysis {
