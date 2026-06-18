@@ -67,19 +67,21 @@
         </app-suggestion-card>
       </div>
     </ng-container>
-    <!-- Other structured (metric cards) -->
-    <div class="metric-cards" *ngIf="!lineEditForCurrent && (current.analysisType || current.type) !== 'Proofread' && current.structuredResult && metricCardsForCurrent.length; else textResult">
+    <!-- Other structured (metric cards); excluded for LinguisticAnalysis which uses app-linguistic-result below -->
+    <div class="metric-cards" *ngIf="!lineEditForCurrent && (current.analysisType || current.type) !== 'Proofread' && (current.analysisType || current.type) !== 'LinguisticAnalysis' && current.structuredResult && metricCardsForCurrent.length; else textResult">
       <div class="metric-card" *ngFor="let card of metricCardsForCurrent">
         <span class="metric-label">{{ card.label }}</span>
         <span class="metric-value">{{ card.value }}</span>
       </div>
     </div>
+    <!-- Linguistic analysis: style deviations, consistency issues (shared component) -->
+    <app-linguistic-result [result]="current"></app-linguistic-result>
     <ng-template #textResult>
-      <ul class="analysis-list" *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions() && analysisItems(current.resultText).length > 1; else singleHistory">
+      <ul class="analysis-list" *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions() && (current.analysisType || current.type) !== 'LinguisticAnalysis' && analysisItems(current.resultText).length > 1; else singleHistory">
         <li *ngFor="let item of analysisItems(current.resultText)">{{ item }}</li>
       </ul>
       <ng-template #singleHistory>
-        <p class="analysis-single" *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions()">{{ current.resultText }}</p>
+        <p class="analysis-single" *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions() && (current.analysisType || current.type) !== 'LinguisticAnalysis'">{{ current.resultText }}</p>
       </ng-template>
     </ng-template>
   </article>

@@ -4,11 +4,12 @@ import { AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysi
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { analysisItems as splitAnalysisItems } from '../../core/utils/analysis-items';
 import { SuggestionCardComponent } from './suggestion-card.component';
+import { LinguisticResultComponent } from './linguistic-result.component';
 
 @Component({
   selector: 'app-analysis-run-tab',
   standalone: true,
-  imports: [CommonModule, SuggestionCardComponent],
+  imports: [CommonModule, SuggestionCardComponent, LinguisticResultComponent],
   templateUrl: './analysis-run-tab.component.html',
   styleUrl: './analysis-run-tab.component.scss'
 })
