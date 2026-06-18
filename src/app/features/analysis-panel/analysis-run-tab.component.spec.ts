@@ -71,8 +71,9 @@ describe('AnalysisRunTabComponent', () => {
       component.streamingText = '';
       fixture.detectChanges();
 
-      // Dedicated linguistic block renders.
+      // Dedicated linguistic block renders, with the parsed deviation chip (not the raw stream).
       expect(query('[data-testid="linguistic-view"]')).not.toBeNull();
+      expect(query('[data-testid="deviation-row"]')).not.toBeNull();
       // The generic empty-state must NOT contradict it.
       expect(query('[data-testid="no-run-yet"]')).toBeNull();
     });
