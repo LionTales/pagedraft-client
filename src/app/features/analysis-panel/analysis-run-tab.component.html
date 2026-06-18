@@ -97,7 +97,7 @@
       <pre *ngIf="showRawLineEdit" class="analysis-single">{{ latestResult.resultText }}</pre>
     </div>
     <ng-template #noRunYet>
-      <p class="muted" *ngIf="!proofreadSuggestions.length && !lineEditRunSuggestions.length && !(latestResult && getLineEdit(latestResult))">
+      <p class="muted" data-testid="no-run-yet" *ngIf="!proofreadSuggestions.length && !lineEditRunSuggestions.length && !(latestResult && getLineEdit(latestResult)) && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis')">
         No analysis run yet for this {{ sceneId ? 'scene' : 'chapter' }}.
       </p>
     </ng-template>
