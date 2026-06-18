@@ -212,6 +212,42 @@ describe('LinguisticResultComponent', () => {
   });
 
   // =========================================================================
+  // 5b. resultText fallback when structuredResult is absent
+  // =========================================================================
+
+  describe('resultText fallback', () => {
+    const validJson = JSON.stringify({
+      deviations: [{ metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' }],
+      consistencyIssues: [{ type: 'tense', span: 'x', description: 'tense shift' }],
+    });
+
+    it('renders chips from resultText when structuredResult is null', () => {
+      setResult(makeLinguisticResult(null, { resultText: validJson }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-parse-error"]'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-view"]'))).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="deviation-row"]'))).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-row"]'))).not.toBeNull();
+    });
+
+    it('prefers structuredResult over resultText when both are present', () => {
+      const structured = JSON.stringify({ deviations: [], consistencyIssues: [] });
+      setResult(makeLinguisticResult(structured, { resultText: validJson }));
+
+      // structuredResult has no deviations, so none should render even though resultText has one.
+      expect(fixture.debugElement.query(By.css('[data-testid="deviation-row"]'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="deviations-empty"]'))).not.toBeNull();
+    });
+
+    it('still shows parse-error when resultText is not JSON and structuredResult is null', () => {
+      setResult(makeLinguisticResult(null, { resultText: 'just prose, definitely not json at all' }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-parse-error"]'))).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="deviation-row"]'))).toBeNull();
+    });
+  });
+
+  // =========================================================================
   // 6. Result language drives text direction (RTL default, LTR for English)
   // =========================================================================
 

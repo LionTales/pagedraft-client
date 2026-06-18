@@ -312,13 +312,13 @@ export class LinguisticResultComponent implements OnChanges {
   /**
    * Cached, localized linguistic view for the current result. Returns null for non-LinguisticAnalysis
    * results (so the host section is not rendered at all). JSON.parse runs at most once per distinct
-   * (id + language + structuredResult) triple.
+   * (id + language + structuredResult + resultText) tuple.
    */
   get view(): LinguisticViewModel | null {
     const result = this.result;
     if (!result) return null;
     if ((result.analysisType || result.type) !== 'LinguisticAnalysis') return null;
-    const cacheKey = `${result.id ?? ''}:${result.language ?? ''}:${result.structuredResult ?? ''}`;
+    const cacheKey = `${result.id ?? ''}:${result.language ?? ''}:${result.structuredResult ?? ''}:${result.resultText ?? ''}`;
     if (this._viewCacheKey !== cacheKey) {
       this._viewCache = this.buildLinguisticView(result);
       this._viewCacheKey = cacheKey;
@@ -332,13 +332,19 @@ export class LinguisticResultComponent implements OnChanges {
     const labels = LINGUISTIC_LABELS[lang];
     const dir: 'rtl' | 'ltr' = isEnglish ? 'ltr' : 'rtl';
 
-    // Missing structuredResult OR JSON.parse throws => graceful fallback.
-    if (!result.structuredResult) {
+    // Prefer structuredResult, but fall back to resultText: some LinguisticAnalysis results store the
+    // JSON only in resultText (as LineEditParserService also handles), and the History tab no longer
+    // renders the raw resultText blob, so without this fallback valid output would show a false
+    // "could not parse" state. parseFailed only when neither source yields valid JSON.
+    const rawJson = result.structuredResult?.trim()
+      ? result.structuredResult
+      : (result.resultText?.trim() ? result.resultText : '');
+    if (!rawJson) {
       return { summary: '', deviations: [], consistencyIssues: [], labels, dir, parseFailed: true, emptyStructured: false };
     }
     let parsed: Partial<LinguisticAnalysis> & { summary?: string };
     try {
-      parsed = JSON.parse(result.structuredResult) as Partial<LinguisticAnalysis> & { summary?: string };
+      parsed = JSON.parse(rawJson) as Partial<LinguisticAnalysis> & { summary?: string };
     } catch {
       return { summary: '', deviations: [], consistencyIssues: [], labels, dir, parseFailed: true, emptyStructured: false };
     }
