@@ -164,6 +164,23 @@ describe('LinguisticResultComponent', () => {
       expect(fixture.debugElement.query(By.css('[data-testid="linguistic-empty-note"]'))).toBeNull();
       expect(fixture.debugElement.query(By.css('[data-testid="linguistic-raw-toggle"]'))).toBeNull();
     });
+
+    it('recomputes emptyStructured when consistency suggestions arrive on the SAME result object', () => {
+      // Initially no consistency suggestions: empty parsed JSON + long raw text => empty note shows.
+      const result = makeLinguisticResult('{}', { resultText: RAW_TEXT, suggestions: [] });
+      setResult(result);
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-empty-note"]'))).not.toBeNull();
+      expect(component.view!.emptyStructured).toBeTrue();
+
+      // The persisted row's consistency suggestions arrive on the SAME object - id, language,
+      // structuredResult and resultText are all unchanged. The cached view must still recompute, or
+      // the stale "no structured content" note lingers while consistency cards render elsewhere.
+      result.suggestions = [{ category: 'consistency-pov' } as any];
+      fixture.detectChanges();
+
+      expect(component.view!.emptyStructured).toBeFalse();
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-empty-note"]'))).toBeNull();
+    });
   });
 
   // =========================================================================

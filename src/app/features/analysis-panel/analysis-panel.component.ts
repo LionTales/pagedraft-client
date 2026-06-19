@@ -1025,38 +1025,64 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           this.dismissedProofreadHistoryKeys = new Set();
           this.acceptedLineEditKeys = new Set();
           this.dismissedLineEditKeys = new Set();
+          // Consistency items are dismiss-only (navigate-only cards, no Accept). A full reload is
+          // meant to reset session outcome state to exactly what the server returned, so the
+          // in-memory dismissed-consistency set must be cleared too; otherwise reloaded history can
+          // still hide consistency items via stale keys from a previous run.
+          this.dismissedConsistencyKeys = new Set();
         }
-        // Prepend streaming run (no id) so it appears in History and Accepted/Dismissed keys match,
-        // but only when its analysis type matches the current history filter (or when showing All).
-        if (this.latestResult && !this.latestResult.id) {
-          const latestType = this.latestResult.analysisType || this.latestResult.type;
-          if (!this.historyFilterType || latestType === this.historyFilterType) {
-            this.history = [this.latestResult, ...this.history];
-          }
-        }
-        // Decide which result should be treated as "latest" for the Run tab:
-        // - If we already have a synthetic streaming latestResult for this type, keep it for this pass.
-        // - Otherwise, prefer the most recent analysis whose type matches the currently selected type,
-        //   so the Run tab never shows results for a different analysis type than the picker.
-        let latestCandidate: AnalysisResultDto | null = null;
-        if (this.latestResult && !this.latestResult.id && (this.latestResult.analysisType || this.latestResult.type) === this.selectedAnalysisType) {
-          latestCandidate = this.latestResult;
-        } else {
+        // The newest persisted (has-id) analysis row for the selected type. Active rows win over
+        // archived; ties broken by createdAt desc.
+        const persistedForType: AnalysisResultDto | null = (() => {
           const activeForType = this.activeAnalyses.filter(
             r => (r.analysisType || r.type) === this.selectedAnalysisType
           );
           const allForType = this.allAnalyses.filter(
             r => (r.analysisType || r.type) === this.selectedAnalysisType
           );
-          const candidates = activeForType.length ? activeForType : allForType;
+          const candidates = (activeForType.length ? activeForType : allForType).slice();
           candidates.sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           );
-          latestCandidate = candidates[0] ?? null;
+          return candidates[0] ?? null;
+        })();
+
+        // A synthetic streaming result has no id and carries only resultText/structuredResult - never
+        // the AnalysisSuggestion DTOs. Consistency cards are sourced ONLY from result.suggestions, so a
+        // LinguisticAnalysis run must adopt the persisted API row (which carries those suggestions) once
+        // it is available; otherwise Run + History show no consistency issues. Proofread/LineEdit keep
+        // the synthetic result because their Run tab is driven by resultText, not server suggestions.
+        const syntheticStreaming =
+          this.latestResult && !this.latestResult.id &&
+          (this.latestResult.analysisType || this.latestResult.type) === this.selectedAnalysisType
+            ? this.latestResult
+            : null;
+        const syntheticType = syntheticStreaming
+          ? (syntheticStreaming.analysisType || syntheticStreaming.type)
+          : null;
+        const replaceSyntheticWithPersisted =
+          !!syntheticStreaming && syntheticType === 'LinguisticAnalysis' && !!persistedForType;
+
+        // Prepend the synthetic streaming run so it appears in History and its Accepted/Dismissed keys
+        // match - but NOT when we are about to replace it with the persisted row, or the same run would
+        // show twice (the synthetic copy without consistency cards).
+        if (this.latestResult && !this.latestResult.id && !replaceSyntheticWithPersisted) {
+          const latestType = this.latestResult.analysisType || this.latestResult.type;
+          if (!this.historyFilterType || latestType === this.historyFilterType) {
+            this.history = [this.latestResult, ...this.history];
+          }
         }
+
+        // Decide which result is "latest" for the Run tab: keep a synthetic streaming result for this
+        // pass (unless it is being replaced by the persisted row), else prefer the newest persisted row
+        // of the selected type so the Run tab never shows a different type than the picker.
+        const latestCandidate: AnalysisResultDto | null =
+          (syntheticStreaming && !replaceSyntheticWithPersisted) ? syntheticStreaming : persistedForType;
         if (latestCandidate) {
           let shouldUpdateLatest = false;
-          if (!this.latestResult) {
+          // Swapping a synthetic streaming result for its persisted row is intentional even though the
+          // persisted row's server createdAt predates the synthetic client timestamp, so force it.
+          if (!this.latestResult || replaceSyntheticWithPersisted) {
             shouldUpdateLatest = true;
           } else {
             const existingTime = new Date(this.latestResult.createdAt).getTime();

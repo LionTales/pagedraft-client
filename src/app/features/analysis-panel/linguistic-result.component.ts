@@ -206,7 +206,7 @@ export class LinguisticResultComponent implements OnChanges {
   /** Whether the opt-in raw-response block is currently expanded. */
   showRaw = false;
 
-  /** Cached view model; recomputed only when the cache key (id + language + structuredResult) changes. */
+  /** Cached view model; recomputed only when the cache key (id + language + structuredResult + resultText + consistency count) changes. */
   private _viewCache: LinguisticViewModel | null = null;
   private _viewCacheKey: string | null = null;
 
@@ -231,7 +231,13 @@ export class LinguisticResultComponent implements OnChanges {
     const result = this.result;
     if (!result) return null;
     if ((result.analysisType || result.type) !== 'LinguisticAnalysis') return null;
-    const cacheKey = `${result.id ?? ''}:${result.language ?? ''}:${result.structuredResult ?? ''}:${result.resultText ?? ''}`;
+    // emptyStructured depends on whether the result carries consistency suggestion DTOs, but those can
+    // be populated on the same result object (same id/structuredResult/resultText) after the initial
+    // render - e.g. when the persisted row's suggestions arrive. Include the consistency-suggestion
+    // count in the cache key so the view recomputes and the "no structured content" note clears once
+    // consistency cards exist.
+    const consistencyCount = result.suggestions?.filter(s => isConsistencySuggestion(s)).length ?? 0;
+    const cacheKey = `${result.id ?? ''}:${result.language ?? ''}:${result.structuredResult ?? ''}:${result.resultText ?? ''}:${consistencyCount}`;
     if (this._viewCacheKey !== cacheKey) {
       this._viewCache = this.buildLinguisticView(result);
       this._viewCacheKey = cacheKey;
