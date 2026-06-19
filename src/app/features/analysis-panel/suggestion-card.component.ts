@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
-import { AnalysisSuggestion } from '../../core/models/analysis';
+import { AnalysisSuggestion, isConsistencySuggestion } from '../../core/models/analysis';
 import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proofread-diff';
 
 @Component({
@@ -17,7 +17,11 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
           *ngIf="suggestion.category">
           {{ getCategoryLabel(suggestion.category) }}
         </span>
-        <div class="suggestion-original" *ngIf="suggestion.original !== suggestion.suggested && suggestion.original">
+        <div class="suggestion-navigate-text" *ngIf="navigateOnly && suggestion.original">
+          <span class="suggestion-label">Text:</span>
+          <span class="suggestion-inline">{{ suggestion.original }}</span>
+        </div>
+        <div class="suggestion-original" *ngIf="!navigateOnly && suggestion.original !== suggestion.suggested && suggestion.original">
           <span class="suggestion-label">Original:</span>
           <span class="suggestion-inline">
             @for (f of originalFragments; track f.text + f.type + $index) {
@@ -28,7 +32,7 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
             }
           </span>
         </div>
-        <div class="suggestion-suggested" *ngIf="suggestion.original !== suggestion.suggested">
+        <div class="suggestion-suggested" *ngIf="!navigateOnly && suggestion.original !== suggestion.suggested">
           <span class="suggestion-label">Suggested:</span>
           <span class="suggestion-inline">
             @for (f of suggestedFragments; track f.text + f.type + $index) {
@@ -59,15 +63,15 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
         </span>
       </div>
       <div class="suggestion-actions" *ngIf="!readOnly">
-        <button type="button" class="btn-accept" *ngIf="hasChange" [disabled]="stale" (click)="accept.emit(suggestion); $event.stopPropagation()">Accept</button>
-        <button type="button" class="btn-dismiss" (click)="dismiss.emit(suggestion); $event.stopPropagation()">{{ hasChange ? 'Dismiss' : 'OK' }}</button>
+        <button type="button" class="btn-accept" *ngIf="hasChange && !navigateOnly" [disabled]="stale" (click)="accept.emit(suggestion); $event.stopPropagation()">Accept</button>
+        <button type="button" class="btn-dismiss" (click)="dismiss.emit(suggestion); $event.stopPropagation()">{{ hasChange && !navigateOnly ? 'Dismiss' : 'OK' }}</button>
         <button
           type="button"
           class="btn-show"
           [class.btn-show-approx]="!hasOffsets"
-          *ngIf="hasChange && suggestion.original"
+          *ngIf="suggestion.original && ((!navigateOnly && hasChange && (hasOffsets || suggestion.id)) || (navigateOnly && hasOffsets))"
           [disabled]="stale"
-          [title]="stale ? 'Text was edited — location unavailable' : (hasOffsets ? '' : 'Approximate location (search-based)')"
+          [title]="stale ? 'Text was edited - location unavailable' : (hasOffsets ? '' : 'Approximate location (search-based)')"
           (click)="showInDocument.emit(suggestion); $event.stopPropagation()">
           Show{{ hasOffsets ? '' : ' ≈' }}
         </button>
@@ -107,7 +111,7 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
       color: #666;
       margin-inline-end: 0.25rem;
     }
-    .suggestion-original, .suggestion-suggested, .suggestion-reason {
+    .suggestion-navigate-text, .suggestion-original, .suggestion-suggested, .suggestion-reason {
       font-size: 0.85rem;
       line-height: 1.4;
     }
@@ -168,6 +172,18 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
     .suggestion-category.category-style {
       background: #e0f2f1;
       color: #00695c;
+    }
+    .suggestion-category.category-consistency-register {
+      background: #fff4e0;
+      color: #b45f06;
+    }
+    .suggestion-category.category-consistency-tense {
+      background: #e8f0fe;
+      color: #1a4fb4;
+    }
+    .suggestion-category.category-consistency-pov {
+      background: #f3e5f5;
+      color: #6a1b9a;
     }
     .suggestion-explanation {
       font-size: 0.8rem;
@@ -296,6 +312,8 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
 })
 export class SuggestionCardComponent implements OnChanges {
   @Input() suggestion!: AnalysisSuggestion;
+  /** Display language for localized labels such as category chips. Defaults to 'en' so all existing usages are unaffected. */
+  @Input() lang: 'he' | 'en' = 'en';
   /** When true, show status badge (Accepted/Dismissed) and hide action buttons. Used in History tab. */
   @Input() readOnly = false;
   /** In read-only mode: 'accepted' | 'dismissed' | 'reverted' | 'pending'. */
@@ -326,8 +344,13 @@ export class SuggestionCardComponent implements OnChanges {
   }
 
   onFieldsClick(): void {
-    if (!this.readOnly && !this.stale && this.hasChange && this.suggestion.original) {
-      this.showInDocument.emit(this.suggestion);
+    if (!this.readOnly && !this.stale && this.suggestion.original) {
+      const canNavigate = this.navigateOnly
+        ? this.hasOffsets
+        : this.hasChange && (this.hasOffsets || !!this.suggestion?.id);
+      if (canNavigate) {
+        this.showInDocument.emit(this.suggestion);
+      }
     }
   }
 
@@ -340,6 +363,11 @@ export class SuggestionCardComponent implements OnChanges {
   /** True when there is an actual text change (original !== suggested). */
   get hasChange(): boolean {
     return !!this.suggestion && this.suggestion.original !== this.suggestion.suggested;
+  }
+
+  /** True when this is a consistency suggestion with no suggested replacement - navigate-only, nothing to apply. */
+  get navigateOnly(): boolean {
+    return isConsistencySuggestion(this.suggestion) && !this.suggestion?.suggested;
   }
 
   /** True when both startOffset and endOffset are populated (precise navigation available). */
@@ -358,6 +386,24 @@ export class SuggestionCardComponent implements OnChanges {
   getCategoryLabel(category: string): string {
     const key = (category || '').toLowerCase();
 
+    // Localized labels for the consistency sub-categories (he/en).
+    const consistencySubLabels: Record<'he' | 'en', Record<string, string>> = {
+      en: {
+        'consistency-register': 'Register',
+        'consistency-tense': 'Tense',
+        'consistency-pov': 'POV'
+      },
+      he: {
+        'consistency-register': 'רישום',
+        'consistency-tense': 'זמן דקדוקי',
+        'consistency-pov': 'נקודת מבט'
+      }
+    };
+
+    if (key in consistencySubLabels[this.lang]) {
+      return consistencySubLabels[this.lang][key];
+    }
+
     const enLabels: Record<string, string> = {
       consistency: 'Consistency',
       continuity: 'Continuity',
@@ -369,8 +415,7 @@ export class SuggestionCardComponent implements OnChanges {
       style: 'Style'
     };
 
-    // Suggestion-level language is not available here; the caller should supply
-    // localized category keys. Fallback to English mapping or the raw key.
+    // Fallback to English mapping or the raw key.
     return enLabels[key] ?? category;
   }
 }
