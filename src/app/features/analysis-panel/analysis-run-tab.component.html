@@ -62,6 +62,21 @@
     <h4>{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
     <p class="run-duration muted" *ngIf="lastRunDurationLabel">Run time: {{ lastRunDurationLabel }}</p>
     <app-linguistic-result [result]="latestResult"></app-linguistic-result>
+    <!-- Consistency issues: navigable + dismissable suggestion cards (single source of truth = result.suggestions).
+         Replaces the former display-only chips in linguistic-result; deviations + summary stay there. -->
+    <div class="consistency-suggestions" *ngIf="consistencyRunSuggestions.length > 0" data-testid="consistency-suggestions">
+      <h4>{{ consistencyCardLang === 'he' ? 'בעיות עקביות' : 'Consistency issues' }}</h4>
+      <app-suggestion-card
+        *ngFor="let s of consistencyRunSuggestions"
+        [suggestion]="s"
+        [lang]="consistencyCardLang"
+        [stale]="s.stale || !!(s.id && staleSuggestionIds.has(s.id))"
+        [loadingExplanation]="!!(s.id && explainingSuggestionIds.has(s.id))"
+        (dismiss)="onConsistencyDismissClick(s)"
+        (explain)="explainSuggestion.emit($event)"
+        (showInDocument)="showInDocumentEvent.emit(s)">
+      </app-suggestion-card>
+    </div>
   </article>
   <article
     class="result-view"

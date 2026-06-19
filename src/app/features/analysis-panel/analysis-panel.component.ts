@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnInit, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subscription, forkJoin } from 'rxjs';
-import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto } from '../../core/models/analysis';
+import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
@@ -93,6 +93,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   versions: DocumentVersionDto[] = [];
   /** Timestamp when the current run started (for duration display). */
   private runStartedAt: number | null = null;
+  /**
+   * Persisted analysis-result ids known BEFORE the current run started (captured in prepareForRun).
+   * A streaming run's persisted row is the one whose id is NOT in this set, which is how we tell the
+   * just-completed run apart from a pre-existing analysis when deciding whether to swap a synthetic
+   * streaming result for its persisted row (see loadHistory).
+   */
+  private analysisResultIdsBeforeRun = new Set<string>();
   /** Human-readable duration label for the last completed run (e.g. "45s", "2m 10s"). */
   lastRunDurationLabel: string | null = null;
   /** Latest estimated completion percent for the current Proofread run (0–100). */
@@ -101,6 +108,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   lineEditRunSuggestions: AnalysisSuggestion[] = [];
   /** True after we've restored Line Edit suggestions for the current chapter/scene (so we don't re-run mapping on every documentText change while user edits). */
   private hasRestoredLineEditForCurrentContext = false;
+  /** Consistency suggestions (register/tense/POV) for the current Run tab; navigate-only AnalysisSuggestion rows on the linguistic result. */
+  consistencyRunSuggestions: AnalysisSuggestion[] = [];
+  /** True after we've restored consistency suggestions for the current chapter/scene. */
+  private hasRestoredConsistencyForCurrentContext = false;
+  /** Keys of dismissed consistency suggestions (so we hide them in History). Reuses the line-edit key shape. */
+  dismissedConsistencyKeys = new Set<string>();
   /** Cached list of Active analyses (by status) for the current chapter/scene, used for re-analysis warnings. */
   private activeAnalyses: AnalysisResultDto[] = [];
   /** True when documentText has changed since the last relocation pass; cleared after relocateAll runs. */
@@ -208,6 +221,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.restoreProofreadStateFromLatestResult();
       } else if (type === 'LineEdit') {
         this.restoreLineEditStateFromResult(candidate);
+      } else if (type === 'LinguisticAnalysis') {
+        this.restoreConsistencyStateFromResult(candidate);
       }
     }
 
@@ -463,6 +478,28 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.emitSuggestionRanges();
   }
 
+  /** Dismiss a navigate-only consistency suggestion (no Accept in v1); persists the outcome like line-edit. */
+  onConsistencyDismiss(suggestion: AnalysisSuggestion, current: AnalysisResultDto): void {
+    const key = this.suggestionKeyService.lineEditSuggestionKey(current, {
+      original: suggestion.original,
+      suggested: suggestion.suggested
+    });
+    this.dismissedConsistencyKeys = new Set([...this.dismissedConsistencyKeys, key]);
+    this.suggestionKeyService.trackRecentOutcomeKey(key);
+    // Remove from the current Run tab list so the dismissed item disappears immediately.
+    this.consistencyRunSuggestions = this.consistencyRunSuggestions.filter(x => x !== suggestion);
+    if (this.bookId && this.chapterId && current.id && suggestion.id) {
+      this.applyOutcomeToSuggestionDtos(suggestion.id, 'Dismissed');
+      this.analysisService
+        .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Dismissed')
+        .subscribe({ error: () => {} });
+    }
+    if (suggestion.startOffset != null && suggestion.endOffset != null) {
+      this.scrollTargetChange.emit({ startOffset: suggestion.startOffset, endOffset: suggestion.endOffset, originalText: suggestion.original || undefined });
+    }
+    this.emitSuggestionRanges();
+  }
+
   onShowInDocument(s: AnalysisSuggestion): void {
     if (this.documentText && s.original) {
       const relocated = this.suggestionAnchorService.relocateOne(s, this.documentText);
@@ -667,6 +704,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       source = this.proofreadSuggestions;
     } else if (type === 'LineEdit') {
       source = this.lineEditRunSuggestions;
+    } else if (type === 'LinguisticAnalysis') {
+      source = this.consistencyRunSuggestions;
     } else {
       this.suggestionRangesChange.emit([]);
       return;
@@ -676,6 +715,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       const relocated = this.suggestionAnchorService.relocateAll(source, this.documentText);
       const newStale = new Set<string>();
       for (let i = 0; i < source.length; i++) {
+        // Null-offset consistency fallback items (be-c01: located nowhere) stay non-navigable and
+        // are never treated as stale: there is no anchor to move, only a descriptive cue to preserve.
+        if (isConsistencySuggestion(source[i]) && source[i].startOffset == null && source[i].endOffset == null) {
+          continue;
+        }
         source[i].startOffset = relocated[i].relocatedStart;
         source[i].endOffset = relocated[i].relocatedEnd;
         source[i].stale = relocated[i].stale;
@@ -686,6 +730,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
       const stalePending = source.filter(s => {
         if (!s.stale || !s.id) return false;
+        // Consistency issues are navigate-only awareness items: a moved span is shown stale (dimmed,
+        // Show disabled) but NOT auto-dismissed - dropping it would erase a scarce, high-value signal
+        // (be-c01 fallback decision). Only the user dismisses a consistency issue.
+        if (isConsistencySuggestion(s)) return false;
         const outcome = (s.outcome || '').toLowerCase();
         return !outcome || outcome === 'pending';
       });
@@ -750,6 +798,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.proofreadSuggestions = [];
       this.proofreadSuggestionsUnreliable = false;
       this.lineEditRunSuggestions = [];
+      this.consistencyRunSuggestions = [];
       this.history = [];
       this.allAnalyses = [];
       this.activeAnalyses = [];
@@ -757,9 +806,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.acceptedProofreadHistoryKeys = new Set();
       this.dismissedLineEditKeys = new Set();
       this.acceptedLineEditKeys = new Set();
+      this.dismissedConsistencyKeys = new Set();
       this.streamingText = '';
       this.hasRestoredProofreadForCurrentContext = false;
       this.hasRestoredLineEditForCurrentContext = false;
+      this.hasRestoredConsistencyForCurrentContext = false;
       this.offsetsDirty = false;
       this.lastAnalysisDocumentText = '';
       this.explainingSuggestionIds.clear();
@@ -807,6 +858,20 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       ) {
         this.restoreLineEditStateFromResult(this.latestResult);
         this.hasRestoredLineEditForCurrentContext = true;
+      }
+
+      // For LinguisticAnalysis consistency issues, restore run-tab suggestions once the document
+      // matches the current context (so navigate offsets are validated against the right document).
+      if (
+        this.latestResult &&
+        (this.latestResult.analysisType || this.latestResult.type) === 'LinguisticAnalysis' &&
+        !this.hasRestoredConsistencyForCurrentContext &&
+        this.consistencyRunSuggestions.length === 0 &&
+        this.documentMatchesCurrentContext &&
+        this.documentText
+      ) {
+        this.restoreConsistencyStateFromResult(this.latestResult);
+        this.hasRestoredConsistencyForCurrentContext = true;
       }
 
       // Offset-recompute: when documentText becomes available and existing Line Edit
@@ -865,7 +930,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private restoreLineEditStateFromResult(result: AnalysisResultDto): void {
     if ((result.analysisType || result.type) !== 'LineEdit') return;
 
-    const mapped = this.mapDtoSuggestions(result);
+    const mapped = this.mapDtoSuggestions(result).filter(s => !isConsistencySuggestion(s));
     const base: AnalysisSuggestion[] = mapped.length
       ? mapped
       : (() => {
@@ -885,6 +950,35 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       return !this.acceptedLineEditKeys.has(key) && !this.dismissedLineEditKeys.has(key);
     });
     this.hasRestoredLineEditForCurrentContext = true;
+    this.offsetsDirty = true;
+    this.emitSuggestionRanges();
+  }
+
+  /**
+   * Restore consistency (register/tense/POV) suggestions for the Run tab from a LinguisticAnalysis result.
+   * These are navigate-only AnalysisSuggestion rows (empty suggested, category consistency-*). Sourced ONLY
+   * from result.suggestions so there is a single source of truth (NOT from the structuredResult chips).
+   * Filters out already accepted/dismissed/superseded items so they don't reappear on the Run tab.
+   * Keeps null-offset fallback items (descriptive, non-navigable) so the user still sees them.
+   */
+  private restoreConsistencyStateFromResult(result: AnalysisResultDto): void {
+    if ((result.analysisType || result.type) !== 'LinguisticAnalysis') return;
+
+    // No heuristic length filter: a consistency span can be long but is still a real signal.
+    const mapped = this.mapDtoSuggestions(result, false).filter(s => isConsistencySuggestion(s));
+
+    this.consistencyRunSuggestions = mapped.filter(s => {
+      const outcome = (s.outcome || '').toLowerCase();
+      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'superseded') {
+        return false;
+      }
+      const key = this.suggestionKeyService.lineEditSuggestionKey(result, {
+        original: s.original,
+        suggested: s.suggested
+      });
+      return !this.dismissedConsistencyKeys.has(key);
+    });
+    this.hasRestoredConsistencyForCurrentContext = true;
     this.offsetsDirty = true;
     this.emitSuggestionRanges();
   }
@@ -938,38 +1032,74 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           this.dismissedProofreadHistoryKeys = new Set();
           this.acceptedLineEditKeys = new Set();
           this.dismissedLineEditKeys = new Set();
+          // Consistency items are dismiss-only (navigate-only cards, no Accept). A full reload is
+          // meant to reset session outcome state to exactly what the server returned, so the
+          // in-memory dismissed-consistency set must be cleared too; otherwise reloaded history can
+          // still hide consistency items via stale keys from a previous run.
+          this.dismissedConsistencyKeys = new Set();
         }
-        // Prepend streaming run (no id) so it appears in History and Accepted/Dismissed keys match,
-        // but only when its analysis type matches the current history filter (or when showing All).
-        if (this.latestResult && !this.latestResult.id) {
-          const latestType = this.latestResult.analysisType || this.latestResult.type;
-          if (!this.historyFilterType || latestType === this.historyFilterType) {
-            this.history = [this.latestResult, ...this.history];
-          }
-        }
-        // Decide which result should be treated as "latest" for the Run tab:
-        // - If we already have a synthetic streaming latestResult for this type, keep it for this pass.
-        // - Otherwise, prefer the most recent analysis whose type matches the currently selected type,
-        //   so the Run tab never shows results for a different analysis type than the picker.
-        let latestCandidate: AnalysisResultDto | null = null;
-        if (this.latestResult && !this.latestResult.id && (this.latestResult.analysisType || this.latestResult.type) === this.selectedAnalysisType) {
-          latestCandidate = this.latestResult;
-        } else {
+        // The newest persisted (has-id) analysis row for the selected type. Active rows win over
+        // archived; ties broken by createdAt desc.
+        const persistedForType: AnalysisResultDto | null = (() => {
           const activeForType = this.activeAnalyses.filter(
             r => (r.analysisType || r.type) === this.selectedAnalysisType
           );
           const allForType = this.allAnalyses.filter(
             r => (r.analysisType || r.type) === this.selectedAnalysisType
           );
-          const candidates = activeForType.length ? activeForType : allForType;
+          const candidates = (activeForType.length ? activeForType : allForType).slice();
           candidates.sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
           );
-          latestCandidate = candidates[0] ?? null;
+          return candidates[0] ?? null;
+        })();
+
+        // A synthetic streaming result has no id and carries only resultText/structuredResult - never
+        // the AnalysisSuggestion DTOs. Consistency cards are sourced ONLY from result.suggestions, so a
+        // LinguisticAnalysis run must adopt the persisted API row (which carries those suggestions) once
+        // it is available; otherwise Run + History show no consistency issues. Proofread/LineEdit keep
+        // the synthetic result because their Run tab is driven by resultText, not server suggestions.
+        const syntheticStreaming =
+          this.latestResult && !this.latestResult.id &&
+          (this.latestResult.analysisType || this.latestResult.type) === this.selectedAnalysisType
+            ? this.latestResult
+            : null;
+        const syntheticType = syntheticStreaming
+          ? (syntheticStreaming.analysisType || syntheticStreaming.type)
+          : null;
+        // Only adopt the persisted row when it is THIS run's row, i.e. an id that did not exist before
+        // the run started. Without this guard, a response that does not yet contain the just-completed
+        // run (replica lag, a stale/cached GET) would replace the fresh synthetic result with the
+        // PREVIOUS persisted analysis, so the Run tab would show an older structured view + consistency
+        // cards instead of the output the user just received. When the run's row has not arrived yet we
+        // keep the synthetic result; a later loadHistory adopts the persisted row once it appears.
+        const replaceSyntheticWithPersisted =
+          !!syntheticStreaming
+          && syntheticType === 'LinguisticAnalysis'
+          && !!persistedForType
+          && !!persistedForType.id
+          && !this.analysisResultIdsBeforeRun.has(persistedForType.id);
+
+        // Prepend the synthetic streaming run so it appears in History and its Accepted/Dismissed keys
+        // match - but NOT when we are about to replace it with the persisted row, or the same run would
+        // show twice (the synthetic copy without consistency cards).
+        if (this.latestResult && !this.latestResult.id && !replaceSyntheticWithPersisted) {
+          const latestType = this.latestResult.analysisType || this.latestResult.type;
+          if (!this.historyFilterType || latestType === this.historyFilterType) {
+            this.history = [this.latestResult, ...this.history];
+          }
         }
+
+        // Decide which result is "latest" for the Run tab: keep a synthetic streaming result for this
+        // pass (unless it is being replaced by the persisted row), else prefer the newest persisted row
+        // of the selected type so the Run tab never shows a different type than the picker.
+        const latestCandidate: AnalysisResultDto | null =
+          (syntheticStreaming && !replaceSyntheticWithPersisted) ? syntheticStreaming : persistedForType;
         if (latestCandidate) {
           let shouldUpdateLatest = false;
-          if (!this.latestResult) {
+          // Swapping a synthetic streaming result for its persisted row is intentional even though the
+          // persisted row's server createdAt predates the synthetic client timestamp, so force it.
+          if (!this.latestResult || replaceSyntheticWithPersisted) {
             shouldUpdateLatest = true;
           } else {
             const existingTime = new Date(this.latestResult.createdAt).getTime();
@@ -994,6 +1124,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
                 (this.activeSubTab !== 'run' || this.lineEditRunSuggestions.length === 0)
               ) {
                 this.restoreLineEditStateFromResult(this.latestResult);
+              } else if (
+                latestType === 'LinguisticAnalysis' &&
+                (this.activeSubTab !== 'run' || this.consistencyRunSuggestions.length === 0)
+              ) {
+                this.restoreConsistencyStateFromResult(this.latestResult);
               }
             }
           }
@@ -1081,10 +1216,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
+    this.consistencyRunSuggestions = [];
     this.staleSuggestionIds = new Set();
     this.hasRestoredLineEditForCurrentContext = false;
+    this.hasRestoredConsistencyForCurrentContext = false;
     this.emitSuggestionRanges();
     this.analysisStarted.emit();
+    // Snapshot the persisted result ids that exist BEFORE this run. After a streaming run, this lets
+    // loadHistory recognize the run's own persisted row (a brand-new id) and avoid swapping the fresh
+    // synthetic result for an OLDER analysis that merely happens to be the newest one in the response.
+    this.analysisResultIdsBeforeRun = new Set(
+      this.allAnalyses.map(r => r.id).filter((id): id is string => !!id)
+    );
     this.runStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     this.lastRunDurationLabel = null;
     this.currentProgressPercent = null;
@@ -1233,6 +1376,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.autoShowFirstSuggestion();
     } else if (type === 'LineEdit') {
       this.restoreLineEditStateFromResult(result);
+    } else if (type === 'LinguisticAnalysis') {
+      this.restoreConsistencyStateFromResult(result);
     }
   }
 

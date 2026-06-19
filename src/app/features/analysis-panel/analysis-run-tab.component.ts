@@ -1,6 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, Output } from '@angular/core';
 import { AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
+import { resolveCardLang } from './card-lang';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { analysisItems as splitAnalysisItems } from '../../core/utils/analysis-items';
 import { SuggestionCardComponent } from './suggestion-card.component';
@@ -18,6 +19,8 @@ export class AnalysisRunTabComponent {
   @Input() proofreadSuggestions: AnalysisSuggestion[] = [];
   @Input() proofreadSuggestionsUnreliable = false;
   @Input() lineEditRunSuggestions: AnalysisSuggestion[] = [];
+  /** Navigate-only consistency suggestions (register/tense/POV) for the current LinguisticAnalysis run. */
+  @Input() consistencyRunSuggestions: AnalysisSuggestion[] = [];
   @Input() latestResult: AnalysisResultDto | null = null;
   @Input() lastRunDurationLabel: string | null = null;
   @Input() streamingText = '';
@@ -30,6 +33,7 @@ export class AnalysisRunTabComponent {
   @Output() proofreadDismiss = new EventEmitter<AnalysisSuggestion>();
   @Output() lineEditAccept = new EventEmitter<{ suggestion: AnalysisSuggestion; result: AnalysisResultDto }>();
   @Output() lineEditDismiss = new EventEmitter<{ suggestion: AnalysisSuggestion; result: AnalysisResultDto }>();
+  @Output() consistencyDismiss = new EventEmitter<{ suggestion: AnalysisSuggestion; result: AnalysisResultDto }>();
   @Output() showInDocumentEvent = new EventEmitter<AnalysisSuggestion>();
   @Output() explainSuggestion = new EventEmitter<AnalysisSuggestion>();
 
@@ -125,6 +129,17 @@ export class AnalysisRunTabComponent {
   onLineEditDismissClick(s: AnalysisSuggestion): void {
     if (this.latestResult) {
       this.lineEditDismiss.emit({ suggestion: s, result: this.latestResult });
+    }
+  }
+
+  /** Language for the consistency suggestion-card labels; resolved from the result / book language. */
+  get consistencyCardLang(): 'he' | 'en' {
+    return resolveCardLang(this.latestResult, this.bookLanguage);
+  }
+
+  onConsistencyDismissClick(s: AnalysisSuggestion): void {
+    if (this.latestResult) {
+      this.consistencyDismiss.emit({ suggestion: s, result: this.latestResult });
     }
   }
 }

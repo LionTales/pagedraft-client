@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
-import { AnalysisResultDto } from '../../core/models/analysis';
+import { AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -109,6 +109,95 @@ describe('AnalysisRunTabComponent', () => {
 
       expect(query('[data-testid="linguistic-view"]')).toBeNull();
       expect(query('[data-testid="no-run-yet"]')).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // Consistency suggestions: Run tab wiring
+  // =========================================================================
+
+  describe('consistency suggestions in Run tab', () => {
+    const consistencySuggestion: AnalysisSuggestion = {
+      id: 'con-1',
+      original: 'She ran toward him.',
+      suggested: '',
+      category: 'consistency-pov',
+      startOffset: 100,
+      endOffset: 119,
+    };
+
+    function setupLinguisticRunWithConsistency(): void {
+      component.latestResult = makeLinguisticResult(
+        JSON.stringify({ deviations: [], consistencyIssues: [] })
+      );
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+      component.consistencyRunSuggestions = [consistencySuggestion];
+      component.streamingText = '';
+      fixture.detectChanges();
+    }
+
+    it('renders a suggestion-card for each consistency suggestion', () => {
+      setupLinguisticRunWithConsistency();
+      const container = query('[data-testid="consistency-suggestions"]');
+      expect(container).not.toBeNull();
+      const cards = fixture.debugElement.queryAll(By.css('[data-testid="consistency-suggestions"] app-suggestion-card'));
+      expect(cards.length).toBe(1);
+    });
+
+    it('consistency block is absent when consistencyRunSuggestions is empty', () => {
+      component.latestResult = makeLinguisticResult(
+        JSON.stringify({ deviations: [], consistencyIssues: [] })
+      );
+      component.consistencyRunSuggestions = [];
+      component.streamingText = '';
+      fixture.detectChanges();
+      expect(query('[data-testid="consistency-suggestions"]')).toBeNull();
+    });
+
+    it('showInDocumentEvent is emitted when the card emits showInDocument', () => {
+      setupLinguisticRunWithConsistency();
+
+      const emitted: AnalysisSuggestion[] = [];
+      component.showInDocumentEvent.subscribe((s: AnalysisSuggestion) => emitted.push(s));
+
+      // Trigger showInDocument output on the child card via Show button click
+      const show = fixture.debugElement.query(
+        By.css('[data-testid="consistency-suggestions"] .btn-show')
+      );
+      expect(show).not.toBeNull();
+      show.nativeElement.click();
+
+      expect(emitted.length).toBe(1);
+      expect(emitted[0].id).toBe('con-1');
+    });
+
+    it('consistencyDismiss output fires with suggestion + result when dismiss is clicked', () => {
+      setupLinguisticRunWithConsistency();
+
+      const dismissed: { suggestion: AnalysisSuggestion; result: AnalysisResultDto }[] = [];
+      component.consistencyDismiss.subscribe((e) => dismissed.push(e));
+
+      const btn = fixture.debugElement.query(
+        By.css('[data-testid="consistency-suggestions"] .btn-dismiss')
+      );
+      expect(btn).not.toBeNull();
+      btn.nativeElement.click();
+
+      expect(dismissed.length).toBe(1);
+      expect(dismissed[0].suggestion.id).toBe('con-1');
+      expect(dismissed[0].result).toBe(component.latestResult as AnalysisResultDto);
+    });
+
+    it('consistencyCardLang returns "he" when bookLanguage is null (defaults to Hebrew)', () => {
+      component.latestResult = makeLinguisticResult(null, { language: null });
+      component.bookLanguage = null;
+      expect(component.consistencyCardLang).toBe('he');
+    });
+
+    it('consistencyCardLang returns "en" when result language is "en"', () => {
+      component.latestResult = makeLinguisticResult(null, { language: 'en' });
+      component.bookLanguage = null;
+      expect(component.consistencyCardLang).toBe('en');
     });
   });
 });

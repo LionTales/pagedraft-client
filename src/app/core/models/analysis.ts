@@ -51,8 +51,8 @@ export interface PromptTemplateDto {
 /** Unified suggestion model used in the UI for Proofread and Line Edit. */
 export interface AnalysisSuggestion {
   id?: string;
-  startOffset?: number;
-  endOffset?: number;
+  startOffset?: number | null;
+  endOffset?: number | null;
   original: string;
   suggested: string;
   reason?: string;
@@ -62,6 +62,17 @@ export interface AnalysisSuggestion {
   contextBefore?: string;
   contextAfter?: string;
   stale?: boolean;
+}
+
+/**
+ * True when a suggestion is a linguistic *consistency* issue (register / tense / POV shift),
+ * identified by its `category` starting with `consistency-`. Used as the single discriminator that
+ * keeps the three suggestion families (proofread / line-edit / consistency) disjoint:
+ * line-edit's own `consistency` category is an EXACT match (no trailing `-`), so it is NOT a
+ * consistency issue under this predicate and the families never double-count.
+ */
+export function isConsistencySuggestion(s: { category?: string | null } | null | undefined): boolean {
+  return (s?.category ?? '').toLowerCase().startsWith('consistency-');
 }
 
 /** Server-side suggestion DTO returned from the backend. */

@@ -1,12 +1,13 @@
 import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
-import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '../../core/models/analysis';
+import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { LineEditParserService, ParsedLineEdit } from '../../core/services/line-edit-parser.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
 import { proofreadDiff } from '../../core/utils/proofread-diff';
 import { analysisItems as splitAnalysisItems } from '../../core/utils/analysis-items';
 import { SuggestionCardComponent } from './suggestion-card.component';
 import { LinguisticResultComponent } from './linguistic-result.component';
+import { resolveCardLang } from './card-lang';
 
 @Component({
   selector: 'app-analysis-history-tab',
@@ -27,6 +28,9 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   @Input() dismissedProofreadHistoryKeys = new Set<string>();
   @Input() acceptedLineEditKeys = new Set<string>();
   @Input() dismissedLineEditKeys = new Set<string>();
+  @Input() dismissedConsistencyKeys = new Set<string>();
+  /** Book language (e.g. 'he', 'en'); feeds the consistency card label localization. */
+  @Input() bookLanguage: string | null = null;
   @Input() proofreadOriginalDocumentByRunKey = new Map<string, string>();
 
   @Output() historyFilterChange = new EventEmitter<string | null>();
@@ -40,6 +44,10 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   /** Cached result of lineEditSuggestionsWithStatus for the current history item; invalidated by ngOnChanges. */
   private _lineEditSuggestionsWithStatusCache: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] | null = null;
   private _lineEditSuggestionsWithStatusCacheResultId: string | null = null;
+
+  /** Cached result of consistencySuggestionsWithStatus for the current history item; invalidated by ngOnChanges. */
+  private _consistencySuggestionsWithStatusCache: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] | null = null;
+  private _consistencySuggestionsWithStatusCacheResultId: string | null = null;
 
   /** Cached parsed LineEdit for the current history item; avoids repeated JSON.parse in template. */
   private _lineEditCache: ParsedLineEdit | null = null;
@@ -75,6 +83,11 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     if (proofreadCacheKeys.some(k => changes[k])) {
       this._proofreadHistoryItemsWithStatusCache = null;
       this._proofreadHistoryItemsWithStatusCacheResultId = null;
+    }
+    const consistencyCacheKeys = ['history', 'dismissedConsistencyKeys'];
+    if (consistencyCacheKeys.some(k => changes[k])) {
+      this._consistencySuggestionsWithStatusCache = null;
+      this._consistencySuggestionsWithStatusCacheResultId = null;
     }
   }
 
@@ -226,6 +239,57 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     const list = this._lineEditSuggestionsWithStatusCache ?? [];
     if (this.historySuggestionStatusFilter === 'all') return list;
     return list.filter(item => item.status === this.historySuggestionStatusFilter);
+  }
+
+  /**
+   * Consistency (register/tense/POV) suggestions with outcome status for the current LinguisticAnalysis
+   * history item. Mirrors lineEditSuggestionsWithStatus but sourced ONLY from result.suggestions whose
+   * category startsWith 'consistency-' (single source of truth, disjoint from line-edit/proofread).
+   * Read-only display; navigate-only items carry no Accept.
+   */
+  private consistencySuggestionsWithStatus(current: AnalysisResultDto): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
+    const keyFor = (s: { original: string; suggested: string }) =>
+      this.suggestionKeyService.lineEditSuggestionKey(current, s);
+
+    const base = this.mapDtoSuggestionsForHistory(current).filter(s => isConsistencySuggestion(s));
+    const result: { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] = [];
+
+    for (const s of base) {
+      const key = keyFor(s);
+      let status: 'accepted' | 'dismissed' | 'reverted' | 'pending';
+      if (this.dismissedConsistencyKeys.has(key)) {
+        status = 'dismissed';
+      } else {
+        const outcome = (s.outcome || '').toLowerCase();
+        if (outcome === 'accepted') status = 'accepted';
+        else if (outcome === 'dismissed' || outcome === 'superseded') status = 'dismissed';
+        else if (outcome === 'reverted') status = 'reverted';
+        else status = 'pending';
+      }
+      result.push({ suggestion: s, status });
+    }
+
+    return this.suggestionKeyService.sortHistoryItemsWithRecentFirst(result, s => keyFor(s));
+  }
+
+  /** Cached + status-filtered consistency suggestions for the current LinguisticAnalysis history item. */
+  get filteredConsistencySuggestionsWithStatusForCurrent(): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
+    const current = this.currentHistoryItem;
+    if (!current || (current.analysisType || current.type) !== 'LinguisticAnalysis') return [];
+    const resultId = current.id ?? '';
+    const cacheKey = `${this.selectedIndex}:${resultId}`;
+    if (this._consistencySuggestionsWithStatusCacheResultId !== cacheKey) {
+      this._consistencySuggestionsWithStatusCache = this.consistencySuggestionsWithStatus(current);
+      this._consistencySuggestionsWithStatusCacheResultId = cacheKey;
+    }
+    const list = this._consistencySuggestionsWithStatusCache ?? [];
+    if (this.historySuggestionStatusFilter === 'all') return list;
+    return list.filter(item => item.status === this.historySuggestionStatusFilter);
+  }
+
+  /** Language for the consistency suggestion-card labels in History; resolved from the result / book language. */
+  get consistencyCardLang(): 'he' | 'en' {
+    return resolveCardLang(this.currentHistoryItem, this.bookLanguage);
   }
 
   getLineEdit(current: AnalysisResultDto): ParsedLineEdit | null {
