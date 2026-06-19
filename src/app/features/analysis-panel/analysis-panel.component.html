@@ -82,6 +82,7 @@
     [proofreadSuggestions]="proofreadSuggestions"
     [proofreadSuggestionsUnreliable]="proofreadSuggestionsUnreliable"
     [lineEditRunSuggestions]="lineEditRunSuggestions"
+    [consistencyRunSuggestions]="consistencyRunSuggestions"
     [latestResult]="latestResult"
     [lastRunDurationLabel]="lastRunDurationLabel"
     [streamingText]="streamingText"
@@ -93,6 +94,7 @@
     (proofreadDismiss)="onProofreadDismiss($event)"
     (lineEditAccept)="onLineEditAccept($event.suggestion, $event.result)"
     (lineEditDismiss)="onLineEditDismiss($event.suggestion, $event.result)"
+    (consistencyDismiss)="onConsistencyDismiss($event.suggestion, $event.result)"
     (showInDocumentEvent)="onShowInDocument($event)"
     (explainSuggestion)="onExplainSuggestion($event)">
   </app-analysis-run-tab>
@@ -110,6 +112,8 @@
     [dismissedProofreadHistoryKeys]="dismissedProofreadHistoryKeys"
     [acceptedLineEditKeys]="acceptedLineEditKeys"
     [dismissedLineEditKeys]="dismissedLineEditKeys"
+    [dismissedConsistencyKeys]="dismissedConsistencyKeys"
+    [bookLanguage]="bookLanguage"
     [proofreadOriginalDocumentByRunKey]="proofreadOriginalDocumentByRunKey"
     (historyFilterChange)="setHistoryFilter($event)"
     (proofreadHistoryAccept)="onProofreadHistoryAccept($event)"

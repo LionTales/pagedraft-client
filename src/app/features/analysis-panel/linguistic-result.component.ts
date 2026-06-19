@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, Input, OnChanges, SimpleChanges } from '@angular/core';
-import { AnalysisResultDto } from '../../core/models/analysis';
+import { AnalysisResultDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { LinguisticAnalysis } from '../../core/models/language-engine';
 
 /** Row shown for a single style deviation (scene metric vs chapter baseline). */
@@ -14,26 +14,15 @@ export interface LinguisticDeviationRow {
   comparison: string;
 }
 
-/** Chip shown for a single cross-paragraph consistency issue. */
-export interface LinguisticConsistencyChip {
-  type: 'register' | 'tense' | 'pov';
-  typeLabel: string;
-  span: string;
-  description: string;
-}
-
 /** Localized strings + parsed fields for the linguistic view of a result. */
 export interface LinguisticViewModel {
   /** Optional model-provided overview sentence(s). Empty string when absent. */
   summary: string;
   deviations: LinguisticDeviationRow[];
-  consistencyIssues: LinguisticConsistencyChip[];
   /** Localized section labels (he default, en when result language is English). */
   labels: {
     deviationsTitle: string;
-    consistencyTitle: string;
     noDeviations: string;
-    noConsistencyIssues: string;
     /** "{scene} vs chapter {baseline}" template parts (kept for compatibility). */
     vs: string;
     chapterBaselineLabel: string;
@@ -47,7 +36,7 @@ export interface LinguisticViewModel {
   };
   /** 'rtl' for Hebrew (default), 'ltr' for English results. */
   dir: 'rtl' | 'ltr';
-  /** True when structuredResult was missing or JSON.parse threw — render fallback instead of blocks. */
+  /** True when structuredResult was missing or JSON.parse threw - render fallback instead of blocks. */
   parseFailed: boolean;
   /** True when parse succeeded but there is no summary, no deviations and no consistency issues. */
   emptyStructured: boolean;
@@ -98,22 +87,9 @@ export interface LinguisticViewModel {
           </ng-template>
         </div>
 
-        <!-- Consistency issues (typed chips) -->
-        <div class="linguistic-block" data-testid="linguistic-consistency">
-          <h4 class="linguistic-block-title">{{ ling.labels.consistencyTitle }}</h4>
-          <ul class="consistency-list" *ngIf="ling.consistencyIssues.length; else noConsistency">
-            <li class="consistency-row" *ngFor="let c of ling.consistencyIssues" data-testid="consistency-row">
-              <span class="consistency-type" [ngClass]="'consistency-type-' + c.type" data-testid="consistency-type">{{ c.typeLabel }}</span>
-              <span class="consistency-body">
-                <span class="consistency-description">{{ c.description }}</span>
-                <span class="consistency-span" *ngIf="c.span">“{{ c.span }}”</span>
-              </span>
-            </li>
-          </ul>
-          <ng-template #noConsistency>
-            <p class="muted" data-testid="consistency-empty">{{ ling.labels.noConsistencyIssues }}</p>
-          </ng-template>
-        </div>
+        <!-- Consistency issues are now rendered as navigable + dismissable suggestion cards by the
+             Run/History tabs (sourced from result.suggestions, category consistency-*), so they no
+             longer appear here. Only style deviations + summary live in this shared view. -->
 
         <!-- Parsed but empty, and there is non-trivial raw text: offer the raw response. -->
         <ng-container *ngIf="ling.emptyStructured && hasRawText">
@@ -197,69 +173,6 @@ export interface LinguisticViewModel {
       line-height: 1.4;
       color: #555;
     }
-    .consistency-list {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.4rem;
-    }
-    .consistency-row {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.4rem;
-    }
-    .consistency-type {
-      flex: none;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.25rem;
-      font-size: 0.7rem;
-      text-transform: uppercase;
-      border-radius: 999px;
-      padding: 0.1rem 0.45rem;
-      font-weight: 600;
-      background: #e6f0ff;
-      color: #074799;
-    }
-    .consistency-type::before {
-      content: '';
-      display: inline-block;
-      width: 0.4rem;
-      height: 0.4rem;
-      border-radius: 999px;
-      background: currentColor;
-    }
-    .consistency-type.consistency-type-register {
-      background: #fff4e0;
-      color: #b45f06;
-    }
-    .consistency-type.consistency-type-tense {
-      background: #e8f0fe;
-      color: #1a4fb4;
-    }
-    .consistency-type.consistency-type-pov {
-      background: #f3e5f5;
-      color: #6a1b9a;
-    }
-    .consistency-body {
-      display: flex;
-      flex-direction: column;
-      gap: 0.15rem;
-      min-width: 0;
-    }
-    .consistency-description {
-      font-size: 0.85rem;
-      line-height: 1.4;
-      color: #333;
-    }
-    .consistency-span {
-      font-size: 0.8rem;
-      color: #666;
-      font-style: italic;
-      word-break: break-word;
-    }
     .muted {
       color: #666;
       font-size: 0.85rem;
@@ -340,20 +253,20 @@ export class LinguisticResultComponent implements OnChanges {
       ? result.structuredResult
       : (result.resultText?.trim() ? result.resultText : '');
     if (!rawJson) {
-      return { summary: '', deviations: [], consistencyIssues: [], labels, dir, parseFailed: true, emptyStructured: false };
+      return { summary: '', deviations: [], labels, dir, parseFailed: true, emptyStructured: false };
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawJson);
     } catch {
-      return { summary: '', deviations: [], consistencyIssues: [], labels, dir, parseFailed: true, emptyStructured: false };
+      return { summary: '', deviations: [], labels, dir, parseFailed: true, emptyStructured: false };
     }
 
     // JSON.parse returns non-object primitives for valid JSON like `null`, `123` or `"text"`. Reading
     // fields off those (e.g. `parsed.summary` when parsed is null) throws during change detection and
     // breaks the Run/History tab, so treat anything that is not a plain object as a parse failure.
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { summary: '', deviations: [], consistencyIssues: [], labels, dir, parseFailed: true, emptyStructured: false };
+      return { summary: '', deviations: [], labels, dir, parseFailed: true, emptyStructured: false };
     }
     const obj = parsed as Partial<LinguisticAnalysis> & { summary?: string };
 
@@ -374,19 +287,15 @@ export class LinguisticResultComponent implements OnChanges {
         };
       });
 
-    const rawIssues = Array.isArray(obj.consistencyIssues) ? obj.consistencyIssues : [];
-    const consistencyIssues: LinguisticConsistencyChip[] = rawIssues
-      .filter(i => i && typeof i === 'object' && (i.type === 'register' || i.type === 'tense' || i.type === 'pov'))
-      .map(i => ({
-        type: i.type,
-        typeLabel: CONSISTENCY_TYPE_LABELS[lang][i.type],
-        span: i.span ?? '',
-        description: i.description ?? ''
-      }));
+    // Consistency issues are NOT parsed here anymore: they are rendered as navigable suggestion cards
+    // by the Run/History tabs from result.suggestions (category consistency-*). emptyStructured keys off
+    // summary + deviations only - but also treat any consistency suggestion as non-empty so we don't
+    // show a confusing "no structured content" note when the Run/History tabs are already rendering
+    // consistency cards for this result.
+    const hasConsistency = result.suggestions?.some(s => isConsistencySuggestion(s)) ?? false;
+    const emptyStructured = !summary && deviations.length === 0 && !hasConsistency;
 
-    const emptyStructured = !summary && deviations.length === 0 && consistencyIssues.length === 0;
-
-    return { summary, deviations, consistencyIssues, labels, dir, parseFailed: false, emptyStructured };
+    return { summary, deviations, labels, dir, parseFailed: false, emptyStructured };
   }
 
   /** Format a number for display: integers as-is, floats to 2 dp (trailing ".00" stripped). */
@@ -419,14 +328,12 @@ export class LinguisticResultComponent implements OnChanges {
  * Localized strings for the linguistic view. This client has no i18n framework / translation files,
  * so localization follows the existing in-component label-map pattern (see SuggestionCardComponent
  * getCategoryLabel). Hebrew is the product default; English is used only when the result language is
- * English. he/en kept at strict parity. No em-dash (—) in any user-facing string.
+ * English. he/en kept at strict parity. No em-dash in any user-facing string.
  */
 const LINGUISTIC_LABELS: Record<'he' | 'en', LinguisticViewModel['labels']> = {
   he: {
     deviationsTitle: 'חריגות סגנון מהפרק',
-    consistencyTitle: 'בעיות עקביות',
     noDeviations: 'לא נמצאו חריגות סגנון משמעותיות.',
-    noConsistencyIssues: 'לא נמצאו בעיות עקביות.',
     vs: 'מול',
     chapterBaselineLabel: 'קו בסיס הפרק',
     rawVs: 'לעומת',
@@ -437,9 +344,7 @@ const LINGUISTIC_LABELS: Record<'he' | 'en', LinguisticViewModel['labels']> = {
   },
   en: {
     deviationsTitle: 'Style deviations from chapter',
-    consistencyTitle: 'Consistency issues',
     noDeviations: 'No significant style deviations found.',
-    noConsistencyIssues: 'No consistency issues found.',
     vs: 'vs',
     chapterBaselineLabel: 'chapter baseline',
     rawVs: 'vs',
@@ -447,20 +352,6 @@ const LINGUISTIC_LABELS: Record<'he' | 'en', LinguisticViewModel['labels']> = {
     showRaw: 'Show raw response',
     hideRaw: 'Hide raw response',
     noStructuredNote: 'No structured content found - the model may have returned output that could not be fully parsed.'
-  }
-};
-
-/** Localized labels for the three consistency-issue types. he/en parity. */
-const CONSISTENCY_TYPE_LABELS: Record<'he' | 'en', Record<'register' | 'tense' | 'pov', string>> = {
-  he: {
-    register: 'רישום',
-    tense: 'זמן דקדוקי',
-    pov: 'נקודת מבט'
-  },
-  en: {
-    register: 'Register',
-    tense: 'Tense',
-    pov: 'POV'
   }
 };
 

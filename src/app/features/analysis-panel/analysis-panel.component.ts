@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnInit, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subscription, forkJoin } from 'rxjs';
-import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto } from '../../core/models/analysis';
+import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
@@ -101,6 +101,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   lineEditRunSuggestions: AnalysisSuggestion[] = [];
   /** True after we've restored Line Edit suggestions for the current chapter/scene (so we don't re-run mapping on every documentText change while user edits). */
   private hasRestoredLineEditForCurrentContext = false;
+  /** Consistency suggestions (register/tense/POV) for the current Run tab; navigate-only AnalysisSuggestion rows on the linguistic result. */
+  consistencyRunSuggestions: AnalysisSuggestion[] = [];
+  /** True after we've restored consistency suggestions for the current chapter/scene. */
+  private hasRestoredConsistencyForCurrentContext = false;
+  /** Keys of dismissed consistency suggestions (so we hide them in History). Reuses the line-edit key shape. */
+  dismissedConsistencyKeys = new Set<string>();
   /** Cached list of Active analyses (by status) for the current chapter/scene, used for re-analysis warnings. */
   private activeAnalyses: AnalysisResultDto[] = [];
   /** True when documentText has changed since the last relocation pass; cleared after relocateAll runs. */
@@ -208,6 +214,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.restoreProofreadStateFromLatestResult();
       } else if (type === 'LineEdit') {
         this.restoreLineEditStateFromResult(candidate);
+      } else if (type === 'LinguisticAnalysis') {
+        this.restoreConsistencyStateFromResult(candidate);
       }
     }
 
@@ -463,6 +471,28 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.emitSuggestionRanges();
   }
 
+  /** Dismiss a navigate-only consistency suggestion (no Accept in v1); persists the outcome like line-edit. */
+  onConsistencyDismiss(suggestion: AnalysisSuggestion, current: AnalysisResultDto): void {
+    const key = this.suggestionKeyService.lineEditSuggestionKey(current, {
+      original: suggestion.original,
+      suggested: suggestion.suggested
+    });
+    this.dismissedConsistencyKeys = new Set([...this.dismissedConsistencyKeys, key]);
+    this.suggestionKeyService.trackRecentOutcomeKey(key);
+    // Remove from the current Run tab list so the dismissed item disappears immediately.
+    this.consistencyRunSuggestions = this.consistencyRunSuggestions.filter(x => x !== suggestion);
+    if (this.bookId && this.chapterId && current.id && suggestion.id) {
+      this.applyOutcomeToSuggestionDtos(suggestion.id, 'Dismissed');
+      this.analysisService
+        .updateSuggestionOutcome(this.bookId, this.chapterId, suggestion.id, 'Dismissed')
+        .subscribe({ error: () => {} });
+    }
+    if (suggestion.startOffset != null && suggestion.endOffset != null) {
+      this.scrollTargetChange.emit({ startOffset: suggestion.startOffset, endOffset: suggestion.endOffset, originalText: suggestion.original || undefined });
+    }
+    this.emitSuggestionRanges();
+  }
+
   onShowInDocument(s: AnalysisSuggestion): void {
     if (this.documentText && s.original) {
       const relocated = this.suggestionAnchorService.relocateOne(s, this.documentText);
@@ -667,6 +697,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       source = this.proofreadSuggestions;
     } else if (type === 'LineEdit') {
       source = this.lineEditRunSuggestions;
+    } else if (type === 'LinguisticAnalysis') {
+      source = this.consistencyRunSuggestions;
     } else {
       this.suggestionRangesChange.emit([]);
       return;
@@ -676,6 +708,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       const relocated = this.suggestionAnchorService.relocateAll(source, this.documentText);
       const newStale = new Set<string>();
       for (let i = 0; i < source.length; i++) {
+        // Null-offset consistency fallback items (be-c01: located nowhere) stay non-navigable and
+        // are never treated as stale: there is no anchor to move, only a descriptive cue to preserve.
+        if (isConsistencySuggestion(source[i]) && source[i].startOffset == null && source[i].endOffset == null) {
+          continue;
+        }
         source[i].startOffset = relocated[i].relocatedStart;
         source[i].endOffset = relocated[i].relocatedEnd;
         source[i].stale = relocated[i].stale;
@@ -686,6 +723,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
       const stalePending = source.filter(s => {
         if (!s.stale || !s.id) return false;
+        // Consistency issues are navigate-only awareness items: a moved span is shown stale (dimmed,
+        // Show disabled) but NOT auto-dismissed - dropping it would erase a scarce, high-value signal
+        // (be-c01 fallback decision). Only the user dismisses a consistency issue.
+        if (isConsistencySuggestion(s)) return false;
         const outcome = (s.outcome || '').toLowerCase();
         return !outcome || outcome === 'pending';
       });
@@ -750,6 +791,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.proofreadSuggestions = [];
       this.proofreadSuggestionsUnreliable = false;
       this.lineEditRunSuggestions = [];
+      this.consistencyRunSuggestions = [];
       this.history = [];
       this.allAnalyses = [];
       this.activeAnalyses = [];
@@ -757,9 +799,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.acceptedProofreadHistoryKeys = new Set();
       this.dismissedLineEditKeys = new Set();
       this.acceptedLineEditKeys = new Set();
+      this.dismissedConsistencyKeys = new Set();
       this.streamingText = '';
       this.hasRestoredProofreadForCurrentContext = false;
       this.hasRestoredLineEditForCurrentContext = false;
+      this.hasRestoredConsistencyForCurrentContext = false;
       this.offsetsDirty = false;
       this.lastAnalysisDocumentText = '';
       this.explainingSuggestionIds.clear();
@@ -807,6 +851,20 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       ) {
         this.restoreLineEditStateFromResult(this.latestResult);
         this.hasRestoredLineEditForCurrentContext = true;
+      }
+
+      // For LinguisticAnalysis consistency issues, restore run-tab suggestions once the document
+      // matches the current context (so navigate offsets are validated against the right document).
+      if (
+        this.latestResult &&
+        (this.latestResult.analysisType || this.latestResult.type) === 'LinguisticAnalysis' &&
+        !this.hasRestoredConsistencyForCurrentContext &&
+        this.consistencyRunSuggestions.length === 0 &&
+        this.documentMatchesCurrentContext &&
+        this.documentText
+      ) {
+        this.restoreConsistencyStateFromResult(this.latestResult);
+        this.hasRestoredConsistencyForCurrentContext = true;
       }
 
       // Offset-recompute: when documentText becomes available and existing Line Edit
@@ -865,7 +923,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private restoreLineEditStateFromResult(result: AnalysisResultDto): void {
     if ((result.analysisType || result.type) !== 'LineEdit') return;
 
-    const mapped = this.mapDtoSuggestions(result);
+    const mapped = this.mapDtoSuggestions(result).filter(s => !isConsistencySuggestion(s));
     const base: AnalysisSuggestion[] = mapped.length
       ? mapped
       : (() => {
@@ -885,6 +943,35 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       return !this.acceptedLineEditKeys.has(key) && !this.dismissedLineEditKeys.has(key);
     });
     this.hasRestoredLineEditForCurrentContext = true;
+    this.offsetsDirty = true;
+    this.emitSuggestionRanges();
+  }
+
+  /**
+   * Restore consistency (register/tense/POV) suggestions for the Run tab from a LinguisticAnalysis result.
+   * These are navigate-only AnalysisSuggestion rows (empty suggested, category consistency-*). Sourced ONLY
+   * from result.suggestions so there is a single source of truth (NOT from the structuredResult chips).
+   * Filters out already accepted/dismissed/superseded items so they don't reappear on the Run tab.
+   * Keeps null-offset fallback items (descriptive, non-navigable) so the user still sees them.
+   */
+  private restoreConsistencyStateFromResult(result: AnalysisResultDto): void {
+    if ((result.analysisType || result.type) !== 'LinguisticAnalysis') return;
+
+    // No heuristic length filter: a consistency span can be long but is still a real signal.
+    const mapped = this.mapDtoSuggestions(result, false).filter(s => isConsistencySuggestion(s));
+
+    this.consistencyRunSuggestions = mapped.filter(s => {
+      const outcome = (s.outcome || '').toLowerCase();
+      if (outcome === 'accepted' || outcome === 'dismissed' || outcome === 'superseded') {
+        return false;
+      }
+      const key = this.suggestionKeyService.lineEditSuggestionKey(result, {
+        original: s.original,
+        suggested: s.suggested
+      });
+      return !this.dismissedConsistencyKeys.has(key);
+    });
+    this.hasRestoredConsistencyForCurrentContext = true;
     this.offsetsDirty = true;
     this.emitSuggestionRanges();
   }
@@ -994,6 +1081,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
                 (this.activeSubTab !== 'run' || this.lineEditRunSuggestions.length === 0)
               ) {
                 this.restoreLineEditStateFromResult(this.latestResult);
+              } else if (
+                latestType === 'LinguisticAnalysis' &&
+                (this.activeSubTab !== 'run' || this.consistencyRunSuggestions.length === 0)
+              ) {
+                this.restoreConsistencyStateFromResult(this.latestResult);
               }
             }
           }
@@ -1081,8 +1173,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.proofreadSuggestions = [];
     this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
+    this.consistencyRunSuggestions = [];
     this.staleSuggestionIds = new Set();
     this.hasRestoredLineEditForCurrentContext = false;
+    this.hasRestoredConsistencyForCurrentContext = false;
     this.emitSuggestionRanges();
     this.analysisStarted.emit();
     this.runStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
@@ -1233,6 +1327,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.autoShowFirstSuggestion();
     } else if (type === 'LineEdit') {
       this.restoreLineEditStateFromResult(result);
+    } else if (type === 'LinguisticAnalysis') {
+      this.restoreConsistencyStateFromResult(result);
     }
   }
 

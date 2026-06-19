@@ -21,7 +21,7 @@
     <!-- Proofread (history): read-only list of suggestions with Accepted/Dismissed status -->
     <ng-container *ngIf="(current.analysisType || current.type) === 'Proofread' && proofreadHistoryItemsWithStatus.length > 0">
       <div class="suggestions-block">
-        <h4>Suggestions — what happened</h4>
+        <h4>Suggestions: what happened</h4>
         <div class="history-outcome-filter">
           <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">All</button>
           <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">Accepted</button>
@@ -49,7 +49,7 @@
         <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
       </ng-container>
       <div class="line-edit-suggestions" *ngIf="filteredLineEditSuggestionsWithStatusForCurrent.length > 0">
-        <h4>Suggestions — what happened</h4>
+        <h4>Suggestions: what happened</h4>
         <div class="history-outcome-filter">
           <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">All</button>
           <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">Accepted</button>
@@ -74,8 +74,30 @@
         <span class="metric-value">{{ card.value }}</span>
       </div>
     </div>
-    <!-- Linguistic analysis: style deviations, consistency issues (shared component) -->
+    <!-- Linguistic analysis: style deviations + summary (shared component); consistency issues render below as cards -->
     <app-linguistic-result [result]="current"></app-linguistic-result>
+    <!-- Consistency issues (history): read-only suggestion cards with outcome status. Single source of truth = result.suggestions. -->
+    <ng-container *ngIf="(current.analysisType || current.type) === 'LinguisticAnalysis'">
+      <div class="line-edit-suggestions" *ngIf="filteredConsistencySuggestionsWithStatusForCurrent.length > 0" data-testid="consistency-history">
+        <h4>{{ consistencyCardLang === 'he' ? 'בעיות עקביות' : 'Consistency issues' }}</h4>
+        <div class="history-outcome-filter">
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">All</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">Accepted</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'dismissed'" (click)="historySuggestionStatusFilter = 'dismissed'">Dismissed</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'reverted'" (click)="historySuggestionStatusFilter = 'reverted'">Reverted</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">Pending</button>
+        </div>
+        <app-suggestion-card
+          *ngFor="let item of filteredConsistencySuggestionsWithStatusForCurrent"
+          [suggestion]="item.suggestion"
+          [lang]="consistencyCardLang"
+          [readOnly]="true"
+          [status]="item.status"
+          [loadingExplanation]="!!(item.suggestion.id && explainingSuggestionIds.has(item.suggestion.id))"
+          (explain)="explainSuggestionEvent.emit($event)">
+        </app-suggestion-card>
+      </div>
+    </ng-container>
     <ng-template #textResult>
       <ul class="analysis-list" *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions() && (current.analysisType || current.type) !== 'LinguisticAnalysis' && analysisItems(current.resultText).length > 1; else singleHistory">
         <li *ngFor="let item of analysisItems(current.resultText)">{{ item }}</li>

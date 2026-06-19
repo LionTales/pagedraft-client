@@ -136,6 +136,37 @@ describe('LinguisticResultComponent', () => {
   });
 
   // =========================================================================
+  // 3a. emptyStructured suppressed when consistency suggestions are present
+  // =========================================================================
+
+  describe('emptyStructured suppressed by consistency suggestions', () => {
+    const RAW_TEXT = 'This is a non-trivial raw response longer than twenty characters.';
+
+    it('does NOT render linguistic-empty-note or raw-toggle when result has a consistency suggestion', () => {
+      // No summary, no deviations in structuredResult, but suggestions carry a consistency-pov item.
+      setResult(makeLinguisticResult('{}', {
+        resultText: RAW_TEXT,
+        suggestions: [
+          {
+            id: 's-1',
+            analysisResultId: 'r-ling',
+            category: 'consistency-pov',
+            text: 'POV shift detected.',
+            severity: 'warning',
+            sceneId: null,
+            chapterStartOffset: null,
+            chapterEndOffset: null,
+            status: 'Active',
+          } as any,
+        ],
+      }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-empty-note"]'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-raw-toggle"]'))).toBeNull();
+    });
+  });
+
+  // =========================================================================
   // 4. 'notably' comparison band (en)
   // =========================================================================
 
@@ -235,18 +266,19 @@ describe('LinguisticResultComponent', () => {
   // =========================================================================
 
   describe('resultText fallback', () => {
+    // consistencyIssues are no longer rendered by this shared view (they are navigable suggestion
+    // cards driven by result.suggestions; see analysis-run-tab / analysis-history-tab). This view
+    // now renders only summary + deviations, so the fallback assertions check the deviation row.
     const validJson = JSON.stringify({
       deviations: [{ metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' }],
-      consistencyIssues: [{ type: 'tense', span: 'x', description: 'tense shift' }],
     });
 
-    it('renders chips from resultText when structuredResult is null', () => {
+    it('renders deviations from resultText when structuredResult is null', () => {
       setResult(makeLinguisticResult(null, { resultText: validJson }));
 
       expect(fixture.debugElement.query(By.css('[data-testid="linguistic-parse-error"]'))).toBeNull();
       expect(fixture.debugElement.query(By.css('[data-testid="linguistic-view"]'))).not.toBeNull();
       expect(fixture.debugElement.query(By.css('[data-testid="deviation-row"]'))).not.toBeNull();
-      expect(fixture.debugElement.query(By.css('[data-testid="consistency-row"]'))).not.toBeNull();
     });
 
     it('prefers structuredResult over resultText when both are present', () => {

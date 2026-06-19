@@ -170,11 +170,15 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
   });
 
   // =========================================================================
-  // 2. Consistency issues
+  // 2. Consistency issues are no longer rendered by linguistic-result chips.
+  //    They are now navigable + dismissable suggestion cards driven by
+  //    result.suggestions (category consistency-*); coverage for that lives in
+  //    the f03 navigation specs. The shared linguistic view must NOT render the
+  //    old chip markup any more.
   // =========================================================================
 
-  describe('consistency issues', () => {
-    it('renders one consistency-row per issue', () => {
+  describe('consistency chips removed from the shared linguistic view', () => {
+    it('does NOT render consistency-row / consistency-type chips even when consistencyIssues is present', () => {
       const result = makeLinguisticResult({
         consistencyIssues: [
           { type: 'register', span: 'span1', description: 'desc1' },
@@ -184,82 +188,14 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       });
       loadResult(result);
 
-      const rows = fixture.debugElement.queryAll(By.css('[data-testid="consistency-row"]'));
-      expect(rows.length).toBe(3);
-    });
-
-    it('each chip has the correct consistency-type-{type} class (Hebrew default)', () => {
-      const result = makeLinguisticResult({
-        consistencyIssues: [
-          { type: 'register', span: '', description: 'Register shift' },
-          { type: 'tense', span: '', description: 'Tense inconsistency' },
-          { type: 'pov', span: '', description: 'POV shift' },
-        ],
-      });
-      loadResult(result);
-
-      const chips = fixture.debugElement.queryAll(By.css('[data-testid="consistency-type"]'));
-      expect(chips.length).toBe(3);
-
-      expect(chips[0].nativeElement.classList).toContain('consistency-type-register');
-      expect(chips[1].nativeElement.classList).toContain('consistency-type-tense');
-      expect(chips[2].nativeElement.classList).toContain('consistency-type-pov');
-    });
-
-    it('renders Hebrew localized labels for consistency type chips (default language)', () => {
-      const result = makeLinguisticResult(
-        {
-          consistencyIssues: [
-            { type: 'register', span: '', description: 'Register shift' },
-            { type: 'tense', span: '', description: 'Tense inconsistency' },
-            { type: 'pov', span: '', description: 'POV shift' },
-          ],
-        },
-        { language: 'he' }
-      );
-      loadResult(result);
-
-      const chips = fixture.debugElement.queryAll(By.css('[data-testid="consistency-type"]'));
-      expect(chips[0].nativeElement.textContent.trim()).toBe('רישום');
-      expect(chips[1].nativeElement.textContent.trim()).toBe('זמן דקדוקי');
-      expect(chips[2].nativeElement.textContent.trim()).toBe('נקודת מבט');
-    });
-
-    it('renders English localized labels for consistency type chips when language starts with "en"', () => {
-      const result = makeLinguisticResult(
-        {
-          consistencyIssues: [
-            { type: 'register', span: '', description: 'Register shift' },
-            { type: 'tense', span: '', description: 'Tense inconsistency' },
-            { type: 'pov', span: '', description: 'POV shift' },
-          ],
-        },
-        { language: 'en' }
-      );
-      loadResult(result);
-
-      const chips = fixture.debugElement.queryAll(By.css('[data-testid="consistency-type"]'));
-      expect(chips[0].nativeElement.textContent.trim()).toBe('Register');
-      expect(chips[1].nativeElement.textContent.trim()).toBe('Tense');
-      expect(chips[2].nativeElement.textContent.trim()).toBe('POV');
-    });
-
-    it('renders description and span for each consistency row', () => {
-      const result = makeLinguisticResult({
-        consistencyIssues: [
-          { type: 'register', span: 'my span text', description: 'a register description' },
-        ],
-      });
-      loadResult(result);
-
-      const row = fixture.debugElement.query(By.css('[data-testid="consistency-row"]'));
-      expect(row.nativeElement.querySelector('.consistency-description')?.textContent).toContain('a register description');
-      expect(row.nativeElement.querySelector('.consistency-span')?.textContent).toContain('my span text');
+      expect(fixture.debugElement.queryAll(By.css('[data-testid="consistency-row"]')).length).toBe(0);
+      expect(fixture.debugElement.queryAll(By.css('[data-testid="consistency-type"]')).length).toBe(0);
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'))).toBeNull();
     });
   });
 
   // =========================================================================
-  // 3. Empty states
+  // 3. Empty states (deviations only; consistency is no longer chip-rendered)
   // =========================================================================
 
   describe('empty states', () => {
@@ -277,33 +213,166 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       expect(rows.length).toBe(0);
     });
 
-    it('renders [data-testid="consistency-empty"] and no consistency-rows when consistencyIssues is empty', () => {
+    it('renders the deviations block (with rows) when deviations are present', () => {
       const result = makeLinguisticResult({
         deviations: [{ metric: 'wordCount', sceneValue: 100, chapterBaseline: 80, note: '' }],
         consistencyIssues: [],
       });
       loadResult(result);
 
-      const empty = fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'));
-      expect(empty).not.toBeNull();
-
-      const rows = fixture.debugElement.queryAll(By.css('[data-testid="consistency-row"]'));
-      expect(rows.length).toBe(0);
+      const rows = fixture.debugElement.queryAll(By.css('[data-testid="deviation-row"]'));
+      expect(rows.length).toBe(1);
     });
 
-    it('renders both empty-state messages when both arrays are empty', () => {
+    it('renders the deviations empty-state message when deviations are empty', () => {
       const result = makeLinguisticResult({ deviations: [], consistencyIssues: [] });
       loadResult(result);
 
       const devEmpty = fixture.debugElement.query(By.css('[data-testid="deviations-empty"]'));
-      const conEmpty = fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'));
       expect(devEmpty).not.toBeNull();
-      expect(conEmpty).not.toBeNull();
 
       const devRows = fixture.debugElement.queryAll(By.css('[data-testid="deviation-row"]'));
-      const conRows = fixture.debugElement.queryAll(By.css('[data-testid="consistency-row"]'));
       expect(devRows.length).toBe(0);
-      expect(conRows.length).toBe(0);
+    });
+  });
+
+  // =========================================================================
+  // 4. Consistency suggestion cards in history
+  // =========================================================================
+
+  describe('consistency suggestion cards in history (LinguisticAnalysis)', () => {
+    function makeConsistencyDto(id: string, outcome: string | null = null) {
+      return {
+        id,
+        analysisResultId: 'r-ling',
+        originalText: 'She looked at him.',
+        suggestedText: '',
+        startOffset: 0,
+        endOffset: 18,
+        reason: 'POV shift',
+        category: 'consistency-pov',
+        explanation: null,
+        outcome,
+        orderIndex: 0,
+        contextBefore: null,
+        contextAfter: null,
+      };
+    }
+
+    it('renders a read-only consistency card for each consistency-* suggestion in history', () => {
+      const result = makeLinguisticResult(
+        { deviations: [], consistencyIssues: [] },
+        {
+          id: 'r-ling',
+          suggestions: [makeConsistencyDto('cs-1')],
+        }
+      );
+      loadResult(result);
+
+      const container = fixture.debugElement.query(By.css('[data-testid="consistency-history"]'));
+      expect(container).not.toBeNull();
+      const cards = fixture.debugElement.queryAll(
+        By.css('[data-testid="consistency-history"] app-suggestion-card')
+      );
+      expect(cards.length).toBe(1);
+    });
+
+    it('consistency history block is absent when there are no consistency-* suggestions', () => {
+      // A LineEdit suggestion (exact match "consistency", not prefixed) must NOT appear.
+      const lineEditConsistency = {
+        id: 'le-1',
+        analysisResultId: 'r-ling',
+        originalText: 'he walked.',
+        suggestedText: 'he strode.',
+        startOffset: 0,
+        endOffset: 10,
+        reason: null,
+        category: 'consistency',  // exact match, NOT 'consistency-*'
+        explanation: null,
+        outcome: null,
+        orderIndex: 0,
+        contextBefore: null,
+        contextAfter: null,
+      };
+      const result = makeLinguisticResult(
+        { deviations: [], consistencyIssues: [] },
+        { id: 'r-ling', suggestions: [lineEditConsistency] }
+      );
+      loadResult(result);
+
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-history"]'))).toBeNull();
+    });
+
+    it('filteredConsistencySuggestionsWithStatusForCurrent returns empty for non-LinguisticAnalysis result', () => {
+      const nonLing: AnalysisResultDto = {
+        id: 'r-pr',
+        chapterId: 'chap-1',
+        jobId: null,
+        type: 'Proofread',
+        analysisType: 'Proofread',
+        resultText: '',
+        modelName: 'model',
+        createdAt: new Date().toISOString(),
+        scope: 'Chapter',
+        structuredResult: null,
+        sceneId: null,
+        bookId: 'book-1',
+        language: 'he',
+        status: 'Active',
+        proofreadNoChangesHint: false,
+        suggestions: [makeConsistencyDto('cs-x')],
+      };
+      loadResult(nonLing);
+
+      expect(component.filteredConsistencySuggestionsWithStatusForCurrent.length).toBe(0);
+    });
+
+    it('dismissed outcome is reflected as status=dismissed on the history card', () => {
+      const result = makeLinguisticResult(
+        { deviations: [], consistencyIssues: [] },
+        {
+          id: 'r-ling',
+          suggestions: [makeConsistencyDto('cs-2', 'Dismissed')],
+        }
+      );
+      loadResult(result);
+
+      const items = component.filteredConsistencySuggestionsWithStatusForCurrent;
+      expect(items.length).toBe(1);
+      expect(items[0].status).toBe('dismissed');
+    });
+
+    it('pending consistency suggestion has status=pending in history', () => {
+      const result = makeLinguisticResult(
+        { deviations: [], consistencyIssues: [] },
+        {
+          id: 'r-ling',
+          suggestions: [makeConsistencyDto('cs-3', null)],
+        }
+      );
+      loadResult(result);
+
+      const items = component.filteredConsistencySuggestionsWithStatusForCurrent;
+      expect(items.length).toBe(1);
+      expect(items[0].status).toBe('pending');
+    });
+
+    it('consistencyCardLang returns "he" for a Hebrew LinguisticAnalysis history item', () => {
+      const result = makeLinguisticResult(
+        { deviations: [] },
+        { id: 'r-ling', language: 'he' }
+      );
+      loadResult(result);
+      expect(component.consistencyCardLang).toBe('he');
+    });
+
+    it('consistencyCardLang returns "en" for an English LinguisticAnalysis history item', () => {
+      const result = makeLinguisticResult(
+        { deviations: [] },
+        { id: 'r-ling', language: 'en' }
+      );
+      loadResult(result);
+      expect(component.consistencyCardLang).toBe('en');
     });
   });
 
@@ -386,8 +455,8 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       const devsBlock = fixture.debugElement.query(By.css('[data-testid="linguistic-deviations"]'));
       expect(devsBlock.nativeElement.textContent).toContain('חריגות סגנון מהפרק');
 
-      const conBlock = fixture.debugElement.query(By.css('[data-testid="linguistic-consistency"]'));
-      expect(conBlock.nativeElement.textContent).toContain('בעיות עקביות');
+      // The consistency block was removed from this shared view (now suggestion-card driven).
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-consistency"]'))).toBeNull();
     });
 
     it('uses English section labels when language is "en"', () => {
@@ -397,8 +466,7 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       const devsBlock = fixture.debugElement.query(By.css('[data-testid="linguistic-deviations"]'));
       expect(devsBlock.nativeElement.textContent).toContain('Style deviations from chapter');
 
-      const conBlock = fixture.debugElement.query(By.css('[data-testid="linguistic-consistency"]'));
-      expect(conBlock.nativeElement.textContent).toContain('Consistency issues');
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-consistency"]'))).toBeNull();
     });
 
     it('uses English section labels when language starts with "en" (e.g. "en-US")', () => {
