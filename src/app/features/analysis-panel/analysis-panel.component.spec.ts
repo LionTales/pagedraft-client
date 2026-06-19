@@ -804,6 +804,9 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     component.documentChapterId = 'chap-1';
     component.documentSceneId = null;
     component.documentText = 'Some analyzed chapter text.';
+    // The run's persisted row ('ling-persisted') is brand new: it was NOT among the ids known before
+    // the run, so it is recognized as this run's output and adopted.
+    component['analysisResultIdsBeforeRun'] = new Set<string>();
 
     // Synthetic streaming result: no id, no suggestions, client timestamp NEWER than the server row.
     component['latestResult'] = makeStreamingResult({
@@ -844,6 +847,48 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect(component.consistencyRunSuggestions[0].category).toBe('consistency-pov');
     // The synthetic placeholder must NOT also linger in History as a duplicate (it has no id).
     expect(component.history.some(r => !r.id)).toBeFalse();
+  });
+
+  it('loadHistory keeps the fresh synthetic result when the response has only a PRE-EXISTING (stale) persisted row', () => {
+    component.selectedAnalysisType = 'LinguisticAnalysis';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'Some analyzed chapter text.';
+
+    // The synthetic result the user just received (fresh structured output, no id yet).
+    const freshStructured = '{"summary":"the run the user just received"}';
+    component['latestResult'] = makeStreamingResult({
+      structuredResult: freshStructured,
+      resultText: freshStructured,
+    });
+
+    // This run's persisted row has NOT arrived yet; the response carries only an OLDER analysis whose
+    // id was already known before the run started.
+    component['analysisResultIdsBeforeRun'] = new Set<string>(['old-ling']);
+    const stalePersisted = makeResultWithSuggestions({
+      id: 'old-ling',
+      type: 'LinguisticAnalysis',
+      analysisType: 'LinguisticAnalysis',
+      structuredResult: '{"summary":"a previous run"}',
+      createdAt: new Date(Date.now() - 600_000).toISOString(),
+      suggestions: [
+        {
+          id: 'old-cs', analysisResultId: 'old-ling', originalText: 'old span', suggestedText: '',
+          startOffset: 0, endOffset: 8, reason: 'old', category: 'consistency-tense',
+          explanation: null, outcome: null, orderIndex: 0,
+        } as AnalysisSuggestionDto,
+      ],
+    });
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => of([stalePersisted]);
+
+    (component as any).loadHistory(true);
+
+    // The fresh synthetic result must be kept (NOT replaced by the older analysis).
+    expect(component['latestResult']!.id).toBe('');
+    expect(component['latestResult']!.structuredResult).toBe(freshStructured);
+    // ...and the stale row's consistency cards must NOT leak onto the Run tab.
+    expect(component.consistencyRunSuggestions.length).toBe(0);
   });
 
   // ─── full reload resets dismissed-consistency keys; merge keeps them ──

@@ -93,6 +93,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   versions: DocumentVersionDto[] = [];
   /** Timestamp when the current run started (for duration display). */
   private runStartedAt: number | null = null;
+  /**
+   * Persisted analysis-result ids known BEFORE the current run started (captured in prepareForRun).
+   * A streaming run's persisted row is the one whose id is NOT in this set, which is how we tell the
+   * just-completed run apart from a pre-existing analysis when deciding whether to swap a synthetic
+   * streaming result for its persisted row (see loadHistory).
+   */
+  private analysisResultIdsBeforeRun = new Set<string>();
   /** Human-readable duration label for the last completed run (e.g. "45s", "2m 10s"). */
   lastRunDurationLabel: string | null = null;
   /** Latest estimated completion percent for the current Proofread run (0–100). */
@@ -1060,8 +1067,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         const syntheticType = syntheticStreaming
           ? (syntheticStreaming.analysisType || syntheticStreaming.type)
           : null;
+        // Only adopt the persisted row when it is THIS run's row, i.e. an id that did not exist before
+        // the run started. Without this guard, a response that does not yet contain the just-completed
+        // run (replica lag, a stale/cached GET) would replace the fresh synthetic result with the
+        // PREVIOUS persisted analysis, so the Run tab would show an older structured view + consistency
+        // cards instead of the output the user just received. When the run's row has not arrived yet we
+        // keep the synthetic result; a later loadHistory adopts the persisted row once it appears.
         const replaceSyntheticWithPersisted =
-          !!syntheticStreaming && syntheticType === 'LinguisticAnalysis' && !!persistedForType;
+          !!syntheticStreaming
+          && syntheticType === 'LinguisticAnalysis'
+          && !!persistedForType
+          && !!persistedForType.id
+          && !this.analysisResultIdsBeforeRun.has(persistedForType.id);
 
         // Prepend the synthetic streaming run so it appears in History and its Accepted/Dismissed keys
         // match - but NOT when we are about to replace it with the persisted row, or the same run would
@@ -1205,6 +1222,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.hasRestoredConsistencyForCurrentContext = false;
     this.emitSuggestionRanges();
     this.analysisStarted.emit();
+    // Snapshot the persisted result ids that exist BEFORE this run. After a streaming run, this lets
+    // loadHistory recognize the run's own persisted row (a brand-new id) and avoid swapping the fresh
+    // synthetic result for an OLDER analysis that merely happens to be the newest one in the response.
+    this.analysisResultIdsBeforeRun = new Set(
+      this.allAnalyses.map(r => r.id).filter((id): id is string => !!id)
+    );
     this.runStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     this.lastRunDurationLabel = null;
     this.currentProgressPercent = null;
