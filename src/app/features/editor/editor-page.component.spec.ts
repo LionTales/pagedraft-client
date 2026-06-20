@@ -121,6 +121,10 @@ describe('EditorPageComponent (focused logic)', () => {
     component.selectedChapterId = 'chap-1';
     component.bookId = 'book-1';
     component.currentDocumentPlainText = 'Hello world';
+    // A chapter document is loaded, so the document owner matches the selection
+    // (set by loadChapterContent in the real flow). Saves require this match.
+    component.documentOwnerChapterId = 'chap-1';
+    component.documentOwnerSceneId = null;
   });
 
   afterEach(() => {
@@ -244,6 +248,47 @@ describe('EditorPageComponent (focused logic)', () => {
       'chap-1',
       jasmine.objectContaining({ contentSfdt: CLEAN }),
     );
+  });
+
+  // ─── saveCurrentDocument: document-owner routing guard ──────────────
+
+  it('does not write the loaded scene document into the chapter during a delete/clear transition', () => {
+    // The editor still holds scene-1's document (owner = scene-1) but the selection
+    // already moved off the scene (selectedSceneId null) because the scene was just
+    // deleted/cleared and loadChapterContent has not finished yet. hasPendingChanges
+    // is still true from prior scene edits.
+    component.documentOwnerChapterId = 'chap-1';
+    component.documentOwnerSceneId = 'scene-1';
+    component.selectedChapterId = 'chap-1';
+    component.selectedSceneId = null;
+    component.hasPendingChanges = true;
+
+    component.saveCurrentDocument();
+
+    // The save is skipped: the scene SFDT is never persisted into the chapter record,
+    // and the pending flag is left intact (nothing was saved).
+    expect(chapterUpdateSpy).not.toHaveBeenCalled();
+    expect(component.hasPendingChanges).toBe(true);
+  });
+
+  it('routes a save to the scene when the loaded document is the selected scene', () => {
+    const sceneUpdateSpy = jasmine.createSpy('sceneUpdate').and.returnValue(of({}));
+    (TestBed.inject(SceneService) as any).update = sceneUpdateSpy;
+    component.documentOwnerChapterId = 'chap-1';
+    component.documentOwnerSceneId = 'scene-1';
+    component.selectedChapterId = 'chap-1';
+    component.selectedSceneId = 'scene-1';
+    component.hasPendingChanges = true;
+
+    component.saveCurrentDocument();
+
+    expect(sceneUpdateSpy).toHaveBeenCalledWith(
+      'book-1',
+      'chap-1',
+      'scene-1',
+      jasmine.objectContaining({ contentSfdt: jasmine.any(String) }),
+    );
+    expect(chapterUpdateSpy).not.toHaveBeenCalled();
   });
 
   // ─── Scene deletion handlers ────────────────────────────────────────

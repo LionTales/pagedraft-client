@@ -513,6 +513,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       if (onCompleted) onCompleted();
       return;
     }
+    // The editor keeps the previously-loaded document until a new load completes, so
+    // during a transition the selected target can already point elsewhere while the
+    // editor still holds the prior document. Most dangerously, deleting/clearing the
+    // selected scene nulls selectedSceneId before loadChapterContent finishes, so a
+    // save here would route to the chapter (else branch below) and write the scene's
+    // SFDT into the chapter record. Only persist when the current target matches the
+    // loaded document's owner; otherwise skip until the new document is opened.
+    if (this.documentOwnerChapterId !== this.selectedChapterId || this.documentOwnerSceneId !== this.selectedSceneId) {
+      if (onCompleted) onCompleted();
+      return;
+    }
     let sfdt: string;
     try {
       sfdt = this.docEditor.documentEditor.serialize();
