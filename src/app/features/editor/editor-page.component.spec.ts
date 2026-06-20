@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { ActivatedRoute, Router } from '@angular/router';
-import { of, EMPTY } from 'rxjs';
+import { of, EMPTY, throwError, Subject } from 'rxjs';
 import { EditorPageComponent } from './editor-page.component';
 import { BookService } from '../../core/services/book.service';
 import { ChapterService } from '../../core/services/chapter.service';
@@ -92,6 +92,7 @@ describe('EditorPageComponent (focused logic)', () => {
             sceneCreated$: EMPTY,
             sceneUpdated$: EMPTY,
             sceneDeleted$: EMPTY,
+            scenesCleared$: EMPTY,
             scenesReordered$: EMPTY,
           },
         },
@@ -120,6 +121,10 @@ describe('EditorPageComponent (focused logic)', () => {
     component.selectedChapterId = 'chap-1';
     component.bookId = 'book-1';
     component.currentDocumentPlainText = 'Hello world';
+    // A chapter document is loaded, so the document owner matches the selection
+    // (set by loadChapterContent in the real flow). Saves require this match.
+    component.documentOwnerChapterId = 'chap-1';
+    component.documentOwnerSceneId = null;
   });
 
   afterEach(() => {
@@ -243,5 +248,332 @@ describe('EditorPageComponent (focused logic)', () => {
       'chap-1',
       jasmine.objectContaining({ contentSfdt: CLEAN }),
     );
+  });
+
+  // ─── saveCurrentDocument: document-owner routing guard ──────────────
+
+  it('does not write the loaded scene document into the chapter during a delete/clear transition', () => {
+    // The editor still holds scene-1's document (owner = scene-1) but the selection
+    // already moved off the scene (selectedSceneId null) because the scene was just
+    // deleted/cleared and loadChapterContent has not finished yet. hasPendingChanges
+    // is still true from prior scene edits.
+    component.documentOwnerChapterId = 'chap-1';
+    component.documentOwnerSceneId = 'scene-1';
+    component.selectedChapterId = 'chap-1';
+    component.selectedSceneId = null;
+    component.hasPendingChanges = true;
+
+    component.saveCurrentDocument();
+
+    // The save is skipped: the scene SFDT is never persisted into the chapter record,
+    // and the pending flag is left intact (nothing was saved).
+    expect(chapterUpdateSpy).not.toHaveBeenCalled();
+    expect(component.hasPendingChanges).toBe(true);
+  });
+
+  it('routes a save to the scene when the loaded document is the selected scene', () => {
+    const sceneUpdateSpy = jasmine.createSpy('sceneUpdate').and.returnValue(of({}));
+    (TestBed.inject(SceneService) as any).update = sceneUpdateSpy;
+    component.documentOwnerChapterId = 'chap-1';
+    component.documentOwnerSceneId = 'scene-1';
+    component.selectedChapterId = 'chap-1';
+    component.selectedSceneId = 'scene-1';
+    component.hasPendingChanges = true;
+
+    component.saveCurrentDocument();
+
+    expect(sceneUpdateSpy).toHaveBeenCalledWith(
+      'book-1',
+      'chap-1',
+      'scene-1',
+      jasmine.objectContaining({ contentSfdt: jasmine.any(String) }),
+    );
+    expect(chapterUpdateSpy).not.toHaveBeenCalled();
+  });
+
+  // ─── Scene deletion handlers ────────────────────────────────────────
+
+  describe('onDeleteScene', () => {
+    let sceneDeleteSpy: jasmine.Spy;
+    let sceneGetAllSpy: jasmine.Spy;
+    let sceneGetByIdSpy: jasmine.Spy;
+    let chapterGetByIdSpy: jasmine.Spy;
+    const SCENE: import('../../core/models/book').SceneSummaryDto = {
+      id: 'scene-1', chapterId: 'chap-1', title: 'Scene One', order: 0, updatedAt: ''
+    };
+    const OTHER_SCENE: import('../../core/models/book').SceneSummaryDto = {
+      id: 'scene-2', chapterId: 'chap-1', title: 'Scene Two', order: 1, updatedAt: ''
+    };
+
+    beforeEach(() => {
+      sceneDeleteSpy = jasmine.createSpy('delete').and.returnValue(of(undefined));
+      sceneGetAllSpy = jasmine.createSpy('getAll').and.returnValue(of([]));
+      sceneGetByIdSpy = jasmine.createSpy('getById').and.returnValue(EMPTY);
+      chapterGetByIdSpy = jasmine.createSpy('getById').and.returnValue(EMPTY);
+
+      // Override providers that need richer stubs for these tests
+      const sceneServiceStub = TestBed.inject(SceneService) as any;
+      sceneServiceStub.delete = sceneDeleteSpy;
+      sceneServiceStub.getAll = sceneGetAllSpy;
+      sceneServiceStub.getById = sceneGetByIdSpy;
+      const chapterServiceStub = TestBed.inject(ChapterService) as any;
+      chapterServiceStub.getById = chapterGetByIdSpy;
+
+      // Set up pre-populated scenes
+      component.scenesByChapter = { 'chap-1': [SCENE, OTHER_SCENE] };
+    });
+
+    it('does nothing when confirm returns false', () => {
+      spyOn(window, 'confirm').and.returnValue(false);
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      expect(sceneDeleteSpy).not.toHaveBeenCalled();
+      expect(component.scenesByChapter['chap-1']).toEqual([SCENE, OTHER_SCENE]);
+    });
+
+    it('optimistically removes the scene and calls sceneService.delete on confirm', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      // Optimistic removal: scene-1 is gone from the list
+      expect(component.scenesByChapter['chap-1'].map((s: any) => s.id)).not.toContain('scene-1');
+      expect(component.scenesByChapter['chap-1'].map((s: any) => s.id)).toContain('scene-2');
+      // Service call
+      expect(sceneDeleteSpy).toHaveBeenCalledOnceWith('book-1', 'chap-1', 'scene-1');
+    });
+
+    it('resets selectedSceneId and calls loadChapterContent when deleted scene was selected', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedSceneId = 'scene-1';
+      component.selectedChapterId = 'chap-1';
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      expect(component.selectedSceneId).toBeNull();
+      // loadChapterContent calls chapterService.getById
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('does not reset selectedSceneId when a different scene is deleted', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedSceneId = 'scene-2';
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      expect(component.selectedSceneId).toBe('scene-2');
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+    });
+
+    it('calls alert and reloads scenes on service error', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      sceneDeleteSpy.and.returnValue(throwError(() => new Error('x')));
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      expect(window.alert).toHaveBeenCalled();
+      // loadScenesForChapter calls sceneService.getAll
+      expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('preserves the selected scene and its unsaved edits when deleting it fails', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedSceneId = 'scene-1';
+      component.selectedChapterId = 'chap-1';
+      sceneDeleteSpy.and.returnValue(throwError(() => new Error('x')));
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      // The editor is never switched, so the scene stays selected and its in-editor
+      // unsaved edits are NOT reloaded/discarded from the server (no scene or chapter load).
+      expect(component.selectedSceneId).toBe('scene-1');
+      expect(sceneGetByIdSpy).not.toHaveBeenCalled();
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+      // The tree is reconciled with the server.
+      expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('does not switch the editor to chapter content until the delete is confirmed', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedSceneId = 'scene-1';
+      component.selectedChapterId = 'chap-1';
+      const deleteSubject = new Subject<void>();
+      sceneDeleteSpy.and.returnValue(deleteSubject.asObservable());
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      // While the delete is in flight, the editor must NOT switch to chapter content
+      // (which would open over the scene document and reset hasPendingChanges, losing
+      // unsaved scene edits if the delete then fails).
+      expect(component.selectedSceneId).toBe('scene-1');
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+
+      // Only once the server confirms does the editor switch to the chapter.
+      deleteSubject.next();
+      deleteSubject.complete();
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('does not restore scene selection when deleting a NON-selected scene fails', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedSceneId = 'scene-2';
+      sceneDeleteSpy.and.returnValue(throwError(() => new Error('x')));
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      // scene-2 stays selected; we never optimistically cleared it, so nothing to restore.
+      expect(component.selectedSceneId).toBe('scene-2');
+      expect(sceneGetByIdSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('onClearScenes', () => {
+    let sceneClearSpy: jasmine.Spy;
+    let sceneGetAllSpy: jasmine.Spy;
+    let chapterGetByIdSpy: jasmine.Spy;
+    const CHAPTER: import('../../core/models/book').ChapterSummaryDto = {
+      id: 'chap-1', title: 'Chapter One', partName: null, order: 0, wordCount: 0, updatedAt: ''
+    };
+    const SCENE: import('../../core/models/book').SceneSummaryDto = {
+      id: 'scene-1', chapterId: 'chap-1', title: 'Scene One', order: 0, updatedAt: ''
+    };
+
+    beforeEach(() => {
+      sceneClearSpy = jasmine.createSpy('clear').and.returnValue(of(undefined));
+      sceneGetAllSpy = jasmine.createSpy('getAll').and.returnValue(of([]));
+      chapterGetByIdSpy = jasmine.createSpy('getById').and.returnValue(EMPTY);
+
+      const sceneServiceStub = TestBed.inject(SceneService) as any;
+      sceneServiceStub.clear = sceneClearSpy;
+      sceneServiceStub.getAll = sceneGetAllSpy;
+      const chapterServiceStub = TestBed.inject(ChapterService) as any;
+      chapterServiceStub.getById = chapterGetByIdSpy;
+
+      component.scenesByChapter = { 'chap-1': [SCENE] };
+    });
+
+    it('does nothing when confirm returns false', () => {
+      spyOn(window, 'confirm').and.returnValue(false);
+
+      component.onClearScenes(CHAPTER);
+
+      expect(sceneClearSpy).not.toHaveBeenCalled();
+    });
+
+    it('calls sceneService.clear and empties the scene list on confirm', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+
+      component.onClearScenes(CHAPTER);
+
+      expect(sceneClearSpy).toHaveBeenCalledOnceWith('book-1', 'chap-1');
+      expect(component.scenesByChapter['chap-1']).toEqual([]);
+    });
+
+    it('resets selectedSceneId and reloads chapter content when a scene in that chapter was selected', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+
+      component.onClearScenes(CHAPTER);
+
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('does not reset selectedSceneId when no scene in that chapter was selected', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = null;
+
+      component.onClearScenes(CHAPTER);
+
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+    });
+
+    it('calls alert and reloads scenes from the server on service error', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+
+      component.onClearScenes(CHAPTER);
+
+      expect(window.alert).toHaveBeenCalled();
+      // Reconcile with the server (the clear may have applied despite the error,
+      // or a hub event mutated local state) by reloading the scene list.
+      expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('drops the stale selection and loads chapter content when the clear succeeded server-side despite the error', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+      // Server actually cleared: the reload returns no scenes.
+      sceneGetAllSpy.and.returnValue(of([]));
+
+      component.onClearScenes(CHAPTER);
+
+      // The deleted scene is no longer selected; the editor switches to chapter content
+      // so the user is not editing/saving against a scene that no longer exists.
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('keeps the selection when the clear truly failed and the scene survives the reload', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+      // Clear truly failed: the scene is still present on reload.
+      sceneGetAllSpy.and.returnValue(of([SCENE]));
+
+      component.onClearScenes(CHAPTER);
+
+      expect(component.selectedSceneId).toBe('scene-1');
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+    });
+
+    it('drops the selection and shows chapter content when the reconcile reload also fails and there are no unsaved edits', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+      component.hasPendingChanges = false;
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+      // Both the clear AND the reconcile reload fail: server state is unknown.
+      sceneGetAllSpy.and.returnValue(throwError(() => new Error('reload failed')));
+
+      component.onClearScenes(CHAPTER);
+
+      // No unsaved edits to protect, and the clear may have applied: drop the possibly
+      // stale scene selection and switch to chapter content.
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('keeps the selected scene when the reconcile reload also fails but there are unsaved edits', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+      component.hasPendingChanges = true;
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+      sceneGetAllSpy.and.returnValue(throwError(() => new Error('reload failed')));
+
+      component.onClearScenes(CHAPTER);
+
+      // Unverified state with unsaved edits: do not switch the editor (which would
+      // discard the edits). Keep the scene selected.
+      expect(component.selectedSceneId).toBe('scene-1');
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+    });
   });
 });

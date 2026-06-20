@@ -170,6 +170,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         if (this.selectedChapterId) this.loadChapterContent(this.selectedChapterId);
       }
     });
+    this.syncService.scenesCleared$.pipe(takeUntil(this.destroy$)).subscribe(ev => {
+      if (ev.bookId !== this.bookId) return;
+      this.scenesByChapter = { ...this.scenesByChapter, [ev.chapterId]: [] };
+      if (this.selectedChapterId === ev.chapterId && this.selectedSceneId) {
+        this.selectedSceneId = null;
+        this.loadChapterContent(ev.chapterId);
+      }
+    });
     this.syncService.scenesReordered$.pipe(takeUntil(this.destroy$)).subscribe(ev => {
       if (ev.bookId !== this.bookId) return;
       this.loadScenesForChapter(ev.chapterId);
@@ -341,6 +349,93 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  onDeleteScene(event: { scene: SceneSummaryDto; chapterId: string }): void {
+    if (!this.bookId) return;
+    const { scene, chapterId } = event;
+    const confirmed = confirm(`Delete scene "${scene.title}"? This cannot be undone.`);
+    if (!confirmed) return;
+    // Optimistically remove the scene from the tree (cheap and reversible). Do NOT
+    // switch the editor away from the scene yet: loading chapter content here would
+    // open over the scene document and reset hasPendingChanges before the delete is
+    // confirmed, so a failed delete would discard unsaved scene edits even though the
+    // scene still exists. Switch the editor only once the server confirms the delete.
+    this.scenesByChapter = {
+      ...this.scenesByChapter,
+      [chapterId]: (this.scenesByChapter[chapterId] ?? []).filter(s => s.id !== scene.id)
+    };
+    this.sceneService.delete(this.bookId, chapterId, scene.id).subscribe({
+      next: () => {
+        // Deletion confirmed: if this scene is still the open one, leave it and show
+        // the chapter instead. (If the user navigated elsewhere meanwhile, do nothing.)
+        if (this.selectedSceneId === scene.id) {
+          this.selectedSceneId = null;
+          this.loadChapterContent(chapterId);
+        }
+      },
+      error: () => {
+        // The scene was not deleted. Reconcile the tree from the server; the editor
+        // was never touched, so the still-selected scene and its unsaved edits remain.
+        alert('Failed to delete scene.');
+        this.loadScenesForChapter(chapterId);
+      }
+    });
+    // sceneDeleted$ from SignalR also removes the scene and switches the editor on the
+    // originating client once the server broadcasts; with the list already filtered and
+    // (on success) the selection cleared, it is a no-op.
+  }
+
+  onClearScenes(ch: ChapterSummaryDto): void {
+    const bookId = this.bookId;
+    if (!bookId) return;
+    const confirmed = confirm(`Remove all scenes from "${ch.title}"? The chapter content is kept; only the scene split is removed.`);
+    if (!confirmed) return;
+    this.sceneService.clear(bookId, ch.id).subscribe({
+      next: () => {
+        this.scenesByChapter = { ...this.scenesByChapter, [ch.id]: [] };
+        if (this.selectedChapterId === ch.id && this.selectedSceneId) {
+          this.selectedSceneId = null;
+          this.loadChapterContent(ch.id);
+        }
+      },
+      error: () => {
+        alert('Failed to remove scenes. Please try again.');
+        // The clear may have applied server-side despite the HTTP error (or a hub
+        // event already mutated local state). Reload the scene list AND reconcile
+        // the selection against the server: if the selected scene in this chapter is
+        // gone from the server, drop it and switch to chapter content so the user is
+        // not left editing or saving against a scene that no longer exists. If the
+        // clear truly failed, the scene survives the reload and selection is kept.
+        this.sceneService.getAll(bookId, ch.id).subscribe({
+          next: list => {
+            this.scenesByChapter = { ...this.scenesByChapter, [ch.id]: list };
+            if (
+              this.selectedChapterId === ch.id &&
+              this.selectedSceneId &&
+              !list.some(s => s.id === this.selectedSceneId)
+            ) {
+              this.selectedSceneId = null;
+              this.loadChapterContent(ch.id);
+            }
+          },
+          error: () => {
+            // The reconcile reload also failed, so we cannot confirm whether the
+            // selected scene survived. The clear may well have applied (server or
+            // SignalR), so to avoid leaving the user editing/saving against a scene
+            // that may no longer exist, drop the selection and show chapter content -
+            // but only when there are no unsaved edits, which must not be silently
+            // discarded on an unverified state (mirrors the delete/save guards).
+            if (this.selectedChapterId === ch.id && this.selectedSceneId && !this.hasPendingChanges) {
+              this.selectedSceneId = null;
+              this.loadChapterContent(ch.id);
+            }
+          }
+        });
+      }
+    });
+    // scenesCleared$ from SignalR handles multi-client sync; setting the list to []
+    // again when the event arrives is idempotent.
+  }
+
   private loadChapterContent(chapterId: string): void {
     if (!this.bookId || !this.docEditor) return;
     this.chapterService.getById(this.bookId, chapterId).subscribe(dto => {
@@ -429,6 +524,17 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /** Public save for the Save button. Only saves when there are pending changes. */
   saveCurrentDocument(onCompleted?: () => void): void {
     if (!this.bookId || !this.selectedChapterId || !this.docEditor || !this.hasPendingChanges || this.isOpeningDocument) {
+      if (onCompleted) onCompleted();
+      return;
+    }
+    // The editor keeps the previously-loaded document until a new load completes, so
+    // during a transition the selected target can already point elsewhere while the
+    // editor still holds the prior document. Most dangerously, deleting/clearing the
+    // selected scene nulls selectedSceneId before loadChapterContent finishes, so a
+    // save here would route to the chapter (else branch below) and write the scene's
+    // SFDT into the chapter record. Only persist when the current target matches the
+    // loaded document's owner; otherwise skip until the new document is opened.
+    if (this.documentOwnerChapterId !== this.selectedChapterId || this.documentOwnerSceneId !== this.selectedSceneId) {
       if (onCompleted) onCompleted();
       return;
     }

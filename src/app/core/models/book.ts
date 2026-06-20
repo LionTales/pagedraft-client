@@ -228,6 +228,12 @@ export interface SceneDeletedEvent {
   sceneId: string;
 }
 
+export interface ScenesClearedEvent {
+  bookId: string;
+  chapterId: string;
+  clearedSceneIds: string[];
+}
+
 export interface ScenesReorderedEvent {
   bookId: string;
   chapterId: string;
