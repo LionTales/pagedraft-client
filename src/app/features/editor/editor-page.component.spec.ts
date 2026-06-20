@@ -251,6 +251,7 @@ describe('EditorPageComponent (focused logic)', () => {
   describe('onDeleteScene', () => {
     let sceneDeleteSpy: jasmine.Spy;
     let sceneGetAllSpy: jasmine.Spy;
+    let sceneGetByIdSpy: jasmine.Spy;
     let chapterGetByIdSpy: jasmine.Spy;
     const SCENE: import('../../core/models/book').SceneSummaryDto = {
       id: 'scene-1', chapterId: 'chap-1', title: 'Scene One', order: 0, updatedAt: ''
@@ -262,12 +263,14 @@ describe('EditorPageComponent (focused logic)', () => {
     beforeEach(() => {
       sceneDeleteSpy = jasmine.createSpy('delete').and.returnValue(of(undefined));
       sceneGetAllSpy = jasmine.createSpy('getAll').and.returnValue(of([]));
+      sceneGetByIdSpy = jasmine.createSpy('getById').and.returnValue(EMPTY);
       chapterGetByIdSpy = jasmine.createSpy('getById').and.returnValue(EMPTY);
 
       // Override providers that need richer stubs for these tests
       const sceneServiceStub = TestBed.inject(SceneService) as any;
       sceneServiceStub.delete = sceneDeleteSpy;
       sceneServiceStub.getAll = sceneGetAllSpy;
+      sceneServiceStub.getById = sceneGetByIdSpy;
       const chapterServiceStub = TestBed.inject(ChapterService) as any;
       chapterServiceStub.getById = chapterGetByIdSpy;
 
@@ -329,10 +332,42 @@ describe('EditorPageComponent (focused logic)', () => {
       // loadScenesForChapter calls sceneService.getAll
       expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
     });
+
+    it('restores selection and scene editor content when deleting the SELECTED scene fails', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedSceneId = 'scene-1';
+      component.selectedChapterId = 'chap-1';
+      sceneDeleteSpy.and.returnValue(throwError(() => new Error('x')));
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      // The scene still exists server-side, so selection + scene content are restored
+      // (otherwise the UI would show chapter view with nothing selected).
+      expect(component.selectedSceneId).toBe('scene-1');
+      // loadSceneContent reloads the scene editor content via sceneService.getById
+      expect(sceneGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1', 'scene-1');
+      // The scene list is also reconciled with the server
+      expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('does not restore scene selection when deleting a NON-selected scene fails', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedSceneId = 'scene-2';
+      sceneDeleteSpy.and.returnValue(throwError(() => new Error('x')));
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      // scene-2 stays selected; we never optimistically cleared it, so nothing to restore.
+      expect(component.selectedSceneId).toBe('scene-2');
+      expect(sceneGetByIdSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('onClearScenes', () => {
     let sceneClearSpy: jasmine.Spy;
+    let sceneGetAllSpy: jasmine.Spy;
     let chapterGetByIdSpy: jasmine.Spy;
     const CHAPTER: import('../../core/models/book').ChapterSummaryDto = {
       id: 'chap-1', title: 'Chapter One', partName: null, order: 0, wordCount: 0, updatedAt: ''
@@ -343,10 +378,12 @@ describe('EditorPageComponent (focused logic)', () => {
 
     beforeEach(() => {
       sceneClearSpy = jasmine.createSpy('clear').and.returnValue(of(undefined));
+      sceneGetAllSpy = jasmine.createSpy('getAll').and.returnValue(of([]));
       chapterGetByIdSpy = jasmine.createSpy('getById').and.returnValue(EMPTY);
 
       const sceneServiceStub = TestBed.inject(SceneService) as any;
       sceneServiceStub.clear = sceneClearSpy;
+      sceneServiceStub.getAll = sceneGetAllSpy;
       const chapterServiceStub = TestBed.inject(ChapterService) as any;
       chapterServiceStub.getById = chapterGetByIdSpy;
 
@@ -392,7 +429,7 @@ describe('EditorPageComponent (focused logic)', () => {
       expect(chapterGetByIdSpy).not.toHaveBeenCalled();
     });
 
-    it('calls alert on service error', () => {
+    it('calls alert and reloads scenes from the server on service error', () => {
       spyOn(window, 'confirm').and.returnValue(true);
       spyOn(window, 'alert');
       sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
@@ -400,6 +437,9 @@ describe('EditorPageComponent (focused logic)', () => {
       component.onClearScenes(CHAPTER);
 
       expect(window.alert).toHaveBeenCalled();
+      // Reconcile with the server (the clear may have applied despite the error,
+      // or a hub event mutated local state) by reloading the scene list.
+      expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
     });
   });
 });

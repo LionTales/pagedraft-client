@@ -354,20 +354,30 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     const { scene, chapterId } = event;
     const confirmed = confirm(`Delete scene "${scene.title}"? This cannot be undone.`);
     if (!confirmed) return;
+    const wasSelected = this.selectedSceneId === scene.id;
     // Optimistic removal before the server responds
     this.scenesByChapter = {
       ...this.scenesByChapter,
       [chapterId]: (this.scenesByChapter[chapterId] ?? []).filter(s => s.id !== scene.id)
     };
-    if (this.selectedSceneId === scene.id) {
+    if (wasSelected) {
       this.selectedSceneId = null;
       if (this.selectedChapterId) this.loadChapterContent(this.selectedChapterId);
     }
     this.sceneService.delete(this.bookId, chapterId, scene.id).subscribe({
       error: () => {
-        // Rollback: reload from server
+        // The delete did not happen on the server. Reload the scene list so the
+        // optimistically removed scene reappears, and if it was the selected scene
+        // restore both the selection and the scene editor content we cleared above
+        // (otherwise the scene still exists server-side but the UI shows chapter
+        // view with nothing selected). selectedSceneId must be set before
+        // loadSceneContent, which only opens when selectedSceneId matches.
         alert('Failed to delete scene.');
         this.loadScenesForChapter(chapterId);
+        if (wasSelected) {
+          this.selectedSceneId = scene.id;
+          this.loadSceneContent(chapterId, scene.id);
+        }
       }
     });
     // sceneDeleted$ from SignalR will also try to remove the scene; filtering an
@@ -386,7 +396,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
           this.loadChapterContent(ch.id);
         }
       },
-      error: () => alert('Failed to remove scenes. Please try again.')
+      error: () => {
+        // Reconcile with the server instead of trusting local state: the clear may
+        // have applied server-side (or partially) even though the HTTP client
+        // reported an error, or a hub event already mutated local state. Reload the
+        // scene list so the tree matches the backend, mirroring onDeleteScene.
+        alert('Failed to remove scenes. Please try again.');
+        this.loadScenesForChapter(ch.id);
+      }
     });
     // scenesCleared$ from SignalR handles multi-client sync; setting the list to []
     // again when the event arrives is idempotent.
