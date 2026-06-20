@@ -170,6 +170,14 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         if (this.selectedChapterId) this.loadChapterContent(this.selectedChapterId);
       }
     });
+    this.syncService.scenesCleared$.pipe(takeUntil(this.destroy$)).subscribe(ev => {
+      if (ev.bookId !== this.bookId) return;
+      this.scenesByChapter = { ...this.scenesByChapter, [ev.chapterId]: [] };
+      if (this.selectedChapterId === ev.chapterId && this.selectedSceneId) {
+        this.selectedSceneId = null;
+        this.loadChapterContent(ev.chapterId);
+      }
+    });
     this.syncService.scenesReordered$.pipe(takeUntil(this.destroy$)).subscribe(ev => {
       if (ev.bookId !== this.bookId) return;
       this.loadScenesForChapter(ev.chapterId);
@@ -339,6 +347,49 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       },
       error: () => alert('Split scenes failed. Save the chapter first so it has content to split.')
     });
+  }
+
+  onDeleteScene(event: { scene: SceneSummaryDto; chapterId: string }): void {
+    if (!this.bookId) return;
+    const { scene, chapterId } = event;
+    const confirmed = confirm(`Delete scene "${scene.title}"? This cannot be undone.`);
+    if (!confirmed) return;
+    // Optimistic removal before the server responds
+    this.scenesByChapter = {
+      ...this.scenesByChapter,
+      [chapterId]: (this.scenesByChapter[chapterId] ?? []).filter(s => s.id !== scene.id)
+    };
+    if (this.selectedSceneId === scene.id) {
+      this.selectedSceneId = null;
+      if (this.selectedChapterId) this.loadChapterContent(this.selectedChapterId);
+    }
+    this.sceneService.delete(this.bookId, chapterId, scene.id).subscribe({
+      error: () => {
+        // Rollback: reload from server
+        alert('Failed to delete scene.');
+        this.loadScenesForChapter(chapterId);
+      }
+    });
+    // sceneDeleted$ from SignalR will also try to remove the scene; filtering an
+    // already-removed id is a no-op so there is no duplication issue.
+  }
+
+  onClearScenes(ch: ChapterSummaryDto): void {
+    if (!this.bookId) return;
+    const confirmed = confirm(`Remove all scenes from "${ch.title}"? The chapter content is kept; only the scene split is removed.`);
+    if (!confirmed) return;
+    this.sceneService.clear(this.bookId, ch.id).subscribe({
+      next: () => {
+        this.scenesByChapter = { ...this.scenesByChapter, [ch.id]: [] };
+        if (this.selectedChapterId === ch.id && this.selectedSceneId) {
+          this.selectedSceneId = null;
+          this.loadChapterContent(ch.id);
+        }
+      },
+      error: () => alert('Failed to remove scenes. Please try again.')
+    });
+    // scenesCleared$ from SignalR handles multi-client sync; setting the list to []
+    // again when the event arrives is idempotent.
   }
 
   private loadChapterContent(chapterId: string): void {

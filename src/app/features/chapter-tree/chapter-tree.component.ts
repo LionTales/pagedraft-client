@@ -50,7 +50,8 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
                   <div
                     class="scene-row"
                     [class.active]="selectedSceneId === scene.id"
-                    (click)="selectSceneClicked(scene, ch.id, $event)">
+                    (click)="selectSceneClicked(scene, ch.id, $event)"
+                    (contextmenu)="openSceneContextMenu($event, scene, ch.id)">
                     <span class="scene-title">{{ scene.title }}</span>
                   </div>
                 }
@@ -70,7 +71,20 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
           [style.left.px]="contextMenu.x">
           <button type="button" (click)="onRename(contextMenu.chapter)">Rename</button>
           <button type="button" (click)="onSplitScenes(contextMenu.chapter)">Split scenes</button>
+          <button
+            type="button"
+            [disabled]="scenesKnownEmpty(contextMenu.chapter.id)"
+            (click)="onClearScenes(contextMenu.chapter)">Remove all scenes</button>
           <button type="button" (click)="onDelete(contextMenu.chapter)">Delete</button>
+        </div>
+      }
+
+      @if (sceneContextMenu.visible && sceneContextMenu.scene) {
+        <div
+          class="context-menu"
+          [style.top.px]="sceneContextMenu.y"
+          [style.left.px]="sceneContextMenu.x">
+          <button type="button" (click)="onDeleteScene(sceneContextMenu.scene, sceneContextMenu.chapterId)">Delete scene</button>
         </div>
       }
     </div>
@@ -234,8 +248,13 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
       cursor: pointer;
     }
 
-    .context-menu button:hover {
+    .context-menu button:hover:not(:disabled) {
       background: #f3f3f3;
+    }
+
+    .context-menu button:disabled {
+      color: #aaa;
+      cursor: default;
     }
   `]
 })
@@ -261,6 +280,8 @@ export class ChapterTreeComponent {
   @Output() renameChapter = new EventEmitter<ChapterSummaryDto>();
   @Output() deleteChapter = new EventEmitter<ChapterSummaryDto>();
   @Output() splitScenes = new EventEmitter<ChapterSummaryDto>();
+  @Output() deleteScene = new EventEmitter<{ scene: SceneSummaryDto; chapterId: string }>();
+  @Output() clearScenes = new EventEmitter<ChapterSummaryDto>();
 
   private _chapters = signal<ChapterSummaryDto[]>([]);
   private _expandedChapters = signal<string[]>([]);
@@ -279,6 +300,32 @@ export class ChapterTreeComponent {
     chapter: null as ChapterSummaryDto | null
   };
 
+  sceneContextMenu = {
+    visible: false,
+    x: 0,
+    y: 0,
+    scene: null as SceneSummaryDto | null,
+    chapterId: null as string | null
+  };
+
+  hasScenes(chapterId: string): boolean {
+    return (this._scenesByChapter()[chapterId] ?? []).length > 0;
+  }
+
+  /**
+   * True ONLY when the chapter's scenes are KNOWN to be empty: the map has the
+   * key AND its array is length 0. Returns false when the key is absent (scene
+   * state not yet loaded this session) so the "Remove all scenes" action stays
+   * ENABLED for chapters whose scenes were never expanded. The backend clear
+   * endpoint is idempotent (204 even with zero scenes), so enabling-when-unknown
+   * is safe — at worst it issues a no-op clear.
+   */
+  scenesKnownEmpty(chapterId: string): boolean {
+    const map = this._scenesByChapter();
+    if (!Object.prototype.hasOwnProperty.call(map, chapterId)) return false;
+    return (map[chapterId] ?? []).length === 0;
+  }
+
   isExpanded(chapterId: string): boolean {
     return this._expandedChapters().includes(chapterId);
   }
@@ -294,6 +341,7 @@ export class ChapterTreeComponent {
     event.preventDefault();
     event.stopPropagation();
     this.closeContextMenu();
+    this.closeSceneContextMenu();
     this.chapterSelected.emit(ch);
   }
 
@@ -301,6 +349,7 @@ export class ChapterTreeComponent {
     event.preventDefault();
     event.stopPropagation();
     this.closeContextMenu();
+    this.closeSceneContextMenu();
     this.sceneSelected.emit({ scene, chapterId });
   }
 
@@ -312,6 +361,11 @@ export class ChapterTreeComponent {
 
   onSplitScenes(ch: ChapterSummaryDto): void {
     this.splitScenes.emit(ch);
+    this.closeContextMenu();
+  }
+
+  onClearScenes(ch: ChapterSummaryDto): void {
+    this.clearScenes.emit(ch);
     this.closeContextMenu();
   }
 
@@ -330,11 +384,25 @@ export class ChapterTreeComponent {
 
   openContextMenu(event: MouseEvent, ch: ChapterSummaryDto): void {
     event.preventDefault();
+    this.closeSceneContextMenu();
     this.contextMenu = {
       visible: true,
       x: event.clientX,
       y: event.clientY,
       chapter: ch
+    };
+  }
+
+  openSceneContextMenu(event: MouseEvent, scene: SceneSummaryDto, chapterId: string): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.closeContextMenu();
+    this.sceneContextMenu = {
+      visible: true,
+      x: event.clientX,
+      y: event.clientY,
+      scene,
+      chapterId
     };
   }
 
@@ -348,8 +416,17 @@ export class ChapterTreeComponent {
     this.closeContextMenu();
   }
 
+  onDeleteScene(scene: SceneSummaryDto | null, chapterId: string | null): void {
+    if (!scene || !chapterId) return;
+    this.deleteScene.emit({ scene, chapterId });
+    this.closeSceneContextMenu();
+  }
+
   closeContextMenu(): void {
     this.contextMenu = { visible: false, x: 0, y: 0, chapter: null };
   }
-}
 
+  closeSceneContextMenu(): void {
+    this.sceneContextMenu = { visible: false, x: 0, y: 0, scene: null, chapterId: null };
+  }
+}

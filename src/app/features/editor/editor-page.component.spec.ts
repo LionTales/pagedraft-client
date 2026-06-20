@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { ActivatedRoute, Router } from '@angular/router';
-import { of, EMPTY } from 'rxjs';
+import { of, EMPTY, throwError } from 'rxjs';
 import { EditorPageComponent } from './editor-page.component';
 import { BookService } from '../../core/services/book.service';
 import { ChapterService } from '../../core/services/chapter.service';
@@ -92,6 +92,7 @@ describe('EditorPageComponent (focused logic)', () => {
             sceneCreated$: EMPTY,
             sceneUpdated$: EMPTY,
             sceneDeleted$: EMPTY,
+            scenesCleared$: EMPTY,
             scenesReordered$: EMPTY,
           },
         },
@@ -243,5 +244,162 @@ describe('EditorPageComponent (focused logic)', () => {
       'chap-1',
       jasmine.objectContaining({ contentSfdt: CLEAN }),
     );
+  });
+
+  // ─── Scene deletion handlers ────────────────────────────────────────
+
+  describe('onDeleteScene', () => {
+    let sceneDeleteSpy: jasmine.Spy;
+    let sceneGetAllSpy: jasmine.Spy;
+    let chapterGetByIdSpy: jasmine.Spy;
+    const SCENE: import('../../core/models/book').SceneSummaryDto = {
+      id: 'scene-1', chapterId: 'chap-1', title: 'Scene One', order: 0, updatedAt: ''
+    };
+    const OTHER_SCENE: import('../../core/models/book').SceneSummaryDto = {
+      id: 'scene-2', chapterId: 'chap-1', title: 'Scene Two', order: 1, updatedAt: ''
+    };
+
+    beforeEach(() => {
+      sceneDeleteSpy = jasmine.createSpy('delete').and.returnValue(of(undefined));
+      sceneGetAllSpy = jasmine.createSpy('getAll').and.returnValue(of([]));
+      chapterGetByIdSpy = jasmine.createSpy('getById').and.returnValue(EMPTY);
+
+      // Override providers that need richer stubs for these tests
+      const sceneServiceStub = TestBed.inject(SceneService) as any;
+      sceneServiceStub.delete = sceneDeleteSpy;
+      sceneServiceStub.getAll = sceneGetAllSpy;
+      const chapterServiceStub = TestBed.inject(ChapterService) as any;
+      chapterServiceStub.getById = chapterGetByIdSpy;
+
+      // Set up pre-populated scenes
+      component.scenesByChapter = { 'chap-1': [SCENE, OTHER_SCENE] };
+    });
+
+    it('does nothing when confirm returns false', () => {
+      spyOn(window, 'confirm').and.returnValue(false);
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      expect(sceneDeleteSpy).not.toHaveBeenCalled();
+      expect(component.scenesByChapter['chap-1']).toEqual([SCENE, OTHER_SCENE]);
+    });
+
+    it('optimistically removes the scene and calls sceneService.delete on confirm', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      // Optimistic removal: scene-1 is gone from the list
+      expect(component.scenesByChapter['chap-1'].map((s: any) => s.id)).not.toContain('scene-1');
+      expect(component.scenesByChapter['chap-1'].map((s: any) => s.id)).toContain('scene-2');
+      // Service call
+      expect(sceneDeleteSpy).toHaveBeenCalledOnceWith('book-1', 'chap-1', 'scene-1');
+    });
+
+    it('resets selectedSceneId and calls loadChapterContent when deleted scene was selected', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedSceneId = 'scene-1';
+      component.selectedChapterId = 'chap-1';
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      expect(component.selectedSceneId).toBeNull();
+      // loadChapterContent calls chapterService.getById
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('does not reset selectedSceneId when a different scene is deleted', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedSceneId = 'scene-2';
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      expect(component.selectedSceneId).toBe('scene-2');
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+    });
+
+    it('calls alert and reloads scenes on service error', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      sceneDeleteSpy.and.returnValue(throwError(() => new Error('x')));
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      expect(window.alert).toHaveBeenCalled();
+      // loadScenesForChapter calls sceneService.getAll
+      expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+  });
+
+  describe('onClearScenes', () => {
+    let sceneClearSpy: jasmine.Spy;
+    let chapterGetByIdSpy: jasmine.Spy;
+    const CHAPTER: import('../../core/models/book').ChapterSummaryDto = {
+      id: 'chap-1', title: 'Chapter One', partName: null, order: 0, wordCount: 0, updatedAt: ''
+    };
+    const SCENE: import('../../core/models/book').SceneSummaryDto = {
+      id: 'scene-1', chapterId: 'chap-1', title: 'Scene One', order: 0, updatedAt: ''
+    };
+
+    beforeEach(() => {
+      sceneClearSpy = jasmine.createSpy('clear').and.returnValue(of(undefined));
+      chapterGetByIdSpy = jasmine.createSpy('getById').and.returnValue(EMPTY);
+
+      const sceneServiceStub = TestBed.inject(SceneService) as any;
+      sceneServiceStub.clear = sceneClearSpy;
+      const chapterServiceStub = TestBed.inject(ChapterService) as any;
+      chapterServiceStub.getById = chapterGetByIdSpy;
+
+      component.scenesByChapter = { 'chap-1': [SCENE] };
+    });
+
+    it('does nothing when confirm returns false', () => {
+      spyOn(window, 'confirm').and.returnValue(false);
+
+      component.onClearScenes(CHAPTER);
+
+      expect(sceneClearSpy).not.toHaveBeenCalled();
+    });
+
+    it('calls sceneService.clear and empties the scene list on confirm', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+
+      component.onClearScenes(CHAPTER);
+
+      expect(sceneClearSpy).toHaveBeenCalledOnceWith('book-1', 'chap-1');
+      expect(component.scenesByChapter['chap-1']).toEqual([]);
+    });
+
+    it('resets selectedSceneId and reloads chapter content when a scene in that chapter was selected', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+
+      component.onClearScenes(CHAPTER);
+
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('does not reset selectedSceneId when no scene in that chapter was selected', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = null;
+
+      component.onClearScenes(CHAPTER);
+
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+    });
+
+    it('calls alert on service error', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+
+      component.onClearScenes(CHAPTER);
+
+      expect(window.alert).toHaveBeenCalled();
+    });
   });
 });
