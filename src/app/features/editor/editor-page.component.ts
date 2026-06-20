@@ -405,15 +405,29 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         // gone from the server, drop it and switch to chapter content so the user is
         // not left editing or saving against a scene that no longer exists. If the
         // clear truly failed, the scene survives the reload and selection is kept.
-        this.sceneService.getAll(bookId, ch.id).subscribe(list => {
-          this.scenesByChapter = { ...this.scenesByChapter, [ch.id]: list };
-          if (
-            this.selectedChapterId === ch.id &&
-            this.selectedSceneId &&
-            !list.some(s => s.id === this.selectedSceneId)
-          ) {
-            this.selectedSceneId = null;
-            this.loadChapterContent(ch.id);
+        this.sceneService.getAll(bookId, ch.id).subscribe({
+          next: list => {
+            this.scenesByChapter = { ...this.scenesByChapter, [ch.id]: list };
+            if (
+              this.selectedChapterId === ch.id &&
+              this.selectedSceneId &&
+              !list.some(s => s.id === this.selectedSceneId)
+            ) {
+              this.selectedSceneId = null;
+              this.loadChapterContent(ch.id);
+            }
+          },
+          error: () => {
+            // The reconcile reload also failed, so we cannot confirm whether the
+            // selected scene survived. The clear may well have applied (server or
+            // SignalR), so to avoid leaving the user editing/saving against a scene
+            // that may no longer exist, drop the selection and show chapter content -
+            // but only when there are no unsaved edits, which must not be silently
+            // discarded on an unverified state (mirrors the delete/save guards).
+            if (this.selectedChapterId === ch.id && this.selectedSceneId && !this.hasPendingChanges) {
+              this.selectedSceneId = null;
+              this.loadChapterContent(ch.id);
+            }
           }
         });
       }

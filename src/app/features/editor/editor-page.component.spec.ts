@@ -540,5 +540,40 @@ describe('EditorPageComponent (focused logic)', () => {
       expect(component.selectedSceneId).toBe('scene-1');
       expect(chapterGetByIdSpy).not.toHaveBeenCalled();
     });
+
+    it('drops the selection and shows chapter content when the reconcile reload also fails and there are no unsaved edits', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+      component.hasPendingChanges = false;
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+      // Both the clear AND the reconcile reload fail: server state is unknown.
+      sceneGetAllSpy.and.returnValue(throwError(() => new Error('reload failed')));
+
+      component.onClearScenes(CHAPTER);
+
+      // No unsaved edits to protect, and the clear may have applied: drop the possibly
+      // stale scene selection and switch to chapter content.
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('keeps the selected scene when the reconcile reload also fails but there are unsaved edits', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+      component.hasPendingChanges = true;
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+      sceneGetAllSpy.and.returnValue(throwError(() => new Error('reload failed')));
+
+      component.onClearScenes(CHAPTER);
+
+      // Unverified state with unsaved edits: do not switch the editor (which would
+      // discard the edits). Keep the scene selected.
+      expect(component.selectedSceneId).toBe('scene-1');
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+    });
   });
 });
