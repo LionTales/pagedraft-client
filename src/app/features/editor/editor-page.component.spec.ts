@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { ActivatedRoute, Router } from '@angular/router';
-import { of, EMPTY, throwError } from 'rxjs';
+import { of, EMPTY, throwError, Subject } from 'rxjs';
 import { EditorPageComponent } from './editor-page.component';
 import { BookService } from '../../core/services/book.service';
 import { ChapterService } from '../../core/services/chapter.service';
@@ -378,7 +378,7 @@ describe('EditorPageComponent (focused logic)', () => {
       expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
     });
 
-    it('restores selection and scene editor content when deleting the SELECTED scene fails', () => {
+    it('preserves the selected scene and its unsaved edits when deleting it fails', () => {
       spyOn(window, 'confirm').and.returnValue(true);
       spyOn(window, 'alert');
       component.selectedSceneId = 'scene-1';
@@ -387,13 +387,35 @@ describe('EditorPageComponent (focused logic)', () => {
 
       component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
 
-      // The scene still exists server-side, so selection + scene content are restored
-      // (otherwise the UI would show chapter view with nothing selected).
+      // The editor is never switched, so the scene stays selected and its in-editor
+      // unsaved edits are NOT reloaded/discarded from the server (no scene or chapter load).
       expect(component.selectedSceneId).toBe('scene-1');
-      // loadSceneContent reloads the scene editor content via sceneService.getById
-      expect(sceneGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1', 'scene-1');
-      // The scene list is also reconciled with the server
+      expect(sceneGetByIdSpy).not.toHaveBeenCalled();
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+      // The tree is reconciled with the server.
       expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('does not switch the editor to chapter content until the delete is confirmed', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      component.selectedSceneId = 'scene-1';
+      component.selectedChapterId = 'chap-1';
+      const deleteSubject = new Subject<void>();
+      sceneDeleteSpy.and.returnValue(deleteSubject.asObservable());
+
+      component.onDeleteScene({ scene: SCENE, chapterId: 'chap-1' });
+
+      // While the delete is in flight, the editor must NOT switch to chapter content
+      // (which would open over the scene document and reset hasPendingChanges, losing
+      // unsaved scene edits if the delete then fails).
+      expect(component.selectedSceneId).toBe('scene-1');
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+
+      // Only once the server confirms does the editor switch to the chapter.
+      deleteSubject.next();
+      deleteSubject.complete();
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
     });
 
     it('does not restore scene selection when deleting a NON-selected scene fails', () => {

@@ -354,34 +354,34 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     const { scene, chapterId } = event;
     const confirmed = confirm(`Delete scene "${scene.title}"? This cannot be undone.`);
     if (!confirmed) return;
-    const wasSelected = this.selectedSceneId === scene.id;
-    // Optimistic removal before the server responds
+    // Optimistically remove the scene from the tree (cheap and reversible). Do NOT
+    // switch the editor away from the scene yet: loading chapter content here would
+    // open over the scene document and reset hasPendingChanges before the delete is
+    // confirmed, so a failed delete would discard unsaved scene edits even though the
+    // scene still exists. Switch the editor only once the server confirms the delete.
     this.scenesByChapter = {
       ...this.scenesByChapter,
       [chapterId]: (this.scenesByChapter[chapterId] ?? []).filter(s => s.id !== scene.id)
     };
-    if (wasSelected) {
-      this.selectedSceneId = null;
-      if (this.selectedChapterId) this.loadChapterContent(this.selectedChapterId);
-    }
     this.sceneService.delete(this.bookId, chapterId, scene.id).subscribe({
+      next: () => {
+        // Deletion confirmed: if this scene is still the open one, leave it and show
+        // the chapter instead. (If the user navigated elsewhere meanwhile, do nothing.)
+        if (this.selectedSceneId === scene.id) {
+          this.selectedSceneId = null;
+          this.loadChapterContent(chapterId);
+        }
+      },
       error: () => {
-        // The delete did not happen on the server. Reload the scene list so the
-        // optimistically removed scene reappears, and if it was the selected scene
-        // restore both the selection and the scene editor content we cleared above
-        // (otherwise the scene still exists server-side but the UI shows chapter
-        // view with nothing selected). selectedSceneId must be set before
-        // loadSceneContent, which only opens when selectedSceneId matches.
+        // The scene was not deleted. Reconcile the tree from the server; the editor
+        // was never touched, so the still-selected scene and its unsaved edits remain.
         alert('Failed to delete scene.');
         this.loadScenesForChapter(chapterId);
-        if (wasSelected) {
-          this.selectedSceneId = scene.id;
-          this.loadSceneContent(chapterId, scene.id);
-        }
       }
     });
-    // sceneDeleted$ from SignalR will also try to remove the scene; filtering an
-    // already-removed id is a no-op so there is no duplication issue.
+    // sceneDeleted$ from SignalR also removes the scene and switches the editor on the
+    // originating client once the server broadcasts; with the list already filtered and
+    // (on success) the selection cleared, it is a no-op.
   }
 
   onClearScenes(ch: ChapterSummaryDto): void {
