@@ -23,6 +23,10 @@ export interface LinguisticViewModel {
   labels: {
     deviationsTitle: string;
     noDeviations: string;
+    /** Muted empty-state shown when the run parsed but produced zero consistency issues. */
+    noConsistencyIssues: string;
+    /** Muted message shown when consistency issues were detected in JSON but could not be anchored. */
+    consistencyUndetectable: string;
     /** "{scene} vs chapter {baseline}" template parts (kept for compatibility). */
     vs: string;
     chapterBaselineLabel: string;
@@ -38,8 +42,28 @@ export interface LinguisticViewModel {
   dir: 'rtl' | 'ltr';
   /** True when structuredResult was missing or JSON.parse threw - render fallback instead of blocks. */
   parseFailed: boolean;
-  /** True when parse succeeded but there is no summary, no deviations and no consistency issues. */
+  /**
+   * True when parse succeeded but there is NO structured content of any kind: no summary, no
+   * deviations, no anchored consistency cards, AND no consistencyIssues in the parsed JSON. Stays
+   * false when the JSON carried consistencyIssues that anchoring dropped (that case drives
+   * consistencyUndetectable instead), so the "no structured content" note never renders alongside -
+   * and contradicts - the undetectable-consistency message.
+   */
   emptyStructured: boolean;
+  /**
+   * True when the run parsed successfully (NOT parseFailed) and produced zero consistency suggestion
+   * cards. Drives the explicit "no consistency issues found" empty-state so a successfully-analyzed
+   * but issue-free chapter does not look broken/blank where the consistency cards would appear.
+   * Mutually exclusive with consistencyUndetectable.
+   */
+  noConsistencyIssues: boolean;
+  /**
+   * True when the run parsed successfully (NOT parseFailed), produced zero anchored consistency
+   * suggestion cards, BUT the parsed structuredResult contained a non-empty consistencyIssues array.
+   * Indicates the model DID detect issues but anchoring failed to locate them in the text.
+   * Mutually exclusive with noConsistencyIssues.
+   */
+  consistencyUndetectable: boolean;
 }
 
 /**
@@ -87,9 +111,14 @@ export interface LinguisticViewModel {
           </ng-template>
         </div>
 
-        <!-- Consistency issues are now rendered as navigable + dismissable suggestion cards by the
-             Run/History tabs (sourced from result.suggestions, category consistency-*), so they no
-             longer appear here. Only style deviations + summary live in this shared view. -->
+        <!-- Consistency issues are rendered as navigable + dismissable suggestion cards by the
+             Run/History tabs (sourced from result.suggestions, category consistency-*), so the cards
+             themselves do not appear here. But when the run parsed successfully and produced ZERO
+             consistency cards, the tabs render nothing for consistency - which reads as broken/blank.
+             Show an explicit muted empty-state here, mirroring the deviations empty-state, so an
+             analyzed-but-clean chapter reads as "analyzed, no issues". -->
+        <p class="muted" data-testid="consistency-empty" *ngIf="ling.noConsistencyIssues && !ling.consistencyUndetectable">{{ ling.labels.noConsistencyIssues }}</p>
+        <p class="muted" data-testid="consistency-undetectable" *ngIf="ling.consistencyUndetectable">{{ ling.labels.consistencyUndetectable }}</p>
 
         <!-- Parsed but empty, and there is non-trivial raw text: offer the raw response. -->
         <ng-container *ngIf="ling.emptyStructured && hasRawText">
@@ -258,21 +287,22 @@ export class LinguisticResultComponent implements OnChanges {
     const rawJson = result.structuredResult?.trim()
       ? result.structuredResult
       : (result.resultText?.trim() ? result.resultText : '');
+    const parseFailed_early = { summary: '', deviations: [], labels, dir, parseFailed: true as const, emptyStructured: false, noConsistencyIssues: false, consistencyUndetectable: false };
     if (!rawJson) {
-      return { summary: '', deviations: [], labels, dir, parseFailed: true, emptyStructured: false };
+      return parseFailed_early;
     }
     let parsed: unknown;
     try {
       parsed = JSON.parse(rawJson);
     } catch {
-      return { summary: '', deviations: [], labels, dir, parseFailed: true, emptyStructured: false };
+      return parseFailed_early;
     }
 
     // JSON.parse returns non-object primitives for valid JSON like `null`, `123` or `"text"`. Reading
     // fields off those (e.g. `parsed.summary` when parsed is null) throws during change detection and
     // breaks the Run/History tab, so treat anything that is not a plain object as a parse failure.
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return { summary: '', deviations: [], labels, dir, parseFailed: true, emptyStructured: false };
+      return parseFailed_early;
     }
     const obj = parsed as Partial<LinguisticAnalysis> & { summary?: string };
 
@@ -293,15 +323,30 @@ export class LinguisticResultComponent implements OnChanges {
         };
       });
 
-    // Consistency issues are NOT parsed here anymore: they are rendered as navigable suggestion cards
-    // by the Run/History tabs from result.suggestions (category consistency-*). emptyStructured keys off
-    // summary + deviations only - but also treat any consistency suggestion as non-empty so we don't
-    // show a confusing "no structured content" note when the Run/History tabs are already rendering
-    // consistency cards for this result.
+    // Consistency issues are NOT parsed into cards here anymore: they are rendered as navigable
+    // suggestion cards by the Run/History tabs from result.suggestions (category consistency-*).
     const hasConsistency = result.suggestions?.some(s => isConsistencySuggestion(s)) ?? false;
-    const emptyStructured = !summary && deviations.length === 0 && !hasConsistency;
 
-    return { summary, deviations, labels, dir, parseFailed: false, emptyStructured };
+    // Determine whether the parsed JSON contained a non-empty consistencyIssues array. This allows
+    // distinguishing the "model found nothing" case from "model found issues but anchoring failed".
+    const parsedConsistencyIssues = Array.isArray(obj.consistencyIssues) ? obj.consistencyIssues : [];
+    const modelDetectedIssues = parsedConsistencyIssues.length > 0;
+
+    // emptyStructured == the parse yielded NO structured content of any kind: no summary, no deviations,
+    // no anchored consistency cards AND no consistencyIssues in the JSON. modelDetectedIssues MUST be
+    // part of this: when the JSON carried consistencyIssues but anchoring dropped them all, the result
+    // is not empty - it drives the consistencyUndetectable message - so leaving modelDetectedIssues out
+    // would let the contradictory "no structured content" empty-note render alongside that message
+    // whenever resultText is long enough to satisfy hasRawText.
+    const emptyStructured = !summary && deviations.length === 0 && !hasConsistency && !modelDetectedIssues;
+
+    // Parse succeeded and there are zero anchored consistency suggestion cards.
+    // Two distinct states, mutually exclusive:
+    //   noConsistencyIssues: genuinely clean run (zero anchored AND zero/absent structured issues)
+    //   consistencyUndetectable: model returned issues in JSON but ALL were dropped during anchoring
+    const noConsistencyIssues = !hasConsistency && !modelDetectedIssues;
+    const consistencyUndetectable = !hasConsistency && modelDetectedIssues;
+    return { summary, deviations, labels, dir, parseFailed: false, emptyStructured, noConsistencyIssues, consistencyUndetectable };
   }
 
   /** Format a number for display: integers as-is, floats to 2 dp (trailing ".00" stripped). */
@@ -340,6 +385,8 @@ const LINGUISTIC_LABELS: Record<'he' | 'en', LinguisticViewModel['labels']> = {
   he: {
     deviationsTitle: 'חריגות סגנון מהפרק',
     noDeviations: 'לא נמצאו חריגות סגנון משמעותיות.',
+    noConsistencyIssues: 'לא נמצאו בעיות עקביות.',
+    consistencyUndetectable: 'בעיות עקביות זוהו אך לא ניתן היה לאתר אותן בטקסט.',
     vs: 'מול',
     chapterBaselineLabel: 'קו בסיס הפרק',
     rawVs: 'לעומת',
@@ -351,6 +398,8 @@ const LINGUISTIC_LABELS: Record<'he' | 'en', LinguisticViewModel['labels']> = {
   en: {
     deviationsTitle: 'Style deviations from chapter',
     noDeviations: 'No significant style deviations found.',
+    noConsistencyIssues: 'No consistency issues found.',
+    consistencyUndetectable: 'Consistency issues were detected but could not be located in the text.',
     vs: 'vs',
     chapterBaselineLabel: 'chapter baseline',
     rawVs: 'vs',
