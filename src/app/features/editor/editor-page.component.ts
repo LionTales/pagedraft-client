@@ -385,10 +385,11 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   }
 
   onClearScenes(ch: ChapterSummaryDto): void {
-    if (!this.bookId) return;
+    const bookId = this.bookId;
+    if (!bookId) return;
     const confirmed = confirm(`Remove all scenes from "${ch.title}"? The chapter content is kept; only the scene split is removed.`);
     if (!confirmed) return;
-    this.sceneService.clear(this.bookId, ch.id).subscribe({
+    this.sceneService.clear(bookId, ch.id).subscribe({
       next: () => {
         this.scenesByChapter = { ...this.scenesByChapter, [ch.id]: [] };
         if (this.selectedChapterId === ch.id && this.selectedSceneId) {
@@ -397,12 +398,24 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         }
       },
       error: () => {
-        // Reconcile with the server instead of trusting local state: the clear may
-        // have applied server-side (or partially) even though the HTTP client
-        // reported an error, or a hub event already mutated local state. Reload the
-        // scene list so the tree matches the backend, mirroring onDeleteScene.
         alert('Failed to remove scenes. Please try again.');
-        this.loadScenesForChapter(ch.id);
+        // The clear may have applied server-side despite the HTTP error (or a hub
+        // event already mutated local state). Reload the scene list AND reconcile
+        // the selection against the server: if the selected scene in this chapter is
+        // gone from the server, drop it and switch to chapter content so the user is
+        // not left editing or saving against a scene that no longer exists. If the
+        // clear truly failed, the scene survives the reload and selection is kept.
+        this.sceneService.getAll(bookId, ch.id).subscribe(list => {
+          this.scenesByChapter = { ...this.scenesByChapter, [ch.id]: list };
+          if (
+            this.selectedChapterId === ch.id &&
+            this.selectedSceneId &&
+            !list.some(s => s.id === this.selectedSceneId)
+          ) {
+            this.selectedSceneId = null;
+            this.loadChapterContent(ch.id);
+          }
+        });
       }
     });
     // scenesCleared$ from SignalR handles multi-client sync; setting the list to []

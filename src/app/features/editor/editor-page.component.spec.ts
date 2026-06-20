@@ -441,5 +441,37 @@ describe('EditorPageComponent (focused logic)', () => {
       // or a hub event mutated local state) by reloading the scene list.
       expect(sceneGetAllSpy).toHaveBeenCalledWith('book-1', 'chap-1');
     });
+
+    it('drops the stale selection and loads chapter content when the clear succeeded server-side despite the error', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+      // Server actually cleared: the reload returns no scenes.
+      sceneGetAllSpy.and.returnValue(of([]));
+
+      component.onClearScenes(CHAPTER);
+
+      // The deleted scene is no longer selected; the editor switches to chapter content
+      // so the user is not editing/saving against a scene that no longer exists.
+      expect(component.selectedSceneId).toBeNull();
+      expect(chapterGetByIdSpy).toHaveBeenCalledWith('book-1', 'chap-1');
+    });
+
+    it('keeps the selection when the clear truly failed and the scene survives the reload', () => {
+      spyOn(window, 'confirm').and.returnValue(true);
+      spyOn(window, 'alert');
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = 'scene-1';
+      sceneClearSpy.and.returnValue(throwError(() => new Error('fail')));
+      // Clear truly failed: the scene is still present on reload.
+      sceneGetAllSpy.and.returnValue(of([SCENE]));
+
+      component.onClearScenes(CHAPTER);
+
+      expect(component.selectedSceneId).toBe('scene-1');
+      expect(chapterGetByIdSpy).not.toHaveBeenCalled();
+    });
   });
 });
