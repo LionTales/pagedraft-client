@@ -35,6 +35,10 @@ export class SceneService {
     return this.http.delete<void>(`${this.base(bookId, chapterId)}/${sceneId}`);
   }
 
+  clear(bookId: string, chapterId: string): Observable<void> {
+    return this.http.delete<void>(this.base(bookId, chapterId));
+  }
+
   reorder(
     bookId: string,
     chapterId: string,

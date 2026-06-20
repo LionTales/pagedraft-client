@@ -9,6 +9,7 @@ import type {
   SceneCreatedEvent,
   SceneUpdatedEvent,
   SceneDeletedEvent,
+  ScenesClearedEvent,
   ScenesReorderedEvent
 } from '../models/book';
 
@@ -24,6 +25,7 @@ export class SyncService {
   readonly sceneCreated$ = new Subject<SceneCreatedEvent>();
   readonly sceneUpdated$ = new Subject<SceneUpdatedEvent>();
   readonly sceneDeleted$ = new Subject<SceneDeletedEvent>();
+  readonly scenesCleared$ = new Subject<ScenesClearedEvent>();
   readonly scenesReordered$ = new Subject<ScenesReorderedEvent>();
 
   async connect(): Promise<void> {
@@ -39,6 +41,7 @@ export class SyncService {
     this.connection.on('SceneCreated', (e: SceneCreatedEvent) => this.sceneCreated$.next(e));
     this.connection.on('SceneUpdated', (e: SceneUpdatedEvent) => this.sceneUpdated$.next(e));
     this.connection.on('SceneDeleted', (e: SceneDeletedEvent) => this.sceneDeleted$.next(e));
+    this.connection.on('ScenesCleared', (e: ScenesClearedEvent) => this.scenesCleared$.next(e));
     this.connection.on('ScenesReordered', (e: ScenesReorderedEvent) => this.scenesReordered$.next(e));
     await this.connection.start();
     if (this.currentBookId) await this.joinBook(this.currentBookId);
