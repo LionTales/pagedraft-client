@@ -184,6 +184,148 @@ describe('LinguisticResultComponent', () => {
   });
 
   // =========================================================================
+  // 3b. "no consistency issues found" empty-state
+  // =========================================================================
+
+  describe('no-consistency-issues empty-state', () => {
+    const structured = JSON.stringify({ deviations: [], consistencyIssues: [] });
+
+    it('renders [data-testid="consistency-empty"] for a parsed linguistic result with zero consistency suggestions', () => {
+      setResult(makeLinguisticResult(structured, { suggestions: [] }));
+
+      const empty = fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'));
+      expect(empty).not.toBeNull();
+      expect(component.view!.noConsistencyIssues).toBeTrue();
+    });
+
+    it('resolves the Hebrew label by default (no language)', () => {
+      setResult(makeLinguisticResult(structured, { language: '', suggestions: [] }));
+
+      const empty = fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'));
+      expect(empty).not.toBeNull();
+      expect((empty.nativeElement as HTMLElement).textContent?.trim()).toBe('לא נמצאו בעיות עקביות.');
+    });
+
+    it('resolves the English label when the result language is English', () => {
+      setResult(makeLinguisticResult(structured, { language: 'en', suggestions: [] }));
+
+      const empty = fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'));
+      expect(empty).not.toBeNull();
+      expect((empty.nativeElement as HTMLElement).textContent?.trim()).toBe('No consistency issues found.');
+    });
+
+    it('still renders the empty-state when the result has deviations but zero consistency suggestions', () => {
+      const withDeviation = JSON.stringify({
+        deviations: [{ metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' }],
+      });
+      setResult(makeLinguisticResult(withDeviation, { suggestions: [] }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="deviation-row"]'))).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'))).not.toBeNull();
+    });
+
+    it('does NOT render the empty-state when the result has at least one consistency suggestion', () => {
+      setResult(makeLinguisticResult(structured, {
+        suggestions: [{ category: 'consistency-pov' } as any],
+      }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'))).toBeNull();
+      expect(component.view!.noConsistencyIssues).toBeFalse();
+    });
+
+    it('does NOT render the empty-state on parse failure', () => {
+      setResult(makeLinguisticResult('{not valid json', { suggestions: [] }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'))).toBeNull();
+      expect(component.view!.noConsistencyIssues).toBeFalse();
+    });
+
+    it('does NOT render the empty-state for a non-LinguisticAnalysis (Proofread) result', () => {
+      const proofread: AnalysisResultDto = {
+        id: 'r-pr3',
+        chapterId: 'chap-1',
+        jobId: null,
+        type: 'Proofread',
+        analysisType: 'Proofread',
+        resultText: 'Some proofread result.',
+        modelName: 'test-model',
+        createdAt: new Date().toISOString(),
+        scope: 'Chapter',
+        structuredResult: null,
+        sceneId: null,
+        bookId: 'book-1',
+        language: 'he',
+        status: 'Active',
+        proofreadNoChangesHint: false,
+        suggestions: [],
+      };
+      setResult(proofread);
+
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'))).toBeNull();
+      expect(component.view).toBeNull();
+    });
+
+    it('clears the empty-state once consistency suggestions arrive on the SAME result object', () => {
+      const result = makeLinguisticResult(structured, { suggestions: [] });
+      setResult(result);
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'))).not.toBeNull();
+
+      // Suggestions arrive on the same object (id/language/structuredResult/resultText unchanged):
+      // the consistency-count cache key must force a recompute so the empty-state disappears.
+      result.suggestions = [{ category: 'consistency-pov' } as any];
+      fixture.detectChanges();
+
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'))).toBeNull();
+      expect(component.view!.noConsistencyIssues).toBeFalse();
+    });
+  });
+
+  // =========================================================================
+  // 3c. "consistency issues detected but not locatable" empty-state
+  // =========================================================================
+
+  describe('consistency-undetectable empty-state', () => {
+    // structuredResult carries a non-empty consistencyIssues array, but suggestions (anchored cards)
+    // are empty - anchoring dropped everything.
+    const structuredWithIssues = JSON.stringify({
+      deviations: [],
+      consistencyIssues: [{ type: 'pov', span: 'x', description: 'y' }],
+    });
+
+    it('renders [data-testid="consistency-undetectable"] when structuredResult has consistencyIssues but suggestions is empty', () => {
+      setResult(makeLinguisticResult(structuredWithIssues, { suggestions: [] }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-undetectable"]'))).not.toBeNull();
+      expect(component.view!.consistencyUndetectable).toBeTrue();
+    });
+
+    it('does NOT render [data-testid="consistency-empty"] in the undetectable branch', () => {
+      setResult(makeLinguisticResult(structuredWithIssues, { suggestions: [] }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-empty"]'))).toBeNull();
+      expect(component.view!.noConsistencyIssues).toBeFalse();
+    });
+
+    it('resolves the Hebrew label (he default) for the undetectable branch', () => {
+      setResult(makeLinguisticResult(structuredWithIssues, { language: '', suggestions: [] }));
+
+      const el = fixture.debugElement.query(By.css('[data-testid="consistency-undetectable"]'));
+      expect(el).not.toBeNull();
+      expect((el.nativeElement as HTMLElement).textContent?.trim())
+        .toBe('בעיות עקביות זוהו אך לא ניתן היה לאתר אותן בטקסט.');
+    });
+
+    it('resolves the English label for the undetectable branch when language is English', () => {
+      setResult(makeLinguisticResult(structuredWithIssues, { language: 'en', suggestions: [] }));
+
+      const el = fixture.debugElement.query(By.css('[data-testid="consistency-undetectable"]'));
+      expect(el).not.toBeNull();
+      expect((el.nativeElement as HTMLElement).textContent?.trim())
+        .toBe('Consistency issues were detected but could not be located in the text.');
+    });
+  });
+
+  // =========================================================================
   // 4. 'notably' comparison band (en)
   // =========================================================================
 
