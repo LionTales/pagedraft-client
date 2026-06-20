@@ -42,7 +42,13 @@ export interface LinguisticViewModel {
   dir: 'rtl' | 'ltr';
   /** True when structuredResult was missing or JSON.parse threw - render fallback instead of blocks. */
   parseFailed: boolean;
-  /** True when parse succeeded but there is no summary, no deviations and no consistency issues. */
+  /**
+   * True when parse succeeded but there is NO structured content of any kind: no summary, no
+   * deviations, no anchored consistency cards, AND no consistencyIssues in the parsed JSON. Stays
+   * false when the JSON carried consistencyIssues that anchoring dropped (that case drives
+   * consistencyUndetectable instead), so the "no structured content" note never renders alongside -
+   * and contradicts - the undetectable-consistency message.
+   */
   emptyStructured: boolean;
   /**
    * True when the run parsed successfully (NOT parseFailed) and produced zero consistency suggestion
@@ -317,18 +323,22 @@ export class LinguisticResultComponent implements OnChanges {
         };
       });
 
-    // Consistency issues are NOT parsed here anymore: they are rendered as navigable suggestion cards
-    // by the Run/History tabs from result.suggestions (category consistency-*). emptyStructured keys off
-    // summary + deviations only - but also treat any consistency suggestion as non-empty so we don't
-    // show a confusing "no structured content" note when the Run/History tabs are already rendering
-    // consistency cards for this result.
+    // Consistency issues are NOT parsed into cards here anymore: they are rendered as navigable
+    // suggestion cards by the Run/History tabs from result.suggestions (category consistency-*).
     const hasConsistency = result.suggestions?.some(s => isConsistencySuggestion(s)) ?? false;
-    const emptyStructured = !summary && deviations.length === 0 && !hasConsistency;
 
     // Determine whether the parsed JSON contained a non-empty consistencyIssues array. This allows
     // distinguishing the "model found nothing" case from "model found issues but anchoring failed".
     const parsedConsistencyIssues = Array.isArray(obj.consistencyIssues) ? obj.consistencyIssues : [];
     const modelDetectedIssues = parsedConsistencyIssues.length > 0;
+
+    // emptyStructured == the parse yielded NO structured content of any kind: no summary, no deviations,
+    // no anchored consistency cards AND no consistencyIssues in the JSON. modelDetectedIssues MUST be
+    // part of this: when the JSON carried consistencyIssues but anchoring dropped them all, the result
+    // is not empty - it drives the consistencyUndetectable message - so leaving modelDetectedIssues out
+    // would let the contradictory "no structured content" empty-note render alongside that message
+    // whenever resultText is long enough to satisfy hasRawText.
+    const emptyStructured = !summary && deviations.length === 0 && !hasConsistency && !modelDetectedIssues;
 
     // Parse succeeded and there are zero anchored consistency suggestion cards.
     // Two distinct states, mutually exclusive:

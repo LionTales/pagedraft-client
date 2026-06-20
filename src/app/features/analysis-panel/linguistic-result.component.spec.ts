@@ -323,6 +323,19 @@ describe('LinguisticResultComponent', () => {
       expect((el.nativeElement as HTMLElement).textContent?.trim())
         .toBe('Consistency issues were detected but could not be located in the text.');
     });
+
+    it('does NOT render the contradictory linguistic-empty-note even with a long resultText', () => {
+      // Regression: the JSON carries consistencyIssues (so consistencyUndetectable is shown) AND the
+      // resultText is long enough to satisfy hasRawText. emptyStructured must stay false so the
+      // "no structured content" empty-note does not render alongside the undetectable message.
+      const RAW_TEXT = 'This is a non-trivial raw response longer than twenty characters.';
+      setResult(makeLinguisticResult(structuredWithIssues, { resultText: RAW_TEXT, suggestions: [] }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="consistency-undetectable"]'))).not.toBeNull();
+      expect(component.view!.emptyStructured).toBeFalse();
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-empty-note"]'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="linguistic-raw-toggle"]'))).toBeNull();
+    });
   });
 
   // =========================================================================
