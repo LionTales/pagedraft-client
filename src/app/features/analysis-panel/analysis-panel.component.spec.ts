@@ -1,5 +1,6 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { EMPTY, NEVER, of, throwError } from 'rxjs';
+import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { SimpleChange } from '@angular/core';
+import { EMPTY, NEVER, Subject, of, throwError } from 'rxjs';
 import { AnalysisPanelComponent } from './analysis-panel.component';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisRunOrchestrationService } from '../../core/services/analysis-run-orchestration.service';
@@ -1006,10 +1007,12 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     component['analysisResultIdsBeforeRun'] = new Set<string>();
     component['streamingText'] = 'the cat';
 
-    // The run's persisted row has not arrived yet (replica lag): the synthetic result is kept and its
-    // client-diff drives the Run tab. A reliable run must still end up showing the cards.
+    // This run's persisted (reliable) row IS present in the response, so reliability is known: the synthetic
+    // is kept and its client diff drives the Run tab (no need to wait/retry).
     const svc = TestBed.inject(AnalysisService) as any;
-    svc.getHistory = () => of([]);
+    svc.getHistory = () => of([
+      makeResultWithSuggestions({ id: 'pr-reliable', proofreadResultUnreliable: false }),
+    ]);
 
     const showSpy = spyOn(component.showInDocument, 'emit');
 
@@ -1021,7 +1024,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     });
     (component as any).onStreamingCompleted(synthetic);
 
-    // Synthetic kept (no server row yet); client-diff cards surfaced.
+    // Synthetic kept (reliable row present, not adopted); client-diff cards surfaced.
     expect(component['latestResult']!.id).toBe('');
     expect(component.proofreadSuggestions.length).toBeGreaterThan(0);
     // Original document stashed under the synthetic run key so Accept can map offsets later.
@@ -1135,6 +1138,122 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     // stuck clean message).
     expect(component.proofreadFinalizing).toBeFalse();
     expect(component.proofreadSuggestions.length).toBeGreaterThan(0);
+  });
+
+  // ─── Bug 2: do not surface the client diff before THIS run's persisted row replicates ──
+
+  it('Bug 2: while finalizing, a history response missing this run\'s row holds the diff and retries; it surfaces only after retries exhaust', fakeAsync(() => {
+    component.selectedAnalysisType = 'Proofread';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'teh cat';
+    component.highlightSuggestionsInDocument = true;
+    component.activeSubTab = 'run';
+    // The run's row has NOT replicated: the only row present is an OLD id known before the run.
+    component['analysisResultIdsBeforeRun'] = new Set<string>(['old-id']);
+    component['streamingText'] = 'the cat';
+
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => of([makeResultWithSuggestions({ id: 'old-id', proofreadResultUnreliable: false })]);
+
+    (component as any).onStreamingCompleted(makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'the cat',
+      createdAt: new Date().toISOString(),
+    }));
+
+    // Row not arrived => keep finalizing, do NOT surface the (possibly unreliable) client diff yet.
+    expect(component.proofreadFinalizing).toBeTrue();
+    expect(component.proofreadSuggestions.length).toBe(0);
+
+    // Each retry re-loads; the row never arrives, so after the retry budget is spent we surface optimistically.
+    tick(600);
+    expect(component.proofreadFinalizing).toBeTrue();
+    tick(600);
+    tick(600);
+
+    expect(component.proofreadFinalizing).toBeFalse();
+    expect(component.proofreadSuggestions.length).toBeGreaterThan(0);
+  }));
+
+  it('Bug 2: while finalizing, once this run\'s UNRELIABLE row replicates, the diff is suppressed (not surfaced)', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'teh cat';
+    component.activeSubTab = 'run';
+    component['analysisResultIdsBeforeRun'] = new Set<string>();
+    component['streamingText'] = 'the cat';
+
+    // This run's NEW row is present and flagged unreliable => adopt + suppress (no client-diff flood).
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => of([
+      makeResultWithSuggestions({ id: 'pr-unreliable', proofreadResultUnreliable: true, suggestions: [] }),
+    ]);
+
+    (component as any).onStreamingCompleted(makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'the cat',
+      createdAt: new Date(Date.now() + 60_000).toISOString(),
+    }));
+
+    expect(component.proofreadFinalizing).toBeFalse();
+    expect(component['latestResult']!.proofreadResultUnreliable).toBeTrue();
+    expect(component.proofreadSuggestions.length).toBe(0);
+  });
+
+  // ─── Bug 1: stale loadHistory responses must not touch the new context's finalizing window ──
+
+  it('Bug 1: a stale loadHistory SUCCESS from a prior navigation does not clear the new context finalizing', () => {
+    const subject = new Subject<AnalysisResultDto[]>();
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => subject.asObservable();
+
+    component.chapterId = 'chap-1';
+    component.proofreadFinalizing = true;
+    (component as any).loadHistory(true); // captures loadingChapterId = 'chap-1'
+
+    // User navigates away; the new chapter's own run is finalizing.
+    component.chapterId = 'chap-2';
+    component.proofreadFinalizing = true;
+
+    subject.next([]); // late response for the OLD request
+
+    // The stale-guard runs first, so the new context's finalizing flag is untouched.
+    expect(component.proofreadFinalizing).toBeTrue();
+  });
+
+  it('Bug 1: a stale loadHistory ERROR from a prior navigation does not clear the new context finalizing', () => {
+    const subject = new Subject<AnalysisResultDto[]>();
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => subject.asObservable();
+
+    component.chapterId = 'chap-1';
+    (component as any).loadHistory(true);
+
+    component.chapterId = 'chap-2';
+    component.proofreadFinalizing = true;
+
+    subject.error(new Error('late failure'));
+
+    expect(component.proofreadFinalizing).toBeTrue();
+  });
+
+  // ─── Bug 3: chapter/scene change resets the streaming-proofread finalize one-shots ──
+
+  it('Bug 3: a chapter change resets autoShow + finalizing so a prior run cannot auto-open in the new context', () => {
+    component['autoShowFirstProofreadAfterRestore'] = true;
+    component.proofreadFinalizing = true;
+    component['proofreadFinalizeRetriesLeft'] = 3;
+
+    component.chapterId = 'chap-2';
+    component.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
+
+    expect(component['autoShowFirstProofreadAfterRestore']).toBeFalse();
+    expect(component.proofreadFinalizing).toBeFalse();
+    expect(component['proofreadFinalizeRetriesLeft']).toBe(0);
   });
 
   it('emitSuggestionRanges emits NO document highlights when the Proofread latestResult is flagged unreliable', () => {
