@@ -377,6 +377,83 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
   });
 
   // =========================================================================
+  // 4b. Unreliable proofread history item
+  // =========================================================================
+
+  describe('unreliable proofread in history', () => {
+    function makeProofreadSuggestionDto(id: string, orderIndex = 0) {
+      return {
+        id,
+        analysisResultId: 'r-pr',
+        originalText: 'teh',
+        suggestedText: 'the',
+        startOffset: 0,
+        endOffset: 3,
+        reason: 'Spelling',
+        category: null,
+        explanation: null,
+        outcome: null,
+        orderIndex,
+        contextBefore: null,
+        contextAfter: null,
+      };
+    }
+
+    function makeProofreadResult(overrides: Partial<AnalysisResultDto> = {}): AnalysisResultDto {
+      return {
+        id: 'r-pr',
+        chapterId: 'chap-1',
+        jobId: null,
+        type: 'Proofread',
+        analysisType: 'Proofread',
+        resultText: 'the dropped raw text',
+        modelName: 'test-model',
+        createdAt: new Date().toISOString(),
+        scope: 'Chapter',
+        structuredResult: null,
+        sceneId: null,
+        bookId: 'book-1',
+        language: 'he',
+        status: 'Active',
+        proofreadNoChangesHint: false,
+        suggestions: [makeProofreadSuggestionDto('ps-1'), makeProofreadSuggestionDto('ps-2', 1)],
+        ...overrides,
+      };
+    }
+
+    it('unreliable: shows ONLY the warning (no cards, no "what happened" block, no raw list/single)', () => {
+      const result = makeProofreadResult({ proofreadResultUnreliable: true });
+      loadResult(result);
+
+      // Warning paragraph present.
+      const hint = fixture.debugElement.query(By.css('.proofread-length-hint'));
+      expect(hint).not.toBeNull();
+      expect(hint.nativeElement.textContent).toContain('We could not produce a reliable proofread');
+
+      // Proofread cards / "what happened" block absent.
+      expect(fixture.debugElement.queryAll(By.css('app-suggestion-card')).length).toBe(0);
+      const headings = fixture.debugElement
+        .queryAll(By.css('h4'))
+        .map(h => (h.nativeElement.textContent || '').trim());
+      expect(headings).not.toContain('Suggestions: what happened');
+
+      // Raw resultText fallback absent.
+      expect(fixture.debugElement.query(By.css('.analysis-list'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('.analysis-single'))).toBeNull();
+    });
+
+    it('reliable proofread with suggestions: cards render and the warning is absent (control)', () => {
+      const result = makeProofreadResult({ proofreadResultUnreliable: false });
+      loadResult(result);
+
+      const cards = fixture.debugElement.queryAll(By.css('app-suggestion-card'));
+      expect(cards.length).toBe(2);
+
+      expect(fixture.debugElement.query(By.css('.proofread-length-hint'))).toBeNull();
+    });
+  });
+
+  // =========================================================================
   // 5. Linguistic view section is absent for non-LinguisticAnalysis results
   // =========================================================================
 

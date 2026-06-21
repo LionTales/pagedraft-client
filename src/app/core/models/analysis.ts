@@ -12,8 +12,10 @@ export interface AnalysisResultDto {
   sceneId?: string | null;
   bookId?: string | null;
   language?: string | null;
-  /** True when API detected Proofread result nearly identical to input (possible length limit). */
+  /** True when the Proofread run produced no changes - including a genuinely-clean result. No longer drives the Run-tab warning by itself; use proofreadResultUnreliable for that. */
   proofreadNoChangesHint?: boolean;
+  /** True when the proofread result is untrustworthy (model returned empty or content unrelated to input). Drives the Run-tab "unreliable result" warning; clean text leaves this false. */
+  proofreadResultUnreliable?: boolean;
   /** Active/Archived status of this analysis result. */
   status?: string | null;
   /** Server-side suggestions for this analysis run (Proofread and Line Edit). */

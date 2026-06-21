@@ -17,7 +17,6 @@ import { LinguisticResultComponent } from './linguistic-result.component';
 export class AnalysisRunTabComponent {
   @Input() selectedAnalysisType = 'Proofread';
   @Input() proofreadSuggestions: AnalysisSuggestion[] = [];
-  @Input() proofreadSuggestionsUnreliable = false;
   @Input() lineEditRunSuggestions: AnalysisSuggestion[] = [];
   /** Navigate-only consistency suggestions (register/tense/POV) for the current LinguisticAnalysis run. */
   @Input() consistencyRunSuggestions: AnalysisSuggestion[] = [];
@@ -64,10 +63,15 @@ export class AnalysisRunTabComponent {
     return '';
   }
 
-  get showProofreadLengthHint(): boolean {
+  /**
+   * True when the latest completed result is a Proofread that the server flagged as
+   * untrustworthy (empty / unrelated / dropped-span flood of bogus deletions). When true, the Run
+   * tab shows a single warning and suppresses the suggestion cards and the "looks clean" message.
+   */
+  get isProofreadResultUnreliable(): boolean {
     const r = this.latestResult;
-    if (!r || (r.analysisType || r.type) !== 'Proofread' || this.proofreadSuggestions.length > 0) return false;
-    return !!r.proofreadNoChangesHint || this.proofreadSuggestionsUnreliable;
+    if (!r || (r.analysisType || r.type) !== 'Proofread') return false;
+    return !!r.proofreadResultUnreliable;
   }
 
   get isProofreadWithNoSuggestions(): boolean {

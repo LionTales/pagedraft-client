@@ -1,7 +1,9 @@
 <section class="run-tab-content">
-  <!-- Proofread: show suggestion cards from diff (only when type picker is Proofread) -->
-  <div class="suggestions-block" *ngIf="selectedAnalysisType === 'Proofread' && proofreadSuggestions.length > 0">
-    <h4>Suggestions</h4>
+  <!-- Proofread: show suggestion cards from diff (only when type picker is Proofread and the
+       result is reliable; an unreliable result suppresses the cards and shows a warning instead). -->
+  <div class="suggestions-block" *ngIf="selectedAnalysisType === 'Proofread' && proofreadSuggestions.length > 0 && !isProofreadResultUnreliable">
+    <h4 *ngIf="latestResult">{{ latestResult.analysisType || latestResult.type }}<ng-container *ngIf="latestResult.modelName"> ({{ latestResult.modelName }})</ng-container></h4>
+    <h4 *ngIf="!latestResult">Suggestions</h4>
     <p class="run-duration muted" *ngIf="lastRunDurationLabel">Run time: {{ lastRunDurationLabel }}</p>
     <div class="suggestions-list">
       <app-suggestion-card
@@ -16,6 +18,17 @@
       </app-suggestion-card>
     </div>
   </div>
+  <!-- Proofread: unreliable result. Sole source of the warning; suppresses the suggestion cards
+       (above) and the "looks clean" / generic body (below) so exactly one message renders. -->
+  <article
+    class="result-view"
+    *ngIf="selectedAnalysisType === 'Proofread' && latestResult && !streamingText && isProofreadResultUnreliable">
+    <h4>{{ latestResult.analysisType || latestResult.type }}<ng-container *ngIf="latestResult.modelName"> ({{ latestResult.modelName }})</ng-container></h4>
+    <p class="run-duration muted" *ngIf="lastRunDurationLabel">Run time: {{ lastRunDurationLabel }}</p>
+    <p class="proofread-length-hint muted">
+      We could not produce a reliable proofread for this section. Try a shorter section (for example, one scene) and run it again.
+    </p>
+  </article>
   <!-- Line Edit (Run): overallFeedback (when available) + server-side suggestion cards.
        Only render when we either have structured Line Edit data or at least one suggestion,
        so we don't duplicate the generic fallback view. -->
@@ -82,16 +95,14 @@
     class="result-view"
     *ngIf="(streamingText || latestResult)
            && !(latestResult && (latestResult.analysisType || latestResult.type) === 'Proofread' && proofreadSuggestions.length)
+           && !(latestResult && !streamingText && isProofreadResultUnreliable)
            && !(latestResult && (latestResult.analysisType || latestResult.type) === 'LineEdit' && lineEditRunSuggestions.length)
            && !(latestResult && getLineEdit(latestResult))
            && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis'); else emptyRun">
     <h4 *ngIf="streamingText">Live result</h4>
-    <h4 *ngIf="!streamingText && latestResult">{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
-    <p class="proofread-length-hint muted" *ngIf="showProofreadLengthHint">
-      No changes suggested. The text may be too long for the model, or the result wasn't a proper proofread—try a shorter section (e.g. one scene).
-    </p>
-    <p class="proofread-all-good" *ngIf="isProofreadWithNoSuggestions && !showProofreadLengthHint">
-      No changes suggested—text looks good. All suggestions have been applied to the document.
+    <h4 *ngIf="!streamingText && latestResult">{{ latestResult.analysisType || latestResult.type }}<ng-container *ngIf="latestResult.modelName"> ({{ latestResult.modelName }})</ng-container></h4>
+    <p class="proofread-all-good" *ngIf="isProofreadWithNoSuggestions && !isProofreadResultUnreliable">
+      No changes needed. Your text looks clean.
     </p>
     <ul class="analysis-list" *ngIf="runDisplayText && !isProofreadWithNoSuggestions && analysisItems(runDisplayText).length > 1; else singleRunBlock">
       <li *ngFor="let item of analysisItems(runDisplayText)">{{ item }}</li>
@@ -112,7 +123,7 @@
       <pre *ngIf="showRawLineEdit" class="analysis-single">{{ latestResult.resultText }}</pre>
     </div>
     <ng-template #noRunYet>
-      <p class="muted" data-testid="no-run-yet" *ngIf="!proofreadSuggestions.length && !lineEditRunSuggestions.length && !(latestResult && getLineEdit(latestResult)) && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis')">
+      <p class="muted" data-testid="no-run-yet" *ngIf="!proofreadSuggestions.length && !lineEditRunSuggestions.length && !(latestResult && getLineEdit(latestResult)) && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis') && !(latestResult && !streamingText && isProofreadResultUnreliable)">
         No analysis run yet for this {{ sceneId ? 'scene' : 'chapter' }}.
       </p>
     </ng-template>

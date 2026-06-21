@@ -141,6 +141,64 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect(withFilter.length).toBe(0);
   });
 
+  it('applyProofreadOrLineEditResultToRunTab suppresses cards AND highlights for an unreliable proofread', () => {
+    // An unreliable proofread returns a flood of bogus suggestions; the Run tab shows the warning and
+    // we must NOT surface those suggestions as cards or as document highlights.
+    const result = makeResultWithSuggestions({ proofreadResultUnreliable: true });
+    component.documentText = 'Hello world';
+    component.highlightSuggestionsInDocument = true;
+    component.latestResult = result;
+
+    const emissions: any[][] = [];
+    component.suggestionRangesChange.subscribe((ranges: any[]) => emissions.push(ranges));
+
+    (component as any).applyProofreadOrLineEditResultToRunTab(result);
+
+    expect(component['proofreadSuggestions'].length).toBe(0);
+    expect(emissions.length).toBeGreaterThan(0);
+    expect(emissions[emissions.length - 1]).toEqual([]);
+  });
+
+  it('applyProofreadOrLineEditResultToRunTab still surfaces suggestions for a reliable proofread (no over-suppression)', () => {
+    const result = makeResultWithSuggestions({ proofreadResultUnreliable: false });
+    component.documentText = 'Hello world';
+    component.highlightSuggestionsInDocument = true;
+    component.latestResult = result;
+
+    (component as any).applyProofreadOrLineEditResultToRunTab(result);
+
+    expect(component['proofreadSuggestions'].length).toBeGreaterThan(0);
+  });
+
+  it('restoreProofreadStateFromLatestResult clears suggestions AND highlights for an unreliable proofread (History/context restore)', () => {
+    // Reloaded/History unreliable proofread carries proofreadResultUnreliable. Restoring must NOT
+    // surface the bogus suggestions as cards or re-paint highlights - mirrors the live Run-tab guard.
+    const result = makeResultWithSuggestions({ proofreadResultUnreliable: true });
+    component.documentText = 'Hello world';
+    component.highlightSuggestionsInDocument = true;
+    component.latestResult = result;
+
+    const emissions: any[][] = [];
+    component.suggestionRangesChange.subscribe((ranges: any[]) => emissions.push(ranges));
+
+    (component as any).restoreProofreadStateFromLatestResult();
+
+    expect(component['proofreadSuggestions'].length).toBe(0);
+    expect(emissions.length).toBeGreaterThan(0);
+    expect(emissions[emissions.length - 1]).toEqual([]);
+  });
+
+  it('restoreProofreadStateFromLatestResult still restores suggestions for a reliable proofread (no over-suppression)', () => {
+    const result = makeResultWithSuggestions({ proofreadResultUnreliable: false });
+    component.documentText = 'Hello world';
+    component.highlightSuggestionsInDocument = true;
+    component.latestResult = result;
+
+    (component as any).restoreProofreadStateFromLatestResult();
+
+    expect(component['proofreadSuggestions'].length).toBeGreaterThan(0);
+  });
+
   it('rebuildHistoryFromAllAnalyses filters by historyFilterType and sorts by createdAt', () => {
     const newer = makeResultWithSuggestions({ id: 'r-new', createdAt: new Date(Date.now() + 1000).toISOString() });
     const older = makeResultWithSuggestions({ id: 'r-old', createdAt: new Date(Date.now() - 1000).toISOString(), analysisType: 'LineEdit' });
@@ -847,6 +905,51 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect(component.consistencyRunSuggestions[0].category).toBe('consistency-pov');
     // The synthetic placeholder must NOT also linger in History as a duplicate (it has no id).
     expect(component.history.some(r => !r.id)).toBeFalse();
+  });
+
+  // ─── streaming Proofread adopts the persisted row when that row is UNRELIABLE ──
+
+  it('loadHistory swaps a synthetic streaming Proofread result for the persisted API row when that row is unreliable, suppressing cards', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'Some proofread chapter text.';
+    component.activeSubTab = 'run';
+    // This run's persisted row ('pr-unreliable') is brand new (not known before the run), so it is
+    // recognized as this run's output and adopted.
+    component['analysisResultIdsBeforeRun'] = new Set<string>();
+
+    // Synthetic streaming Proofread result: no id, no proofreadResultUnreliable flag, client timestamp
+    // NEWER than the server row. Client-diff already produced a card on the Run tab.
+    component['latestResult'] = makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      createdAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    component['proofreadSuggestions'] = [
+      { original: 'teh', suggested: 'the', startOffset: 0, endOffset: 3 } as AnalysisSuggestion,
+    ];
+
+    // Persisted row for this run: server flagged it as unreliable.
+    const persisted = makeResultWithSuggestions({
+      id: 'pr-unreliable',
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      proofreadResultUnreliable: true,
+      // Server createdAt EARLIER than the synthetic client timestamp; the swap must still win.
+      createdAt: new Date().toISOString(),
+      suggestions: [],
+    });
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => of([persisted]);
+
+    (component as any).loadHistory(true);
+
+    // latestResult must be the persisted (flagged) row, so the existing unreliable suppression applies.
+    expect(component['latestResult']!.id).toBe('pr-unreliable');
+    expect(component['latestResult']!.proofreadResultUnreliable).toBeTrue();
+    // The bogus client-diff cards must be cleared (warning shows instead, no highlights).
+    expect(component.proofreadSuggestions.length).toBe(0);
   });
 
   it('loadHistory keeps the fresh synthetic result when the response has only a PRE-EXISTING (stale) persisted row', () => {

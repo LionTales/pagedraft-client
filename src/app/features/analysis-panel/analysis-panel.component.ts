@@ -73,8 +73,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   latestResult: AnalysisResultDto | null = null;
   /** Proofread suggestions populated from server-side AnalysisSuggestion rows; shown on Run tab with Accept/Dismiss. */
   proofreadSuggestions: AnalysisSuggestion[] = [];
-  /** True when diff produced too many suggestions (likely model returned unrelated content); show "try shorter section" instead of cards. */
-  proofreadSuggestionsUnreliable = false;
   /** Keys of dismissed Line Edit suggestions (so we hide them in History). Key: `${resultId}-${original}-${suggested}` */
   dismissedLineEditKeys = new Set<string>();
   /** Keys of accepted Line Edit suggestions in History (read-only display). */
@@ -796,7 +794,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       // Clear run state so we don't show another chapter's suggestions; history load will restore if available
       this.latestResult = null;
       this.proofreadSuggestions = [];
-      this.proofreadSuggestionsUnreliable = false;
       this.lineEditRunSuggestions = [];
       this.consistencyRunSuggestions = [];
       this.history = [];
@@ -898,6 +895,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     if (!this.latestResult) return;
     const type = this.latestResult.analysisType || this.latestResult.type;
     if (type !== 'Proofread') return;
+
+    // Unreliable proofread (empty / unrelated / dropped-span): do not surface the (bogus) suggestions or
+    // their document highlights when restoring from History/context - matches the live Run-tab behavior.
+    if (this.latestResult.proofreadResultUnreliable) {
+      this.proofreadSuggestions = [];
+      this.hasRestoredProofreadForCurrentContext = true;
+      this.offsetsDirty = true;
+      this.emitSuggestionRanges(); // re-emit empty => clears any highlights
+      return;
+    }
 
     let all: AnalysisSuggestion[];
     if (this.latestResult.suggestions && this.latestResult.suggestions.length) {
@@ -1075,10 +1082,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         // keep the synthetic result; a later loadHistory adopts the persisted row once it appears.
         const replaceSyntheticWithPersisted =
           !!syntheticStreaming
-          && syntheticType === 'LinguisticAnalysis'
           && !!persistedForType
           && !!persistedForType.id
-          && !this.analysisResultIdsBeforeRun.has(persistedForType.id);
+          && !this.analysisResultIdsBeforeRun.has(persistedForType.id)
+          && (syntheticType === 'LinguisticAnalysis'
+              || (syntheticType === 'Proofread' && !!persistedForType.proofreadResultUnreliable));
 
         // Prepend the synthetic streaming run so it appears in History and its Accepted/Dismissed keys
         // match - but NOT when we are about to replace it with the persisted row, or the same run would
@@ -1116,7 +1124,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
               // only auto-restore if we don't already have suggestions for that type.
               if (
                 latestType === 'Proofread' &&
-                (this.activeSubTab !== 'run' || this.proofreadSuggestions.length === 0)
+                (this.activeSubTab !== 'run' || this.proofreadSuggestions.length === 0 || !!this.latestResult.proofreadResultUnreliable)
               ) {
                 this.restoreProofreadStateFromLatestResult();
               } else if (
@@ -1214,7 +1222,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.runError = null;
     this.streamingText = '';
     this.proofreadSuggestions = [];
-    this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
     this.consistencyRunSuggestions = [];
     this.staleSuggestionIds = new Set();
@@ -1321,13 +1328,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     }
     this.latestResult = latestResult;
     this.activeSubTab = 'run';
-    if (this.selectedAnalysisType === 'Proofread' && this.documentText != null && this.streamingText) {
+    if (this.selectedAnalysisType === 'Proofread' && this.documentText != null && this.streamingText && !latestResult.proofreadResultUnreliable) {
       this.proofreadOriginalDocumentByRunKey.set(
         this.suggestionKeyService.proofreadRunKeyForResult(latestResult),
         this.documentText
       );
       this.proofreadSuggestions = proofreadDiff(this.documentText, this.streamingText);
-      this.proofreadSuggestionsUnreliable = false;
       this.hasRestoredProofreadForCurrentContext = true;
       this.offsetsDirty = true;
       this.emitSuggestionRanges();
@@ -1358,6 +1364,17 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           this.documentText
         );
       }
+      // An unreliable proofread (empty / unrelated / dropped-span) returns suggestions that are not
+      // trustworthy (e.g. a flood of bogus deletions from a dropped span). Do NOT surface them as cards
+      // or as document highlights - the Run tab shows the "could not produce a reliable proofread" warning.
+      // Clearing the list and re-emitting empty ranges also removes any prior highlights from the editor.
+      if (result.proofreadResultUnreliable) {
+        this.proofreadSuggestions = [];
+        this.hasRestoredProofreadForCurrentContext = true;
+        this.offsetsDirty = true;
+        this.emitSuggestionRanges();
+        return;
+      }
       let all: AnalysisSuggestion[] = [];
       let mapped = this.mapDtoSuggestions(result);
       if (!mapped.length && (result.suggestions?.length ?? 0) > 0) {
@@ -1369,7 +1386,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         all = proofreadDiff(this.documentText, result.resultText);
       }
       this.proofreadSuggestions = all;
-      this.proofreadSuggestionsUnreliable = false;
       this.hasRestoredProofreadForCurrentContext = true;
       this.offsetsDirty = true;
       this.emitSuggestionRanges();

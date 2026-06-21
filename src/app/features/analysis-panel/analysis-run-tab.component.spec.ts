@@ -28,6 +28,32 @@ function makeLinguisticResult(
     language: 'he',
     status: 'Active',
     proofreadNoChangesHint: false,
+    proofreadResultUnreliable: false,
+    suggestions: [],
+    ...overrides,
+  };
+}
+
+function makeProofreadResult(
+  overrides: Partial<AnalysisResultDto> = {}
+): AnalysisResultDto {
+  return {
+    id: 'r-proof',
+    chapterId: 'chap-1',
+    jobId: null,
+    type: 'Proofread',
+    analysisType: 'Proofread',
+    resultText: '',
+    modelName: 'test-model',
+    createdAt: new Date().toISOString(),
+    scope: 'Scene',
+    structuredResult: null,
+    sceneId: 'scene-1',
+    bookId: 'book-1',
+    language: 'he',
+    status: 'Active',
+    proofreadNoChangesHint: false,
+    proofreadResultUnreliable: false,
     suggestions: [],
     ...overrides,
   };
@@ -198,6 +224,146 @@ describe('AnalysisRunTabComponent', () => {
       component.latestResult = makeLinguisticResult(null, { language: 'en' });
       component.bookLanguage = null;
       expect(component.consistencyCardLang).toBe('en');
+    });
+  });
+
+  // =========================================================================
+  // Proofread Run-tab states: the four mutually-exclusive completed-run states.
+  // Each shows the model name in its header, exactly one message, and never a
+  // "looks clean" alongside a warning (or vice versa).
+  // =========================================================================
+
+  describe('Proofread Run-tab states', () => {
+    const oneSuggestion: AnalysisSuggestion = {
+      id: 'p-1',
+      original: 'teh',
+      suggested: 'the',
+      category: 'spelling',
+      startOffset: 0,
+      endOffset: 3,
+    };
+
+    function suggestionCards() {
+      return fixture.debugElement.queryAll(By.css('.suggestions-block app-suggestion-card'));
+    }
+
+    // ---- State 1: UNRELIABLE + has suggestions (PROBLEM 2) ----------------
+    it('UNRELIABLE + has suggestions: warning renders, cards do NOT, model name in header', () => {
+      component.latestResult = makeProofreadResult({
+        proofreadResultUnreliable: true,
+        modelName: 'Ollama:dicta',
+      });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [oneSuggestion];
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(component.isProofreadResultUnreliable).toBe(true);
+
+      const warning = query('.proofread-length-hint');
+      expect(warning).not.toBeNull();
+      expect(warning.nativeElement.textContent).toContain('We could not produce a reliable proofread');
+
+      // Suggestion cards (and the whole suggestions block) must be suppressed.
+      expect(query('.suggestions-block')).toBeNull();
+      expect(suggestionCards().length).toBe(0);
+
+      // "looks clean" must not render alongside the warning.
+      expect(query('.proofread-all-good')).toBeNull();
+      // Exactly one warning paragraph.
+      expect(fixture.debugElement.queryAll(By.css('.proofread-length-hint')).length).toBe(1);
+
+      // Model name appears in the (sole) result header.
+      const header = warning.nativeElement.closest('article').querySelector('h4');
+      expect(header.textContent).toContain('Proofread');
+      expect(header.textContent).toContain('Ollama:dicta');
+    });
+
+    // ---- State 1b: UNRELIABLE + no suggestions ---------------------------
+    it('UNRELIABLE + no suggestions: warning renders, "looks clean" does NOT, model name present', () => {
+      component.latestResult = makeProofreadResult({
+        proofreadResultUnreliable: true,
+        modelName: 'Ollama:dicta',
+      });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [];
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(component.isProofreadResultUnreliable).toBe(true);
+
+      const warning = query('.proofread-length-hint');
+      expect(warning).not.toBeNull();
+      expect(fixture.debugElement.queryAll(By.css('.proofread-length-hint')).length).toBe(1);
+      expect(query('.proofread-all-good')).toBeNull();
+      // No stray "no run yet" message either.
+      expect(query('[data-testid="no-run-yet"]')).toBeNull();
+
+      const header = warning.nativeElement.closest('article').querySelector('h4');
+      expect(header.textContent).toContain('Ollama:dicta');
+    });
+
+    // ---- State 2: RELIABLE + has suggestions (PROBLEM 1 regression) -------
+    it('RELIABLE + has suggestions: cards render, warning does NOT, model name in header', () => {
+      component.latestResult = makeProofreadResult({
+        proofreadResultUnreliable: false,
+        modelName: 'Ollama:dicta',
+      });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [oneSuggestion];
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(component.isProofreadResultUnreliable).toBe(false);
+
+      const block = query('.suggestions-block');
+      expect(block).not.toBeNull();
+      expect(suggestionCards().length).toBe(1);
+
+      // Warning and "looks clean" must both be absent.
+      expect(query('.proofread-length-hint')).toBeNull();
+      expect(query('.proofread-all-good')).toBeNull();
+
+      // Model name now shows in the suggestions header (regression for PROBLEM 1).
+      const header = block.nativeElement.querySelector('h4');
+      expect(header.textContent).toContain('Proofread');
+      expect(header.textContent).toContain('Ollama:dicta');
+    });
+
+    // ---- State 3: RELIABLE + no suggestions ------------------------------
+    it('RELIABLE + no suggestions: "looks clean" renders, warning does NOT, model name present', () => {
+      component.latestResult = makeProofreadResult({
+        proofreadResultUnreliable: false,
+        modelName: 'Ollama:dicta',
+      });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [];
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(component.isProofreadResultUnreliable).toBe(false);
+
+      const allGood = query('.proofread-all-good');
+      expect(allGood).not.toBeNull();
+      expect(allGood.nativeElement.textContent).toContain('No changes needed. Your text looks clean.');
+
+      expect(query('.proofread-length-hint')).toBeNull();
+      expect(query('.suggestions-block')).toBeNull();
+
+      const header = allGood.nativeElement.closest('article').querySelector('h4');
+      expect(header.textContent).toContain('Ollama:dicta');
+    });
+
+    it('CLEAN: treats an undefined proofreadResultUnreliable as reliable', () => {
+      component.latestResult = makeProofreadResult({ proofreadResultUnreliable: undefined });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [];
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(component.isProofreadResultUnreliable).toBe(false);
+      expect(query('.proofread-all-good')).not.toBeNull();
+      expect(query('.proofread-length-hint')).toBeNull();
     });
   });
 });

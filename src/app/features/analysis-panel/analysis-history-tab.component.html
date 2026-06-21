@@ -18,8 +18,12 @@
   </nav>
   <article class="result-view" *ngIf="history.length && currentHistoryItem as current">
     <h4>{{ current.analysisType || current.type }} ({{ current.modelName }})</h4>
+    <!-- Proofread (history): unreliable result shows only the warning (no cards, no raw resultText) -->
+    <div class="suggestions-block" *ngIf="(current.analysisType || current.type) === 'Proofread' && current.proofreadResultUnreliable">
+      <p class="proofread-length-hint muted">We could not produce a reliable proofread for this section. Try a shorter section (for example, one scene) and run it again.</p>
+    </div>
     <!-- Proofread (history): read-only list of suggestions with Accepted/Dismissed status -->
-    <ng-container *ngIf="(current.analysisType || current.type) === 'Proofread' && proofreadHistoryItemsWithStatus.length > 0">
+    <ng-container *ngIf="(current.analysisType || current.type) === 'Proofread' && !current.proofreadResultUnreliable && proofreadHistoryItemsWithStatus.length > 0">
       <div class="suggestions-block">
         <h4>Suggestions: what happened</h4>
         <div class="history-outcome-filter">
