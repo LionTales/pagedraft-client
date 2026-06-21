@@ -87,6 +87,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   proofreadOriginalDocumentByRunKey = new Map<string, string>();
   /** True after we've restored proofread suggestions for the current chapter/scene (so we don't re-run diff on every documentText change while user edits). */
   private hasRestoredProofreadForCurrentContext = false;
+  /**
+   * One-shot: a freshly-completed streaming Proofread asks to auto-open its first suggestion once the
+   * authoritative (reliability-checked) server row is surfaced via restoreProofreadStateFromLatestResult.
+   * Streaming completion itself cannot auto-show: the synthetic result lacks proofreadResultUnreliable,
+   * so surfacing is deferred to the loadHistory adopt path instead.
+   */
+  private autoShowFirstProofreadAfterRestore = false;
   /** Versions list for the Versions tab (chapter/scene document snapshots). */
   versions: DocumentVersionDto[] = [];
   /** Timestamp when the current run started (for duration display). */
@@ -699,7 +706,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     const type = this.latestResult?.analysisType || this.latestResult?.type;
     let source: AnalysisSuggestion[] = [];
     if (type === 'Proofread') {
-      source = this.proofreadSuggestions;
+      // An unreliable proofread's suggestions are not trustworthy (empty / unrelated / dropped-span -
+      // often a flood of bogus deletions). Never surface them as document highlights regardless of what
+      // the array currently holds: a streaming run can briefly carry a client-diff before loadHistory
+      // adopts the flagged server row, and any later re-emit (document edit, context restore) must also
+      // stay clear. emitSuggestionRanges is the single chokepoint for highlights, so gate it here.
+      source = this.latestResult?.proofreadResultUnreliable ? [] : this.proofreadSuggestions;
     } else if (type === 'LineEdit') {
       source = this.lineEditRunSuggestions;
     } else if (type === 'LinguisticAnalysis') {
@@ -896,6 +908,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     const type = this.latestResult.analysisType || this.latestResult.type;
     if (type !== 'Proofread') return;
 
+    // Read-and-clear the streaming auto-show request: a freshly-completed streaming proofread deferred
+    // surfacing to this method, so this is where we honor its "open the first suggestion" intent. Clear
+    // it unconditionally (even on the unreliable early-return) so an unrelated later restore - a context
+    // switch, a History click - never inherits a stale request, and an unreliable run never auto-shows.
+    const autoShowFirst = this.autoShowFirstProofreadAfterRestore;
+    this.autoShowFirstProofreadAfterRestore = false;
+
     // Unreliable proofread (empty / unrelated / dropped-span): do not surface the (bogus) suggestions or
     // their document highlights when restoring from History/context - matches the live Run-tab behavior.
     if (this.latestResult.proofreadResultUnreliable) {
@@ -926,6 +945,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.hasRestoredProofreadForCurrentContext = true;
     this.offsetsDirty = true;
     this.emitSuggestionRanges();
+    if (autoShowFirst) this.autoShowFirstSuggestion();
   }
 
   /**
@@ -1227,6 +1247,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.staleSuggestionIds = new Set();
     this.hasRestoredLineEditForCurrentContext = false;
     this.hasRestoredConsistencyForCurrentContext = false;
+    this.autoShowFirstProofreadAfterRestore = false;
     this.emitSuggestionRanges();
     this.analysisStarted.emit();
     // Snapshot the persisted result ids that exist BEFORE this run. After a streaming run, this lets
@@ -1328,19 +1349,25 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     }
     this.latestResult = latestResult;
     this.activeSubTab = 'run';
-    if (this.selectedAnalysisType === 'Proofread' && this.documentText != null && this.streamingText && !latestResult.proofreadResultUnreliable) {
+    if (this.selectedAnalysisType === 'Proofread' && this.documentText != null && this.streamingText) {
+      // The synthetic streaming result carries only resultText, never the server-set
+      // proofreadResultUnreliable flag - reliability is decided server-side and only reaches the client
+      // on the persisted row. So we cannot tell here whether this proofread is trustworthy. Do NOT
+      // surface client-diff cards/highlights now: an unreliable run (a flood of bogus deletions from a
+      // dropped span) would flash on the Run tab and in the document until loadHistory swapped in the
+      // flagged row. Instead, stash the original document for offset math and defer surfacing to
+      // loadHistory(true) below, which adopts the authoritative server row and routes through
+      // restoreProofreadStateFromLatestResult (reliable -> client-diff cards; unreliable -> suppressed).
       this.proofreadOriginalDocumentByRunKey.set(
         this.suggestionKeyService.proofreadRunKeyForResult(latestResult),
         this.documentText
       );
-      this.proofreadSuggestions = proofreadDiff(this.documentText, this.streamingText);
-      this.hasRestoredProofreadForCurrentContext = true;
-      this.offsetsDirty = true;
-      this.emitSuggestionRanges();
-      this.autoShowFirstSuggestion();
+      this.autoShowFirstProofreadAfterRestore = true;
     }
     // Clear the live-stream buffer now the run is complete: the dedicated linguistic/line-edit blocks
     // require !streamingText to render, and runDisplayText falls back to the persisted resultText.
+    // restoreProofreadStateFromLatestResult re-derives the diff from latestResult.resultText, so the
+    // deferred proofread surfacing does not depend on streamingText surviving this clear.
     this.streamingText = '';
     this.loadHistory(true);
     this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);

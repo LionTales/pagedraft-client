@@ -952,6 +952,118 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect(component.proofreadSuggestions.length).toBe(0);
   });
 
+  // ─── streaming Proofread defers surfacing to the reliability-checked server row (no flash) ──
+
+  it('onStreamingCompleted does NOT surface bogus client-diff cards/highlights when the run is UNRELIABLE', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'teh cat';
+    component.highlightSuggestionsInDocument = true;
+    component.activeSubTab = 'run';
+    // This run's persisted row is brand new, so loadHistory recognizes it as this run's output.
+    component['analysisResultIdsBeforeRun'] = new Set<string>();
+    component['streamingText'] = 'the cat';
+
+    // Server flagged this run's persisted row as unreliable.
+    const persistedUnreliable = makeResultWithSuggestions({
+      id: 'pr-unreliable',
+      proofreadResultUnreliable: true,
+      suggestions: [],
+      createdAt: new Date().toISOString(),
+    });
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => of([persistedUnreliable]);
+
+    const rangesSpy = spyOn(component.suggestionRangesChange, 'emit');
+    const showSpy = spyOn(component.showInDocument, 'emit');
+
+    // Synthetic streaming result: no id, no unreliable flag, client timestamp newer than the server row.
+    const synthetic = makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'the cat',
+      createdAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    (component as any).onStreamingCompleted(synthetic);
+
+    // The flagged server row is adopted; the client-diff is never surfaced as cards.
+    expect(component['latestResult']!.id).toBe('pr-unreliable');
+    expect(component['latestResult']!.proofreadResultUnreliable).toBeTrue();
+    expect(component.proofreadSuggestions.length).toBe(0);
+    // No document highlights leak (last emission is empty) and the first suggestion is not auto-shown.
+    expect(rangesSpy.calls.mostRecent().args[0]).toEqual([]);
+    expect(showSpy).not.toHaveBeenCalled();
+  });
+
+  it('onStreamingCompleted surfaces client-diff cards (and auto-shows the first) for a RELIABLE run via the loadHistory adopt path', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'teh cat';
+    component.highlightSuggestionsInDocument = true;
+    component.activeSubTab = 'run';
+    component['analysisResultIdsBeforeRun'] = new Set<string>();
+    component['streamingText'] = 'the cat';
+
+    // The run's persisted row has not arrived yet (replica lag): the synthetic result is kept and its
+    // client-diff drives the Run tab. A reliable run must still end up showing the cards.
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => of([]);
+
+    const showSpy = spyOn(component.showInDocument, 'emit');
+
+    const synthetic = makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'the cat',
+      createdAt: new Date().toISOString(),
+    });
+    (component as any).onStreamingCompleted(synthetic);
+
+    // Synthetic kept (no server row yet); client-diff cards surfaced.
+    expect(component['latestResult']!.id).toBe('');
+    expect(component.proofreadSuggestions.length).toBeGreaterThan(0);
+    // Original document stashed under the synthetic run key so Accept can map offsets later.
+    const runKey = (component as any).suggestionKeyService.proofreadRunKeyForResult(synthetic);
+    expect(component['proofreadOriginalDocumentByRunKey'].get(runKey)).toBe('teh cat');
+    // The deferred auto-show one-shot fires exactly once, then clears.
+    expect(showSpy).toHaveBeenCalledTimes(1);
+    expect(component['autoShowFirstProofreadAfterRestore']).toBeFalse();
+  });
+
+  it('emitSuggestionRanges emits NO document highlights when the Proofread latestResult is flagged unreliable', () => {
+    component.latestResult = makeResultWithSuggestions({ proofreadResultUnreliable: true });
+    component.highlightSuggestionsInDocument = true;
+    // Even with a populated suggestion array (e.g. a transient client-diff), an unreliable result
+    // must never paint highlights.
+    component['proofreadSuggestions'] = [
+      { original: 'teh', suggested: 'the', startOffset: 0, endOffset: 3 } as AnalysisSuggestion,
+    ];
+
+    const emitSpy = spyOn(component.suggestionRangesChange, 'emit');
+    (component as any).emitSuggestionRanges();
+
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy.calls.mostRecent().args[0]).toEqual([]);
+  });
+
+  it('emitSuggestionRanges emits Proofread ranges when the latestResult is reliable', () => {
+    component.latestResult = makeResultWithSuggestions({ proofreadResultUnreliable: false });
+    component.highlightSuggestionsInDocument = true;
+    component['proofreadSuggestions'] = [
+      { id: 'p-1', original: 'teh', suggested: 'the', startOffset: 0, endOffset: 3 } as AnalysisSuggestion,
+    ];
+
+    const emitSpy = spyOn(component.suggestionRangesChange, 'emit');
+    (component as any).emitSuggestionRanges();
+
+    const arg = emitSpy.calls.mostRecent().args[0] as Array<{ startOffset: number; endOffset: number }>;
+    expect(arg.length).toBe(1);
+    expect(arg[0].startOffset).toBe(0);
+    expect(arg[0].endOffset).toBe(3);
+  });
+
   it('loadHistory keeps the fresh synthetic result when the response has only a PRE-EXISTING (stale) persisted row', () => {
     component.selectedAnalysisType = 'LinguisticAnalysis';
     component.documentChapterId = 'chap-1';
