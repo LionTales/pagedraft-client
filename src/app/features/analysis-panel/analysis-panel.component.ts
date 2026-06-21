@@ -73,8 +73,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   latestResult: AnalysisResultDto | null = null;
   /** Proofread suggestions populated from server-side AnalysisSuggestion rows; shown on Run tab with Accept/Dismiss. */
   proofreadSuggestions: AnalysisSuggestion[] = [];
-  /** True when diff produced too many suggestions (likely model returned unrelated content); show "try shorter section" instead of cards. */
-  proofreadSuggestionsUnreliable = false;
   /** Keys of dismissed Line Edit suggestions (so we hide them in History). Key: `${resultId}-${original}-${suggested}` */
   dismissedLineEditKeys = new Set<string>();
   /** Keys of accepted Line Edit suggestions in History (read-only display). */
@@ -89,6 +87,30 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   proofreadOriginalDocumentByRunKey = new Map<string, string>();
   /** True after we've restored proofread suggestions for the current chapter/scene (so we don't re-run diff on every documentText change while user edits). */
   private hasRestoredProofreadForCurrentContext = false;
+  /**
+   * One-shot: a freshly-completed streaming Proofread asks to auto-open its first suggestion once the
+   * authoritative (reliability-checked) server row is surfaced via restoreProofreadStateFromLatestResult.
+   * Streaming completion itself cannot auto-show: the synthetic result lacks proofreadResultUnreliable,
+   * so surfacing is deferred to the loadHistory adopt path instead.
+   */
+  private autoShowFirstProofreadAfterRestore = false;
+  /**
+   * True between a streaming Proofread completing and loadHistory adopting the authoritative server row.
+   * During this window the synthetic row carries neither suggestions nor the reliability flag, so the Run
+   * tab must show a "finalizing" hint instead of a premature "No changes needed" (the run may still surface
+   * edits or an unreliable warning). Cleared the moment loadHistory resolves for THIS context (success or
+   * error), once the run's own persisted row is available (or retries to fetch it are exhausted).
+   */
+  proofreadFinalizing = false;
+  /**
+   * Remaining loadHistory retries while finalizing a streaming Proofread whose persisted row (carrying the
+   * reliability flag) has not replicated into the history response yet. Surfacing the client diff before
+   * that row arrives would expose an unreliable run's bogus deletion flood, so we wait/retry instead.
+   */
+  private proofreadFinalizeRetriesLeft = 0;
+  private proofreadFinalizeRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly proofreadFinalizeMaxRetries = 3;
+  private readonly proofreadFinalizeRetryMs = 600;
   /** Versions list for the Versions tab (chapter/scene document snapshots). */
   versions: DocumentVersionDto[] = [];
   /** Timestamp when the current run started (for duration display). */
@@ -171,6 +193,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.runSubscription?.unsubscribe();
     this.orchestrationService.stopProgressPolling();
+    this.clearProofreadFinalizeRetryTimer();
+  }
+
+  /** Cancel any pending "wait for the run's persisted row" retry and reset its budget. */
+  private clearProofreadFinalizeRetryTimer(): void {
+    if (this.proofreadFinalizeRetryTimer != null) {
+      clearTimeout(this.proofreadFinalizeRetryTimer);
+      this.proofreadFinalizeRetryTimer = null;
+    }
   }
 
   constructor(
@@ -701,7 +732,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     const type = this.latestResult?.analysisType || this.latestResult?.type;
     let source: AnalysisSuggestion[] = [];
     if (type === 'Proofread') {
-      source = this.proofreadSuggestions;
+      // An unreliable proofread's suggestions are not trustworthy (empty / unrelated / dropped-span -
+      // often a flood of bogus deletions). Never surface them as document highlights regardless of what
+      // the array currently holds: a streaming run can briefly carry a client-diff before loadHistory
+      // adopts the flagged server row, and any later re-emit (document edit, context restore) must also
+      // stay clear. emitSuggestionRanges is the single chokepoint for highlights, so gate it here.
+      source = this.latestResult?.proofreadResultUnreliable ? [] : this.proofreadSuggestions;
     } else if (type === 'LineEdit') {
       source = this.lineEditRunSuggestions;
     } else if (type === 'LinguisticAnalysis') {
@@ -796,7 +832,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       // Clear run state so we don't show another chapter's suggestions; history load will restore if available
       this.latestResult = null;
       this.proofreadSuggestions = [];
-      this.proofreadSuggestionsUnreliable = false;
       this.lineEditRunSuggestions = [];
       this.consistencyRunSuggestions = [];
       this.history = [];
@@ -808,6 +843,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.acceptedLineEditKeys = new Set();
       this.dismissedConsistencyKeys = new Set();
       this.streamingText = '';
+      // Drop streaming-Proofread finalize state from the PREVIOUS context: a stale auto-show one-shot would
+      // otherwise open a suggestion from an unrelated run, and a stale finalizing flag / retry timer would
+      // bleed into the new chapter/scene.
+      this.autoShowFirstProofreadAfterRestore = false;
+      this.proofreadFinalizing = false;
+      this.proofreadFinalizeRetriesLeft = 0;
+      this.clearProofreadFinalizeRetryTimer();
       this.hasRestoredProofreadForCurrentContext = false;
       this.hasRestoredLineEditForCurrentContext = false;
       this.hasRestoredConsistencyForCurrentContext = false;
@@ -836,9 +878,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.offsetsDirty = true;
       }
       // Only restore when we have no suggestions yet and document text is for the current chapter/scene,
-      // and we haven't already restored for this context (avoids re-diffing on every edit).
+      // and we haven't already restored for this context (avoids re-diffing on every edit). Skip while a
+      // streaming Proofread is finalizing: the synthetic row carries client-diff resultText but not yet the
+      // server reliability flag, so diffing it now would emit highlights, consume the auto-show one-shot, and
+      // flash bogus cards for an unreliable run before the deferred loadHistory path can suppress them.
       if (
         !this.hasRestoredProofreadForCurrentContext &&
+        !this.proofreadFinalizing &&
         this.proofreadSuggestions.length === 0 &&
         this.documentMatchesCurrentContext &&
         this.documentText
@@ -899,6 +945,23 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     const type = this.latestResult.analysisType || this.latestResult.type;
     if (type !== 'Proofread') return;
 
+    // Read-and-clear the streaming auto-show request: a freshly-completed streaming proofread deferred
+    // surfacing to this method, so this is where we honor its "open the first suggestion" intent. Clear
+    // it unconditionally (even on the unreliable early-return) so an unrelated later restore - a context
+    // switch, a History click - never inherits a stale request, and an unreliable run never auto-shows.
+    const autoShowFirst = this.autoShowFirstProofreadAfterRestore;
+    this.autoShowFirstProofreadAfterRestore = false;
+
+    // Unreliable proofread (empty / unrelated / dropped-span): do not surface the (bogus) suggestions or
+    // their document highlights when restoring from History/context - matches the live Run-tab behavior.
+    if (this.latestResult.proofreadResultUnreliable) {
+      this.proofreadSuggestions = [];
+      this.hasRestoredProofreadForCurrentContext = true;
+      this.offsetsDirty = true;
+      this.emitSuggestionRanges(); // re-emit empty => clears any highlights
+      return;
+    }
+
     let all: AnalysisSuggestion[];
     if (this.latestResult.suggestions && this.latestResult.suggestions.length) {
       all = this.mapDtoSuggestions(this.latestResult);
@@ -919,6 +982,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.hasRestoredProofreadForCurrentContext = true;
     this.offsetsDirty = true;
     this.emitSuggestionRanges();
+    if (autoShowFirst) this.autoShowFirstSuggestion();
   }
 
   /**
@@ -1014,7 +1078,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       .getHistory(this.bookId, this.chapterId, undefined, this.sceneId ?? undefined)
       .subscribe({
       next: (items) => {
-        // Ignore if user switched chapter/scene before this response
+        // Ignore if user switched chapter/scene before this response. This MUST run before we touch
+        // proofreadFinalizing: a late response from a prior navigation must not end the new context's
+        // finalizing window (Bug 1).
         if (this.chapterId !== loadingChapterId || (this.sceneId ?? undefined) !== loadingSceneId) return;
         const fromApi = items ?? [];
         // allAnalyses should always reflect the latest full server state for this chapter/scene
@@ -1067,6 +1133,35 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         const syntheticType = syntheticStreaming
           ? (syntheticStreaming.analysisType || syntheticStreaming.type)
           : null;
+
+        // This run's own persisted row has replicated into the response when the newest row of the selected
+        // type carries a brand-new id (one not seen before the run started).
+        const runRowArrived =
+          !!persistedForType && !!persistedForType.id
+          && !this.analysisResultIdsBeforeRun.has(persistedForType.id);
+
+        // Bug 2: while finalizing a streaming Proofread, the reliability flag lives ONLY on this run's
+        // persisted row. If that row has not replicated yet, surfacing the synthetic's client diff would
+        // expose an unreliable run's bogus deletion flood. So keep finalizing and retry a few times to wait
+        // the row out; only once retries are exhausted do we give up and surface optimistically (a reliable
+        // run shows its edits; an unreliable run that never replicates is the rare worst case, matching the
+        // history-error fallback).
+        if (this.proofreadFinalizing && syntheticType === 'Proofread' && !runRowArrived) {
+          if (this.proofreadFinalizeRetriesLeft > 0) {
+            this.proofreadFinalizeRetriesLeft--;
+            this.clearProofreadFinalizeRetryTimer();
+            this.proofreadFinalizeRetryTimer = setTimeout(() => this.loadHistory(true), this.proofreadFinalizeRetryMs);
+            this.cdr.detectChanges();
+            return;
+          }
+          // fall through: retries exhausted, resolve optimistically below.
+        }
+
+        // The async step this context's finalizing window was waiting on has now resolved for THIS request
+        // (Bug 1: only after the stale guard). Clear it before the restore below surfaces the real state.
+        this.proofreadFinalizing = false;
+        this.clearProofreadFinalizeRetryTimer();
+
         // Only adopt the persisted row when it is THIS run's row, i.e. an id that did not exist before
         // the run started. Without this guard, a response that does not yet contain the just-completed
         // run (replica lag, a stale/cached GET) would replace the fresh synthetic result with the
@@ -1075,10 +1170,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         // keep the synthetic result; a later loadHistory adopts the persisted row once it appears.
         const replaceSyntheticWithPersisted =
           !!syntheticStreaming
-          && syntheticType === 'LinguisticAnalysis'
           && !!persistedForType
           && !!persistedForType.id
-          && !this.analysisResultIdsBeforeRun.has(persistedForType.id);
+          && !this.analysisResultIdsBeforeRun.has(persistedForType.id)
+          && (syntheticType === 'LinguisticAnalysis'
+              || (syntheticType === 'Proofread' && !!persistedForType.proofreadResultUnreliable));
 
         // Prepend the synthetic streaming run so it appears in History and its Accepted/Dismissed keys
         // match - but NOT when we are about to replace it with the persisted row, or the same run would
@@ -1116,7 +1212,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
               // only auto-restore if we don't already have suggestions for that type.
               if (
                 latestType === 'Proofread' &&
-                (this.activeSubTab !== 'run' || this.proofreadSuggestions.length === 0)
+                (this.activeSubTab !== 'run' || this.proofreadSuggestions.length === 0 || !!this.latestResult.proofreadResultUnreliable)
               ) {
                 this.restoreProofreadStateFromLatestResult();
               } else if (
@@ -1136,7 +1232,29 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
       error: () => {
-        // swallow for now; panel stays empty
+        // Ignore a late failure from a prior navigation: it must not touch the new context's finalizing
+        // state or restore into it (Bug 1).
+        if (this.chapterId !== loadingChapterId || (this.sceneId ?? undefined) !== loadingSceneId) return;
+        // History load failed, so we can no longer adopt the authoritative server row. Resolve the
+        // finalizing state and fall back to surfacing the client diff from the synthetic result, so the Run
+        // tab never gets stuck on a premature "No changes needed" when the run actually produced edits.
+        // Reliability is unknown without history, so we optimistically show the model's edits (the
+        // pre-deferral behavior) rather than leave the user with no result.
+        const wasFinalizing = this.proofreadFinalizing;
+        this.proofreadFinalizing = false;
+        this.proofreadFinalizeRetriesLeft = 0;
+        this.clearProofreadFinalizeRetryTimer();
+        if (
+          wasFinalizing
+          && this.latestResult
+          && (this.latestResult.analysisType || this.latestResult.type) === 'Proofread'
+          && this.documentMatchesCurrentContext
+          && this.documentText
+          && this.proofreadSuggestions.length === 0
+        ) {
+          this.restoreProofreadStateFromLatestResult();
+        }
+        this.cdr.detectChanges();
       }
     });
   }
@@ -1214,12 +1332,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.runError = null;
     this.streamingText = '';
     this.proofreadSuggestions = [];
-    this.proofreadSuggestionsUnreliable = false;
     this.lineEditRunSuggestions = [];
     this.consistencyRunSuggestions = [];
     this.staleSuggestionIds = new Set();
     this.hasRestoredLineEditForCurrentContext = false;
     this.hasRestoredConsistencyForCurrentContext = false;
+    this.autoShowFirstProofreadAfterRestore = false;
+    this.proofreadFinalizing = false;
+    this.proofreadFinalizeRetriesLeft = 0;
+    this.clearProofreadFinalizeRetryTimer();
     this.emitSuggestionRanges();
     this.analysisStarted.emit();
     // Snapshot the persisted result ids that exist BEFORE this run. After a streaming run, this lets
@@ -1321,20 +1442,43 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     }
     this.latestResult = latestResult;
     this.activeSubTab = 'run';
-    if (this.selectedAnalysisType === 'Proofread' && this.documentText != null && this.streamingText) {
+    if (this.selectedAnalysisType === 'Proofread' && this.documentText != null) {
+      // The synthetic streaming result carries only resultText, never the server-set
+      // proofreadResultUnreliable flag - reliability is decided server-side and only reaches the client on
+      // the persisted row. So we cannot tell here whether a CHANGED result is trustworthy. But the client
+      // diff still tells us one thing for free: a NON-empty output whose diff is EMPTY means the model echoed
+      // the document, i.e. a genuinely clean run (every unreliable failure - empty / unrelated / dropped-span
+      // - produces either no usable output or a NON-empty diff). So split the two cases:
       this.proofreadOriginalDocumentByRunKey.set(
         this.suggestionKeyService.proofreadRunKeyForResult(latestResult),
         this.documentText
       );
-      this.proofreadSuggestions = proofreadDiff(this.documentText, this.streamingText);
-      this.proofreadSuggestionsUnreliable = false;
-      this.hasRestoredProofreadForCurrentContext = true;
-      this.offsetsDirty = true;
-      this.emitSuggestionRanges();
-      this.autoShowFirstSuggestion();
+      const provablyClean = !!this.streamingText && proofreadDiff(this.documentText, this.streamingText).length === 0;
+      if (provablyClean) {
+        // Genuinely clean: surface the "No changes needed" state immediately - it is correct and needs no
+        // server round-trip, so there is no reason to make the user wait on loadHistory.
+        this.proofreadSuggestions = [];
+        this.hasRestoredProofreadForCurrentContext = true;
+        this.offsetsDirty = true;
+        this.emitSuggestionRanges();
+      } else {
+        // Indeterminate (real edits, a bogus dropped-span flood, or empty/absent output): do NOT surface the
+        // client-diff cards or highlights now - an unreliable run would flash a flood until loadHistory
+        // swapped in the flagged row, and an empty run must not read as clean. Defer surfacing to
+        // loadHistory(true) below (which routes through restoreProofreadStateFromLatestResult: reliable ->
+        // cards; unreliable -> suppressed), and mark the run as finalizing so the Run tab shows a neutral
+        // hint instead of a premature "looks clean".
+        this.autoShowFirstProofreadAfterRestore = true;
+        this.proofreadFinalizing = true;
+        // Budget for loadHistory to wait out replica lag on this run's persisted row before we give up and
+        // surface the client diff optimistically (see the loadHistory success handler).
+        this.proofreadFinalizeRetriesLeft = this.proofreadFinalizeMaxRetries;
+      }
     }
     // Clear the live-stream buffer now the run is complete: the dedicated linguistic/line-edit blocks
     // require !streamingText to render, and runDisplayText falls back to the persisted resultText.
+    // restoreProofreadStateFromLatestResult re-derives the diff from latestResult.resultText, so the
+    // deferred proofread surfacing does not depend on streamingText surviving this clear.
     this.streamingText = '';
     this.loadHistory(true);
     this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
@@ -1358,6 +1502,17 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           this.documentText
         );
       }
+      // An unreliable proofread (empty / unrelated / dropped-span) returns suggestions that are not
+      // trustworthy (e.g. a flood of bogus deletions from a dropped span). Do NOT surface them as cards
+      // or as document highlights - the Run tab shows the "could not produce a reliable proofread" warning.
+      // Clearing the list and re-emitting empty ranges also removes any prior highlights from the editor.
+      if (result.proofreadResultUnreliable) {
+        this.proofreadSuggestions = [];
+        this.hasRestoredProofreadForCurrentContext = true;
+        this.offsetsDirty = true;
+        this.emitSuggestionRanges();
+        return;
+      }
       let all: AnalysisSuggestion[] = [];
       let mapped = this.mapDtoSuggestions(result);
       if (!mapped.length && (result.suggestions?.length ?? 0) > 0) {
@@ -1369,7 +1524,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         all = proofreadDiff(this.documentText, result.resultText);
       }
       this.proofreadSuggestions = all;
-      this.proofreadSuggestionsUnreliable = false;
       this.hasRestoredProofreadForCurrentContext = true;
       this.offsetsDirty = true;
       this.emitSuggestionRanges();

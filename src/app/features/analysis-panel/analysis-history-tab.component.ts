@@ -178,7 +178,11 @@ export class AnalysisHistoryTabComponent implements OnChanges {
 
   isProofreadWithSuggestions(): boolean {
     const current = this.currentHistoryItem;
-    return !!current && (current.analysisType || current.type) === 'Proofread' && this.proofreadHistoryItemsWithStatus.length > 0;
+    if (!current || (current.analysisType || current.type) !== 'Proofread') return false;
+    // An unreliable proofread shows ONLY the warning paragraph: suppress the raw #textResult fallback too
+    // (the dropped/unrelated text is not worth showing). Returning true here means "do not show raw text".
+    if (current.proofreadResultUnreliable) return true;
+    return this.proofreadHistoryItemsWithStatus.length > 0;
   }
 
   lineEditSuggestionsWithStatus(current: AnalysisResultDto): { suggestion: AnalysisSuggestion; status: 'accepted' | 'dismissed' | 'reverted' | 'pending' }[] {
