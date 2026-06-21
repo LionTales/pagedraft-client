@@ -365,5 +365,34 @@ describe('AnalysisRunTabComponent', () => {
       expect(query('.proofread-all-good')).not.toBeNull();
       expect(query('.proofread-length-hint')).toBeNull();
     });
+
+    // ---- State 4: FINALIZING (streaming just finished, loadHistory in flight) ----
+    it('FINALIZING + no suggestions: "looks clean" is suppressed and a finalizing hint shows instead', () => {
+      // Synthetic streaming row: no suggestions, no reliability flag yet. Without the finalizing guard this
+      // would wrongly render "No changes needed" even though the run may still surface edits / a warning.
+      component.latestResult = makeProofreadResult({ proofreadResultUnreliable: undefined });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [];
+      component.streamingText = '';
+      component.proofreadFinalizing = true;
+      fixture.detectChanges();
+
+      expect(query('.proofread-all-good')).toBeNull();
+      const finalizing = query('.proofread-finalizing');
+      expect(finalizing).not.toBeNull();
+      expect(finalizing.nativeElement.textContent).toContain('Finalizing');
+    });
+
+    it('FINALIZING cleared: once finalizing ends with no suggestions, "looks clean" renders', () => {
+      component.latestResult = makeProofreadResult({ proofreadResultUnreliable: false });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [];
+      component.streamingText = '';
+      component.proofreadFinalizing = false;
+      fixture.detectChanges();
+
+      expect(query('.proofread-finalizing')).toBeNull();
+      expect(query('.proofread-all-good')).not.toBeNull();
+    });
   });
 });

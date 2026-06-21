@@ -101,8 +101,13 @@
            && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis'); else emptyRun">
     <h4 *ngIf="streamingText">Live result</h4>
     <h4 *ngIf="!streamingText && latestResult">{{ latestResult.analysisType || latestResult.type }}<ng-container *ngIf="latestResult.modelName"> ({{ latestResult.modelName }})</ng-container></h4>
-    <p class="proofread-all-good" *ngIf="isProofreadWithNoSuggestions && !isProofreadResultUnreliable">
+    <p class="proofread-all-good" *ngIf="isProofreadWithNoSuggestions && !isProofreadResultUnreliable && !proofreadFinalizing">
       No changes needed. Your text looks clean.
+    </p>
+    <!-- Streaming Proofread just finished but the authoritative server row (suggestions + reliability flag)
+         is still loading. Show a neutral finalizing hint so we never flash a premature "looks clean". -->
+    <p class="proofread-finalizing muted" *ngIf="isProofreadWithNoSuggestions && !isProofreadResultUnreliable && proofreadFinalizing">
+      Finalizing results…
     </p>
     <ul class="analysis-list" *ngIf="runDisplayText && !isProofreadWithNoSuggestions && analysisItems(runDisplayText).length > 1; else singleRunBlock">
       <li *ngFor="let item of analysisItems(runDisplayText)">{{ item }}</li>

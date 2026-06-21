@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { EMPTY, of } from 'rxjs';
+import { EMPTY, NEVER, of, throwError } from 'rxjs';
 import { AnalysisPanelComponent } from './analysis-panel.component';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisRunOrchestrationService } from '../../core/services/analysis-run-orchestration.service';
@@ -1030,6 +1030,111 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     // The deferred auto-show one-shot fires exactly once, then clears.
     expect(showSpy).toHaveBeenCalledTimes(1);
     expect(component['autoShowFirstProofreadAfterRestore']).toBeFalse();
+  });
+
+  // ─── streaming Proofread "finalizing" window (no premature / stuck "looks clean") ──
+
+  it('onStreamingCompleted marks a CHANGED streaming proofread as finalizing while loadHistory is in flight', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'teh cat';
+    component.activeSubTab = 'run';
+    component['analysisResultIdsBeforeRun'] = new Set<string>();
+    component['streamingText'] = 'the cat';
+
+    // loadHistory never resolves => we are stuck in the post-stream / pre-adopt window.
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => NEVER;
+
+    (component as any).onStreamingCompleted(makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'the cat',
+      createdAt: new Date().toISOString(),
+    }));
+
+    // No cards surfaced yet (deferred), but the run is flagged finalizing so the Run tab shows the hint
+    // instead of a premature "No changes needed".
+    expect(component.proofreadSuggestions.length).toBe(0);
+    expect(component.proofreadFinalizing).toBeTrue();
+  });
+
+  it('onStreamingCompleted does NOT finalize a genuinely CLEAN streaming proofread (empty diff surfaces immediately)', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'the cat sat';
+    component.activeSubTab = 'run';
+    component['analysisResultIdsBeforeRun'] = new Set<string>();
+    // Model output identical to the document => empty client diff => genuinely clean.
+    component['streamingText'] = 'the cat sat';
+
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => NEVER; // even with history pending, the clean state is known client-side
+
+    (component as any).onStreamingCompleted(makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'the cat sat',
+      createdAt: new Date().toISOString(),
+    }));
+
+    // Clean state surfaces immediately: no finalizing hint, no cards (the Run tab shows "looks clean").
+    expect(component.proofreadFinalizing).toBeFalse();
+    expect(component.proofreadSuggestions.length).toBe(0);
+  });
+
+  it('onStreamingCompleted finalizes (never shows "looks clean") when the stream produced NO usable output', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'the cat sat';
+    component.activeSubTab = 'run';
+    component['analysisResultIdsBeforeRun'] = new Set<string>();
+    // Empty/absent stream output: indeterminate (likely an unreliable empty run), NOT a clean result.
+    component['streamingText'] = '';
+
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => NEVER;
+
+    (component as any).onStreamingCompleted(makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: '',
+      createdAt: new Date().toISOString(),
+    }));
+
+    expect(component.proofreadFinalizing).toBeTrue();
+    expect(component.proofreadSuggestions.length).toBe(0);
+  });
+
+  it('loadHistory FAILURE clears finalizing and falls back to the client diff so "looks clean" never sticks', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.documentText = 'teh cat';
+    component.highlightSuggestionsInDocument = true;
+    component.activeSubTab = 'run';
+    component['analysisResultIdsBeforeRun'] = new Set<string>();
+    component['streamingText'] = 'the cat';
+
+    // History load fails: without a fallback the synthetic row would be stuck with 0 suggestions and no
+    // reliability flag => a permanent (wrong) "No changes needed".
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => throwError(() => new Error('history unavailable'));
+
+    (component as any).onStreamingCompleted(makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'the cat',
+      createdAt: new Date().toISOString(),
+    }));
+
+    // Finalizing resolved and the client diff was surfaced as a degraded fallback (edits visible, not a
+    // stuck clean message).
+    expect(component.proofreadFinalizing).toBeFalse();
+    expect(component.proofreadSuggestions.length).toBeGreaterThan(0);
   });
 
   it('emitSuggestionRanges emits NO document highlights when the Proofread latestResult is flagged unreliable', () => {

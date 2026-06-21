@@ -23,6 +23,12 @@ export class AnalysisRunTabComponent {
   @Input() latestResult: AnalysisResultDto | null = null;
   @Input() lastRunDurationLabel: string | null = null;
   @Input() streamingText = '';
+  /**
+   * True while a just-completed streaming Proofread is still being finalized: its synthetic row has no
+   * suggestions and no reliability flag yet (both arrive via the async loadHistory adopt step). During this
+   * window we must NOT claim "No changes needed" - the run may yet surface edits or an unreliable warning.
+   */
+  @Input() proofreadFinalizing = false;
   @Input() explainingSuggestionIds = new Set<string>();
   @Input() staleSuggestionIds = new Set<string>();
   @Input() bookLanguage: string | null = null;

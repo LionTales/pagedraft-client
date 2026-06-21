@@ -94,6 +94,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    * so surfacing is deferred to the loadHistory adopt path instead.
    */
   private autoShowFirstProofreadAfterRestore = false;
+  /**
+   * True between a streaming Proofread completing and loadHistory adopting the authoritative server row.
+   * During this window the synthetic row carries neither suggestions nor the reliability flag, so the Run
+   * tab must show a "finalizing" hint instead of a premature "No changes needed" (the run may still surface
+   * edits or an unreliable warning). Cleared the moment loadHistory resolves (success or error).
+   */
+  proofreadFinalizing = false;
   /** Versions list for the Versions tab (chapter/scene document snapshots). */
   versions: DocumentVersionDto[] = [];
   /** Timestamp when the current run started (for duration display). */
@@ -1041,6 +1048,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       .getHistory(this.bookId, this.chapterId, undefined, this.sceneId ?? undefined)
       .subscribe({
       next: (items) => {
+        // The async step a finalizing streaming Proofread was waiting on has resolved; clear the flag now
+        // (before the stale guard) so the Run tab never stays stuck on the "finalizing" hint. The proofread
+        // restore below then surfaces the real state (cards or unreliable warning).
+        this.proofreadFinalizing = false;
         // Ignore if user switched chapter/scene before this response
         if (this.chapterId !== loadingChapterId || (this.sceneId ?? undefined) !== loadingSceneId) return;
         const fromApi = items ?? [];
@@ -1164,7 +1175,24 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
       error: () => {
-        // swallow for now; panel stays empty
+        // History load failed, so we can no longer adopt the authoritative server row. Resolve the
+        // finalizing state and fall back to surfacing the client diff from the synthetic result, so the Run
+        // tab never gets stuck on a premature "No changes needed" when the run actually produced edits.
+        // Reliability is unknown without history, so we optimistically show the model's edits (the
+        // pre-deferral behavior) rather than leave the user with no result.
+        const wasFinalizing = this.proofreadFinalizing;
+        this.proofreadFinalizing = false;
+        if (
+          wasFinalizing
+          && this.latestResult
+          && (this.latestResult.analysisType || this.latestResult.type) === 'Proofread'
+          && this.documentMatchesCurrentContext
+          && this.documentText
+          && this.proofreadSuggestions.length === 0
+        ) {
+          this.restoreProofreadStateFromLatestResult();
+        }
+        this.cdr.detectChanges();
       }
     });
   }
@@ -1248,6 +1276,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.hasRestoredLineEditForCurrentContext = false;
     this.hasRestoredConsistencyForCurrentContext = false;
     this.autoShowFirstProofreadAfterRestore = false;
+    this.proofreadFinalizing = false;
     this.emitSuggestionRanges();
     this.analysisStarted.emit();
     // Snapshot the persisted result ids that exist BEFORE this run. After a streaming run, this lets
@@ -1349,20 +1378,35 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     }
     this.latestResult = latestResult;
     this.activeSubTab = 'run';
-    if (this.selectedAnalysisType === 'Proofread' && this.documentText != null && this.streamingText) {
+    if (this.selectedAnalysisType === 'Proofread' && this.documentText != null) {
       // The synthetic streaming result carries only resultText, never the server-set
-      // proofreadResultUnreliable flag - reliability is decided server-side and only reaches the client
-      // on the persisted row. So we cannot tell here whether this proofread is trustworthy. Do NOT
-      // surface client-diff cards/highlights now: an unreliable run (a flood of bogus deletions from a
-      // dropped span) would flash on the Run tab and in the document until loadHistory swapped in the
-      // flagged row. Instead, stash the original document for offset math and defer surfacing to
-      // loadHistory(true) below, which adopts the authoritative server row and routes through
-      // restoreProofreadStateFromLatestResult (reliable -> client-diff cards; unreliable -> suppressed).
+      // proofreadResultUnreliable flag - reliability is decided server-side and only reaches the client on
+      // the persisted row. So we cannot tell here whether a CHANGED result is trustworthy. But the client
+      // diff still tells us one thing for free: a NON-empty output whose diff is EMPTY means the model echoed
+      // the document, i.e. a genuinely clean run (every unreliable failure - empty / unrelated / dropped-span
+      // - produces either no usable output or a NON-empty diff). So split the two cases:
       this.proofreadOriginalDocumentByRunKey.set(
         this.suggestionKeyService.proofreadRunKeyForResult(latestResult),
         this.documentText
       );
-      this.autoShowFirstProofreadAfterRestore = true;
+      const provablyClean = !!this.streamingText && proofreadDiff(this.documentText, this.streamingText).length === 0;
+      if (provablyClean) {
+        // Genuinely clean: surface the "No changes needed" state immediately - it is correct and needs no
+        // server round-trip, so there is no reason to make the user wait on loadHistory.
+        this.proofreadSuggestions = [];
+        this.hasRestoredProofreadForCurrentContext = true;
+        this.offsetsDirty = true;
+        this.emitSuggestionRanges();
+      } else {
+        // Indeterminate (real edits, a bogus dropped-span flood, or empty/absent output): do NOT surface the
+        // client-diff cards or highlights now - an unreliable run would flash a flood until loadHistory
+        // swapped in the flagged row, and an empty run must not read as clean. Defer surfacing to
+        // loadHistory(true) below (which routes through restoreProofreadStateFromLatestResult: reliable ->
+        // cards; unreliable -> suppressed), and mark the run as finalizing so the Run tab shows a neutral
+        // hint instead of a premature "looks clean".
+        this.autoShowFirstProofreadAfterRestore = true;
+        this.proofreadFinalizing = true;
+      }
     }
     // Clear the live-stream buffer now the run is complete: the dedicated linguistic/line-edit blocks
     // require !streamingText to render, and runDisplayText falls back to the persisted resultText.
