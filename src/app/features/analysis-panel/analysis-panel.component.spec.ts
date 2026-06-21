@@ -1256,6 +1256,63 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect(component['proofreadFinalizeRetriesLeft']).toBe(0);
   });
 
+  // ─── a documentText update during the finalizing window must NOT surface the synthetic diff early ──
+
+  it('a documentText change while finalizing does NOT diff the synthetic result early (no cards / highlight / auto-show)', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.chapterId = 'chap-1';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.sceneId = null;
+    component.activeSubTab = 'run';
+
+    // Finalizing window: synthetic streaming proofread deferred (no suggestions, reliability unknown).
+    component['latestResult'] = makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'the cat',
+    });
+    component['proofreadSuggestions'] = [];
+    component['hasRestoredProofreadForCurrentContext'] = false;
+    component.proofreadFinalizing = true;
+    component['autoShowFirstProofreadAfterRestore'] = true;
+
+    const showSpy = spyOn(component.showInDocument, 'emit');
+
+    // A document update arrives mid-window (context still matches, so the guard - not the context check -
+    // is what suppresses the early restore).
+    component.documentText = 'teh cat';
+    component.ngOnChanges({ documentText: new SimpleChange(undefined, 'teh cat', false) });
+
+    // Deferred: nothing surfaced, no highlight/auto-show, the one-shot is preserved for the loadHistory path.
+    expect(component.proofreadSuggestions.length).toBe(0);
+    expect(showSpy).not.toHaveBeenCalled();
+    expect(component['autoShowFirstProofreadAfterRestore']).toBeTrue();
+  });
+
+  it('a documentText change restores proofread state when NOT finalizing (guard is specific to the window)', () => {
+    component.selectedAnalysisType = 'Proofread';
+    component.chapterId = 'chap-1';
+    component.documentChapterId = 'chap-1';
+    component.documentSceneId = null;
+    component.sceneId = null;
+    component.activeSubTab = 'run';
+
+    component['latestResult'] = makeStreamingResult({
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'the cat',
+    });
+    component['proofreadSuggestions'] = [];
+    component['hasRestoredProofreadForCurrentContext'] = false;
+    component.proofreadFinalizing = false; // window resolved
+
+    component.documentText = 'teh cat';
+    component.ngOnChanges({ documentText: new SimpleChange(undefined, 'teh cat', false) });
+
+    expect(component.proofreadSuggestions.length).toBeGreaterThan(0);
+  });
+
   it('emitSuggestionRanges emits NO document highlights when the Proofread latestResult is flagged unreliable', () => {
     component.latestResult = makeResultWithSuggestions({ proofreadResultUnreliable: true });
     component.highlightSuggestionsInDocument = true;

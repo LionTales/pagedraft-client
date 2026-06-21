@@ -878,9 +878,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.offsetsDirty = true;
       }
       // Only restore when we have no suggestions yet and document text is for the current chapter/scene,
-      // and we haven't already restored for this context (avoids re-diffing on every edit).
+      // and we haven't already restored for this context (avoids re-diffing on every edit). Skip while a
+      // streaming Proofread is finalizing: the synthetic row carries client-diff resultText but not yet the
+      // server reliability flag, so diffing it now would emit highlights, consume the auto-show one-shot, and
+      // flash bogus cards for an unreliable run before the deferred loadHistory path can suppress them.
       if (
         !this.hasRestoredProofreadForCurrentContext &&
+        !this.proofreadFinalizing &&
         this.proofreadSuggestions.length === 0 &&
         this.documentMatchesCurrentContext &&
         this.documentText
