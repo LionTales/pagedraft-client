@@ -238,7 +238,7 @@ export class LinguisticResultComponent implements OnChanges {
   /** Whether the opt-in raw-response block is currently expanded. */
   showRaw = false;
 
-  /** Cached view model; recomputed only when the cache key (id + language + structuredResult + resultText + consistency count) changes. */
+  /** Cached view model; recomputed only when the cache key (id + language + scope + sceneId + structuredResult + resultText + consistency count) changes. */
   private _viewCache: LinguisticViewModel | null = null;
   private _viewCacheKey: string | null = null;
 
@@ -257,7 +257,7 @@ export class LinguisticResultComponent implements OnChanges {
   /**
    * Cached, localized linguistic view for the current result. Returns null for non-LinguisticAnalysis
    * results (so the host section is not rendered at all). JSON.parse runs at most once per distinct
-   * (id + language + structuredResult + resultText) tuple.
+   * (id + language + scope + sceneId + structuredResult + resultText) tuple.
    */
   get view(): LinguisticViewModel | null {
     const result = this.result;
@@ -269,7 +269,11 @@ export class LinguisticResultComponent implements OnChanges {
     // count in the cache key so the view recomputes and the "no structured content" note clears once
     // consistency cards exist.
     const consistencyCount = result.suggestions?.filter(s => isConsistencySuggestion(s)).length ?? 0;
-    const cacheKey = `${result.id ?? ''}:${result.language ?? ''}:${result.structuredResult ?? ''}:${result.resultText ?? ''}:${consistencyCount}`;
+    // scope + sceneId drive the deviation reference (chapter vs book) and thus the "בפרק/בספר" wording
+    // and section title. They can change on the same result id/JSON (e.g. a run DTO that lacked scope is
+    // later replaced by the persisted DTO that carries it), so they MUST be in the key - otherwise a
+    // cached view keeps the wrong chapter/book wording.
+    const cacheKey = `${result.id ?? ''}:${result.language ?? ''}:${result.scope ?? ''}:${result.sceneId ?? ''}:${result.structuredResult ?? ''}:${result.resultText ?? ''}:${consistencyCount}`;
     if (this._viewCacheKey !== cacheKey) {
       this._viewCache = this.buildLinguisticView(result);
       this._viewCacheKey = cacheKey;

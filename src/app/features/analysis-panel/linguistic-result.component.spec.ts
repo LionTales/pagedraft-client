@@ -448,6 +448,57 @@ describe('LinguisticResultComponent', () => {
   });
 
   // =========================================================================
+  // 4b. Scope/sceneId change must bust the cached view (regression)
+  // =========================================================================
+
+  describe('scope change busts the cached view (regression)', () => {
+    // The cached view is keyed by the inputs buildLinguisticView reads. scope + sceneId pick the
+    // deviation reference (chapter vs book), so they MUST be in the key: when the SAME result id and
+    // JSON payload are shown again at a different scope, an old key would return the stale view with
+    // the wrong "בפרק/בספר" wording and the wrong section title.
+    const structured = JSON.stringify({
+      deviations: [{ metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' }],
+    });
+
+    function getTitle(): string | undefined {
+      const block = fixture.debugElement.query(By.css('[data-testid="linguistic-deviations"]'));
+      const el = block?.nativeElement.querySelector('.linguistic-block-title') as HTMLElement | null;
+      return el?.textContent?.trim();
+    }
+    function getRowPhrase(): string | null | undefined {
+      const row = fixture.debugElement.query(By.css('[data-testid="deviation-row"]'));
+      const el = row?.nativeElement.querySelector('.deviation-values') as HTMLElement | null;
+      return el?.textContent;
+    }
+
+    it('re-shows the same result id/JSON at scene scope with chapter wording, not the cached book wording (he)', () => {
+      // First render: chapter scope (no sceneId) -> reference = book -> "...מהספר" / "...בספר".
+      setResult(makeLinguisticResult(structured, { language: 'he', scope: 'Chapter', sceneId: null }));
+      expect(getTitle()).toBe('חריגות סגנון מהספר');
+      expect(getRowPhrase()).toContain('בספר');
+
+      // Same id + JSON + language (only scope/sceneId differ) -> reference = chapter. A view cache that
+      // omitted scope/sceneId would hit and keep the stale "מהספר/בספר" wording here.
+      setResult(makeLinguisticResult(structured, { language: 'he', scope: 'Scene', sceneId: 'scene-1' }));
+      expect(getTitle()).toBe('חריגות סגנון מהפרק');
+      expect(getRowPhrase()).toContain('בפרק');
+    });
+
+    it('recomputes the title from book to chapter when scope/sceneId change on the SAME result object (en)', () => {
+      // Mirrors the consistency-count recompute: scope/sceneId can be populated on the same object
+      // after the initial render (e.g. a run DTO that lacked scope is later refreshed with it).
+      const result = makeLinguisticResult(structured, { language: 'en', scope: 'Chapter', sceneId: null });
+      setResult(result);
+      expect(getTitle()).toBe('Style deviations from book');
+
+      result.scope = 'Scene';
+      result.sceneId = 'scene-9';
+      fixture.detectChanges();
+      expect(getTitle()).toBe('Style deviations from chapter');
+    });
+  });
+
+  // =========================================================================
   // 5. Non-LinguisticAnalysis result: view is absent
   // =========================================================================
 
