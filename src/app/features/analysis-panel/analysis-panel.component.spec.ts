@@ -7,6 +7,9 @@ import { AnalysisRunOrchestrationService } from '../../core/services/analysis-ru
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '../../core/models/analysis';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
+import { StyleBaselineService } from '../../core/services/style-baseline.service';
+import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
+import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
 describe('AnalysisPanelComponent (focused logic)', () => {
   let component: AnalysisPanelComponent;
@@ -69,6 +72,20 @@ describe('AnalysisPanelComponent (focused logic)', () => {
               stale: false,
             }));
             return spy;
+          },
+        },
+        {
+          provide: StyleBaselineService,
+          useValue: {
+            getStyleBaselineStatus: () => NEVER,
+            buildStyleBaseline: () => NEVER,
+          },
+        },
+        {
+          provide: AnalysisProgressService,
+          useValue: {
+            pollProgress: () => NEVER,
+            pollStyleBaselineProgress: () => NEVER,
           },
         },
       ],
@@ -1432,6 +1449,155 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect(remainingIds).not.toContain('s-pending');
     expect(remainingIds).toContain('s-reverted');
     expect(remainingIds).toContain('s-accepted');
+  });
+
+  // =========================================================================
+  // DEF-2: reattach to an in-progress style-baseline build on status load
+  // =========================================================================
+  describe('style baseline reattach (DEF-2)', () => {
+    function makeBaselineStatus(overrides: Partial<BookStyleBaselineStatusDto> = {}): BookStyleBaselineStatusDto {
+      return {
+        bookId: 'book-1',
+        language: 'he',
+        totalChapters: 5,
+        builtChapters: 2,
+        staleCount: 0,
+        hasBaseline: false,
+        ready: false,
+        lastUpdatedAt: null,
+        builtWithModel: null,
+        activeModel: 'gemma4:12b',
+        builtWithDifferentModel: false,
+        activeBuildJobId: null,
+        chaptersToBuild: 5,
+        estimatedSeconds: 120,
+        estimatedUsd: null,
+        ...overrides,
+      };
+    }
+
+    it('reattaches (BUILDING + polls that jobId) when status has a non-null activeBuildJobId', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
+        of(makeBaselineStatus({ activeBuildJobId: 'job-running' }))
+      );
+      // Keep the progress stream open so the component stays in BUILDING during the assertion.
+      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
+
+      component.loadStyleBaselineStatus();
+
+      expect(pollSpy).toHaveBeenCalledWith('book-1', 'job-running', jasmine.anything());
+      expect(component.styleBaselineBuilding).toBeTrue();
+    });
+
+    it('does NOT reattach when activeBuildJobId is null', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
+        of(makeBaselineStatus({ activeBuildJobId: null }))
+      );
+      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
+
+      component.loadStyleBaselineStatus();
+
+      expect(pollSpy).not.toHaveBeenCalled();
+      expect(component.styleBaselineBuilding).toBeFalse();
+    });
+
+    it('does NOT double-subscribe when a build is already being tracked in this tab', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
+        of(makeBaselineStatus({ activeBuildJobId: 'job-running' }))
+      );
+      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
+      // Simulate a build the user just started in THIS tab.
+      component.styleBaselineBuilding = true;
+
+      component.loadStyleBaselineStatus();
+
+      expect(pollSpy).not.toHaveBeenCalled();
+    });
+
+    it('does NOT reattach a second time to a jobId already driven to terminal (loop guard)', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+      // Server keeps advertising the SAME activeBuildJobId even after the job is terminal (lingering entry).
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
+        of(makeBaselineStatus({ activeBuildJobId: 'J' }))
+      );
+      // Controllable progress stream so we can emit a terminal 'succeeded' for 'J'.
+      const progress$ = new Subject<any>();
+      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(progress$.asObservable());
+
+      // First load: reattaches and starts polling 'J'.
+      component.loadStyleBaselineStatus();
+      expect(pollSpy).toHaveBeenCalledTimes(1);
+      expect(pollSpy).toHaveBeenCalledWith('book-1', 'J', jasmine.anything());
+      expect(component.styleBaselineBuilding).toBeTrue();
+
+      // Drive 'J' to terminal. The component records 'J' as handled and re-reads status, which STILL
+      // returns activeBuildJobId 'J' -> must NOT reattach again.
+      progress$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
+
+      expect(pollSpy).toHaveBeenCalledTimes(1);
+      expect(component.styleBaselineBuilding).toBeFalse();
+    });
+
+    it('reattaches to a DIFFERENT new jobId even after a prior jobId was handled (regression)', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
+      // Pretend 'J' was already driven to terminal in this component instance.
+      (component as any).styleBaselineHandledTerminalJobId = 'J';
+
+      // Status now advertises a genuinely NEW build with a different jobId.
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
+        of(makeBaselineStatus({ activeBuildJobId: 'K' }))
+      );
+
+      component.loadStyleBaselineStatus();
+
+      expect(pollSpy).toHaveBeenCalledTimes(1);
+      expect(pollSpy).toHaveBeenCalledWith('book-1', 'K', jasmine.anything());
+      expect(component.styleBaselineBuilding).toBeTrue();
+    });
+
+    it('resets the in-flight build/poll on a bookLanguage change and ignores a stale OLD-language poll emit (c01)', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+
+      // Build for the CURRENT language ('he'): returns a jobId so the component starts polling.
+      spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: 'job-he', noOp: false } as any));
+      // Hold the 'he' poll open so the component stays in BUILDING with a live poll.
+      const hePoll$ = new Subject<any>();
+      spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(hePoll$.asObservable());
+      // After the language switch, the NEW language ('en') reports no active build.
+      const statusSpy = spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
+        of(makeBaselineStatus({ language: 'en', activeBuildJobId: null }))
+      );
+
+      // Start a build for 'he'.
+      component.bookLanguage = 'he';
+      component.onBuildStyleBaseline();
+      expect(component.styleBaselineBuilding).toBeTrue();
+      expect(progressSvc.pollStyleBaselineProgress).toHaveBeenCalledWith('book-1', 'job-he', jasmine.anything());
+
+      // Switch the book language to 'en' (no bookId change).
+      component.bookLanguage = 'en';
+      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+
+      // The OLD-language in-flight build/poll must be torn down for the new language.
+      expect(component.styleBaselineBuilding).toBeFalse();
+      expect((component as any).styleBaselineProgressStop$).toBeNull();
+      // The new language re-read its own status.
+      expect(statusSpy).toHaveBeenCalledWith('book-1', 'en');
+
+      // A late emit on the OLD 'he' poll Subject must NOT flip BUILDING back true for the new language.
+      hePoll$.next({ status: 'running', message: 'still going', estimatedCompletionPercent: 50 });
+      expect(component.styleBaselineBuilding).toBeFalse();
+    });
   });
 
 });

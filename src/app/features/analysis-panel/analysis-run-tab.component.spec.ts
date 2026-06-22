@@ -3,6 +3,7 @@ import { By } from '@angular/platform-browser';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
+import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,6 +56,29 @@ function makeProofreadResult(
     proofreadNoChangesHint: false,
     proofreadResultUnreliable: false,
     suggestions: [],
+    ...overrides,
+  };
+}
+
+function makeBaselineStatus(
+  overrides: Partial<BookStyleBaselineStatusDto> = {}
+): BookStyleBaselineStatusDto {
+  return {
+    bookId: 'book-1',
+    language: 'he',
+    totalChapters: 5,
+    builtChapters: 5,
+    staleCount: 0,
+    hasBaseline: true,
+    ready: true,
+    lastUpdatedAt: new Date().toISOString(),
+    builtWithModel: 'gemma4:12b',
+    activeModel: 'gemma4:12b',
+    builtWithDifferentModel: false,
+    activeBuildJobId: null,
+    chaptersToBuild: 0,
+    estimatedSeconds: 0,
+    estimatedUsd: null,
     ...overrides,
   };
 }
@@ -119,6 +143,68 @@ describe('AnalysisRunTabComponent', () => {
 
       expect(query('[data-testid="no-run-yet"]')).not.toBeNull();
       expect(query('[data-testid="linguistic-view"]')).toBeNull();
+    });
+
+    function setupNoRun(): void {
+      component.latestResult = null;
+      component.streamingText = '';
+      component.proofreadSuggestions = [];
+      component.lineEditRunSuggestions = [];
+    }
+
+    it('localizes the chapter empty-state in Hebrew by default (no bookLanguage)', () => {
+      setupNoRun();
+      component.sceneId = null;
+      fixture.detectChanges();
+
+      const el = query('[data-testid="no-run-yet"]');
+      expect(el).not.toBeNull();
+      expect(el.nativeElement.textContent.trim()).toBe('עדיין לא בוצע ניתוח עבור פרק זה.');
+      expect(el.nativeElement.getAttribute('dir')).toBe('rtl');
+    });
+
+    it('localizes the scene empty-state in English when bookLanguage is en', () => {
+      setupNoRun();
+      component.bookLanguage = 'en';
+      component.sceneId = 'scene-1';
+      fixture.detectChanges();
+
+      const el = query('[data-testid="no-run-yet"]');
+      expect(el).not.toBeNull();
+      expect(el.nativeElement.textContent.trim()).toBe('No analysis run yet for this scene.');
+      expect(el.nativeElement.getAttribute('dir')).toBe('ltr');
+    });
+
+    it('shows the linguistic clarifying note for LinguisticAnalysis (he)', () => {
+      setupNoRun();
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+      fixture.detectChanges();
+
+      const note = query('[data-testid="no-run-yet-linguistic-note"]');
+      expect(note).not.toBeNull();
+      expect(note.nativeElement.textContent).toContain('קו הבסיס הסגנוני');
+      expect(note.nativeElement.getAttribute('dir')).toBe('rtl');
+    });
+
+    it('shows the linguistic clarifying note for LinguisticAnalysis (en)', () => {
+      setupNoRun();
+      component.bookLanguage = 'en';
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+      fixture.detectChanges();
+
+      const note = query('[data-testid="no-run-yet-linguistic-note"]');
+      expect(note).not.toBeNull();
+      expect(note.nativeElement.textContent).toContain('style baseline');
+    });
+
+    it('does NOT show the linguistic clarifying note for a non-linguistic type (Proofread)', () => {
+      setupNoRun();
+      component.selectedAnalysisType = 'Proofread';
+      fixture.detectChanges();
+
+      // The base empty-state still renders, but the linguistic note must not.
+      expect(query('[data-testid="no-run-yet"]')).not.toBeNull();
+      expect(query('[data-testid="no-run-yet-linguistic-note"]')).toBeNull();
     });
   });
 
@@ -393,6 +479,249 @@ describe('AnalysisRunTabComponent', () => {
 
       expect(query('.proofread-finalizing')).toBeNull();
       expect(query('.proofread-all-good')).not.toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // Style baseline status row (a3/a4)
+  // =========================================================================
+
+  describe('style baseline status row', () => {
+    beforeEach(() => {
+      // The row only renders for LinguisticAnalysis.
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+    });
+
+    it('does not render when the analysis type is not LinguisticAnalysis', () => {
+      component.selectedAnalysisType = 'Proofread';
+      component.styleBaselineStatus = makeBaselineStatus();
+      fixture.detectChanges();
+      expect(query('[data-testid="style-baseline-row"]')).toBeNull();
+    });
+
+    it('does not render while the status is still unknown (null)', () => {
+      component.styleBaselineStatus = null;
+      component.styleBaselineBuilding = false;
+      fixture.detectChanges();
+      expect(query('[data-testid="style-baseline-row"]')).toBeNull();
+    });
+
+    it('NOT BUILT: shows "Build now" and reports the not-built state', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        hasBaseline: false,
+        ready: false,
+        builtChapters: 0,
+        staleCount: 0,
+        lastUpdatedAt: null,
+        chaptersToBuild: 5,
+        estimatedSeconds: 120,
+      });
+      fixture.detectChanges();
+
+      expect(component.baselineState).toBe('not-built');
+      expect(query('[data-testid="sb-not-built"]')).not.toBeNull();
+      expect(query('[data-testid="sb-build-now"]')).not.toBeNull();
+    });
+
+    it('BUILDING: shows the building status and a progress percent when present', () => {
+      component.styleBaselineStatus = makeBaselineStatus({ hasBaseline: false, ready: false, builtChapters: 0 });
+      component.styleBaselineBuilding = true;
+      component.styleBaselineProgressPercent = 42;
+      fixture.detectChanges();
+
+      expect(component.baselineState).toBe('building');
+      const el = query('[data-testid="sb-building"]');
+      expect(el).not.toBeNull();
+      expect(el.nativeElement.textContent).toContain('42%');
+      // The build action must not be offered while building.
+      expect(query('[data-testid="sb-build-now"]')).toBeNull();
+    });
+
+    it('READY: shows coverage N/N and an "updated" relative time', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        builtChapters: 4,
+        totalChapters: 4,
+        lastUpdatedAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+      });
+      fixture.detectChanges();
+
+      expect(component.baselineState).toBe('ready');
+      const el = query('[data-testid="sb-ready"]');
+      expect(el).not.toBeNull();
+      expect(el.nativeElement.textContent).toContain('4/4');
+      expect(component.baselineUpdatedRelative).not.toBe('');
+    });
+
+    it('STALE: shows the changed-chapter count and a "Refresh" action', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        ready: false,
+        staleCount: 2,
+        chaptersToBuild: 2,
+        estimatedSeconds: 90,
+      });
+      fixture.detectChanges();
+
+      expect(component.baselineState).toBe('stale');
+      const el = query('[data-testid="sb-stale"]');
+      expect(el).not.toBeNull();
+      expect(el.nativeElement.textContent).toContain('2');
+      expect(query('[data-testid="sb-refresh"]')).not.toBeNull();
+    });
+
+    it('CONSENT gate: build is NOT emitted until the user confirms', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        hasBaseline: false,
+        ready: false,
+        builtChapters: 0,
+        chaptersToBuild: 3,
+        estimatedSeconds: 75,
+      });
+      let emittedCount = 0;
+      component.buildStyleBaseline.subscribe(() => emittedCount++);
+      fixture.detectChanges();
+
+      // Open the consent prompt: still no emit.
+      query('[data-testid="sb-build-now"]').nativeElement.click();
+      fixture.detectChanges();
+      expect(query('[data-testid="sb-consent"]')).not.toBeNull();
+      expect(emittedCount).toBe(0);
+
+      // Estimate text: "~3 chapters, ~2 min" (75s -> ceil = 2). No "$" because estimatedUsd is null.
+      const estimate = query('[data-testid="sb-consent-estimate"]').nativeElement.textContent;
+      expect(estimate).toContain('3');
+      expect(estimate).toContain('2');
+      expect(estimate).not.toContain('$');
+
+      // Confirm -> emit fires exactly once and the prompt closes.
+      query('[data-testid="sb-consent-confirm"]').nativeElement.click();
+      fixture.detectChanges();
+      expect(emittedCount).toBe(1);
+      expect(component.showBaselineConsent).toBeFalse();
+    });
+
+    it('CONSENT cancel: closes the prompt without emitting build', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        hasBaseline: false, ready: false, builtChapters: 0, chaptersToBuild: 1, estimatedSeconds: 30,
+      });
+      let emittedCount = 0;
+      component.buildStyleBaseline.subscribe(() => emittedCount++);
+      fixture.detectChanges();
+
+      query('[data-testid="sb-build-now"]').nativeElement.click();
+      fixture.detectChanges();
+      query('[data-testid="sb-consent-cancel"]').nativeElement.click();
+      fixture.detectChanges();
+
+      expect(emittedCount).toBe(0);
+      expect(query('[data-testid="sb-consent"]')).toBeNull();
+    });
+
+    it('CONSENT estimate: appends "~$" only for paid providers (estimatedUsd != null)', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        hasBaseline: false, ready: false, builtChapters: 0,
+        chaptersToBuild: 10, estimatedSeconds: 600, estimatedUsd: 0.12,
+      });
+      fixture.detectChanges();
+      query('[data-testid="sb-build-now"]').nativeElement.click();
+      fixture.detectChanges();
+
+      const estimate = query('[data-testid="sb-consent-estimate"]').nativeElement.textContent;
+      expect(estimate).toContain('$0.12');
+    });
+
+    it('deviations empty-state hint shows when the baseline is missing/insufficient', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        hasBaseline: false, ready: false, builtChapters: 0,
+      });
+      component.latestResult = makeLinguisticResult(
+        JSON.stringify({ deviations: [], consistencyIssues: [] })
+      );
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(component.baselineMissingOrInsufficient).toBeTrue();
+      expect(query('[data-testid="sb-deviations-hint"]')).not.toBeNull();
+    });
+
+    it('deviations empty-state hint is absent when the baseline is ready', () => {
+      component.styleBaselineStatus = makeBaselineStatus();
+      component.latestResult = makeLinguisticResult(
+        JSON.stringify({ deviations: [], consistencyIssues: [] })
+      );
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(component.baselineMissingOrInsufficient).toBeFalse();
+      expect(query('[data-testid="sb-deviations-hint"]')).toBeNull();
+    });
+
+    // ---- DEF-1: cross-model staleness warning ----------------------------
+    it('CROSS-MODEL: shows the warning line (he) and keeps a Refresh affordance when builtWithDifferentModel', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        ready: false,
+        staleCount: 3,
+        builtWithModel: 'old-model',
+        activeModel: 'gemma4:12b',
+        builtWithDifferentModel: true,
+        chaptersToBuild: 3,
+        estimatedSeconds: 90,
+      });
+      fixture.detectChanges();
+
+      const warning = query('[data-testid="sb-cross-model-warning"]');
+      expect(warning).not.toBeNull();
+      expect(warning.nativeElement.textContent).toContain('מודל אחר');
+      expect(warning.nativeElement.getAttribute('dir')).toBe('rtl');
+      // The stale state offers Refresh; that affordance must remain reachable.
+      expect(component.baselineState).toBe('stale');
+      expect(query('[data-testid="sb-refresh"]')).not.toBeNull();
+    });
+
+    it('CROSS-MODEL: warning is reachable even if staleCount somehow reads 0 (state forced to stale)', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        ready: false,
+        staleCount: 0,
+        builtWithDifferentModel: true,
+        chaptersToBuild: 1,
+        estimatedSeconds: 30,
+      });
+      fixture.detectChanges();
+
+      expect(component.baselineState).toBe('stale');
+      expect(query('[data-testid="sb-cross-model-warning"]')).not.toBeNull();
+      expect(query('[data-testid="sb-refresh"]')).not.toBeNull();
+    });
+
+    it('CROSS-MODEL (en): renders the English warning copy', () => {
+      component.bookLanguage = 'en';
+      component.styleBaselineStatus = makeBaselineStatus({
+        language: 'en',
+        ready: false,
+        staleCount: 2,
+        builtWithDifferentModel: true,
+        chaptersToBuild: 2,
+        estimatedSeconds: 60,
+      });
+      fixture.detectChanges();
+
+      const warning = query('[data-testid="sb-cross-model-warning"]');
+      expect(warning).not.toBeNull();
+      expect(warning.nativeElement.textContent).toContain('different model');
+      expect(warning.nativeElement.getAttribute('dir')).toBe('ltr');
+    });
+
+    it('CROSS-MODEL absent: no warning when builtWithDifferentModel is false', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        ready: false,
+        staleCount: 2,
+        builtWithDifferentModel: false,
+        chaptersToBuild: 2,
+        estimatedSeconds: 60,
+      });
+      fixture.detectChanges();
+
+      expect(component.baselineBuiltWithDifferentModel).toBeFalse();
+      expect(query('[data-testid="sb-cross-model-warning"]')).toBeNull();
     });
   });
 });
