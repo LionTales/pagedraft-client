@@ -19,17 +19,20 @@ export interface LinguisticViewModel {
   /** Optional model-provided overview sentence(s). Empty string when absent. */
   summary: string;
   deviations: LinguisticDeviationRow[];
+  /**
+   * Reference-aware deviations section title. Scene-scope results compare each metric against the
+   * chapter, so the title reads "...from chapter"; chapter-scope results compare against the book,
+   * so it reads "...from book". Threaded through the view model (not read flat off the label map)
+   * so the header matches the per-row reference and never contradicts the row wording.
+   */
+  deviationsTitle: string;
   /** Localized section labels (he default, en when result language is English). */
   labels: {
-    deviationsTitle: string;
     noDeviations: string;
     /** Muted empty-state shown when the run parsed but produced zero consistency issues. */
     noConsistencyIssues: string;
     /** Muted message shown when consistency issues were detected in JSON but could not be anchored. */
     consistencyUndetectable: string;
-    /** "{scene} vs chapter {baseline}" template parts (kept for compatibility). */
-    vs: string;
-    chapterBaselineLabel: string;
     /** Short "vs" separator used in the muted raw-number suffix, e.g. he "לעומת" / en "vs". */
     rawVs: string;
     /** Graceful fallback / raw-toggle strings. */
@@ -96,7 +99,7 @@ export interface LinguisticViewModel {
 
         <!-- Style deviations (scene metric vs chapter baseline) -->
         <div class="linguistic-block" data-testid="linguistic-deviations">
-          <h4 class="linguistic-block-title">{{ ling.labels.deviationsTitle }}</h4>
+          <h4 class="linguistic-block-title">{{ ling.deviationsTitle }}</h4>
           <ul class="deviation-list" *ngIf="ling.deviations.length; else noDeviations">
             <li class="deviation-row" *ngFor="let d of ling.deviations" data-testid="deviation-row">
               <span class="deviation-metric">{{ d.metricLabel }}</span>
@@ -279,6 +282,11 @@ export class LinguisticResultComponent implements OnChanges {
     const lang: 'he' | 'en' = isEnglish ? 'en' : 'he';
     const labels = LINGUISTIC_LABELS[lang];
     const dir: 'rtl' | 'ltr' = isEnglish ? 'ltr' : 'rtl';
+    // Scene-scope results compare against the chapter; chapter-scope results compare against the book.
+    const reference: 'chapter' | 'book' =
+      (result.sceneId || (result.scope ?? '').toLowerCase() === 'scene') ? 'chapter' : 'book';
+    // Title must match the reference so the header does not contradict the per-row wording.
+    const deviationsTitle = DEVIATIONS_TITLE[reference][lang];
 
     // Prefer structuredResult, but fall back to resultText: some LinguisticAnalysis results store the
     // JSON only in resultText (as LineEditParserService also handles), and the History tab no longer
@@ -287,7 +295,7 @@ export class LinguisticResultComponent implements OnChanges {
     const rawJson = result.structuredResult?.trim()
       ? result.structuredResult
       : (result.resultText?.trim() ? result.resultText : '');
-    const parseFailed_early = { summary: '', deviations: [], labels, dir, parseFailed: true as const, emptyStructured: false, noConsistencyIssues: false, consistencyUndetectable: false };
+    const parseFailed_early = { summary: '', deviations: [], deviationsTitle, labels, dir, parseFailed: true as const, emptyStructured: false, noConsistencyIssues: false, consistencyUndetectable: false };
     if (!rawJson) {
       return parseFailed_early;
     }
@@ -319,7 +327,7 @@ export class LinguisticResultComponent implements OnChanges {
           sceneValue,
           chapterBaseline,
           note: d.note ?? '',
-          comparison: this.deviationComparison(sceneValue, chapterBaseline, lang)
+          comparison: this.deviationComparison(sceneValue, chapterBaseline, lang, reference)
         };
       });
 
@@ -346,7 +354,7 @@ export class LinguisticResultComponent implements OnChanges {
     //   consistencyUndetectable: model returned issues in JSON but ALL were dropped during anchoring
     const noConsistencyIssues = !hasConsistency && !modelDetectedIssues;
     const consistencyUndetectable = !hasConsistency && modelDetectedIssues;
-    return { summary, deviations, labels, dir, parseFailed: false, emptyStructured, noConsistencyIssues, consistencyUndetectable };
+    return { summary, deviations, deviationsTitle, labels, dir, parseFailed: false, emptyStructured, noConsistencyIssues, consistencyUndetectable };
   }
 
   /** Format a number for display: integers as-is, floats to 2 dp (trailing ".00" stripped). */
@@ -364,14 +372,14 @@ export class LinguisticResultComponent implements OnChanges {
   }
 
   /** Friendly plain-language comparison phrase for a deviation row. */
-  private deviationComparison(sceneValue: number, chapterBaseline: number, lang: 'he' | 'en'): string {
+  private deviationComparison(sceneValue: number, chapterBaseline: number, lang: 'he' | 'en', reference: 'chapter' | 'book'): string {
     const rel = chapterBaseline !== 0
       ? Math.abs(sceneValue - chapterBaseline) / Math.abs(chapterBaseline)
       : (sceneValue !== chapterBaseline ? 1 : 0);
-    if (rel < 0.01) return DEVIATION_COMPARISON_PHRASES[lang]['same'];
+    if (rel < 0.01) return DEVIATION_COMPARISON_PHRASES[reference][lang]['same'];
     const direction: 'higher' | 'lower' = sceneValue > chapterBaseline ? 'higher' : 'lower';
     const magnitude: 'slightly' | 'notably' | 'much' = rel < 0.10 ? 'slightly' : (rel <= 0.30 ? 'notably' : 'much');
-    return DEVIATION_COMPARISON_PHRASES[lang][`${magnitude}-${direction}`];
+    return DEVIATION_COMPARISON_PHRASES[reference][lang][`${magnitude}-${direction}`];
   }
 }
 
@@ -383,12 +391,9 @@ export class LinguisticResultComponent implements OnChanges {
  */
 const LINGUISTIC_LABELS: Record<'he' | 'en', LinguisticViewModel['labels']> = {
   he: {
-    deviationsTitle: 'חריגות סגנון מהפרק',
     noDeviations: 'לא נמצאו חריגות סגנון משמעותיות.',
     noConsistencyIssues: 'לא נמצאו בעיות עקביות.',
     consistencyUndetectable: 'בעיות עקביות זוהו אך לא ניתן היה לאתר אותן בטקסט.',
-    vs: 'מול',
-    chapterBaselineLabel: 'קו בסיס הפרק',
     rawVs: 'לעומת',
     couldNotParse: 'לא ניתן היה לפרסר את תוצאת הניתוח.',
     showRaw: 'הצג תגובה גולמית',
@@ -396,18 +401,34 @@ const LINGUISTIC_LABELS: Record<'he' | 'en', LinguisticViewModel['labels']> = {
     noStructuredNote: 'לא נמצא תוכן מובנה - ייתכן שהמודל החזיר פלט שלא ניתן לפרסר במלואו.'
   },
   en: {
-    deviationsTitle: 'Style deviations from chapter',
     noDeviations: 'No significant style deviations found.',
     noConsistencyIssues: 'No consistency issues found.',
     consistencyUndetectable: 'Consistency issues were detected but could not be located in the text.',
-    vs: 'vs',
-    chapterBaselineLabel: 'chapter baseline',
     rawVs: 'vs',
     couldNotParse: 'Could not parse the analysis result.',
     showRaw: 'Show raw response',
     hideRaw: 'Hide raw response',
     noStructuredNote: 'No structured content found - the model may have returned output that could not be fully parsed.'
   }
+};
+
+/**
+ * Reference-aware deviations section title. The deviations compare the analyzed unit against either
+ * the chapter (scene scope) or the book (chapter scope); the title must match that reference so it
+ * does not contradict the per-row wording. Keyed by reference, then by language. he/en parity.
+ * No em-dash in any string.
+ *
+ * DRAFT: the Hebrew "חריגות סגנון מהספר" header requires native-speaker validation before release.
+ */
+const DEVIATIONS_TITLE: Record<'chapter' | 'book', Record<'he' | 'en', string>> = {
+  chapter: {
+    he: 'חריגות סגנון מהפרק',
+    en: 'Style deviations from chapter',
+  },
+  book: {
+    he: 'חריגות סגנון מהספר',
+    en: 'Style deviations from book',
+  },
 };
 
 /** Localized, human-readable names for the metric keys emitted by the backend. he/en parity. */
@@ -439,27 +460,53 @@ const METRIC_LABELS: Record<'he' | 'en', Record<string, string>> = {
 };
 
 /**
- * Friendly plain-language phrases for the comparison of a scene metric against its chapter baseline.
+ * Friendly plain-language phrases for the comparison of a metric against a reference baseline.
+ * Keyed first by reference ('chapter' | 'book'), then by language ('he' | 'en'), then by
+ * magnitude-direction key (or 'same').
  * Full pre-translated phrases are used (no template concatenation) to keep Hebrew grammar correct.
  * he/en parity. No em-dash in any string.
+ *
+ * DRAFT: Hebrew "בפרק"/"בספר" wording requires native-speaker validation before release.
  */
-const DEVIATION_COMPARISON_PHRASES: Record<'he' | 'en', Record<string, string>> = {
-  he: {
-    'same':            'דומה לרגיל בפרק',
-    'slightly-higher': 'מעט גבוה מהרגיל בפרק',
-    'notably-higher':  'גבוה משמעותית מהרגיל בפרק',
-    'much-higher':     'גבוה בהרבה מהרגיל בפרק',
-    'slightly-lower':  'מעט נמוך מהרגיל בפרק',
-    'notably-lower':   'נמוך משמעותית מהרגיל בפרק',
-    'much-lower':      'נמוך בהרבה מהרגיל בפרק',
+const DEVIATION_COMPARISON_PHRASES: Record<'chapter' | 'book', Record<'he' | 'en', Record<string, string>>> = {
+  chapter: {
+    he: {
+      'same':            'דומה לרגיל בפרק',
+      'slightly-higher': 'מעט גבוה מהרגיל בפרק',
+      'notably-higher':  'גבוה משמעותית מהרגיל בפרק',
+      'much-higher':     'גבוה בהרבה מהרגיל בפרק',
+      'slightly-lower':  'מעט נמוך מהרגיל בפרק',
+      'notably-lower':   'נמוך משמעותית מהרגיל בפרק',
+      'much-lower':      'נמוך בהרבה מהרגיל בפרק',
+    },
+    en: {
+      'same':            "about the same as the chapter's usual",
+      'slightly-higher': "slightly above the chapter's usual",
+      'notably-higher':  "notably above the chapter's usual",
+      'much-higher':     "much above the chapter's usual",
+      'slightly-lower':  "slightly below the chapter's usual",
+      'notably-lower':   "notably below the chapter's usual",
+      'much-lower':      "much below the chapter's usual",
+    },
   },
-  en: {
-    'same':            "about the same as the chapter's usual",
-    'slightly-higher': "slightly above the chapter's usual",
-    'notably-higher':  "notably above the chapter's usual",
-    'much-higher':     "much above the chapter's usual",
-    'slightly-lower':  "slightly below the chapter's usual",
-    'notably-lower':   "notably below the chapter's usual",
-    'much-lower':      "much below the chapter's usual",
-  }
+  book: {
+    he: {
+      'same':            'דומה לרגיל בספר',
+      'slightly-higher': 'מעט גבוה מהרגיל בספר',
+      'notably-higher':  'גבוה משמעותית מהרגיל בספר',
+      'much-higher':     'גבוה בהרבה מהרגיל בספר',
+      'slightly-lower':  'מעט נמוך מהרגיל בספר',
+      'notably-lower':   'נמוך משמעותית מהרגיל בספר',
+      'much-lower':      'נמוך בהרבה מהרגיל בספר',
+    },
+    en: {
+      'same':            "about the same as the book's usual",
+      'slightly-higher': "slightly above the book's usual",
+      'notably-higher':  "notably above the book's usual",
+      'much-higher':     "much above the book's usual",
+      'slightly-lower':  "slightly below the book's usual",
+      'notably-lower':   "notably below the book's usual",
+      'much-lower':      "much below the book's usual",
+    },
+  },
 };
