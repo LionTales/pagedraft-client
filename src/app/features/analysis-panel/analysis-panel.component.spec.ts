@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { SimpleChange } from '@angular/core';
-import { EMPTY, NEVER, Subject, of, throwError } from 'rxjs';
+import { EMPTY, NEVER, Subject, of, throwError, takeUntil } from 'rxjs';
 import { AnalysisPanelComponent } from './analysis-panel.component';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisRunOrchestrationService } from '../../core/services/analysis-run-orchestration.service';
@@ -1596,6 +1596,66 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
       // A late emit on the OLD 'he' poll Subject must NOT flip BUILDING back true for the new language.
       hePoll$.next({ status: 'running', message: 'still going', estimatedCompletionPercent: 50 });
+      expect(component.styleBaselineBuilding).toBeFalse();
+    });
+
+    it('cancels an earlier in-flight status fetch so a slower OLDER response cannot overwrite the newer snapshot (Bug 1)', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+
+      const olderReq$ = new Subject<BookStyleBaselineStatusDto>();
+      const newerReq$ = new Subject<BookStyleBaselineStatusDto>();
+      // Two overlapping fetches for the SAME (book, language): first call → olderReq$, second → newerReq$.
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValues(olderReq$.asObservable(), newerReq$.asObservable());
+      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
+
+      component.loadStyleBaselineStatus(); // older, still in flight
+      component.loadStyleBaselineStatus(); // newer, supersedes the older
+
+      // The newer request resolves FIRST with the current snapshot...
+      newerReq$.next(makeBaselineStatus({ builtChapters: 5, activeBuildJobId: null }));
+      // ...then the OLDER request resolves LATE with a now-stale snapshot + a stale active build.
+      olderReq$.next(makeBaselineStatus({ builtChapters: 1, activeBuildJobId: 'stale-job' }));
+
+      // The newer snapshot wins, and the stale older response neither overwrites it nor reattaches a poll.
+      expect(component.styleBaselineStatus?.builtChapters).toBe(5);
+      expect(pollSpy).not.toHaveBeenCalled();
+      expect(component.styleBaselineBuilding).toBeFalse();
+    });
+
+    it('onBuildStyleBaseline stops a reattached in-flight poll before building, so the no-op path leaves no live poll (Bug 2)', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+
+      // A poll is already reattached (DEF-2) to a PREVIOUS job. Mirror the real service's takeUntil(stop$)
+      // wiring so stopStyleBaselineProgress() genuinely tears the poll down (a bare-Subject mock would
+      // ignore stop$ and never stop).
+      const oldPoll$ = new Subject<any>();
+      spyOn(progressSvc, 'pollStyleBaselineProgress').and.callFake(
+        (_b: string, _j: string, stop$: any) => oldPoll$.asObservable().pipe(takeUntil(stop$))
+      );
+      // First status read reattaches to 'old-job'; after the no-op build, status reports no active build.
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValues(
+        of(makeBaselineStatus({ activeBuildJobId: 'old-job' })),
+        of(makeBaselineStatus({ activeBuildJobId: null }))
+      );
+
+      component.loadStyleBaselineStatus();
+      expect(component.styleBaselineBuilding).toBeTrue();
+      expect((component as any).styleBaselineProgressStop$).not.toBeNull();
+
+      // The user starts a build that turns out to be a no-op (nothing stale to build).
+      spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: null, noOp: true } as any));
+      component.onBuildStyleBaseline();
+
+      // The no-op cleared BUILDING, and the old reattached poll was stopped BEFORE building, so no live
+      // poll (and no stop$) remains.
+      expect(component.styleBaselineBuilding).toBeFalse();
+      expect((component as any).styleBaselineProgressStop$).toBeNull();
+
+      // A late emit on the OLD poll must NOT resurrect progress after the no-op.
+      oldPoll$.next({ status: 'running', message: 'old job still going', estimatedCompletionPercent: 42 });
+      expect(component.styleBaselineProgressMessage).not.toBe('old job still going');
       expect(component.styleBaselineBuilding).toBeFalse();
     });
   });

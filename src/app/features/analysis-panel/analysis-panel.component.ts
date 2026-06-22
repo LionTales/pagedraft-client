@@ -166,6 +166,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   /** Active baseline-related subscriptions (status fetch + build + progress); cleared on context change / destroy. */
   private styleBaselineSub: Subscription | null = null;
   /**
+   * The latest in-flight GET status fetch. Held so a newer loadStyleBaselineStatus() call cancels the
+   * previous one: without this, two overlapping fetches for the SAME (book, language) can resolve out of
+   * order and a slower OLDER response would overwrite the newer snapshot (and could trigger a stale
+   * reattach to activeBuildJobId). The book/language guard only drops responses after a context SWITCH,
+   * not same-key overlaps. Kept separate from styleBaselineSub (the build POST) so reloading status does
+   * not cancel an in-flight build, and vice versa.
+   */
+  private styleBaselineStatusSub: Subscription | null = null;
+  /**
    * Loop guard: the last baseline jobId this component instance already drove to a terminal state. Once a
    * jobId is recorded here, loadStyleBaselineStatus will NOT reattach to it again even if the server keeps
    * advertising it as activeBuildJobId (lingering registry entry / race / backend bug). Reset when a NEW
@@ -220,6 +229,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.clearProofreadFinalizeRetryTimer();
     this.stopStyleBaselineProgress();
     this.styleBaselineSub?.unsubscribe();
+    this.styleBaselineStatusSub?.unsubscribe();
     this.styleBaselineHandledTerminalJobId = null;
   }
 
@@ -238,7 +248,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     }
     const bookId = this.bookId;
     const lang = this.baselineLanguage;
-    this.styleBaselineService.getStyleBaselineStatus(bookId, lang).subscribe({
+    // Cancel any earlier in-flight status fetch so a slower OLDER response cannot overwrite this newer
+    // snapshot (or trigger a stale reattach). The book/language guard below only drops responses after a
+    // context SWITCH; it does not cover overlapping fetches for the SAME (book, language).
+    this.styleBaselineStatusSub?.unsubscribe();
+    this.styleBaselineStatusSub = this.styleBaselineService.getStyleBaselineStatus(bookId, lang).subscribe({
       next: (status) => {
         // Ignore a stale response after the user switched books OR languages (baseline is per (book, language)).
         if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
@@ -283,6 +297,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private resetStyleBaselineBuildState(): void {
     this.stopStyleBaselineProgress();
     this.styleBaselineSub?.unsubscribe();
+    this.styleBaselineStatusSub?.unsubscribe();
     this.styleBaselineBuilding = false;
     this.styleBaselineProgressPercent = null;
     this.styleBaselineProgressMessage = '';
@@ -299,6 +314,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     if (!this.bookId) return;
     const bookId = this.bookId;
     const language = this.baselineLanguage;
+    // Tear down any reattached / in-flight progress poll BEFORE starting a new build. Otherwise an older
+    // poll (e.g. a DEF-2 reattach to a previous activeBuildJobId) keeps mutating progress during the
+    // window before the new poll starts - and on the no-op path below it would never be stopped at all,
+    // so it would keep updating the row after the UI has left BUILDING until that old job finishes.
+    this.stopStyleBaselineProgress();
     this.styleBaselineBuilding = true;
     this.styleBaselineProgressPercent = null;
     this.styleBaselineProgressMessage = '';
