@@ -125,12 +125,13 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
 
       const rows = fixture.debugElement.queryAll(By.css('[data-testid="deviation-row"]'));
 
+      // Chapter-scope result (sceneId null) compares against the BOOK, so phrases read "בספר".
       // rel for first: |0.44-0.48|/0.48 = 0.083 -> slightly-lower
       expect(rows[0].nativeElement.querySelector('.deviation-values')?.textContent)
-        .toContain('מעט נמוך מהרגיל בפרק');
+        .toContain('מעט נמוך מהרגיל בספר');
       // rel for second: |15-9|/9 = 0.67 -> much-higher
       expect(rows[1].nativeElement.querySelector('.deviation-values')?.textContent)
-        .toContain('גבוה בהרבה מהרגיל בפרק');
+        .toContain('גבוה בהרבה מהרגיל בספר');
     });
 
     it('renders a friendly comparison phrase as the main deviation-values text (en)', () => {
@@ -145,10 +146,11 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       loadResult(result);
 
       const rows = fixture.debugElement.queryAll(By.css('[data-testid="deviation-row"]'));
+      // Chapter-scope result compares against the BOOK, so phrases read "the book's usual".
       expect(rows[0].nativeElement.querySelector('.deviation-values')?.textContent)
-        .toContain("much above the chapter's usual");
+        .toContain("much above the book's usual");
       expect(rows[1].nativeElement.querySelector('.deviation-values')?.textContent)
-        .toContain("about the same as the chapter's usual");
+        .toContain("about the same as the book's usual");
     });
 
     it('shows raw numbers in the muted suffix inside deviation-values', () => {
@@ -524,13 +526,15 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
   // 6. Localization parity
   // =========================================================================
 
+  // Fixtures here are chapter-scope (scope 'Chapter', sceneId null), which compares against the BOOK,
+  // so the deviations section title reads "from book" / "מהספר".
   describe('localization parity', () => {
     it('uses Hebrew section labels by default', () => {
       const result = makeLinguisticResult({ deviations: [], consistencyIssues: [] }, { language: 'he' });
       loadResult(result);
 
       const devsBlock = fixture.debugElement.query(By.css('[data-testid="linguistic-deviations"]'));
-      expect(devsBlock.nativeElement.textContent).toContain('חריגות סגנון מהפרק');
+      expect(devsBlock.nativeElement.textContent).toContain('חריגות סגנון מהספר');
 
       // The consistency block was removed from this shared view (now suggestion-card driven).
       expect(fixture.debugElement.query(By.css('[data-testid="linguistic-consistency"]'))).toBeNull();
@@ -541,7 +545,7 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       loadResult(result);
 
       const devsBlock = fixture.debugElement.query(By.css('[data-testid="linguistic-deviations"]'));
-      expect(devsBlock.nativeElement.textContent).toContain('Style deviations from chapter');
+      expect(devsBlock.nativeElement.textContent).toContain('Style deviations from book');
 
       expect(fixture.debugElement.query(By.css('[data-testid="linguistic-consistency"]'))).toBeNull();
     });
@@ -551,7 +555,7 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       loadResult(result);
 
       const devsBlock = fixture.debugElement.query(By.css('[data-testid="linguistic-deviations"]'));
-      expect(devsBlock.nativeElement.textContent).toContain('Style deviations from chapter');
+      expect(devsBlock.nativeElement.textContent).toContain('Style deviations from book');
     });
   });
 });

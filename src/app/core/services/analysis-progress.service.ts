@@ -24,6 +24,25 @@ export class AnalysisProgressService {
     );
   }
 
+  /**
+   * Poll style-baseline build progress (a3/a4). Same AnalysisProgressDto shape and terminal-status
+   * logic as pollProgress, but hits the book-level route `style-baseline/progress/{jobId}` (no
+   * chapter id). Reuses this service so the app keeps a single progress-polling mechanism.
+   */
+  pollStyleBaselineProgress(
+    bookId: string,
+    jobId: string,
+    stop$: Observable<unknown>,
+    intervalMs = 5000
+  ): Observable<AnalysisProgressDto> {
+    const url = `/api/books/${bookId}/style-baseline/progress/${jobId}`;
+    return timer(0, intervalMs).pipe(
+      takeUntil(stop$),
+      switchMap(() => this.http.get<AnalysisProgressDto>(url)),
+      takeWhile(p => !this.isTerminalStatus(p?.status), true)
+    );
+  }
+
   private isTerminalStatus(status: string | null | undefined): boolean {
     const s = (status ?? '').toLowerCase();
     return s === 'succeeded' || s === 'failed' || s === 'canceled';

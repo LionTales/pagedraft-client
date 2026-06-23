@@ -339,24 +339,162 @@ describe('LinguisticResultComponent', () => {
   });
 
   // =========================================================================
-  // 4. 'notably' comparison band (en)
+  // 4. deviation comparison phrases - reference depends on scope
   // =========================================================================
 
   describe('deviation comparison phrases', () => {
-    it('shows "notably above the chapter\'s usual" for sceneValue 11, chapterBaseline 9 (rel ~0.22, en)', () => {
+    // Helper: extract the .deviation-values text of the first deviation row.
+    function getDeviationValuesText(): string | null | undefined {
+      const row = fixture.debugElement.query(By.css('[data-testid="deviation-row"]'));
+      if (!row) return null;
+      const el = row.nativeElement.querySelector('.deviation-values') as HTMLElement | null;
+      return el?.textContent;
+    }
+
+    // Chapter-scope (no sceneId) -> reference = 'book'
+    it('chapter-scope result (no sceneId): shows "notably above the book\'s usual" (en)', () => {
       // rel = |11 - 9| / 9 = 2/9 ~= 0.222 which falls in [0.10, 0.30] => 'notably-higher'
       const structured = JSON.stringify({
         deviations: [
           { metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' },
         ],
       });
-      setResult(makeLinguisticResult(structured, { language: 'en' }));
+      setResult(makeLinguisticResult(structured, { language: 'en', scope: 'Chapter', sceneId: null }));
 
+      expect(getDeviationValuesText()).toContain("notably above the book's usual");
+    });
+
+    it('chapter-scope result (no sceneId): shows "גבוה משמעותית מהרגיל בספר" (he)', () => {
+      const structured = JSON.stringify({
+        deviations: [
+          { metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' },
+        ],
+      });
+      setResult(makeLinguisticResult(structured, { language: 'he', scope: 'Chapter', sceneId: null }));
+
+      expect(getDeviationValuesText()).toContain('גבוה משמעותית מהרגיל בספר');
+    });
+
+    // Scene-scope (sceneId set) -> reference = 'chapter'
+    it('scene-scope result (sceneId set): shows "notably above the chapter\'s usual" (en)', () => {
+      const structured = JSON.stringify({
+        deviations: [
+          { metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' },
+        ],
+      });
+      setResult(makeLinguisticResult(structured, { language: 'en', scope: 'Scene', sceneId: 'scene-1' }));
+
+      expect(getDeviationValuesText()).toContain("notably above the chapter's usual");
+    });
+
+    it('scene-scope result (sceneId set): shows "גבוה משמעותית מהרגיל בפרק" (he)', () => {
+      const structured = JSON.stringify({
+        deviations: [
+          { metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' },
+        ],
+      });
+      setResult(makeLinguisticResult(structured, { language: 'he', scope: 'Scene', sceneId: 'scene-1' }));
+
+      expect(getDeviationValuesText()).toContain('גבוה משמעותית מהרגיל בפרק');
+    });
+
+    // scope='Scene' without sceneId (edge case) -> should still resolve to 'chapter' reference
+    it('scope="Scene" with no sceneId: still uses chapter reference (en)', () => {
+      const structured = JSON.stringify({
+        deviations: [
+          { metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' },
+        ],
+      });
+      setResult(makeLinguisticResult(structured, { language: 'en', scope: 'Scene', sceneId: null }));
+
+      expect(getDeviationValuesText()).toContain("notably above the chapter's usual");
+    });
+  });
+
+  // =========================================================================
+  // 4a. Deviations section title is reference-aware (chapter vs book)
+  // =========================================================================
+
+  describe('deviations title is reference-aware', () => {
+    const structured = JSON.stringify({ deviations: [], consistencyIssues: [] });
+
+    function getDeviationsTitleText(): string | undefined {
+      const block = fixture.debugElement.query(By.css('[data-testid="linguistic-deviations"]'));
+      const el = block?.nativeElement.querySelector('.linguistic-block-title') as HTMLElement | null;
+      return el?.textContent?.trim();
+    }
+
+    // Chapter-scope (no sceneId) -> reference = 'book' -> title reads "...from book".
+    it('chapter-scope result (no sceneId): title reads "Style deviations from book" (en)', () => {
+      setResult(makeLinguisticResult(structured, { language: 'en', scope: 'Chapter', sceneId: null }));
+      expect(getDeviationsTitleText()).toBe('Style deviations from book');
+    });
+
+    it('chapter-scope result (no sceneId): title reads "חריגות סגנון מהספר" (he)', () => {
+      setResult(makeLinguisticResult(structured, { language: 'he', scope: 'Chapter', sceneId: null }));
+      expect(getDeviationsTitleText()).toBe('חריגות סגנון מהספר');
+    });
+
+    // Scene-scope (sceneId set) -> reference = 'chapter' -> title reads "...from chapter".
+    it('scene-scope result (sceneId set): title reads "Style deviations from chapter" (en)', () => {
+      setResult(makeLinguisticResult(structured, { language: 'en', scope: 'Scene', sceneId: 'scene-1' }));
+      expect(getDeviationsTitleText()).toBe('Style deviations from chapter');
+    });
+
+    it('scene-scope result (sceneId set): title reads "חריגות סגנון מהפרק" (he)', () => {
+      setResult(makeLinguisticResult(structured, { language: 'he', scope: 'Scene', sceneId: 'scene-1' }));
+      expect(getDeviationsTitleText()).toBe('חריגות סגנון מהפרק');
+    });
+  });
+
+  // =========================================================================
+  // 4b. Scope/sceneId change must bust the cached view (regression)
+  // =========================================================================
+
+  describe('scope change busts the cached view (regression)', () => {
+    // The cached view is keyed by the inputs buildLinguisticView reads. scope + sceneId pick the
+    // deviation reference (chapter vs book), so they MUST be in the key: when the SAME result id and
+    // JSON payload are shown again at a different scope, an old key would return the stale view with
+    // the wrong "בפרק/בספר" wording and the wrong section title.
+    const structured = JSON.stringify({
+      deviations: [{ metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' }],
+    });
+
+    function getTitle(): string | undefined {
+      const block = fixture.debugElement.query(By.css('[data-testid="linguistic-deviations"]'));
+      const el = block?.nativeElement.querySelector('.linguistic-block-title') as HTMLElement | null;
+      return el?.textContent?.trim();
+    }
+    function getRowPhrase(): string | null | undefined {
       const row = fixture.debugElement.query(By.css('[data-testid="deviation-row"]'));
-      expect(row).not.toBeNull();
-      const valuesEl = row.nativeElement.querySelector('.deviation-values') as HTMLElement | null;
-      expect(valuesEl).not.toBeNull();
-      expect(valuesEl?.textContent).toContain("notably above the chapter's usual");
+      const el = row?.nativeElement.querySelector('.deviation-values') as HTMLElement | null;
+      return el?.textContent;
+    }
+
+    it('re-shows the same result id/JSON at scene scope with chapter wording, not the cached book wording (he)', () => {
+      // First render: chapter scope (no sceneId) -> reference = book -> "...מהספר" / "...בספר".
+      setResult(makeLinguisticResult(structured, { language: 'he', scope: 'Chapter', sceneId: null }));
+      expect(getTitle()).toBe('חריגות סגנון מהספר');
+      expect(getRowPhrase()).toContain('בספר');
+
+      // Same id + JSON + language (only scope/sceneId differ) -> reference = chapter. A view cache that
+      // omitted scope/sceneId would hit and keep the stale "מהספר/בספר" wording here.
+      setResult(makeLinguisticResult(structured, { language: 'he', scope: 'Scene', sceneId: 'scene-1' }));
+      expect(getTitle()).toBe('חריגות סגנון מהפרק');
+      expect(getRowPhrase()).toContain('בפרק');
+    });
+
+    it('recomputes the title from book to chapter when scope/sceneId change on the SAME result object (en)', () => {
+      // Mirrors the consistency-count recompute: scope/sceneId can be populated on the same object
+      // after the initial render (e.g. a run DTO that lacked scope is later refreshed with it).
+      const result = makeLinguisticResult(structured, { language: 'en', scope: 'Chapter', sceneId: null });
+      setResult(result);
+      expect(getTitle()).toBe('Style deviations from book');
+
+      result.scope = 'Scene';
+      result.sceneId = 'scene-9';
+      fixture.detectChanges();
+      expect(getTitle()).toBe('Style deviations from chapter');
     });
   });
 
