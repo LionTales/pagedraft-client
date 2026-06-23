@@ -25,9 +25,13 @@ export class BookSummaryService {
 
   constructor(private http: HttpClient) {}
 
-  /** GET .../summary - current coverage/freshness + build estimate. */
-  getBookSummaryStatus(bookId: string): Observable<BookSummaryStatusDto> {
-    return this.http.get<BookSummaryStatusDto>(`${this.base}/${bookId}/summary`);
+  /** GET .../summary?language= - current coverage/freshness + build estimate. */
+  getBookSummaryStatus(bookId: string, language: string): Observable<BookSummaryStatusDto> {
+    // Pass the language exactly like StyleBaselineService.getStyleBaselineStatus: the summary is keyed by
+    // (book, language) and the build POST sends a language body, so status + estimates must be read for the
+    // SAME language or they can describe a different language than the one a build will run on.
+    const lang = encodeURIComponent(language || 'he');
+    return this.http.get<BookSummaryStatusDto>(`${this.base}/${bookId}/summary?language=${lang}`);
   }
 
   /** POST .../summary/build - start a build (or no-op when already fresh). */

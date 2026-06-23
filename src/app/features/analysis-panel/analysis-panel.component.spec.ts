@@ -8,6 +8,7 @@ import { DocumentVersionService } from '../../core/services/document-version.ser
 import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '../../core/models/analysis';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
+import { BookSummaryService } from '../../core/services/book-summary.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
@@ -82,10 +83,18 @@ describe('AnalysisPanelComponent (focused logic)', () => {
           },
         },
         {
+          provide: BookSummaryService,
+          useValue: {
+            getBookSummaryStatus: () => NEVER,
+            buildBookSummary: () => NEVER,
+          },
+        },
+        {
           provide: AnalysisProgressService,
           useValue: {
             pollProgress: () => NEVER,
             pollStyleBaselineProgress: () => NEVER,
+            pollBookSummaryProgress: () => NEVER,
           },
         },
       ],
@@ -1654,6 +1663,91 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       // The in-flight poll is still live and still updates progress for the tracked job.
       livePoll$.next({ status: 'running', message: 'tracked job progressing', estimatedCompletionPercent: 60 });
       expect(component.styleBaselineProgressMessage).toBe('tracked job progressing');
+    });
+  });
+
+  describe('book summary (language guard / reattach)', () => {
+    function makeBookSummaryStatus(overrides: Record<string, unknown> = {}) {
+      return {
+        bookId: 'book-1',
+        language: 'he',
+        totalChapters: 5,
+        builtChapters: 2,
+        staleCount: 0,
+        hasSummary: false,
+        ready: false,
+        lastUpdatedAt: null,
+        builtWithModel: null,
+        activeModel: 'gemma4:12b',
+        builtWithDifferentModel: false,
+        activeBuildJobId: null,
+        chaptersToBuild: 5,
+        estimatedSeconds: 120,
+        estimatedUsd: null,
+        ...overrides,
+      } as any;
+    }
+
+    it('loadBookSummaryStatus requests status for the CURRENT language (Bug 2)', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      const statusSpy = spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'en';
+      component.loadBookSummaryStatus();
+
+      // Without the language argument, status + estimates could describe a different language than the
+      // (book, language)-keyed build will run on.
+      expect(statusSpy).toHaveBeenCalledWith('book-1', 'en');
+    });
+
+    it('resets + reloads book-summary state for the new language on a bookLanguage change, and ignores a stale OLD-language poll emit (Bug 1 + Bug 3)', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+
+      // Build for the CURRENT language ('he'): returns a jobId so the component starts polling.
+      spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: 'job-he', noOp: false } as any));
+      // Hold the 'he' poll open so the component stays in BUILDING with a live poll.
+      const hePoll$ = new Subject<any>();
+      spyOn(progressSvc, 'pollBookSummaryProgress').and.returnValue(hePoll$.asObservable());
+      // After the language switch, the NEW language ('en') reports no active build.
+      const statusSpy = spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(
+        of(makeBookSummaryStatus({ language: 'en', activeBuildJobId: null }))
+      );
+
+      // Start a build for 'he'.
+      component.bookLanguage = 'he';
+      component.onBuildBookSummary();
+      expect(component.bookSummaryBuilding).toBeTrue();
+      expect(progressSvc.pollBookSummaryProgress).toHaveBeenCalledWith('book-1', 'job-he', jasmine.anything());
+
+      // Switch the book language to 'en' (no bookId change).
+      component.bookLanguage = 'en';
+      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+
+      // Bug 1: the OLD-language in-flight build/poll is torn down and the new language re-read its own status.
+      expect(component.bookSummaryBuilding).toBeFalse();
+      expect((component as any).bookSummaryProgressStop$).toBeNull();
+      expect(statusSpy).toHaveBeenCalledWith('book-1', 'en');
+
+      // Bug 3: a late emit on the OLD 'he' poll must NOT flip BUILDING / progress back for the new language.
+      hePoll$.next({ status: 'running', message: 'still going', estimatedCompletionPercent: 50 });
+      expect(component.bookSummaryBuilding).toBeFalse();
+      expect(component.bookSummaryProgressMessage).not.toBe('still going');
+    });
+
+    it('reattaches (BUILDING + polls that jobId) for the read language when status advertises an activeBuildJobId', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+      spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(
+        of(makeBookSummaryStatus({ language: 'en', activeBuildJobId: 'job-running' }))
+      );
+      const pollSpy = spyOn(progressSvc, 'pollBookSummaryProgress').and.returnValue(NEVER);
+
+      component.bookLanguage = 'en';
+      component.loadBookSummaryStatus();
+
+      expect(pollSpy).toHaveBeenCalledWith('book-1', 'job-running', jasmine.anything());
+      expect(component.bookSummaryBuilding).toBeTrue();
     });
   });
 

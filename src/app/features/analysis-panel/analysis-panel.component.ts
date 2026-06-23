@@ -332,17 +332,21 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   // ── Book summary (wb1-f01) ────────────────────────────────────────────────
 
-  /** Fetch the current book-summary status for this book and update the run tab. */
+  /** Fetch the current book-summary status for this book/language and update the run tab. */
   loadBookSummaryStatus(): void {
     if (!this.bookId) {
       this.bookSummaryStatus = null;
       return;
     }
     const bookId = this.bookId;
+    const lang = this.baselineLanguage;
     this.bookSummaryStatusSub?.unsubscribe();
-    this.bookSummaryStatusSub = this.bookSummaryService.getBookSummaryStatus(bookId).subscribe({
+    this.bookSummaryStatusSub = this.bookSummaryService.getBookSummaryStatus(bookId, lang).subscribe({
       next: (status) => {
-        if (this.bookId !== bookId) return;
+        // Drop a stale response after the user switched books OR languages (the summary is per (book, language),
+        // same as the style baseline). Without the language check a slower OLD-language status could overwrite
+        // the new language's snapshot or reattach to its build.
+        if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
         this.bookSummaryStatus = status;
         if (status.ready && this.bookSummaryBuilding && this.bookSummaryProgressPercent === 100) {
           this.bookSummaryBuilding = false;
@@ -357,7 +361,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           this.bookSummaryBuilding = true;
           this.bookSummaryProgressPercent = null;
           this.bookSummaryProgressMessage = '';
-          this.pollBookSummaryBuild(bookId, status.activeBuildJobId);
+          this.pollBookSummaryBuild(bookId, status.activeBuildJobId, lang);
         }
         this.cdr.detectChanges();
       },
@@ -402,17 +406,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.bookSummarySub?.unsubscribe();
     this.bookSummarySub = this.bookSummaryService.buildBookSummary(bookId, language).subscribe({
       next: (resp) => {
-        if (this.bookId !== bookId) return;
+        // Drop a stale response after the user switched books OR languages (summary is per (book, language)).
+        if (this.bookId !== bookId || this.baselineLanguage !== language) return;
         if (resp.noOp || !resp.jobId) {
           this.bookSummaryBuilding = false;
           this.loadBookSummaryStatus();
           this.cdr.detectChanges();
           return;
         }
-        this.pollBookSummaryBuild(bookId, resp.jobId);
+        this.pollBookSummaryBuild(bookId, resp.jobId, language);
       },
       error: () => {
-        if (this.bookId !== bookId) return;
+        if (this.bookId !== bookId || this.baselineLanguage !== language) return;
         this.bookSummaryBuilding = false;
         this.bookSummaryProgressMessage = '';
         this.cdr.detectChanges();
@@ -421,13 +426,14 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   /** Poll the book-summary build job and refresh status when it reaches a terminal state. */
-  private pollBookSummaryBuild(bookId: string, jobId: string): void {
+  private pollBookSummaryBuild(bookId: string, jobId: string, lang: string): void {
     this.stopBookSummaryProgress();
     const stop$ = new Subject<void>();
     this.bookSummaryProgressStop$ = stop$;
     this.analysisProgressService.pollBookSummaryProgress(bookId, jobId, stop$).subscribe({
       next: (p) => {
-        if (this.bookId !== bookId) return;
+        // Ignore a stale poll emit after the user switched books OR languages (summary is per (book, language)).
+        if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
         const status = (p.status ?? '').toLowerCase();
         this.bookSummaryProgressMessage = p.message ?? '';
         this.bookSummaryProgressPercent =
@@ -445,7 +451,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
       error: () => {
-        if (this.bookId !== bookId) return;
+        if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
         this.bookSummaryBuilding = false;
         this.stopBookSummaryProgress();
         this.bookSummaryHandledTerminalJobId = jobId;
@@ -1229,12 +1235,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     if (changes['bookLanguage'] && this.bookId && this.chapterId) {
       this.loadTemplates();
     }
-    // Baseline status is per-language; re-read when the book language changes (independent of chapter).
-    // Tear down the OLD-language build/poll/guard FIRST so a late response for the superseded language can't
-    // bleed into the new language's status (the baseline is keyed by (book, language)).
+    // Baseline AND book-summary status are per-language; re-read both when the book language changes
+    // (independent of chapter). Tear down the OLD-language build/poll/guard FIRST so a late response for the
+    // superseded language can't bleed into the new language's status (each is keyed by (book, language)).
+    // The bookId-change branch above already resets+reloads both; this covers a language-only change.
     if (changes['bookLanguage'] && !changes['bookId'] && this.bookId) {
       this.resetStyleBaselineBuildState();
       this.loadStyleBaselineStatus();
+      this.resetBookSummaryBuildState();
+      this.loadBookSummaryStatus();
     }
     if (changes['documentText']) {
       if (this.lastAnalysisDocumentText && this.documentText !== this.lastAnalysisDocumentText) {
