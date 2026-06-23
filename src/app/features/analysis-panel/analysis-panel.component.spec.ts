@@ -1623,40 +1623,37 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(component.styleBaselineBuilding).toBeFalse();
     });
 
-    it('onBuildStyleBaseline stops a reattached in-flight poll before building, so the no-op path leaves no live poll (Bug 2)', () => {
+    it('onBuildStyleBaseline does NOT interrupt or duplicate a build already in flight (reattach guard, Bug 1)', () => {
       const styleSvc = TestBed.inject(StyleBaselineService);
       const progressSvc = TestBed.inject(AnalysisProgressService);
 
-      // A poll is already reattached (DEF-2) to a PREVIOUS job. Mirror the real service's takeUntil(stop$)
-      // wiring so stopStyleBaselineProgress() genuinely tears the poll down (a bare-Subject mock would
-      // ignore stop$ and never stop).
-      const oldPoll$ = new Subject<any>();
+      // A poll is already reattached (DEF-2) to an in-flight job; the component is BUILDING. Mirror the
+      // real service's takeUntil(stop$) wiring so the poll is a faithful live subscription.
+      const livePoll$ = new Subject<any>();
       spyOn(progressSvc, 'pollStyleBaselineProgress').and.callFake(
-        (_b: string, _j: string, stop$: any) => oldPoll$.asObservable().pipe(takeUntil(stop$))
+        (_b: string, _j: string, stop$: any) => livePoll$.asObservable().pipe(takeUntil(stop$))
       );
-      // First status read reattaches to 'old-job'; after the no-op build, status reports no active build.
-      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValues(
-        of(makeBaselineStatus({ activeBuildJobId: 'old-job' })),
-        of(makeBaselineStatus({ activeBuildJobId: null }))
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
+        of(makeBaselineStatus({ activeBuildJobId: 'live-job' }))
       );
+      const buildSpy = spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: 'dup', noOp: false } as any));
 
       component.loadStyleBaselineStatus();
       expect(component.styleBaselineBuilding).toBeTrue();
-      expect((component as any).styleBaselineProgressStop$).not.toBeNull();
+      const stopBefore = (component as any).styleBaselineProgressStop$;
+      expect(stopBefore).not.toBeNull();
 
-      // The user starts a build that turns out to be a no-op (nothing stale to build).
-      spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: null, noOp: true } as any));
+      // A stray Confirm arrives while the build is in flight (e.g. a lingering consent prompt). It must be
+      // a no-op: NO second build POST, BUILDING stays true, and the live poll keeps tracking the job.
       component.onBuildStyleBaseline();
 
-      // The no-op cleared BUILDING, and the old reattached poll was stopped BEFORE building, so no live
-      // poll (and no stop$) remains.
-      expect(component.styleBaselineBuilding).toBeFalse();
-      expect((component as any).styleBaselineProgressStop$).toBeNull();
+      expect(buildSpy).not.toHaveBeenCalled();
+      expect(component.styleBaselineBuilding).toBeTrue();
+      expect((component as any).styleBaselineProgressStop$).toBe(stopBefore);
 
-      // A late emit on the OLD poll must NOT resurrect progress after the no-op.
-      oldPoll$.next({ status: 'running', message: 'old job still going', estimatedCompletionPercent: 42 });
-      expect(component.styleBaselineProgressMessage).not.toBe('old job still going');
-      expect(component.styleBaselineBuilding).toBeFalse();
+      // The in-flight poll is still live and still updates progress for the tracked job.
+      livePoll$.next({ status: 'running', message: 'tracked job progressing', estimatedCompletionPercent: 60 });
+      expect(component.styleBaselineProgressMessage).toBe('tracked job progressing');
     });
   });
 

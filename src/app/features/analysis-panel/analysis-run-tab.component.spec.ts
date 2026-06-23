@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { SimpleChange } from '@angular/core';
 import { By } from '@angular/platform-browser';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
@@ -722,6 +723,61 @@ describe('AnalysisRunTabComponent', () => {
 
       expect(component.baselineBuiltWithDifferentModel).toBeFalse();
       expect(query('[data-testid="sb-cross-model-warning"]')).toBeNull();
+    });
+
+    // ---- Bug 1: the consent prompt must not stay confirmable while a build is in flight ----
+    it('BUILDING: hides the consent prompt even if showBaselineConsent is still true', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        ready: false, staleCount: 2, chaptersToBuild: 2, estimatedSeconds: 90,
+      });
+      component.showBaselineConsent = true;   // prompt was opened...
+      component.styleBaselineBuilding = true;  // ...then a build started / reattached (DEF-2)
+      fixture.detectChanges();
+
+      // Gated on !styleBaselineBuilding so a lingering prompt cannot be confirmed mid-build.
+      expect(query('[data-testid="sb-consent"]')).toBeNull();
+
+      // Once the build is no longer in flight, the still-open prompt is shown again.
+      component.styleBaselineBuilding = false;
+      fixture.detectChanges();
+      expect(query('[data-testid="sb-consent"]')).not.toBeNull();
+    });
+
+    it('confirmBaselineBuild is a no-op while building (closes the prompt, emits no duplicate build)', () => {
+      let emitted = 0;
+      component.buildStyleBaseline.subscribe(() => emitted++);
+      component.showBaselineConsent = true;
+      component.styleBaselineBuilding = true;
+
+      component.confirmBaselineBuild();
+
+      expect(emitted).toBe(0);
+      expect(component.showBaselineConsent).toBeFalse();
+    });
+
+    // ---- Bug 2: the consent prompt is dismissed when the (book, language) context changes ----
+    it('clears an open consent prompt when the book changes', () => {
+      component.showBaselineConsent = true;
+      component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
+      expect(component.showBaselineConsent).toBeFalse();
+    });
+
+    it('clears an open consent prompt when the book language changes', () => {
+      component.showBaselineConsent = true;
+      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+      expect(component.showBaselineConsent).toBeFalse();
+    });
+
+    it('clears an open consent prompt once a build becomes in flight (reattach)', () => {
+      component.showBaselineConsent = true;
+      component.ngOnChanges({ styleBaselineBuilding: new SimpleChange(false, true, false) });
+      expect(component.showBaselineConsent).toBeFalse();
+    });
+
+    it('does NOT clear the consent prompt on an unrelated input change', () => {
+      component.showBaselineConsent = true;
+      component.ngOnChanges({ sceneId: new SimpleChange(null, 'scene-9', false) });
+      expect(component.showBaselineConsent).toBeTrue();
     });
   });
 });

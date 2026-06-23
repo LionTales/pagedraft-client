@@ -65,8 +65,9 @@
       {{ baselineLabel('crossModelWarning') }}
     </p>
 
-    <!-- CONSENT prompt: a4 estimate, gated. Build endpoint is NOT called until Confirm. -->
-    <div class="sb-consent" *ngIf="showBaselineConsent" data-testid="sb-consent" [attr.dir]="baselineDir">
+    <!-- CONSENT prompt: a4 estimate, gated. Build endpoint is NOT called until Confirm. Hidden while a
+         build is in flight so a lingering prompt cannot be confirmed into interrupting / duplicating it. -->
+    <div class="sb-consent" *ngIf="showBaselineConsent && !styleBaselineBuilding" data-testid="sb-consent" [attr.dir]="baselineDir">
       <p class="sb-consent-title">{{ baselineLabel('consentTitle') }}</p>
       <p class="sb-consent-body">{{ baselineLabel('consentBody') }}</p>
       <p class="sb-consent-estimate" data-testid="sb-consent-estimate">{{ baselineConsentEstimate }}</p>

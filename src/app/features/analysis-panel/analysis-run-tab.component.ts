@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 import { AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { formatRelativeTime } from '../../core/utils/relative-time';
@@ -16,7 +16,7 @@ import { LinguisticResultComponent } from './linguistic-result.component';
   templateUrl: './analysis-run-tab.component.html',
   styleUrl: './analysis-run-tab.component.scss'
 })
-export class AnalysisRunTabComponent {
+export class AnalysisRunTabComponent implements OnChanges {
   @Input() selectedAnalysisType = 'Proofread';
   @Input() proofreadSuggestions: AnalysisSuggestion[] = [];
   @Input() lineEditRunSuggestions: AnalysisSuggestion[] = [];
@@ -33,6 +33,8 @@ export class AnalysisRunTabComponent {
   @Input() proofreadFinalizing = false;
   @Input() explainingSuggestionIds = new Set<string>();
   @Input() staleSuggestionIds = new Set<string>();
+  /** Current book id. Used only to dismiss the baseline consent prompt when the book changes (see ngOnChanges). */
+  @Input() bookId: string | null = null;
   @Input() bookLanguage: string | null = null;
   @Input() sceneId: string | null = null;
 
@@ -76,6 +78,21 @@ export class AnalysisRunTabComponent {
   ];
 
   constructor(private lineEditParser: LineEditParserService) {}
+
+  ngOnChanges(changes: SimpleChanges): void {
+    // The baseline is keyed by (book, language) and the panel tears its baseline state down on either
+    // change. Dismiss the consent prompt too: one opened for the PREVIOUS book/language must not linger
+    // and then (now showing the NEW book's estimate) be confirmed into building the wrong book.
+    if (changes['bookId'] || changes['bookLanguage']) {
+      this.showBaselineConsent = false;
+    }
+    // Once a build is in flight (a fresh start OR a DEF-2 reattach surfaced on a status reload), the
+    // consent prompt must not stay open/confirmable - confirming would ask the parent to interrupt the
+    // tracked job and start a duplicate build.
+    if (changes['styleBaselineBuilding']?.currentValue === true) {
+      this.showBaselineConsent = false;
+    }
+  }
 
   private get language(): string {
     return (this.bookLanguage?.trim()) || 'he';
@@ -221,6 +238,9 @@ export class AnalysisRunTabComponent {
   /** Confirm consent -> close the prompt and ask the parent to start the build. */
   confirmBaselineBuild(): void {
     this.showBaselineConsent = false;
+    // Never trigger a build while one is already in flight (e.g. a reattach flipped BUILDING true while
+    // this prompt was open): that would interrupt the tracked job and start a duplicate. Just close.
+    if (this.styleBaselineBuilding) return;
     this.buildStyleBaseline.emit();
   }
 

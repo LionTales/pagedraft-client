@@ -312,12 +312,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    */
   onBuildStyleBaseline(): void {
     if (!this.bookId) return;
+    // Guard: a build is already in flight for this book (started here, or reattached via DEF-2 after a
+    // reload / from another tab). Starting another would stop the live progress poll (losing tracking of
+    // the running job) and POST a duplicate build for the same (book, language). The consent prompt is
+    // hidden while BUILDING, but a lingering/late Confirm could still reach here, so refuse it.
+    if (this.styleBaselineBuilding) return;
     const bookId = this.bookId;
     const language = this.baselineLanguage;
-    // Tear down any reattached / in-flight progress poll BEFORE starting a new build. Otherwise an older
-    // poll (e.g. a DEF-2 reattach to a previous activeBuildJobId) keeps mutating progress during the
-    // window before the new poll starts - and on the no-op path below it would never be stopped at all,
-    // so it would keep updating the row after the UI has left BUILDING until that old job finishes.
+    // Defensive: clear any stray progress poll before starting. The guard above already blocks the common
+    // in-flight case (BUILDING); this covers a poll left running while the BUILDING flag is somehow false,
+    // and ensures the no-op path below cannot leave a live poll updating the row after the UI settles.
     this.stopStyleBaselineProgress();
     this.styleBaselineBuilding = true;
     this.styleBaselineProgressPercent = null;
