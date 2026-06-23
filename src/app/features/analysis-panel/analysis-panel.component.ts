@@ -4,9 +4,11 @@ import { FormsModule } from '@angular/forms';
 import { Subject, Subscription, forkJoin } from 'rxjs';
 import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
+import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
+import { BookSummaryService } from '../../core/services/book-summary.service';
 import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
@@ -181,6 +183,24 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    * build is started in this tab or the book switches, so a genuine future build can reattach normally.
    */
   private styleBaselineHandledTerminalJobId: string | null = null;
+
+  // ── Book summary (wb1-f01) ────────────────────────────────────────────────
+  /** Latest book-summary status read for the current book (null while loading / no book). */
+  bookSummaryStatus: BookSummaryStatusDto | null = null;
+  /** True while a summary build job is in flight (drives the BUILDING state in the run tab). */
+  bookSummaryBuilding = false;
+  /** Live summary build progress 0..100 (null = indeterminate). */
+  bookSummaryProgressPercent: number | null = null;
+  /** Human-readable progress message from the summary build job. */
+  bookSummaryProgressMessage = '';
+  /** Stops the active summary progress poll; nulled when no poll is running. */
+  private bookSummaryProgressStop$: Subject<void> | null = null;
+  /** Active summary-related subscriptions (status fetch + build); cleared on context change / destroy. */
+  private bookSummarySub: Subscription | null = null;
+  /** The latest in-flight GET summary status fetch (cancels previous on overlap). */
+  private bookSummaryStatusSub: Subscription | null = null;
+  /** Loop guard for summary build: mirrors styleBaselineHandledTerminalJobId. */
+  private bookSummaryHandledTerminalJobId: string | null = null;
   /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI.
    *  Offset relocation is handled separately by SuggestionAnchorService in emitSuggestionRanges / onShowInDocument. */
   private mapDtoSuggestions(
@@ -231,6 +251,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.styleBaselineSub?.unsubscribe();
     this.styleBaselineStatusSub?.unsubscribe();
     this.styleBaselineHandledTerminalJobId = null;
+    this.stopBookSummaryProgress();
+    this.bookSummarySub?.unsubscribe();
+    this.bookSummaryStatusSub?.unsubscribe();
+    this.bookSummaryHandledTerminalJobId = null;
   }
 
   // ── Style baseline (a3/a4) ────────────────────────────────────────────────
@@ -304,6 +328,131 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.styleBaselineStatus = null;
     // Forget any handled jobId so a build for the new book/language can reattach.
     this.styleBaselineHandledTerminalJobId = null;
+  }
+
+  // ── Book summary (wb1-f01) ────────────────────────────────────────────────
+
+  /** Fetch the current book-summary status for this book and update the run tab. */
+  loadBookSummaryStatus(): void {
+    if (!this.bookId) {
+      this.bookSummaryStatus = null;
+      return;
+    }
+    const bookId = this.bookId;
+    this.bookSummaryStatusSub?.unsubscribe();
+    this.bookSummaryStatusSub = this.bookSummaryService.getBookSummaryStatus(bookId).subscribe({
+      next: (status) => {
+        if (this.bookId !== bookId) return;
+        this.bookSummaryStatus = status;
+        if (status.ready && this.bookSummaryBuilding && this.bookSummaryProgressPercent === 100) {
+          this.bookSummaryBuilding = false;
+        }
+        // Reattach to an in-progress build (started in another tab/session).
+        if (
+          status.activeBuildJobId &&
+          status.activeBuildJobId !== this.bookSummaryHandledTerminalJobId &&
+          !this.bookSummaryBuilding &&
+          !this.bookSummaryProgressStop$
+        ) {
+          this.bookSummaryBuilding = true;
+          this.bookSummaryProgressPercent = null;
+          this.bookSummaryProgressMessage = '';
+          this.pollBookSummaryBuild(bookId, status.activeBuildJobId);
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => { /* leave current; row hides when status is null */ },
+    });
+  }
+
+  /** Stop any active book-summary progress poll. */
+  private stopBookSummaryProgress(): void {
+    if (this.bookSummaryProgressStop$) {
+      this.bookSummaryProgressStop$.next();
+      this.bookSummaryProgressStop$.complete();
+      this.bookSummaryProgressStop$ = null;
+    }
+  }
+
+  /** Tear down any in-flight book-summary build/poll and reset its UI + loop guard. */
+  private resetBookSummaryBuildState(): void {
+    this.stopBookSummaryProgress();
+    this.bookSummarySub?.unsubscribe();
+    this.bookSummaryStatusSub?.unsubscribe();
+    this.bookSummaryBuilding = false;
+    this.bookSummaryProgressPercent = null;
+    this.bookSummaryProgressMessage = '';
+    this.bookSummaryStatus = null;
+    this.bookSummaryHandledTerminalJobId = null;
+  }
+
+  /** Consent confirmed in the run tab: start (or no-op) the book summary build. */
+  onBuildBookSummary(): void {
+    if (!this.bookId) return;
+    if (this.bookSummaryBuilding) return;
+    const bookId = this.bookId;
+    const language = this.baselineLanguage;
+    this.stopBookSummaryProgress();
+    this.bookSummaryBuilding = true;
+    this.bookSummaryProgressPercent = null;
+    this.bookSummaryProgressMessage = '';
+    this.bookSummaryHandledTerminalJobId = null;
+    this.cdr.detectChanges();
+
+    this.bookSummarySub?.unsubscribe();
+    this.bookSummarySub = this.bookSummaryService.buildBookSummary(bookId, language).subscribe({
+      next: (resp) => {
+        if (this.bookId !== bookId) return;
+        if (resp.noOp || !resp.jobId) {
+          this.bookSummaryBuilding = false;
+          this.loadBookSummaryStatus();
+          this.cdr.detectChanges();
+          return;
+        }
+        this.pollBookSummaryBuild(bookId, resp.jobId);
+      },
+      error: () => {
+        if (this.bookId !== bookId) return;
+        this.bookSummaryBuilding = false;
+        this.bookSummaryProgressMessage = '';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  /** Poll the book-summary build job and refresh status when it reaches a terminal state. */
+  private pollBookSummaryBuild(bookId: string, jobId: string): void {
+    this.stopBookSummaryProgress();
+    const stop$ = new Subject<void>();
+    this.bookSummaryProgressStop$ = stop$;
+    this.analysisProgressService.pollBookSummaryProgress(bookId, jobId, stop$).subscribe({
+      next: (p) => {
+        if (this.bookId !== bookId) return;
+        const status = (p.status ?? '').toLowerCase();
+        this.bookSummaryProgressMessage = p.message ?? '';
+        this.bookSummaryProgressPercent =
+          status === 'succeeded'
+            ? 100
+            : (Number.isFinite(p.estimatedCompletionPercent)
+                ? Math.max(0, Math.min(100, p.estimatedCompletionPercent))
+                : this.bookSummaryProgressPercent);
+        if (status === 'succeeded' || status === 'failed' || status === 'canceled') {
+          this.bookSummaryBuilding = false;
+          this.stopBookSummaryProgress();
+          this.bookSummaryHandledTerminalJobId = jobId;
+          this.loadBookSummaryStatus();
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        if (this.bookId !== bookId) return;
+        this.bookSummaryBuilding = false;
+        this.stopBookSummaryProgress();
+        this.bookSummaryHandledTerminalJobId = jobId;
+        this.loadBookSummaryStatus();
+        this.cdr.detectChanges();
+      },
+    });
   }
 
   /**
@@ -408,7 +557,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     private suggestionKeyService: SuggestionKeyService,
     private suggestionAnchorService: SuggestionAnchorService,
     private styleBaselineService: StyleBaselineService,
-    private analysisProgressService: AnalysisProgressService
+    private analysisProgressService: AnalysisProgressService,
+    private bookSummaryService: BookSummaryService
   ) {}
 
 
@@ -1061,6 +1211,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       // Switching book invalidates the baseline status + any in-flight build poll.
       if (changes['bookId']) {
         this.resetStyleBaselineBuildState();
+        this.resetBookSummaryBuildState();
       }
       if (this.bookId && this.chapterId) {
         this.loadTemplates();
@@ -1072,6 +1223,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       }
       if (this.bookId) {
         this.loadStyleBaselineStatus();
+        this.loadBookSummaryStatus();
       }
     }
     if (changes['bookLanguage'] && this.bookId && this.chapterId) {
