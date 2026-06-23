@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 import { AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
+import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { resolveCardLang } from './card-lang';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
@@ -51,6 +52,19 @@ export class AnalysisRunTabComponent implements OnChanges {
   /** User confirmed the consent prompt -> parent should start the build and flip to BUILDING. */
   @Output() buildStyleBaseline = new EventEmitter<void>();
 
+  // ── Book summary (wb1-f01) ────────────────────────────────────────────────
+  /** Latest status read for the book summary (null while loading / no book). */
+  @Input() bookSummaryStatus: BookSummaryStatusDto | null = null;
+  /** True while a summary build job is in flight (client-tracked, drives the BUILDING state). */
+  @Input() bookSummaryBuilding = false;
+  /** Live summary build progress 0..100 (null = indeterminate / not started). */
+  @Input() bookSummaryProgressPercent: number | null = null;
+  /** Optional human-readable progress message from the summary build job. */
+  @Input() bookSummaryProgressMessage = '';
+
+  /** User confirmed the consent prompt -> parent should start the summary build. */
+  @Output() buildBookSummary = new EventEmitter<void>();
+
   @Output() proofreadAccept = new EventEmitter<AnalysisSuggestion>();
   @Output() proofreadDismiss = new EventEmitter<AnalysisSuggestion>();
   @Output() lineEditAccept = new EventEmitter<{ suggestion: AnalysisSuggestion; result: AnalysisResultDto }>();
@@ -62,8 +76,11 @@ export class AnalysisRunTabComponent implements OnChanges {
   showRawLineEdit = false;
   lineEditCategoryFilter = 'all';
 
-  /** True while the consent prompt (showing the build estimate) is open. */
+  /** True while the style-baseline consent prompt (showing the build estimate) is open. */
   showBaselineConsent = false;
+
+  /** True while the book-summary consent prompt is open. */
+  showBookSummaryConsent = false;
 
   readonly lineEditCategoryOptions: string[] = [
     'all',
@@ -85,12 +102,16 @@ export class AnalysisRunTabComponent implements OnChanges {
     // and then (now showing the NEW book's estimate) be confirmed into building the wrong book.
     if (changes['bookId'] || changes['bookLanguage']) {
       this.showBaselineConsent = false;
+      this.showBookSummaryConsent = false;
     }
     // Once a build is in flight (a fresh start OR a DEF-2 reattach surfaced on a status reload), the
     // consent prompt must not stay open/confirmable - confirming would ask the parent to interrupt the
     // tracked job and start a duplicate build.
     if (changes['styleBaselineBuilding']?.currentValue === true) {
       this.showBaselineConsent = false;
+    }
+    if (changes['bookSummaryBuilding']?.currentValue === true) {
+      this.showBookSummaryConsent = false;
     }
   }
 
@@ -242,6 +263,119 @@ export class AnalysisRunTabComponent implements OnChanges {
     // this prompt was open): that would interrupt the tracked job and start a duplicate. Just close.
     if (this.styleBaselineBuilding) return;
     this.buildStyleBaseline.emit();
+  }
+
+  // ── Book summary status row (wb1-f01) ──────────────────────────────────────
+
+  /** 'rtl' for Hebrew (default), 'ltr' for English. Drives [dir] on the summary status row. */
+  get bookSummaryDir(): 'rtl' | 'ltr' {
+    return this.language.toLowerCase().startsWith('en') ? 'ltr' : 'rtl';
+  }
+
+  /**
+   * Derived state for the book-summary status row. BUILDING is client-tracked (bookSummaryBuilding)
+   * so it wins over the snapshot read while a job is in flight.
+   */
+  get bookSummaryState(): 'building' | 'not-built' | 'ready' | 'stale' | 'unknown' {
+    if (this.bookSummaryBuilding) return 'building';
+    const s = this.bookSummaryStatus;
+    if (!s) return 'unknown';
+    if (s.hasSummary && (s.staleCount > 0 || s.builtWithDifferentModel)) return 'stale';
+    if (s.ready) return 'ready';
+    if (!s.hasSummary && s.builtChapters === 0) return 'not-built';
+    return s.hasSummary ? 'ready' : 'not-built';
+  }
+
+  /** True when a summary exists but was built with a different model (drives the cross-model warning). */
+  get bookSummaryBuiltWithDifferentModel(): boolean {
+    return !!this.bookSummaryStatus?.builtWithDifferentModel;
+  }
+
+  /** Coverage string "N/N" from the status read. */
+  get bookSummaryCoverage(): string {
+    const s = this.bookSummaryStatus;
+    if (!s) return '';
+    return `${s.builtChapters}/${s.totalChapters}`;
+  }
+
+  /** Localized, timezone-aware "updated <relative time>" for the last build. Empty when never built. */
+  get bookSummaryUpdatedRelative(): string {
+    const s = this.bookSummaryStatus;
+    if (!s?.lastUpdatedAt) return '';
+    const lang = this.language.toLowerCase().startsWith('en') ? 'en' : 'he';
+    return formatRelativeTime(s.lastUpdatedAt, lang);
+  }
+
+  /** Localized labels for the book-summary status row. he default, en when book language is English. */
+  bookSummaryLabel(key: string): string {
+    const lang = this.language.toLowerCase().startsWith('en') ? 'en' : 'he';
+    const he: Record<string, string> = {
+      title: 'תקצירי ספר',
+      notBuilt: 'טרם נבנה',
+      buildNow: 'בנה עכשיו',
+      building: 'בונה תקצירים...',
+      refresh: 'רענן',
+      coverage: 'כיסוי',
+      updated: 'עודכן',
+      stalePrefix: 'פרקים שהשתנו:',
+      consentTitle: 'בניית תקצירי ספר',
+      consentBody: 'פעולה זו תנתח את פרקי הספר כדי לבנות תקצירים לכל פרק.',
+      confirm: 'אישור',
+      cancel: 'ביטול',
+      crossModelWarning: 'התקצירים נבנו עם מודל אחר מהפעיל כעת. רעננו אותם לקבלת תוצאות מדויקות.',
+    };
+    const en: Record<string, string> = {
+      title: 'Book briefs',
+      notBuilt: 'Not built',
+      buildNow: 'Build now',
+      building: 'Building briefs...',
+      refresh: 'Refresh',
+      coverage: 'Coverage',
+      updated: 'Updated',
+      stalePrefix: 'Chapters changed:',
+      consentTitle: 'Build book briefs',
+      consentBody: 'This will analyze the book chapters to build a brief summary for each chapter.',
+      confirm: 'Confirm',
+      cancel: 'Cancel',
+      crossModelWarning: 'The briefs were built with a different model than the one now active. Refresh them for accurate results.',
+    };
+    const map = lang === 'he' ? he : en;
+    return map[key] ?? key;
+  }
+
+  /** Build estimate sentence for the consent prompt, e.g. "~3 chapters, ~2 min". */
+  get bookSummaryConsentEstimate(): string {
+    const s = this.bookSummaryStatus;
+    if (!s) return '';
+    const lang = this.language.toLowerCase().startsWith('en') ? 'en' : 'he';
+    const chapters = s.chaptersToBuild;
+    const minutes = Math.max(1, Math.ceil((s.estimatedSeconds || 0) / 60));
+    let phrase: string;
+    if (lang === 'he') {
+      phrase = `~${chapters} פרקים, ~${minutes} דקות`;
+    } else {
+      phrase = `~${chapters} chapters, ~${minutes} min`;
+    }
+    if (s.estimatedUsd != null) {
+      phrase += `, ~$${this.formatUsd(s.estimatedUsd)}`;
+    }
+    return phrase;
+  }
+
+  /** Open the book-summary consent prompt. */
+  openBookSummaryConsent(): void {
+    this.showBookSummaryConsent = true;
+  }
+
+  cancelBookSummaryConsent(): void {
+    this.showBookSummaryConsent = false;
+  }
+
+  /** Confirm book-summary consent -> close the prompt and ask the parent to start the build. */
+  confirmBookSummaryBuild(): void {
+    this.showBookSummaryConsent = false;
+    if (this.bookSummaryBuilding) return;
+    this.buildBookSummary.emit();
   }
 
   get runDisplayText(): string {
