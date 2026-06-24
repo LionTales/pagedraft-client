@@ -9,6 +9,7 @@ import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '..
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
+import { BookReviewService } from '../../core/services/book-review.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
@@ -90,11 +91,20 @@ describe('AnalysisPanelComponent (focused logic)', () => {
           },
         },
         {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER,
+            buildReview: () => NEVER,
+            getReviewProgress: () => NEVER,
+          },
+        },
+        {
           provide: AnalysisProgressService,
           useValue: {
             pollProgress: () => NEVER,
             pollStyleBaselineProgress: () => NEVER,
             pollBookSummaryProgress: () => NEVER,
+            pollBookReviewProgress: () => NEVER,
           },
         },
       ],
@@ -1748,6 +1758,147 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
       expect(pollSpy).toHaveBeenCalledWith('book-1', 'job-running', jasmine.anything());
       expect(component.bookSummaryBuilding).toBeTrue();
+    });
+
+    // c02: a finished SUMMARY build makes briefs present, so the book-REVIEW row's "build summary first"
+    // gate must clear (and an existing review go STALE). Both are surfaced only by re-reading review status,
+    // so the summary build's terminal/error handlers MUST refresh it. The poll is held open with a Subject
+    // (not synchronous of()/throwError) so the terminal/error emit lands inside the real in-flight window.
+    it('c02: refreshes book-review status when a book-summary build SUCCEEDS', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+
+      spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(progressSvc, 'pollBookSummaryProgress').and.returnValue(poll$.asObservable());
+      const reviewSpy = spyOn(component, 'loadBookReviewStatus').and.callThrough();
+
+      component.bookLanguage = 'he';
+      component.onBuildBookSummary();
+      expect(component.bookSummaryBuilding).toBeTrue();
+      reviewSpy.calls.reset();
+
+      // Terminal 'succeeded' emit on the held-open poll.
+      poll$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
+
+      expect(component.bookSummaryBuilding).toBeFalse();
+      expect(reviewSpy).toHaveBeenCalled();
+    });
+
+    it('c02: refreshes book-review status when the book-summary build poll ERRORS', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+
+      spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(progressSvc, 'pollBookSummaryProgress').and.returnValue(poll$.asObservable());
+      const reviewSpy = spyOn(component, 'loadBookReviewStatus').and.callThrough();
+
+      component.bookLanguage = 'he';
+      component.onBuildBookSummary();
+      expect(component.bookSummaryBuilding).toBeTrue();
+      reviewSpy.calls.reset();
+
+      // Error on the held-open poll (job lost / network drop).
+      poll$.error(new Error('poll dropped'));
+
+      expect(component.bookSummaryBuilding).toBeFalse();
+      expect(reviewSpy).toHaveBeenCalled();
+    });
+  });
+
+  // c03: the book-review build orchestration (onBuildBookReview -> pollBookReviewBuild) had no coverage.
+  // Each spec holds the progress Subject OPEN across assertions so progress and the terminal status land
+  // inside the real in-flight window (a synchronous of()/throwError collapses that window and hides the
+  // mid-flight state). getReviewStatus stays NEVER (default) so loadBookReviewStatus() — fired from the
+  // terminal handlers — is an inert no-op and cannot mutate the outcome under test.
+  describe('book review build orchestration (c03)', () => {
+    it('(a) in-flight then terminal failed: BUILDING true mid-flight, then outcome=failed and BUILDING false', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+
+      // A running progress emit keeps the build in flight.
+      poll$.next({ status: 'running', message: 'building', estimatedCompletionPercent: 40 });
+      expect(component.bookReviewBuilding).toBeTrue();
+      expect(component.bookReviewBuildOutcome).toBeNull();
+
+      // Terminal failure on the held-open poll.
+      poll$.next({ status: 'failed', message: 'all dimensions failed', estimatedCompletionPercent: 100 });
+      expect(component.bookReviewBuildOutcome).toBe('failed');
+      expect(component.bookReviewBuildOutcomeMessage).toBe('all dimensions failed');
+      expect(component.bookReviewBuilding).toBeFalse();
+    });
+
+    it('(b) terminal succeeded with a PLAIN message -> outcome stays null (no false degraded)', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+      expect(component.bookReviewBuilding).toBeTrue();
+
+      poll$.next({ status: 'succeeded', message: 'Book review built successfully', estimatedCompletionPercent: 100 });
+
+      expect(component.bookReviewBuildOutcome).toBeNull();
+      expect(component.bookReviewBuildOutcomeMessage).toBe('');
+      expect(component.bookReviewBuilding).toBeFalse();
+    });
+
+    it('(c) terminal succeeded WITH a "(N failed)" / "with warnings" message -> outcome=degraded', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+      expect(component.bookReviewBuilding).toBeTrue();
+
+      poll$.next({ status: 'succeeded', message: 'Built with warnings (2 failed)', estimatedCompletionPercent: 100 });
+
+      expect(component.bookReviewBuildOutcome).toBe('degraded');
+      expect(component.bookReviewBuildOutcomeMessage).toBe('Built with warnings (2 failed)');
+      expect(component.bookReviewBuilding).toBeFalse();
+    });
+
+    it('(d) STALE GUARD: a terminal emit after the bookId changed mid-flight does NOT mutate the new context', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-A', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+
+      // Start a build for book A.
+      component.bookId = 'book-A';
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+      expect(component.bookReviewBuilding).toBeTrue();
+
+      // Switch context FIRST (the user navigated to a different book) — THEN the stale poll fires terminal.
+      component.bookId = 'book-B';
+      poll$.next({ status: 'failed', message: 'stale failure from book A', estimatedCompletionPercent: 100 });
+
+      // The guard returns early: book-B's outcome is untouched (no leaked banner from the superseded build).
+      expect(component.bookReviewBuildOutcome).toBeNull();
+      expect(component.bookReviewBuildOutcomeMessage).toBe('');
+    });
+
+    it('(e) RESET-ON-SWITCH (f01): a bookId change via ngOnChanges clears a prior failed outcome + message', () => {
+      // A stale failed banner from the PREVIOUS book must not bleed into the newly selected book.
+      component.bookReviewBuildOutcome = 'failed';
+      component.bookReviewBuildOutcomeMessage = 'previous book failure';
+
+      component.bookId = 'book-2';
+      component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
+
+      expect(component.bookReviewBuildOutcome).toBeNull();
+      expect(component.bookReviewBuildOutcomeMessage).toBe('');
     });
   });
 
