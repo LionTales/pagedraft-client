@@ -1995,6 +1995,51 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       // The failure banner REMAINS: the build did not produce a usable review.
       expect(component.bookReviewBuildOutcome).toBe('failed');
     });
+
+    it('(k) HTTP START failure: an unrelated ready status refresh must NOT clear the failed banner', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      // The build fails at the HTTP start (no job ran), so the review is unchanged.
+      spyOn(reviewSvc, 'buildReview').and.returnValue(throwError(() => new Error('network down')));
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(NEVER);
+      // A later, UNRELATED refresh (e.g. chapter navigation) returns the unchanged, already-ready review.
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(
+        of({ ready: true, hasReview: true, findingCount: 7, activeBuildJobId: null } as any));
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+      expect(component.bookReviewBuildOutcome).toBe('failed'); // the start failed
+
+      // Simulate an unrelated status refetch (NOT the post-build terminal refresh).
+      component.loadBookReviewStatus();
+
+      // The failed-START banner must persist: a pre-existing ready review the failed start did not produce must
+      // not make the failure look like it never happened.
+      expect(component.bookReviewBuildOutcome).toBe('failed');
+    });
+
+    it('(l) while degraded, an unrelated status refresh must NOT overwrite the post-build count', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      const statusSpy = spyOn(reviewSvc, 'getReviewStatus');
+      // The post-build refresh returns the fresh count from the build that just completed.
+      statusSpy.and.returnValue(of({ ready: true, hasReview: true, findingCount: 4, activeBuildJobId: null } as any));
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+      poll$.next({ status: 'succeeded', message: 'Built with warnings (2 failed)', estimatedCompletionPercent: 100 });
+
+      expect(component.bookReviewBuildOutcome).toBe('degraded');
+      expect(component.bookReviewBuildOutcomeCount).toBe(4);
+
+      // An UNRELATED status load (e.g. a summary build completing) returns a DIFFERENT total...
+      statusSpy.and.returnValue(of({ ready: true, hasReview: true, findingCount: 99, activeBuildJobId: null } as any));
+      component.loadBookReviewStatus();
+
+      // ...must NOT overwrite the post-build count, so the degraded banner never shows an unrelated/stale total.
+      expect(component.bookReviewBuildOutcomeCount).toBe(4);
+    });
   });
 
 });

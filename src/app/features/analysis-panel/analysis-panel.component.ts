@@ -434,8 +434,17 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   // ── Book review (wb2-f03) ─────────────────────────────────────────────────
 
-  /** Fetch the current book-review status for this book/language and update the run tab. */
-  loadBookReviewStatus(): void {
+  /**
+   * Fetch the current book-review status for this book/language and update the run tab.
+   *
+   * @param fromBuildTerminal True ONLY when called as the POST-BUILD refresh from the review poll's terminal /
+   *   error handler. The build-outcome banner mutations (clearing a stale 'failed', filling the degraded count)
+   *   are gated on this so an UNRELATED status load — chapter navigation, a summary build completing, re-init —
+   *   can neither erase a genuine failed-START banner nor overwrite the degraded count with a non-post-build
+   *   (possibly stale) total, even when overlapping fetches cancel each other. Other callers omit it and only
+   *   refresh the status row.
+   */
+  loadBookReviewStatus(fromBuildTerminal = false): void {
     if (!this.bookId) {
       this.bookReviewStatus = null;
       return;
@@ -447,22 +456,26 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       next: (status) => {
         if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
         this.bookReviewStatus = status;
-        // Clear a STALE 'failed' banner when the refreshed status shows a usable review: the build actually
-        // succeeded on the server even though the progress poll errored (a transient drop sets outcome='failed'
-        // optimistically). Without this, the red failure banner lingers over a ready review with findings — a
-        // contradictory UI. Gated on `ready` (fresh review under the active model), NOT hasReview: a genuinely
-        // failed build leaves only a stale/wrong-model cache (ready=false), where the 'failed' banner must stay.
-        if (this.bookReviewBuildOutcome === 'failed' && status.ready) {
-          this.bookReviewBuildOutcome = null;
-          this.bookReviewBuildOutcomeMessage = '';
-          this.bookReviewBuildOutcomeCount = null;
-        }
-        // The degraded banner's finding count must reflect the build that JUST completed, not the pre-build
-        // snapshot. This status read is the post-build refresh (fired from the terminal poll handler), so sync
-        // the banner count from it here. Scoped to the degraded outcome so an unrelated status load is a no-op;
-        // if this refresh never succeeds the count stays null and the banner shows the plain copy (no count).
-        if (this.bookReviewBuildOutcome === 'degraded') {
-          this.bookReviewBuildOutcomeCount = status.findingCount;
+        // Build-outcome banner mutations apply ONLY to the post-build refresh (the call from the review poll's
+        // terminal / error handler). An unrelated status load must leave the banner untouched.
+        if (fromBuildTerminal) {
+          // Clear a STALE 'failed' banner when THIS post-build refresh shows a usable review: the build actually
+          // succeeded server-side even though the progress poll errored (a transient drop optimistically set
+          // 'failed'). Gated on fromBuildTerminal so an unrelated load (e.g. chapter navigation) cannot erase a
+          // genuine failed-START banner; gated on `ready` (not hasReview) so a real failure that left only a
+          // stale/wrong-model cache keeps the banner.
+          if (this.bookReviewBuildOutcome === 'failed' && status.ready) {
+            this.bookReviewBuildOutcome = null;
+            this.bookReviewBuildOutcomeMessage = '';
+            this.bookReviewBuildOutcomeCount = null;
+          }
+          // The degraded banner's count must reflect the build that JUST completed, so it is filled ONLY from
+          // this post-build refresh — never from an overlapping/unrelated load that could carry a non-post-build
+          // (stale) total. If this refresh is canceled or fails, the count stays null and the banner shows the
+          // plain copy (no count) rather than a wrong total.
+          if (this.bookReviewBuildOutcome === 'degraded') {
+            this.bookReviewBuildOutcomeCount = status.findingCount;
+          }
         }
         if (status.ready && this.bookReviewBuilding && this.bookReviewProgressPercent === 100) {
           this.bookReviewBuilding = false;
@@ -590,7 +603,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           // The just-completed count is not in the progress payload; clear it and let the post-build status
           // refresh below repopulate it (degraded case). Until then the banner renders without a stale count.
           this.bookReviewBuildOutcomeCount = null;
-          this.loadBookReviewStatus();
+          this.loadBookReviewStatus(true); // post-build refresh: may set the degraded count / clear a stale 'failed'
         }
         this.cdr.detectChanges();
       },
@@ -604,7 +617,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.bookReviewBuildOutcome = 'failed';
         this.bookReviewBuildOutcomeMessage = '';
         this.bookReviewBuildOutcomeCount = null;
-        this.loadBookReviewStatus();
+        this.loadBookReviewStatus(true); // post-build refresh: clears 'failed' if the build actually succeeded
         this.cdr.detectChanges();
       },
     });
