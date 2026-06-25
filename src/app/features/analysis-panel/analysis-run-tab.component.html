@@ -90,210 +90,6 @@
     </div>
   </div>
 
-  <!-- Book summary status row (wb1-f01). Always visible so Phase-3 UI (brief readers) can gate on it;
-       not restricted to a particular analysis type the way the style-baseline row is. -->
-  <div
-    class="style-baseline-row"
-    *ngIf="bookSummaryState !== 'unknown'"
-    [attr.dir]="bookSummaryDir"
-    data-testid="book-summary-row">
-    <div class="sb-line">
-      <span class="sb-title">{{ bookSummaryLabel('title') }}</span>
-
-      <!-- NOT BUILT -->
-      <ng-container *ngIf="bookSummaryState === 'not-built'">
-        <span class="sb-status sb-not-built" data-testid="bsum-not-built">{{ bookSummaryLabel('notBuilt') }}</span>
-        <button
-          type="button"
-          class="run-btn sb-action"
-          data-testid="bsum-build-now"
-          (click)="openBookSummaryConsent()">
-          {{ bookSummaryLabel('buildNow') }}
-        </button>
-      </ng-container>
-
-      <!-- BUILDING -->
-      <ng-container *ngIf="bookSummaryState === 'building'">
-        <span class="sb-status sb-building" data-testid="bsum-building">
-          {{ bookSummaryProgressMessage || bookSummaryLabel('building') }}
-          <ng-container *ngIf="bookSummaryProgressPercent != null"> ({{ bookSummaryProgressPercent }}%)</ng-container>
-        </span>
-        <span class="sb-spinner" aria-hidden="true"></span>
-      </ng-container>
-
-      <!-- READY -->
-      <ng-container *ngIf="bookSummaryState === 'ready'">
-        <span class="sb-status sb-ready" data-testid="bsum-ready">
-          {{ bookSummaryLabel('coverage') }} {{ bookSummaryCoverage }}
-          <ng-container *ngIf="bookSummaryUpdatedRelative">
-            · {{ bookSummaryLabel('updated') }} {{ bookSummaryUpdatedRelative }}
-          </ng-container>
-        </span>
-      </ng-container>
-
-      <!-- STALE -->
-      <ng-container *ngIf="bookSummaryState === 'stale'">
-        <span class="sb-status sb-stale" data-testid="bsum-stale">
-          {{ bookSummaryLabel('stalePrefix') }} {{ bookSummaryStatus?.staleCount }}
-        </span>
-        <button
-          type="button"
-          class="run-btn sb-action"
-          data-testid="bsum-refresh"
-          (click)="openBookSummaryConsent()">
-          {{ bookSummaryLabel('refresh') }}
-        </button>
-      </ng-container>
-    </div>
-
-    <!-- Cross-model staleness warning: summary exists but was built with a different model. -->
-    <p
-      class="sb-cross-model-warning muted"
-      *ngIf="bookSummaryBuiltWithDifferentModel"
-      [attr.dir]="bookSummaryDir"
-      data-testid="bsum-cross-model-warning">
-      {{ bookSummaryLabel('crossModelWarning') }}
-    </p>
-
-    <!-- CONSENT prompt: estimate + gate. Build endpoint is NOT called until Confirm.
-         Hidden while a build is in flight so a lingering prompt cannot duplicate it. -->
-    <div class="sb-consent" *ngIf="showBookSummaryConsent && !bookSummaryBuilding" data-testid="bsum-consent" [attr.dir]="bookSummaryDir">
-      <p class="sb-consent-title">{{ bookSummaryLabel('consentTitle') }}</p>
-      <p class="sb-consent-body">{{ bookSummaryLabel('consentBody') }}</p>
-      <p class="sb-consent-estimate" data-testid="bsum-consent-estimate">{{ bookSummaryConsentEstimate }}</p>
-      <div class="sb-consent-actions">
-        <button
-          type="button"
-          class="run-btn"
-          data-testid="bsum-consent-confirm"
-          (click)="confirmBookSummaryBuild()">
-          {{ bookSummaryLabel('confirm') }}
-        </button>
-        <button
-          type="button"
-          class="run-btn secondary"
-          data-testid="bsum-consent-cancel"
-          (click)="cancelBookSummaryConsent()">
-          {{ bookSummaryLabel('cancel') }}
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Book review status row (wb2-f03). Always visible so Phase-3 UI can gate on it.
-       Requires book-summary briefs; when hasBriefs===false the row shows a hint and disables the build. -->
-  <div
-    class="style-baseline-row"
-    *ngIf="bookReviewState !== 'unknown'"
-    [attr.dir]="bookReviewDir"
-    data-testid="book-review-row">
-    <div class="sb-line">
-      <span class="sb-title">{{ bookReviewLabel('title') }}</span>
-
-      <!-- NEEDS SUMMARY (gate: hasBriefs===false) -->
-      <ng-container *ngIf="bookReviewState === 'needs-summary'">
-        <span class="sb-status sb-not-built" data-testid="brev-needs-summary">{{ bookReviewLabel('notBuilt') }}</span>
-        <span class="sb-hint-inline muted" data-testid="brev-needs-summary-hint">{{ bookReviewLabel('needsSummary') }}</span>
-      </ng-container>
-
-      <!-- NOT BUILT -->
-      <ng-container *ngIf="bookReviewState === 'not-built'">
-        <span class="sb-status sb-not-built" data-testid="brev-not-built">{{ bookReviewLabel('notBuilt') }}</span>
-        <button
-          type="button"
-          class="run-btn sb-action"
-          data-testid="brev-build-now"
-          (click)="openBookReviewConsent()">
-          {{ bookReviewLabel('buildNow') }}
-        </button>
-      </ng-container>
-
-      <!-- BUILDING -->
-      <ng-container *ngIf="bookReviewState === 'building'">
-        <span class="sb-status sb-building" data-testid="brev-building">
-          {{ bookReviewProgressMessage || bookReviewLabel('building') }}
-          <ng-container *ngIf="bookReviewProgressPercent != null"> ({{ bookReviewProgressPercent }}%)</ng-container>
-        </span>
-        <span class="sb-spinner" aria-hidden="true"></span>
-      </ng-container>
-
-      <!-- READY -->
-      <ng-container *ngIf="bookReviewState === 'ready'">
-        <span class="sb-status sb-ready" data-testid="brev-ready">
-          {{ bookReviewStatus?.findingCount }} {{ bookReviewLabel('findings') }}
-          <ng-container *ngIf="bookReviewUpdatedRelative">
-            · {{ bookReviewLabel('updated') }} {{ bookReviewUpdatedRelative }}
-          </ng-container>
-        </span>
-      </ng-container>
-
-      <!-- STALE -->
-      <ng-container *ngIf="bookReviewState === 'stale'">
-        <span class="sb-status sb-stale" data-testid="brev-stale">
-          {{ bookReviewStatus?.findingCount }} {{ bookReviewLabel('findings') }}
-        </span>
-        <button
-          type="button"
-          class="run-btn sb-action"
-          data-testid="brev-refresh"
-          (click)="openBookReviewConsent()">
-          {{ bookReviewLabel('refresh') }}
-        </button>
-      </ng-container>
-    </div>
-
-    <!-- Cross-model staleness warning: review exists but was built with a different model. -->
-    <p
-      class="sb-cross-model-warning muted"
-      *ngIf="bookReviewBuiltWithDifferentModel"
-      [attr.dir]="bookReviewDir"
-      data-testid="brev-cross-model-warning">
-      {{ bookReviewLabel('crossModelWarning') }}
-    </p>
-
-    <!-- Build outcome banner (wb2-c05): the LAST finished build FAILED (all dimensions failed) or was
-         DEGRADED (some failed). Surfaced so a total failure never reads as a silent green finish + re-enabled
-         Build. Hidden while a new build is in flight (transient progress text owns the row then). -->
-    <p
-      class="brev-build-failed"
-      *ngIf="bookReviewBuildOutcome === 'failed' && !bookReviewBuilding"
-      [attr.dir]="bookReviewDir"
-      role="alert"
-      data-testid="brev-build-failed">
-      {{ bookReviewBuildOutcomeText }}
-    </p>
-    <p
-      class="brev-build-degraded muted"
-      *ngIf="bookReviewBuildOutcome === 'degraded' && !bookReviewBuilding"
-      [attr.dir]="bookReviewDir"
-      data-testid="brev-build-degraded">
-      {{ bookReviewBuildOutcomeText }}
-    </p>
-
-    <!-- CONSENT prompt: estimate + gate. Build endpoint is NOT called until Confirm.
-         Hidden while a build is in flight so a lingering prompt cannot duplicate it. -->
-    <div class="sb-consent" *ngIf="showBookReviewConsent && !bookReviewBuilding" data-testid="brev-consent" [attr.dir]="bookReviewDir">
-      <p class="sb-consent-title">{{ bookReviewLabel('consentTitle') }}</p>
-      <p class="sb-consent-body">{{ bookReviewLabel('consentBody') }}</p>
-      <div class="sb-consent-actions">
-        <button
-          type="button"
-          class="run-btn"
-          data-testid="brev-consent-confirm"
-          (click)="confirmBookReviewBuild()">
-          {{ bookReviewLabel('confirm') }}
-        </button>
-        <button
-          type="button"
-          class="run-btn secondary"
-          data-testid="brev-consent-cancel"
-          (click)="cancelBookReviewConsent()">
-          {{ bookReviewLabel('cancel') }}
-        </button>
-      </div>
-    </div>
-  </div>
-
   <!-- Proofread: show suggestion cards from diff (only when type picker is Proofread and the
        result is reliable; an unreliable result suppresses the cards and shows a warning instead). -->
   <div class="suggestions-block" *ngIf="selectedAnalysisType === 'Proofread' && proofreadSuggestions.length > 0 && !isProofreadResultUnreliable">
@@ -402,6 +198,17 @@
       </app-suggestion-card>
     </div>
   </article>
+  <!-- Literary analysis (Run): structured themes/tone/voice/devices view (shared component). The
+       backend stores the extracted LiteraryAnalysisResult re-serialized as JSON in resultText; without
+       this dedicated branch it would fall through to the generic block below and dump raw JSON.
+       Shown only after a run completes (not during streaming). -->
+  <article
+    class="result-view"
+    *ngIf="latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LiteraryAnalysis'">
+    <h4>{{ latestResult.analysisType || latestResult.type }} ({{ latestResult.modelName }})</h4>
+    <p class="run-duration muted" *ngIf="lastRunDurationLabel">Run time: {{ lastRunDurationLabel }}</p>
+    <app-literary-result [result]="latestResult"></app-literary-result>
+  </article>
   <article
     class="result-view"
     *ngIf="(streamingText || latestResult)
@@ -409,7 +216,8 @@
            && !(latestResult && !streamingText && isProofreadResultUnreliable)
            && !(latestResult && (latestResult.analysisType || latestResult.type) === 'LineEdit' && lineEditRunSuggestions.length)
            && !(latestResult && getLineEdit(latestResult))
-           && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis'); else emptyRun">
+           && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis')
+           && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LiteraryAnalysis'); else emptyRun">
     <h4 *ngIf="streamingText">Live result</h4>
     <h4 *ngIf="!streamingText && latestResult">{{ latestResult.analysisType || latestResult.type }}<ng-container *ngIf="latestResult.modelName"> ({{ latestResult.modelName }})</ng-container></h4>
     <p class="proofread-all-good" *ngIf="isProofreadWithNoSuggestions && !isProofreadResultUnreliable && !proofreadFinalizing">
@@ -420,12 +228,15 @@
     <p class="proofread-finalizing muted" *ngIf="isProofreadWithNoSuggestions && !isProofreadResultUnreliable && proofreadFinalizing">
       Finalizing results…
     </p>
-    <ul class="analysis-list" *ngIf="runDisplayText && !isProofreadWithNoSuggestions && analysisItems(runDisplayText).length > 1; else singleRunBlock">
-      <li *ngFor="let item of analysisItems(runDisplayText)">{{ item }}</li>
-    </ul>
-    <ng-template #singleRunBlock>
-      <p class="analysis-single" *ngIf="runDisplayText && !isProofreadWithNoSuggestions">{{ runDisplayText }}</p>
-    </ng-template>
+    <!-- Streaming partial: render as plain pre-wrapped text (incremental, may be mid-token / mid-marker).
+         The FINAL completed result text is rendered as Markdown below so bold/lists/paragraphs display. -->
+    <p class="analysis-single analysis-streaming" *ngIf="streamingText && !isProofreadWithNoSuggestions">{{ streamingText }}</p>
+    <!-- Completed free-text result (Custom / Summarize / any non-structured result): render Markdown. -->
+    <app-markdown-text
+      *ngIf="!streamingText && runDisplayText && !isProofreadWithNoSuggestions"
+      data-testid="run-markdown-result"
+      [text]="runDisplayText">
+    </app-markdown-text>
   </article>
   <ng-template #emptyRun>
     <div *ngIf="latestResult && (latestResult.analysisType || latestResult.type) === 'LineEdit' && !lineEditRunSuggestions.length && !getLineEdit(latestResult); else noRunYet">
@@ -439,7 +250,7 @@
       <pre *ngIf="showRawLineEdit" class="analysis-single">{{ latestResult.resultText }}</pre>
     </div>
     <ng-template #noRunYet>
-      <ng-container *ngIf="!proofreadSuggestions.length && !lineEditRunSuggestions.length && !(latestResult && getLineEdit(latestResult)) && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis') && !(latestResult && !streamingText && isProofreadResultUnreliable)">
+      <ng-container *ngIf="!proofreadSuggestions.length && !lineEditRunSuggestions.length && !(latestResult && getLineEdit(latestResult)) && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis') && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LiteraryAnalysis') && !(latestResult && !streamingText && isProofreadResultUnreliable)">
         <p class="muted" data-testid="no-run-yet" [attr.dir]="baselineDir">
           {{ sceneId ? baselineLabel('noRunYetScene') : baselineLabel('noRunYetChapter') }}
         </p>
