@@ -1940,6 +1940,23 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(component.bookReviewBuildOutcome).toBe('degraded');
       expect(component.bookReviewBuildOutcomeCount).toBeNull();
     });
+
+    it('(h) HTTP START failure (no job id): outcome=failed so the failed start is not a silent no-op', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      // buildReview rejects at the HTTP layer before any jobId (network / server error before a build starts).
+      spyOn(reviewSvc, 'buildReview').and.returnValue(throwError(() => new Error('network down')));
+      const progressSpy = spyOn(reviewSvc, 'getReviewProgress').and.returnValue(NEVER);
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+
+      // No longer in flight AND the failure is surfaced (mirrors the poll error handler), so the user sees the
+      // localized alert instead of a silent no-op with Build still enabled.
+      expect(component.bookReviewBuilding).toBeFalse();
+      expect(component.bookReviewBuildOutcome).toBe('failed');
+      // No progress poll was started (the build never produced a job id).
+      expect(progressSpy).not.toHaveBeenCalled();
+    });
   });
 
 });

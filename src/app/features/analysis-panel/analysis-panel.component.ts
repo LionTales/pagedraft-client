@@ -532,6 +532,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         if (this.bookId !== bookId || this.baselineLanguage !== language) return;
         this.bookReviewBuilding = false;
         this.bookReviewProgressMessage = '';
+        // The build failed to even START (network / server error before a job id): surface a FAILED outcome,
+        // mirroring the poll error handler, so the user sees the localized alert instead of a silent no-op with
+        // Build still available. No job ran, so there is nothing new to refresh from status.
+        this.bookReviewBuildOutcome = 'failed';
+        this.bookReviewBuildOutcomeMessage = '';
+        this.bookReviewBuildOutcomeCount = null;
         this.cdr.detectChanges();
       },
     });
