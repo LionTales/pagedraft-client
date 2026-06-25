@@ -447,6 +447,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       next: (status) => {
         if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
         this.bookReviewStatus = status;
+        // Clear a STALE 'failed' banner when the refreshed status shows a usable review: the build actually
+        // succeeded on the server even though the progress poll errored (a transient drop sets outcome='failed'
+        // optimistically). Without this, the red failure banner lingers over a ready review with findings — a
+        // contradictory UI. Gated on `ready` (fresh review under the active model), NOT hasReview: a genuinely
+        // failed build leaves only a stale/wrong-model cache (ready=false), where the 'failed' banner must stay.
+        if (this.bookReviewBuildOutcome === 'failed' && status.ready) {
+          this.bookReviewBuildOutcome = null;
+          this.bookReviewBuildOutcomeMessage = '';
+          this.bookReviewBuildOutcomeCount = null;
+        }
         // The degraded banner's finding count must reflect the build that JUST completed, not the pre-build
         // snapshot. This status read is the post-build refresh (fired from the terminal poll handler), so sync
         // the banner count from it here. Scoped to the degraded outcome so an unrelated status load is a no-op;

@@ -1957,6 +1957,44 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       // No progress poll was started (the build never produced a job id).
       expect(progressSpy).not.toHaveBeenCalled();
     });
+
+    it('(i) poll error but the build actually FINISHED: a ready status refresh clears the stale failed banner', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      // The build finished server-side: the post-error status refresh returns a READY review with findings.
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(
+        of({ ready: true, hasReview: true, findingCount: 5, activeBuildJobId: null } as any));
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+
+      // The poll drops (transient) AFTER the server already finished the build.
+      poll$.error(new Error('poll dropped'));
+
+      // The optimistic 'failed' banner is cleared because the refreshed status shows a usable (ready) review,
+      // so the UI is not a red failure banner stranded over a ready review with findings.
+      expect(component.bookReviewBuildOutcome).toBeNull();
+      expect(component.bookReviewStatus?.ready).toBeTrue();
+    });
+
+    it('(j) poll error and the build genuinely FAILED: a not-ready status keeps the failed banner', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      // No usable review (a genuine failure / only a stale cache): status stays not-ready.
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(
+        of({ ready: false, hasReview: false, findingCount: 0, activeBuildJobId: null } as any));
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+      poll$.error(new Error('poll dropped'));
+
+      // The failure banner REMAINS: the build did not produce a usable review.
+      expect(component.bookReviewBuildOutcome).toBe('failed');
+    });
   });
 
 });
