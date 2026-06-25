@@ -2040,6 +2040,69 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       // ...must NOT overwrite the post-build count, so the degraded banner never shows an unrelated/stale total.
       expect(component.bookReviewBuildOutcomeCount).toBe(4);
     });
+
+    it('(m) an overlapping refresh that cancels the post-build fetch still fills the degraded count', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      // Each getReviewStatus call returns a FRESH subject so the test controls which response arrives, and when.
+      const statusSubjects: Subject<any>[] = [];
+      spyOn(reviewSvc, 'getReviewStatus').and.callFake(() => {
+        const s = new Subject<any>();
+        statusSubjects.push(s);
+        return s.asObservable();
+      });
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+
+      // Degraded terminal → flags the reconcile + issues the post-build fetch [A] (statusSubjects[0]).
+      poll$.next({ status: 'succeeded', message: 'Built with warnings (2 failed)', estimatedCompletionPercent: 100 });
+      expect(component.bookReviewBuildOutcome).toBe('degraded');
+      expect(component.bookReviewBuildOutcomeCount).toBeNull(); // [A] still in flight
+      expect(statusSubjects.length).toBe(1);
+
+      // An overlapping ORDINARY refresh (summary completion / chapter navigation) issues [B] (statusSubjects[1])
+      // and CANCELS [A] — so [A] never delivers.
+      component.loadBookReviewStatus();
+      expect(statusSubjects.length).toBe(2);
+      statusSubjects[0].next({ ready: true, hasReview: true, findingCount: 999, activeBuildJobId: null } as any);
+      expect(component.bookReviewBuildOutcomeCount).toBeNull(); // [A] was canceled; its emission is a no-op
+
+      // [B] (the response that replaced the canceled post-build fetch) resolves → the reconcile STILL runs.
+      statusSubjects[1].next({ ready: true, hasReview: true, findingCount: 7, activeBuildJobId: null } as any);
+      expect(component.bookReviewBuildOutcomeCount).toBe(7);
+    });
+
+    it('(n) an overlapping refresh after a poll-error failed still clears the banner on a later ready response', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      const statusSubjects: Subject<any>[] = [];
+      spyOn(reviewSvc, 'getReviewStatus').and.callFake(() => {
+        const s = new Subject<any>();
+        statusSubjects.push(s);
+        return s.asObservable();
+      });
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+
+      // Poll drops (transient) after the build actually finished → optimistic 'failed' + flagged reconcile + [A].
+      poll$.error(new Error('poll dropped'));
+      expect(component.bookReviewBuildOutcome).toBe('failed');
+      expect(statusSubjects.length).toBe(1);
+
+      // An overlapping ordinary refresh cancels [A] and issues [B].
+      component.loadBookReviewStatus();
+      expect(statusSubjects.length).toBe(2);
+
+      // [B] shows the review is actually ready → the stale 'failed' is cleared via the still-pending reconcile.
+      statusSubjects[1].next({ ready: true, hasReview: true, findingCount: 5, activeBuildJobId: null } as any);
+      expect(component.bookReviewBuildOutcome).toBeNull();
+    });
   });
 
 });

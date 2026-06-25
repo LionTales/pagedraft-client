@@ -230,6 +230,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    * total. Reset whenever the outcome is (re)set.
    */
   bookReviewBuildOutcomeCount: number | null = null;
+  /**
+   * True after a review build TERMINAL (poll succeeded/failed/error) until the NEXT successful status response
+   * reconciles the banner with it. The reconcile (clear a false 'failed' when the review is actually ready;
+   * fill the degraded count) must run on whichever status response arrives first — NOT only the terminal's own
+   * fetch, which an overlapping ordinary refresh (summary completion / chapter navigation / init) can cancel.
+   * Carried as component state, not a per-call flag, so the intent survives that cancellation. Consumed (set
+   * false) by the reconciling response and cleared whenever a new build starts or the context changes.
+   */
+  private bookReviewPendingPostBuildReconcile = false;
   /** Stops the active review progress poll; nulled when no poll is running. */
   private bookReviewProgressStop$: Subject<void> | null = null;
   /** Active review-related subscriptions (status fetch + build); cleared on context change / destroy. */
@@ -437,14 +446,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   /**
    * Fetch the current book-review status for this book/language and update the run tab.
    *
-   * @param fromBuildTerminal True ONLY when called as the POST-BUILD refresh from the review poll's terminal /
-   *   error handler. The build-outcome banner mutations (clearing a stale 'failed', filling the degraded count)
-   *   are gated on this so an UNRELATED status load — chapter navigation, a summary build completing, re-init —
-   *   can neither erase a genuine failed-START banner nor overwrite the degraded count with a non-post-build
-   *   (possibly stale) total, even when overlapping fetches cancel each other. Other callers omit it and only
-   *   refresh the status row.
+   * The build-outcome banner reconcile (clearing a stale 'failed', filling the degraded count) runs on the
+   * FIRST successful response after a build terminal — gated on the persistent
+   * <see cref="bookReviewPendingPostBuildReconcile"/> flag, NOT on which call issued the fetch. The terminal
+   * handler sets the flag then issues a refresh, but an overlapping ordinary refresh (summary completion,
+   * chapter navigation, init) can cancel that fetch; carrying the intent as state lets whichever response
+   * arrives first do the reconcile. The terminal's own refresh first cancels any in-flight fetch, so the
+   * response that consumes the flag is always post-terminal (its findingCount is the just-built total, and a
+   * failed-START banner — which never sets the flag — is never cleared by an ordinary refresh).
    */
-  loadBookReviewStatus(fromBuildTerminal = false): void {
+  loadBookReviewStatus(): void {
     if (!this.bookId) {
       this.bookReviewStatus = null;
       return;
@@ -456,23 +467,21 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       next: (status) => {
         if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
         this.bookReviewStatus = status;
-        // Build-outcome banner mutations apply ONLY to the post-build refresh (the call from the review poll's
-        // terminal / error handler). An unrelated status load must leave the banner untouched.
-        if (fromBuildTerminal) {
-          // Clear a STALE 'failed' banner when THIS post-build refresh shows a usable review: the build actually
-          // succeeded server-side even though the progress poll errored (a transient drop optimistically set
-          // 'failed'). Gated on fromBuildTerminal so an unrelated load (e.g. chapter navigation) cannot erase a
-          // genuine failed-START banner; gated on `ready` (not hasReview) so a real failure that left only a
-          // stale/wrong-model cache keeps the banner.
+        // Post-build reconcile: run ONCE on the first status response after a build terminal, then consume the
+        // flag so later ordinary refreshes leave the banner untouched.
+        if (this.bookReviewPendingPostBuildReconcile) {
+          this.bookReviewPendingPostBuildReconcile = false;
+          // Clear a STALE 'failed' banner when this post-build response shows a usable review: the build
+          // actually succeeded server-side even though the progress poll errored (a transient drop optimistically
+          // set 'failed'). Gated on `ready` (not hasReview) so a real failure that left only a stale/wrong-model
+          // cache keeps the banner. A failed-START banner never sets the flag, so it is never cleared here.
           if (this.bookReviewBuildOutcome === 'failed' && status.ready) {
             this.bookReviewBuildOutcome = null;
             this.bookReviewBuildOutcomeMessage = '';
             this.bookReviewBuildOutcomeCount = null;
           }
-          // The degraded banner's count must reflect the build that JUST completed, so it is filled ONLY from
-          // this post-build refresh — never from an overlapping/unrelated load that could carry a non-post-build
-          // (stale) total. If this refresh is canceled or fails, the count stays null and the banner shows the
-          // plain copy (no count) rather than a wrong total.
+          // Fill the degraded banner count from this post-build response (the just-built total). If the build
+          // terminal's own fetch was canceled, this still runs on the overlapping response that replaced it.
           if (this.bookReviewBuildOutcome === 'degraded') {
             this.bookReviewBuildOutcomeCount = status.findingCount;
           }
@@ -520,6 +529,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.bookReviewBuildOutcome = null;
     this.bookReviewBuildOutcomeMessage = '';
     this.bookReviewBuildOutcomeCount = null;
+    this.bookReviewPendingPostBuildReconcile = false;
   }
 
   /** Consent confirmed in the run tab: start (or no-op) the book review build. */
@@ -536,6 +546,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.bookReviewBuildOutcome = null;
     this.bookReviewBuildOutcomeMessage = '';
     this.bookReviewBuildOutcomeCount = null;
+    this.bookReviewPendingPostBuildReconcile = false;
     this.bookReviewHandledTerminalJobId = null;
     this.cdr.detectChanges();
 
@@ -600,10 +611,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
             this.bookReviewBuildOutcome = null;
             this.bookReviewBuildOutcomeMessage = '';
           }
-          // The just-completed count is not in the progress payload; clear it and let the post-build status
-          // refresh below repopulate it (degraded case). Until then the banner renders without a stale count.
+          // The just-completed count is not in the progress payload; clear it and let the post-build reconcile
+          // repopulate it (degraded case). Until then the banner renders without a stale count. Flag the
+          // reconcile so the FIRST status response after this terminal applies it, even if an overlapping
+          // ordinary refresh cancels the fetch issued just below.
           this.bookReviewBuildOutcomeCount = null;
-          this.loadBookReviewStatus(true); // post-build refresh: may set the degraded count / clear a stale 'failed'
+          this.bookReviewPendingPostBuildReconcile = true;
+          this.loadBookReviewStatus();
         }
         this.cdr.detectChanges();
       },
@@ -617,7 +631,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.bookReviewBuildOutcome = 'failed';
         this.bookReviewBuildOutcomeMessage = '';
         this.bookReviewBuildOutcomeCount = null;
-        this.loadBookReviewStatus(true); // post-build refresh: clears 'failed' if the build actually succeeded
+        // Flag the post-build reconcile so a later status showing a ready review clears this optimistic 'failed'
+        // even if the refresh issued below is canceled by an overlapping ordinary fetch.
+        this.bookReviewPendingPostBuildReconcile = true;
+        this.loadBookReviewStatus();
         this.cdr.detectChanges();
       },
     });

@@ -99,7 +99,7 @@ export interface BookReviewFindingsDto {
  *   NOT BUILT      = !hasReview
  *   BRIEFS MISSING = !hasBriefs
  *   BUILDING       = activeBuildJobId is non-null (in-flight job; attach for progress)
- *   READY          = ready === true (hasReview && !builtWithDifferentModel && !staleVsBriefs)
+ *   READY          = ready === true (hasBriefs && hasReview && !builtWithDifferentModel && !staleVsBriefs)
  *   STALE          = hasReview && (staleVsBriefs || builtWithDifferentModel)
  */
 export interface BookReviewStatusDto {
@@ -136,7 +136,9 @@ export interface BookReviewStatusDto {
    */
   activeBuildJobId: string | null;
   /**
-   * True when the review is complete and fresh: hasReview && !builtWithDifferentModel && !staleVsBriefs.
+   * True when the review is complete and fresh AND rebuildable: hasBriefs && hasReview &&
+   * !builtWithDifferentModel && !staleVsBriefs. Requires hasBriefs so `ready` is never true while the briefs
+   * are gone/degraded (a state where a build would report BriefsMissing rather than no-op).
    */
   ready: boolean;
 }
