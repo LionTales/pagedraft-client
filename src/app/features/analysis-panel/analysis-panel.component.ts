@@ -5,10 +5,12 @@ import { Subject, Subscription, forkJoin } from 'rxjs';
 import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
+import { BookReviewStatusDto } from '../../core/models/book-review';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
+import { BookReviewService } from '../../core/services/book-review.service';
 import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
@@ -201,6 +203,51 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private bookSummaryStatusSub: Subscription | null = null;
   /** Loop guard for summary build: mirrors styleBaselineHandledTerminalJobId. */
   private bookSummaryHandledTerminalJobId: string | null = null;
+
+  // ── Book review (wb2-f03) ─────────────────────────────────────────────────
+  /** Latest book-review status read for the current book (null while loading / no book). */
+  bookReviewStatus: BookReviewStatusDto | null = null;
+  /** True while a review build job is in flight (drives the BUILDING state in the run tab). */
+  bookReviewBuilding = false;
+  /** Live review build progress 0..100 (null = indeterminate). */
+  bookReviewProgressPercent: number | null = null;
+  /** Human-readable progress message from the review build job. */
+  bookReviewProgressMessage = '';
+  /**
+   * Outcome of the LAST finished review build (wb2-c05): 'failed' when the job ended with status Failed
+   * (all dimensions failed -> no findings), 'degraded' when it succeeded but the terminal message reports
+   * some dimensions failed, else null. Surfaced in the run-tab so a total failure does not read as a silent
+   * green finish. Reset when a new build starts.
+   */
+  bookReviewBuildOutcome: 'failed' | 'degraded' | null = null;
+  /** The terminal build message text accompanying bookReviewBuildOutcome. May be in English; FE localizes the banner label separately. */
+  bookReviewBuildOutcomeMessage = '';
+  /**
+   * Finding count for the degraded banner, sourced from the status refresh that runs AFTER the build finished
+   * (NOT the pre-build bookReviewStatus snapshot, which is still stale when the terminal poll sets the outcome
+   * and triggers change detection). Null until that refresh returns — and stays null if it fails — so the
+   * degraded banner shows the count from the build that just completed, never the previous total or a wrong
+   * total. Reset whenever the outcome is (re)set.
+   */
+  bookReviewBuildOutcomeCount: number | null = null;
+  /**
+   * True after a review build TERMINAL (poll succeeded/failed/error) until the NEXT successful status response
+   * reconciles the banner with it. The reconcile (clear a false 'failed' when the review is actually ready;
+   * fill the degraded count) must run on whichever status response arrives first — NOT only the terminal's own
+   * fetch, which an overlapping ordinary refresh (summary completion / chapter navigation / init) can cancel.
+   * Carried as component state, not a per-call flag, so the intent survives that cancellation. Consumed (set
+   * false) by the reconciling response and cleared whenever a new build starts or the context changes.
+   */
+  private bookReviewPendingPostBuildReconcile = false;
+  /** Stops the active review progress poll; nulled when no poll is running. */
+  private bookReviewProgressStop$: Subject<void> | null = null;
+  /** Active review-related subscriptions (status fetch + build); cleared on context change / destroy. */
+  private bookReviewSub: Subscription | null = null;
+  /** The latest in-flight GET review status fetch (cancels previous on overlap). */
+  private bookReviewStatusSub: Subscription | null = null;
+  /** Loop guard for review build: mirrors bookSummaryHandledTerminalJobId. */
+  private bookReviewHandledTerminalJobId: string | null = null;
+
   /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI.
    *  Offset relocation is handled separately by SuggestionAnchorService in emitSuggestionRanges / onShowInDocument. */
   private mapDtoSuggestions(
@@ -255,6 +302,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.bookSummarySub?.unsubscribe();
     this.bookSummaryStatusSub?.unsubscribe();
     this.bookSummaryHandledTerminalJobId = null;
+    this.stopBookReviewProgress();
+    this.bookReviewSub?.unsubscribe();
+    this.bookReviewStatusSub?.unsubscribe();
+    this.bookReviewHandledTerminalJobId = null;
   }
 
   // ── Style baseline (a3/a4) ────────────────────────────────────────────────
@@ -390,6 +441,205 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.bookSummaryHandledTerminalJobId = null;
   }
 
+  // ── Book review (wb2-f03) ─────────────────────────────────────────────────
+
+  /**
+   * Fetch the current book-review status for this book/language and update the run tab.
+   *
+   * The build-outcome banner reconcile (clearing a stale 'failed', filling the degraded count) runs on the
+   * FIRST successful response after a build terminal — gated on the persistent
+   * <see cref="bookReviewPendingPostBuildReconcile"/> flag, NOT on which call issued the fetch. The terminal
+   * handler sets the flag then issues a refresh, but an overlapping ordinary refresh (summary completion,
+   * chapter navigation, init) can cancel that fetch; carrying the intent as state lets whichever response
+   * arrives first do the reconcile. The terminal's own refresh first cancels any in-flight fetch, so the
+   * response that consumes the flag is always post-terminal (its findingCount is the just-built total, and a
+   * failed-START banner — which never sets the flag — is never cleared by an ordinary refresh).
+   */
+  loadBookReviewStatus(): void {
+    if (!this.bookId) {
+      this.bookReviewStatus = null;
+      return;
+    }
+    const bookId = this.bookId;
+    const lang = this.baselineLanguage;
+    this.bookReviewStatusSub?.unsubscribe();
+    this.bookReviewStatusSub = this.bookReviewService.getReviewStatus(bookId, lang).subscribe({
+      next: (status) => {
+        if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
+        this.bookReviewStatus = status;
+        // Post-build reconcile: run ONCE on the first status response after a build terminal, then consume the
+        // flag so later ordinary refreshes leave the banner untouched.
+        if (this.bookReviewPendingPostBuildReconcile) {
+          this.bookReviewPendingPostBuildReconcile = false;
+          // Clear a STALE 'failed' banner when this post-build response shows a usable review: the build
+          // actually succeeded server-side even though the progress poll errored (a transient drop optimistically
+          // set 'failed'). Gated on `ready` (not hasReview) so a real failure that left only a stale/wrong-model
+          // cache keeps the banner. A failed-START banner never sets the flag, so it is never cleared here.
+          if (this.bookReviewBuildOutcome === 'failed' && status.ready) {
+            this.bookReviewBuildOutcome = null;
+            this.bookReviewBuildOutcomeMessage = '';
+            this.bookReviewBuildOutcomeCount = null;
+          }
+          // Fill the degraded banner count from this post-build response (the just-built total). If the build
+          // terminal's own fetch was canceled, this still runs on the overlapping response that replaced it.
+          if (this.bookReviewBuildOutcome === 'degraded') {
+            this.bookReviewBuildOutcomeCount = status.findingCount;
+          }
+        }
+        if (status.ready && this.bookReviewBuilding && this.bookReviewProgressPercent === 100) {
+          this.bookReviewBuilding = false;
+        }
+        // Reattach to an in-progress build (started in another tab/session).
+        if (
+          status.activeBuildJobId &&
+          status.activeBuildJobId !== this.bookReviewHandledTerminalJobId &&
+          !this.bookReviewBuilding &&
+          !this.bookReviewProgressStop$
+        ) {
+          this.bookReviewBuilding = true;
+          this.bookReviewProgressPercent = null;
+          this.bookReviewProgressMessage = '';
+          this.pollBookReviewBuild(bookId, status.activeBuildJobId, lang);
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => { /* leave current; row hides when status is null */ },
+    });
+  }
+
+  /** Stop any active book-review progress poll. */
+  private stopBookReviewProgress(): void {
+    if (this.bookReviewProgressStop$) {
+      this.bookReviewProgressStop$.next();
+      this.bookReviewProgressStop$.complete();
+      this.bookReviewProgressStop$ = null;
+    }
+  }
+
+  /** Tear down any in-flight book-review build/poll and reset its UI + loop guard. */
+  private resetBookReviewBuildState(): void {
+    this.stopBookReviewProgress();
+    this.bookReviewSub?.unsubscribe();
+    this.bookReviewStatusSub?.unsubscribe();
+    this.bookReviewBuilding = false;
+    this.bookReviewProgressPercent = null;
+    this.bookReviewProgressMessage = '';
+    this.bookReviewStatus = null;
+    this.bookReviewHandledTerminalJobId = null;
+    this.bookReviewBuildOutcome = null;
+    this.bookReviewBuildOutcomeMessage = '';
+    this.bookReviewBuildOutcomeCount = null;
+    this.bookReviewPendingPostBuildReconcile = false;
+  }
+
+  /** Consent confirmed in the run tab: start (or no-op) the book review build. */
+  onBuildBookReview(): void {
+    if (!this.bookId) return;
+    if (this.bookReviewBuilding) return;
+    const bookId = this.bookId;
+    const language = this.baselineLanguage;
+    this.stopBookReviewProgress();
+    this.bookReviewBuilding = true;
+    this.bookReviewProgressPercent = null;
+    this.bookReviewProgressMessage = '';
+    // Clear any prior failed/degraded banner: a fresh build supersedes the last outcome.
+    this.bookReviewBuildOutcome = null;
+    this.bookReviewBuildOutcomeMessage = '';
+    this.bookReviewBuildOutcomeCount = null;
+    this.bookReviewPendingPostBuildReconcile = false;
+    this.bookReviewHandledTerminalJobId = null;
+    this.cdr.detectChanges();
+
+    this.bookReviewSub?.unsubscribe();
+    this.bookReviewSub = this.bookReviewService.buildReview(bookId, language).subscribe({
+      next: (resp) => {
+        if (this.bookId !== bookId || this.baselineLanguage !== language) return;
+        if (resp.noOp || !resp.jobId) {
+          this.bookReviewBuilding = false;
+          this.loadBookReviewStatus();
+          this.cdr.detectChanges();
+          return;
+        }
+        this.pollBookReviewBuild(bookId, resp.jobId, language);
+      },
+      error: () => {
+        if (this.bookId !== bookId || this.baselineLanguage !== language) return;
+        this.bookReviewBuilding = false;
+        this.bookReviewProgressMessage = '';
+        // The build failed to even START (network / server error before a job id): surface a FAILED outcome,
+        // mirroring the poll error handler, so the user sees the localized alert instead of a silent no-op with
+        // Build still available. No job ran, so there is nothing new to refresh from status.
+        this.bookReviewBuildOutcome = 'failed';
+        this.bookReviewBuildOutcomeMessage = '';
+        this.bookReviewBuildOutcomeCount = null;
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  /** Poll the book-review build job and refresh status when it reaches a terminal state. */
+  private pollBookReviewBuild(bookId: string, jobId: string, lang: string): void {
+    this.stopBookReviewProgress();
+    const stop$ = new Subject<void>();
+    this.bookReviewProgressStop$ = stop$;
+    this.bookReviewService.getReviewProgress(bookId, jobId, stop$).subscribe({
+      next: (p) => {
+        if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
+        const status = (p.status ?? '').toLowerCase();
+        this.bookReviewProgressMessage = p.message ?? '';
+        this.bookReviewProgressPercent =
+          status === 'succeeded'
+            ? 100
+            : (Number.isFinite(p.estimatedCompletionPercent)
+                ? Math.max(0, Math.min(100, p.estimatedCompletionPercent))
+                : this.bookReviewProgressPercent);
+        if (status === 'succeeded' || status === 'failed' || status === 'canceled') {
+          this.bookReviewBuilding = false;
+          this.stopBookReviewProgress();
+          this.bookReviewHandledTerminalJobId = jobId;
+          // Surface the terminal outcome so a total failure is not a silent green finish (wb2-c05).
+          // FAILED = all dimensions failed (no findings); a SUCCEEDED message that flags failed dimensions
+          // ("built with warnings ... (N failed)") is a PARTIAL/degraded build. Canceled shows nothing.
+          const msg = p.message ?? '';
+          if (status === 'failed') {
+            this.bookReviewBuildOutcome = 'failed';
+            this.bookReviewBuildOutcomeMessage = msg;
+          } else if (status === 'succeeded' && /with warnings|failed\)/i.test(msg)) {
+            this.bookReviewBuildOutcome = 'degraded';
+            this.bookReviewBuildOutcomeMessage = msg;
+          } else {
+            this.bookReviewBuildOutcome = null;
+            this.bookReviewBuildOutcomeMessage = '';
+          }
+          // The just-completed count is not in the progress payload; clear it and let the post-build reconcile
+          // repopulate it (degraded case). Until then the banner renders without a stale count. Flag the
+          // reconcile so the FIRST status response after this terminal applies it, even if an overlapping
+          // ordinary refresh cancels the fetch issued just below.
+          this.bookReviewBuildOutcomeCount = null;
+          this.bookReviewPendingPostBuildReconcile = true;
+          this.loadBookReviewStatus();
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
+        this.bookReviewBuilding = false;
+        this.stopBookReviewProgress();
+        this.bookReviewHandledTerminalJobId = jobId;
+        // The progress poll itself errored (job lost / network): treat as a failed build so the user is not
+        // left on a silent in-flight state. The localized generic copy renders when no server message exists.
+        this.bookReviewBuildOutcome = 'failed';
+        this.bookReviewBuildOutcomeMessage = '';
+        this.bookReviewBuildOutcomeCount = null;
+        // Flag the post-build reconcile so a later status showing a ready review clears this optimistic 'failed'
+        // even if the refresh issued below is canceled by an overlapping ordinary fetch.
+        this.bookReviewPendingPostBuildReconcile = true;
+        this.loadBookReviewStatus();
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
   /** Consent confirmed in the run tab: start (or no-op) the book summary build. */
   onBuildBookSummary(): void {
     if (!this.bookId) return;
@@ -411,6 +661,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         if (resp.noOp || !resp.jobId) {
           this.bookSummaryBuilding = false;
           this.loadBookSummaryStatus();
+          // An already-fresh summary (no-op) still means briefs are present: re-read review status so the
+          // book-review row clears its "build summary first" gate (and shows STALE if a review already exists).
+          this.loadBookReviewStatus();
           this.cdr.detectChanges();
           return;
         }
@@ -447,6 +700,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           this.stopBookSummaryProgress();
           this.bookSummaryHandledTerminalJobId = jobId;
           this.loadBookSummaryStatus();
+          // A finished summary build makes briefs present (clearing the review row's "build summary first"
+          // gate) and any existing review staleVsBriefs: re-read review status so the row reflects both.
+          this.loadBookReviewStatus();
         }
         this.cdr.detectChanges();
       },
@@ -456,6 +712,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.stopBookSummaryProgress();
         this.bookSummaryHandledTerminalJobId = jobId;
         this.loadBookSummaryStatus();
+        // The poll errored: still re-read review status (the summary may have completed before the poll
+        // dropped) so a stuck "build summary first" gate is not left behind.
+        this.loadBookReviewStatus();
         this.cdr.detectChanges();
       },
     });
@@ -564,7 +823,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     private suggestionAnchorService: SuggestionAnchorService,
     private styleBaselineService: StyleBaselineService,
     private analysisProgressService: AnalysisProgressService,
-    private bookSummaryService: BookSummaryService
+    private bookSummaryService: BookSummaryService,
+    private bookReviewService: BookReviewService
   ) {}
 
 
@@ -1218,6 +1478,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       if (changes['bookId']) {
         this.resetStyleBaselineBuildState();
         this.resetBookSummaryBuildState();
+        this.resetBookReviewBuildState();
       }
       if (this.bookId && this.chapterId) {
         this.loadTemplates();
@@ -1230,20 +1491,23 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       if (this.bookId) {
         this.loadStyleBaselineStatus();
         this.loadBookSummaryStatus();
+        this.loadBookReviewStatus();
       }
     }
     if (changes['bookLanguage'] && this.bookId && this.chapterId) {
       this.loadTemplates();
     }
-    // Baseline AND book-summary status are per-language; re-read both when the book language changes
-    // (independent of chapter). Tear down the OLD-language build/poll/guard FIRST so a late response for the
-    // superseded language can't bleed into the new language's status (each is keyed by (book, language)).
-    // The bookId-change branch above already resets+reloads both; this covers a language-only change.
+    // Baseline, book-summary, and book-review status are all per-language; re-read all when the book
+    // language changes (independent of chapter). Tear down the OLD-language build/poll/guard FIRST so
+    // a late response for the superseded language can't bleed into the new language's status.
+    // The bookId-change branch above already resets+reloads all; this covers a language-only change.
     if (changes['bookLanguage'] && !changes['bookId'] && this.bookId) {
       this.resetStyleBaselineBuildState();
       this.loadStyleBaselineStatus();
       this.resetBookSummaryBuildState();
       this.loadBookSummaryStatus();
+      this.resetBookReviewBuildState();
+      this.loadBookReviewStatus();
     }
     if (changes['documentText']) {
       if (this.lastAnalysisDocumentText && this.documentText !== this.lastAnalysisDocumentText) {

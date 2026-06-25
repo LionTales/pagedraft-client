@@ -180,6 +180,120 @@
     </div>
   </div>
 
+  <!-- Book review status row (wb2-f03). Always visible so Phase-3 UI can gate on it.
+       Requires book-summary briefs; when hasBriefs===false the row shows a hint and disables the build. -->
+  <div
+    class="style-baseline-row"
+    *ngIf="bookReviewState !== 'unknown'"
+    [attr.dir]="bookReviewDir"
+    data-testid="book-review-row">
+    <div class="sb-line">
+      <span class="sb-title">{{ bookReviewLabel('title') }}</span>
+
+      <!-- NEEDS SUMMARY (gate: hasBriefs===false) -->
+      <ng-container *ngIf="bookReviewState === 'needs-summary'">
+        <span class="sb-status sb-not-built" data-testid="brev-needs-summary">{{ bookReviewLabel('notBuilt') }}</span>
+        <span class="sb-hint-inline muted" data-testid="brev-needs-summary-hint">{{ bookReviewLabel('needsSummary') }}</span>
+      </ng-container>
+
+      <!-- NOT BUILT -->
+      <ng-container *ngIf="bookReviewState === 'not-built'">
+        <span class="sb-status sb-not-built" data-testid="brev-not-built">{{ bookReviewLabel('notBuilt') }}</span>
+        <button
+          type="button"
+          class="run-btn sb-action"
+          data-testid="brev-build-now"
+          (click)="openBookReviewConsent()">
+          {{ bookReviewLabel('buildNow') }}
+        </button>
+      </ng-container>
+
+      <!-- BUILDING -->
+      <ng-container *ngIf="bookReviewState === 'building'">
+        <span class="sb-status sb-building" data-testid="brev-building">
+          {{ bookReviewProgressMessage || bookReviewLabel('building') }}
+          <ng-container *ngIf="bookReviewProgressPercent != null"> ({{ bookReviewProgressPercent }}%)</ng-container>
+        </span>
+        <span class="sb-spinner" aria-hidden="true"></span>
+      </ng-container>
+
+      <!-- READY -->
+      <ng-container *ngIf="bookReviewState === 'ready'">
+        <span class="sb-status sb-ready" data-testid="brev-ready">
+          {{ bookReviewStatus?.findingCount }} {{ bookReviewLabel('findings') }}
+          <ng-container *ngIf="bookReviewUpdatedRelative">
+            · {{ bookReviewLabel('updated') }} {{ bookReviewUpdatedRelative }}
+          </ng-container>
+        </span>
+      </ng-container>
+
+      <!-- STALE -->
+      <ng-container *ngIf="bookReviewState === 'stale'">
+        <span class="sb-status sb-stale" data-testid="brev-stale">
+          {{ bookReviewStatus?.findingCount }} {{ bookReviewLabel('findings') }}
+        </span>
+        <button
+          type="button"
+          class="run-btn sb-action"
+          data-testid="brev-refresh"
+          (click)="openBookReviewConsent()">
+          {{ bookReviewLabel('refresh') }}
+        </button>
+      </ng-container>
+    </div>
+
+    <!-- Cross-model staleness warning: review exists but was built with a different model. -->
+    <p
+      class="sb-cross-model-warning muted"
+      *ngIf="bookReviewBuiltWithDifferentModel"
+      [attr.dir]="bookReviewDir"
+      data-testid="brev-cross-model-warning">
+      {{ bookReviewLabel('crossModelWarning') }}
+    </p>
+
+    <!-- Build outcome banner (wb2-c05): the LAST finished build FAILED (all dimensions failed) or was
+         DEGRADED (some failed). Surfaced so a total failure never reads as a silent green finish + re-enabled
+         Build. Hidden while a new build is in flight (transient progress text owns the row then). -->
+    <p
+      class="brev-build-failed"
+      *ngIf="bookReviewBuildOutcome === 'failed' && !bookReviewBuilding"
+      [attr.dir]="bookReviewDir"
+      role="alert"
+      data-testid="brev-build-failed">
+      {{ bookReviewBuildOutcomeText }}
+    </p>
+    <p
+      class="brev-build-degraded muted"
+      *ngIf="bookReviewBuildOutcome === 'degraded' && !bookReviewBuilding"
+      [attr.dir]="bookReviewDir"
+      data-testid="brev-build-degraded">
+      {{ bookReviewBuildOutcomeText }}
+    </p>
+
+    <!-- CONSENT prompt: estimate + gate. Build endpoint is NOT called until Confirm.
+         Hidden while a build is in flight so a lingering prompt cannot duplicate it. -->
+    <div class="sb-consent" *ngIf="showBookReviewConsent && !bookReviewBuilding" data-testid="brev-consent" [attr.dir]="bookReviewDir">
+      <p class="sb-consent-title">{{ bookReviewLabel('consentTitle') }}</p>
+      <p class="sb-consent-body">{{ bookReviewLabel('consentBody') }}</p>
+      <div class="sb-consent-actions">
+        <button
+          type="button"
+          class="run-btn"
+          data-testid="brev-consent-confirm"
+          (click)="confirmBookReviewBuild()">
+          {{ bookReviewLabel('confirm') }}
+        </button>
+        <button
+          type="button"
+          class="run-btn secondary"
+          data-testid="brev-consent-cancel"
+          (click)="cancelBookReviewConsent()">
+          {{ bookReviewLabel('cancel') }}
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Proofread: show suggestion cards from diff (only when type picker is Proofread and the
        result is reliable; an unreliable result suppresses the cards and shows a warning instead). -->
   <div class="suggestions-block" *ngIf="selectedAnalysisType === 'Proofread' && proofreadSuggestions.length > 0 && !isProofreadResultUnreliable">
