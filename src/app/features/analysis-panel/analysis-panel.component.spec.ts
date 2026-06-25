@@ -1900,6 +1900,46 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(component.bookReviewBuildOutcome).toBeNull();
       expect(component.bookReviewBuildOutcomeMessage).toBe('');
     });
+
+    it('(f) DEGRADED: the banner count comes from the POST-BUILD status refresh, not the pre-build snapshot', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      const status$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(status$.asObservable());
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+
+      // Terminal degraded emit: outcome degraded, but the count is NOT yet known (refresh in flight) -> null,
+      // so the stale pre-build snapshot can never leak into the banner.
+      poll$.next({ status: 'succeeded', message: 'Built with warnings (2 failed)', estimatedCompletionPercent: 100 });
+      expect(component.bookReviewBuildOutcome).toBe('degraded');
+      expect(component.bookReviewBuildOutcomeCount).toBeNull();
+
+      // The POST-build status refresh resolves with the fresh finding total from the build that just completed.
+      status$.next({ findingCount: 4, ready: false, activeBuildJobId: null } as any);
+      expect(component.bookReviewBuildOutcomeCount).toBe(4);
+    });
+
+    it('(g) DEGRADED: a FAILED post-build status refresh leaves the count null (never a wrong total)', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      const status$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(status$.asObservable());
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+      poll$.next({ status: 'succeeded', message: 'Built with warnings (2 failed)', estimatedCompletionPercent: 100 });
+
+      // The refresh fails: the count must STAY null so the banner shows the plain copy, not a stale/wrong total.
+      status$.error(new Error('status refresh failed'));
+      expect(component.bookReviewBuildOutcome).toBe('degraded');
+      expect(component.bookReviewBuildOutcomeCount).toBeNull();
+    });
   });
 
 });

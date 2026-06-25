@@ -214,6 +214,43 @@ describe('AnalysisRunTabComponent – Book review status row (wb2-f03)', () => {
     expect(query('[data-testid="brev-refresh"]')).not.toBeNull();
   });
 
+  // ── DEGRADED BUILD BANNER: count source ──────────────────────────────────────
+  // Regression: the degraded banner must enrich from bookReviewBuildOutcomeCount (captured from the POST-build
+  // status refresh), NOT bookReviewStatus.findingCount (still the pre-build snapshot when the banner renders).
+
+  it('DEGRADED banner enriches from bookReviewBuildOutcomeCount, NOT the stale bookReviewStatus.findingCount', () => {
+    component.bookLanguage = 'en';
+    component.bookReviewStatus = makeBookReviewStatus({ findingCount: 99 }); // stale pre-build snapshot
+    component.bookReviewBuilding = false;
+    component.bookReviewBuildOutcome = 'degraded';
+    component.bookReviewBuildOutcomeCount = 3; // the count from the build that just completed
+    fixture.detectChanges();
+
+    const el = query('[data-testid="brev-build-degraded"]');
+    expect(el).not.toBeNull();
+    const text = el.nativeElement.textContent as string;
+    expect(text).toContain('3'); // the just-completed count
+    expect(text).toContain('findings were saved'); // the with-count copy is used
+    expect(text).not.toContain('99'); // the stale pre-build total never leaks into the banner
+  });
+
+  it('DEGRADED banner shows the plain copy (no count) until the post-build count is known (null)', () => {
+    // Before the post-build status refresh returns — or if it fails — the count is null; the banner must render
+    // the plain degraded copy with NO number, never borrowing the stale status total.
+    component.bookLanguage = 'en';
+    component.bookReviewStatus = makeBookReviewStatus({ findingCount: 99 });
+    component.bookReviewBuilding = false;
+    component.bookReviewBuildOutcome = 'degraded';
+    component.bookReviewBuildOutcomeCount = null;
+    fixture.detectChanges();
+
+    const el = query('[data-testid="brev-build-degraded"]');
+    expect(el).not.toBeNull();
+    const text = el.nativeElement.textContent as string;
+    expect(text).not.toContain('findings were saved'); // NOT the with-count copy
+    expect(text).not.toContain('99'); // no stale total
+  });
+
   // ── CONSENT GATE ───────────────────────────────────────────────────────────
 
   it('CONSENT gate: build is NOT emitted until the user confirms', () => {
@@ -430,16 +467,19 @@ describe('AnalysisRunTabComponent – Book review status row (wb2-f03)', () => {
   });
 
   it('DEGRADED outcome: renders a softer warning banner naming the partial failure', () => {
-    component.bookReviewStatus = makeBookReviewStatus({ hasReview: true, ready: true, findingCount: 4 });
+    // The banner enriches from the POST-build outcome count, NOT the (stale) status snapshot.
+    component.bookReviewStatus = makeBookReviewStatus({ hasReview: true, ready: true, findingCount: 12 });
     component.bookReviewBuilding = false;
     component.bookReviewBuildOutcome = 'degraded';
+    component.bookReviewBuildOutcomeCount = 4;
     fixture.detectChanges();
 
     const el = query('[data-testid="brev-build-degraded"]');
     expect(el).not.toBeNull();
-    // Hebrew (default) localized copy enriched with the structured findingCount.
+    // Hebrew (default) localized copy enriched with the just-completed finding count.
     expect(el.nativeElement.textContent).toContain('חלקית');
     expect(el.nativeElement.textContent).toContain('4');
+    expect(el.nativeElement.textContent).not.toContain('12'); // not the stale status snapshot
     expect(query('[data-testid="brev-build-failed"]')).toBeNull();
   });
 
@@ -466,9 +506,10 @@ describe('AnalysisRunTabComponent – Book review status row (wb2-f03)', () => {
   });
 
   it('DEGRADED (he): renders the HEBREW label and NOT the raw English BE message', () => {
-    component.bookReviewStatus = makeBookReviewStatus({ hasReview: true, ready: true, findingCount: 4 });
+    component.bookReviewStatus = makeBookReviewStatus({ hasReview: true, ready: true, findingCount: 12 });
     component.bookReviewBuilding = false;
     component.bookReviewBuildOutcome = 'degraded';
+    component.bookReviewBuildOutcomeCount = 4; // count from the build that just completed
     component.bookReviewBuildOutcomeMessage =
       'Whole-book review built with warnings: 4 findings across 4/6 dimensions (2 failed).';
     fixture.detectChanges();
@@ -476,7 +517,7 @@ describe('AnalysisRunTabComponent – Book review status row (wb2-f03)', () => {
     const el = query('[data-testid="brev-build-degraded"]');
     expect(el).not.toBeNull();
     expect(el.nativeElement.getAttribute('dir')).toBe('rtl');
-    // Localized Hebrew copy, enriched with the structured findingCount (4) — no English parsing.
+    // Localized Hebrew copy, enriched with the post-build outcome count (4) — no English parsing.
     expect(el.nativeElement.textContent).toContain('חלקית');
     expect(el.nativeElement.textContent).toContain('4');
     // ...and does NOT leak any of the English BE message.

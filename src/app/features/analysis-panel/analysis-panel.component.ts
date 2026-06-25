@@ -222,6 +222,14 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   bookReviewBuildOutcome: 'failed' | 'degraded' | null = null;
   /** The terminal build message text accompanying bookReviewBuildOutcome. May be in English; FE localizes the banner label separately. */
   bookReviewBuildOutcomeMessage = '';
+  /**
+   * Finding count for the degraded banner, sourced from the status refresh that runs AFTER the build finished
+   * (NOT the pre-build bookReviewStatus snapshot, which is still stale when the terminal poll sets the outcome
+   * and triggers change detection). Null until that refresh returns — and stays null if it fails — so the
+   * degraded banner shows the count from the build that just completed, never the previous total or a wrong
+   * total. Reset whenever the outcome is (re)set.
+   */
+  bookReviewBuildOutcomeCount: number | null = null;
   /** Stops the active review progress poll; nulled when no poll is running. */
   private bookReviewProgressStop$: Subject<void> | null = null;
   /** Active review-related subscriptions (status fetch + build); cleared on context change / destroy. */
@@ -439,6 +447,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       next: (status) => {
         if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
         this.bookReviewStatus = status;
+        // The degraded banner's finding count must reflect the build that JUST completed, not the pre-build
+        // snapshot. This status read is the post-build refresh (fired from the terminal poll handler), so sync
+        // the banner count from it here. Scoped to the degraded outcome so an unrelated status load is a no-op;
+        // if this refresh never succeeds the count stays null and the banner shows the plain copy (no count).
+        if (this.bookReviewBuildOutcome === 'degraded') {
+          this.bookReviewBuildOutcomeCount = status.findingCount;
+        }
         if (status.ready && this.bookReviewBuilding && this.bookReviewProgressPercent === 100) {
           this.bookReviewBuilding = false;
         }
@@ -481,6 +496,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.bookReviewHandledTerminalJobId = null;
     this.bookReviewBuildOutcome = null;
     this.bookReviewBuildOutcomeMessage = '';
+    this.bookReviewBuildOutcomeCount = null;
   }
 
   /** Consent confirmed in the run tab: start (or no-op) the book review build. */
@@ -496,6 +512,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     // Clear any prior failed/degraded banner: a fresh build supersedes the last outcome.
     this.bookReviewBuildOutcome = null;
     this.bookReviewBuildOutcomeMessage = '';
+    this.bookReviewBuildOutcomeCount = null;
     this.bookReviewHandledTerminalJobId = null;
     this.cdr.detectChanges();
 
@@ -554,6 +571,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
             this.bookReviewBuildOutcome = null;
             this.bookReviewBuildOutcomeMessage = '';
           }
+          // The just-completed count is not in the progress payload; clear it and let the post-build status
+          // refresh below repopulate it (degraded case). Until then the banner renders without a stale count.
+          this.bookReviewBuildOutcomeCount = null;
           this.loadBookReviewStatus();
         }
         this.cdr.detectChanges();
@@ -567,6 +587,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         // left on a silent in-flight state. The localized generic copy renders when no server message exists.
         this.bookReviewBuildOutcome = 'failed';
         this.bookReviewBuildOutcomeMessage = '';
+        this.bookReviewBuildOutcomeCount = null;
         this.loadBookReviewStatus();
         this.cdr.detectChanges();
       },

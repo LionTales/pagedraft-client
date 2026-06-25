@@ -85,6 +85,12 @@ export class AnalysisRunTabComponent implements OnChanges {
   @Input() bookReviewBuildOutcome: 'failed' | 'degraded' | null = null;
   /** Human-readable message accompanying bookReviewBuildOutcome (the job's terminal message). */
   @Input() bookReviewBuildOutcomeMessage = '';
+  /**
+   * Finding count for the degraded banner, captured from the status refresh that ran AFTER the build finished
+   * (the parent populates it post-build; null until then, and null if that refresh failed). The banner reads
+   * THIS, not bookReviewStatus.findingCount, so it never shows the pre-build total or a wrong total.
+   */
+  @Input() bookReviewBuildOutcomeCount: number | null = null;
 
   /** User confirmed the consent prompt -> parent should start the review build. */
   @Output() buildBookReview = new EventEmitter<void>();
@@ -494,16 +500,19 @@ export class AnalysisRunTabComponent implements OnChanges {
    * The message to render in the build-outcome banner (wb2-c05). ALWAYS localized he/en copy from
    * bookReviewLabel — the raw BE terminal message (bookReviewBuildOutcomeMessage) is hardcoded English
    * (BookReviewService.cs), so it must NOT be surfaced to Hebrew users (wb2-c01). The raw message stays
-   * on the @Input for logging/telemetry only. The degraded copy is enriched with the structured
-   * findingCount already on the status row (no English parsing). Empty when there is no outcome to show.
+   * on the @Input for logging/telemetry only. The degraded copy is enriched with bookReviewBuildOutcomeCount
+   * — the count captured from the POST-BUILD status refresh — NOT bookReviewStatus.findingCount, which is
+   * still the pre-build snapshot when the terminal poll first renders this banner (and would show the previous
+   * total, or a wrong total if the refresh failed). When the count is not yet known, the plain copy renders.
+   * Empty when there is no outcome to show.
    */
   get bookReviewBuildOutcomeText(): string {
     if (this.bookReviewBuildOutcome === 'failed') {
       return this.bookReviewLabel('buildFailed');
     }
     if (this.bookReviewBuildOutcome === 'degraded') {
-      const count = this.bookReviewStatus?.findingCount ?? 0;
-      // Enrich with the structured partial-finding count when available; plain copy otherwise.
+      const count = this.bookReviewBuildOutcomeCount ?? 0;
+      // Enrich with the just-completed partial-finding count when known; plain copy otherwise.
       return count > 0
         ? this.bookReviewLabel('buildDegradedWithCount').replace('{count}', String(count))
         : this.bookReviewLabel('buildDegraded');
