@@ -71,8 +71,8 @@
         </app-suggestion-card>
       </div>
     </ng-container>
-    <!-- Other structured (metric cards); excluded for LinguisticAnalysis which uses app-linguistic-result below -->
-    <div class="metric-cards" *ngIf="!lineEditForCurrent && (current.analysisType || current.type) !== 'Proofread' && (current.analysisType || current.type) !== 'LinguisticAnalysis' && current.structuredResult && metricCardsForCurrent.length; else textResult">
+    <!-- Other structured (metric cards); excluded for LinguisticAnalysis + LiteraryAnalysis which use their dedicated app-*-result components below -->
+    <div class="metric-cards" *ngIf="!lineEditForCurrent && (current.analysisType || current.type) !== 'Proofread' && (current.analysisType || current.type) !== 'LinguisticAnalysis' && (current.analysisType || current.type) !== 'LiteraryAnalysis' && current.structuredResult && metricCardsForCurrent.length; else textResult">
       <div class="metric-card" *ngFor="let card of metricCardsForCurrent">
         <span class="metric-label">{{ card.label }}</span>
         <span class="metric-value">{{ card.value }}</span>
@@ -80,6 +80,11 @@
     </div>
     <!-- Linguistic analysis: style deviations + summary (shared component); consistency issues render below as cards -->
     <app-linguistic-result [result]="current"></app-linguistic-result>
+    <!-- Literary analysis: structured themes/tone/voice/devices view (shared component). The backend stores
+         the extracted LiteraryAnalysisResult re-serialized as JSON in resultText; without this dedicated
+         branch the history view would fall through to the generic metric-cards / raw textResult block and
+         dump raw JSON. Renders nothing for non-LiteraryAnalysis results. -->
+    <app-literary-result [result]="current"></app-literary-result>
     <!-- Consistency issues (history): read-only suggestion cards with outcome status. Single source of truth = result.suggestions. -->
     <ng-container *ngIf="(current.analysisType || current.type) === 'LinguisticAnalysis'">
       <div class="line-edit-suggestions" *ngIf="filteredConsistencySuggestionsWithStatusForCurrent.length > 0" data-testid="consistency-history">
@@ -103,12 +108,15 @@
       </div>
     </ng-container>
     <ng-template #textResult>
-      <ul class="analysis-list" *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions() && (current.analysisType || current.type) !== 'LinguisticAnalysis' && analysisItems(current.resultText).length > 1; else singleHistory">
-        <li *ngFor="let item of analysisItems(current.resultText)">{{ item }}</li>
-      </ul>
-      <ng-template #singleHistory>
-        <p class="analysis-single" *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions() && (current.analysisType || current.type) !== 'LinguisticAnalysis'">{{ current.resultText }}</p>
-      </ng-template>
+      <!-- Free-text result (Custom / Summarize / any non-structured past result): render Markdown so
+           bold/lists/paragraphs display instead of literal **/* markers. The LinguisticAnalysis and
+           LiteraryAnalysis exclusions stay (they use their dedicated app-*-result components above);
+           Proofread/LineEdit are excluded by their own conditions. -->
+      <app-markdown-text
+        *ngIf="!lineEditForCurrent && !isProofreadWithSuggestions() && (current.analysisType || current.type) !== 'LinguisticAnalysis' && (current.analysisType || current.type) !== 'LiteraryAnalysis'"
+        data-testid="history-markdown-result"
+        [text]="current.resultText">
+      </app-markdown-text>
     </ng-template>
   </article>
   <ng-template #emptyHistory>
