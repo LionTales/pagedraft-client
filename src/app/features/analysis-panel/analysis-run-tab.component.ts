@@ -426,6 +426,8 @@ export class AnalysisRunTabComponent implements OnChanges {
    * Derived state for the book-review status row. BUILDING is client-tracked (bookReviewBuilding)
    * so it wins over the snapshot read while a job is in flight.
    * GATE: when briefs are missing, the row shows a hint instead of a build action.
+   * 'ready' comes ONLY from the backend readiness gate (s.ready) — never re-derived from hasReview — so the row
+   * can't show the green ready/findings line when the review is not actually ready.
    */
   get bookReviewState(): 'building' | 'not-built' | 'ready' | 'stale' | 'needs-summary' | 'unknown' {
     if (this.bookReviewBuilding) return 'building';
@@ -435,7 +437,11 @@ export class AnalysisRunTabComponent implements OnChanges {
     if (!s.hasBriefs) return 'needs-summary';
     if (s.hasReview && (s.staleVsBriefs || s.builtWithDifferentModel)) return 'stale';
     if (s.ready) return 'ready';
-    return s.hasReview ? 'ready' : 'not-built';
+    // s.ready is false here: a cached review that is NOT ready shows as STALE (findings + a Refresh action),
+    // never 'ready'. Re-deriving 'ready' from hasReview alone contradicted s.ready — e.g. after a poll error the
+    // row can receive ready=false (a build still active, activeBuildJobId set) with an existing review, and the
+    // green ready/findings line would otherwise render beside the failed-build alert.
+    return s.hasReview ? 'stale' : 'not-built';
   }
 
   /** True when the review exists but was built with a different model (drives the cross-model warning). */

@@ -214,6 +214,27 @@ describe('AnalysisRunTabComponent – Book review status row (wb2-f03)', () => {
     expect(query('[data-testid="brev-refresh"]')).not.toBeNull();
   });
 
+  it('ready=false with hasReview=true and no stale flags is STALE, NOT ready (trusts status.ready)', () => {
+    // Regression: the row must trust bookReviewStatus.ready and never re-derive 'ready' from hasReview alone.
+    // After a poll error the parent can receive ready=false (a build still active, activeBuildJobId set) with an
+    // existing review; the row must not render the green ready/findings line beside the failed-build alert.
+    component.bookReviewBuilding = false;
+    component.bookReviewStatus = makeBookReviewStatus({
+      hasReview: true,
+      ready: false,
+      staleVsBriefs: false,
+      builtWithDifferentModel: false,
+      hasBriefs: true,
+      activeBuildJobId: 'job-1',
+      findingCount: 3,
+    });
+    fixture.detectChanges();
+
+    expect(component.bookReviewState).toBe('stale');
+    expect(query('[data-testid="brev-ready"]')).toBeNull();      // no green ready/findings line
+    expect(query('[data-testid="brev-stale"]')).not.toBeNull();  // shown as stale (with a Refresh action)
+  });
+
   // ── DEGRADED BUILD BANNER: count source ──────────────────────────────────────
   // Regression: the degraded banner must enrich from bookReviewBuildOutcomeCount (captured from the POST-build
   // status refresh), NOT bookReviewStatus.findingCount (still the pre-build snapshot when the banner renders).
