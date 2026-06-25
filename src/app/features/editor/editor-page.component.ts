@@ -11,6 +11,7 @@ import { SyncService } from '../../core/services/sync.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { BookDetailDto, ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
+import { ChapterAnchor } from '../../core/models/book-review';
 import { ChapterTreeComponent } from '../chapter-tree/chapter-tree.component';
 import { AnalysisPanelComponent } from '../analysis-panel/analysis-panel.component';
 import { IssuePanelComponent, ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
@@ -779,6 +780,27 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   onIssueHighlighted(_issue: LanguageIssue): void {
     // Future: map LanguageIssue offset/context to editor selection
+  }
+
+  /**
+   * wb3-f01: a chapter-anchor chip in the Book Dashboard (Findings ledger or Story Bible) was clicked.
+   * Resolves the ChapterAnchor to a ChapterSummaryDto from the known chapter list and opens it via the
+   * existing selectChapter path (which handles save-before-switch and document load). Resolves strictly
+   * by chapterId — the order fallback was removed because deleted/reordered chapters can cause the
+   * wrong chapter to be opened.
+   * No character-offset navigation: whole-book findings are chapter-level only.
+   */
+  onOpenChapterFromDashboard(anchor: ChapterAnchor): void {
+    if (!this.book) return;
+    const ch = this.book.chapters.find(c => c.id === anchor.chapterId) ?? null;
+    if (!ch) {
+      const isHe = this.editorDirection === 'rtl';
+      alert(isHe
+        ? 'הפרק לא נמצא - ייתכן שנמחק.'
+        : 'Chapter not found - it may have been deleted.');
+      return;
+    }
+    this.selectChapter(ch);
   }
 
   onRevertToVersion(versionId: string): void {
