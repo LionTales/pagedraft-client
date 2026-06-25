@@ -69,6 +69,28 @@ export class MarkdownTextComponent {
   }
 }
 
+/**
+ * Local-LLM Summarize/Custom output often writes an enumerated list INLINE in one blob
+ * ("1. first 2. second 3. third") rather than one item per line. Standard Markdown only treats an ordinal
+ * at a LINE START as a list item, so without this the whole blob would render as a single paragraph - the
+ * regression this restores from the old analysisItems() inline split. Insert a line break before each
+ * INLINE ordinal so the per-line ordered-list matcher in renderSafeMarkdown picks them up as separate
+ * items (with faithful <ol start> numbering).
+ *
+ * Conservative, to avoid mangling ordinary prose that merely mentions numbers:
+ *   - only fires when the text holds at least TWO list-like ordinal markers, so a lone "...see point 3. and
+ *     then..." in a sentence is left alone;
+ *   - a marker is a 1-2 digit number followed by '.'/')' and whitespace, so years ("in 1990. "), decimals
+ *     ("3.14") and versions ("1.2.3") never qualify (4-digit / no-trailing-space);
+ *   - only an ordinal preceded ON THE SAME LINE by non-whitespace text is broken out; an ordinal already at
+ *     a line start (a genuine multi-line list) is left untouched.
+ */
+function splitInlineOrdinals(raw: string): string {
+  const markerRe = /\b\d{1,2}[.)]\s/g;
+  if ((raw.match(markerRe) ?? []).length < 2) return raw;
+  return raw.replace(/(\S)[^\S\n]+(\d{1,2}[.)]\s)/g, '$1\n$2');
+}
+
 /** HTML-escape ampersands, angle brackets and quotes so any raw HTML/script in the input is inert. */
 function escapeHtml(s: string): string {
   return s
@@ -113,8 +135,9 @@ type Block =
 export function renderSafeMarkdown(raw: string): string {
   if (!raw || !raw.trim()) return '';
 
-  // Normalize newlines, then escape the WHOLE input up front so every downstream branch is safe.
-  const escaped = escapeHtml(raw.replace(/\r\n?/g, '\n'));
+  // Normalize newlines, recover inline-enumerated lists (see splitInlineOrdinals), then escape the WHOLE
+  // input up front so every downstream branch is safe.
+  const escaped = escapeHtml(splitInlineOrdinals(raw.replace(/\r\n?/g, '\n')));
   const lines = escaped.split('\n');
 
   const blocks: Block[] = [];

@@ -108,6 +108,36 @@ describe('MarkdownTextComponent', () => {
     expect(ol?.hasAttribute('start')).toBeFalse();
   });
 
+  it('splits an inline-enumerated blob ("1. a 2. b 3. c") into a faithful ordered list', () => {
+    // Legacy Summarize/Custom output frequently puts the whole enumeration on one line. Markdown only
+    // treats ordinals at a line start as list items, so this must be split back out (the analysisItems
+    // regression). Faithful numbering: starts at 1, so no start attribute.
+    const el = render('1. first item 2. second item 3. third item');
+    const ol = el.querySelector('ol');
+    expect(ol).not.toBeNull();
+    expect(ol?.hasAttribute('start')).toBeFalse();
+    const items = el.querySelectorAll('ol li');
+    expect(items.length).toBe(3);
+    expect(items[0].textContent).toBe('first item');
+    expect(items[1].textContent).toBe('second item');
+    expect(items[2].textContent).toBe('third item');
+  });
+
+  it('does NOT split a prose sentence that ends in a year ("... in 1990. The ...")', () => {
+    // 4-digit numbers are not list ordinals; a single year-terminated sentence must stay one paragraph.
+    const el = render('The war ended in 1990. The treaty was signed later.');
+    expect(el.querySelector('ol')).toBeNull();
+    const paras = el.querySelectorAll('p');
+    expect(paras.length).toBe(1);
+    expect(paras[0].textContent).toBe('The war ended in 1990. The treaty was signed later.');
+  });
+
+  it('does NOT split a lone inline ordinal in prose (needs at least two list markers)', () => {
+    const el = render('Please see point 3. It explains the rest.');
+    expect(el.querySelector('ol')).toBeNull();
+    expect(el.querySelectorAll('p').length).toBe(1);
+  });
+
   it('applies inline bold inside list items (the reported bug shape)', () => {
     // Real model output: a bold numbered heading followed by bullets.
     const el = render('**1. הדילמה:**\n* קושי ראשון\n* קושי שני');

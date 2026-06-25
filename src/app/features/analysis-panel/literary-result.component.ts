@@ -354,23 +354,12 @@ export class LiteraryResultComponent implements OnChanges {
 
     // Prefer structuredResult, fall back to resultText. The backend stores the re-serialized JSON in
     // resultText, but a future path may move it to structuredResult; reading both keeps this robust.
-    const rawJson = result.structuredResult?.trim()
-      ? result.structuredResult
-      : (result.resultText?.trim() ? result.resultText : '');
-    if (!rawJson) return parseFailed;
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawJson);
-    } catch {
-      return parseFailed;
-    }
-    // Non-object primitives (null, number, string, array) are not a usable result: reading fields off
-    // them would throw during change detection, so treat them as a parse failure (raw fallback).
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return parseFailed;
-    }
-    const obj = parsed as LiteraryAnalysisResult;
+    // A non-empty structuredResult that does NOT yield a usable object (parse error, or a non-object
+    // primitive/array) must NOT short-circuit the fallback: resultText may still hold valid
+    // LiteraryAnalysisResult JSON. So try each candidate in order and use the first that parses into an
+    // object; only when neither does do we render the parse-failed fallback.
+    const obj = this.firstUsableObject([result.structuredResult, result.resultText]);
+    if (!obj) return parseFailed;
 
     const summary = this.str(obj.summary);
     const tone = this.str(obj.tone);
@@ -390,6 +379,27 @@ export class LiteraryResultComponent implements OnChanges {
       summary, themes, tone, toneDescription, narrativeVoice, narrativeVoiceDescription,
       devices, moodProgression, labels, dir, parseFailed: false, emptyStructured,
     };
+  }
+
+  /**
+   * Returns the first candidate string that parses into a JSON OBJECT (the shape a LiteraryAnalysisResult
+   * takes), or null when none does. Non-object primitives (null, number, string, array) are skipped, not
+   * treated as terminal failures, so a structuredResult holding e.g. a bare string or `[]` still lets a
+   * valid resultText be tried. Blank/whitespace candidates are skipped.
+   */
+  private firstUsableObject(candidates: (string | null | undefined)[]): LiteraryAnalysisResult | null {
+    for (const candidate of candidates) {
+      if (!candidate?.trim()) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(candidate);
+      } catch {
+        continue;
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      return parsed as LiteraryAnalysisResult;
+    }
+    return null;
   }
 
   private buildThemes(raw: LiteraryTheme[] | undefined, labels: LiteraryLabels): LiteraryThemeRow[] {

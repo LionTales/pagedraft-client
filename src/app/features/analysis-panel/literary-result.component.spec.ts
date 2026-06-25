@@ -300,6 +300,26 @@ describe('LiteraryResultComponent', () => {
       expect((summary.nativeElement as HTMLElement).textContent).toContain('From structured.');
     });
 
+    it('falls back to resultText when structuredResult is non-empty but not an object (array)', () => {
+      // structuredResult holds valid JSON that is NOT a usable literary object (an array); resultText holds
+      // the real LiteraryAnalysisResult. The non-object must not short-circuit into parse-failed.
+      setResult(makeLiteraryResult(FULL_LITERARY, { structuredResult: '[]' }));
+      expect(fixture.debugElement.query(By.css('[data-testid="literary-parse-error"]'))).toBeNull();
+      const summary = fixture.debugElement.query(By.css('[data-testid="literary-summary"]'));
+      expect((summary.nativeElement as HTMLElement).textContent).toContain('reflective chapter on solitude');
+    });
+
+    it('falls back to resultText when structuredResult is non-empty but invalid JSON', () => {
+      setResult(makeLiteraryResult(FULL_LITERARY, { structuredResult: '{ not valid json' }));
+      expect(fixture.debugElement.query(By.css('[data-testid="literary-parse-error"]'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="literary-themes"]'))).not.toBeNull();
+    });
+
+    it('still renders parse-failed when BOTH structuredResult and resultText are unusable', () => {
+      setResult(makeLiteraryResult('also not json', { structuredResult: '12345' }));
+      expect(fixture.debugElement.query(By.css('[data-testid="literary-parse-error"]'))).not.toBeNull();
+    });
+
     it('returns null view and renders nothing for a non-LiteraryAnalysis (Proofread) result', () => {
       const proofread = makeLiteraryResult(FULL_LITERARY, {
         type: 'Proofread',
