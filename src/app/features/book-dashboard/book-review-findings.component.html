@@ -1,0 +1,218 @@
+<!--
+  wb3-c02: Dimension Scorecard (B) + keep/improve/cut Findings Ledger (A).
+  Advisory only - no Accept/apply; the only mutation is the per-finding lifecycle status.
+  The host gates this on the review status row being READY/STALE, so not-built / briefs-missing /
+  building states live in that row, not here. This template owns loading / error / empty states.
+-->
+<div class="findings-panel" [attr.dir]="findingsDir" data-testid="book-review-findings">
+  <!-- LOADING -->
+  <p *ngIf="loading" class="findings-loading muted" data-testid="findings-loading">
+    {{ label('loading') }}
+  </p>
+
+  <!-- LOAD ERROR -->
+  <p
+    *ngIf="loadError"
+    class="findings-error"
+    role="alert"
+    data-testid="findings-error">
+    {{ label('loadError') }}
+  </p>
+
+  <ng-container *ngIf="!loading && !loadError">
+    <!-- ── Scorecard (B) ───────────────────────────────────────────────────── -->
+    <section class="scorecard" *ngIf="scorecardRows.length > 0" data-testid="findings-scorecard">
+      <h4 class="section-title">{{ label('scorecardTitle') }}</h4>
+      <div class="scorecard-grid">
+        <button
+          *ngFor="let s of scorecardRows"
+          type="button"
+          class="scorecard-row"
+          [class.active]="dimensionFilter === s.dimension"
+          [attr.data-dimension]="s.dimension"
+          [attr.data-testid]="'scorecard-row-' + s.dimension"
+          (click)="onDimensionClick(s.dimension)">
+          <span class="sc-dimension">{{ dimensionLabel(s.dimension) }}</span>
+          <span class="sc-score" [attr.data-score]="s.score">{{ scoreLabel(s.score) }}</span>
+          <span class="sc-counts">
+            <span class="sc-count keep" [title]="verdictLabel('keep')">{{ s.keepCount }}</span>
+            <span class="sc-count improve" [title]="verdictLabel('improve')">{{ s.improveCount }}</span>
+            <span class="sc-count cut" [title]="verdictLabel('cut')">{{ s.cutCount }}</span>
+          </span>
+        </button>
+      </div>
+    </section>
+
+    <!-- EMPTY (review ready/stale, zero findings). The scorecard above may still render from scores. -->
+    <p
+      *ngIf="isEmpty"
+      class="findings-empty muted"
+      data-testid="findings-empty">
+      {{ label('empty') }}
+    </p>
+
+    <!-- ── Ledger (A) ──────────────────────────────────────────────────────── -->
+    <section class="ledger" *ngIf="!isEmpty" data-testid="findings-ledger">
+      <div class="ledger-head">
+        <h4 class="section-title">{{ label('ledgerTitle') }}</h4>
+        <div class="ledger-filters" data-testid="ledger-verdict-filters">
+          <button
+            *ngFor="let v of verdicts"
+            type="button"
+            class="verdict-chip"
+            [class.keep]="v === 'keep'"
+            [class.improve]="v === 'improve'"
+            [class.cut]="v === 'cut'"
+            [class.active]="verdictFilter === v"
+            [attr.data-testid]="'verdict-filter-' + v"
+            (click)="onVerdictClick(v)">
+            <span class="verdict-icon" aria-hidden="true">{{ verdictIcon(v) }}</span>
+            {{ verdictLabel(v) }}
+          </button>
+          <button
+            *ngIf="dimensionFilter || verdictFilter"
+            type="button"
+            class="clear-filters link-btn"
+            data-testid="ledger-clear-filters"
+            (click)="clearFilters()">
+            {{ label('clearFilters') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- FILTERED-EMPTY (filters hide all rows, but findings exist) -->
+      <p
+        *ngIf="isFilteredEmpty"
+        class="findings-empty muted"
+        data-testid="findings-filtered-empty">
+        {{ label('filteredEmpty') }}
+      </p>
+
+      <!-- Active (open/acknowledged) findings -->
+      <div class="ledger-group" data-testid="ledger-active-group">
+        <ng-container *ngFor="let f of activeFindings">
+          <ng-container *ngTemplateOutlet="findingRow; context: { $implicit: f, resolved: false }"></ng-container>
+        </ng-container>
+      </div>
+
+      <!-- Resolved (dismissed/done) findings: muted/secondary group, NOT deleted -->
+      <div
+        class="ledger-group resolved"
+        *ngIf="resolvedFindings.length > 0"
+        data-testid="ledger-resolved-group">
+        <p class="resolved-title muted">{{ label('resolvedGroup') }} ({{ resolvedFindings.length }})</p>
+        <ng-container *ngFor="let f of resolvedFindings">
+          <ng-container *ngTemplateOutlet="findingRow; context: { $implicit: f, resolved: true }"></ng-container>
+        </ng-container>
+      </div>
+    </section>
+  </ng-container>
+</div>
+
+<!-- ── A single finding row (shared by active + resolved groups) ─────────────── -->
+<ng-template #findingRow let-f let-resolved="resolved">
+  <div
+    class="finding-row"
+    [class.verdict-keep]="f.verdict === 'keep'"
+    [class.verdict-improve]="f.verdict === 'improve'"
+    [class.verdict-cut]="f.verdict === 'cut'"
+    [class.resolved]="resolved"
+    [attr.data-verdict]="f.verdict"
+    [attr.data-status]="f.status"
+    [attr.data-testid]="'finding-row-' + f.id">
+    <div class="finding-main">
+      <span class="finding-verdict-icon" [attr.title]="verdictLabel(f.verdict)" aria-hidden="true">
+        {{ verdictIcon(f.verdict) }}
+      </span>
+      <span class="dimension-chip" [attr.data-dimension]="f.dimension">{{ dimensionLabel(f.dimension) }}</span>
+      <button
+        type="button"
+        class="finding-rationale link-btn"
+        [attr.data-testid]="'finding-rationale-' + f.id"
+        (click)="toggleExpand(f.id)">
+        <app-markdown-text [text]="f.rationale"></app-markdown-text>
+        <span class="expand-caret" aria-hidden="true">{{ isExpanded(f.id) ? '▲' : '▼' }}</span>
+      </button>
+      <span class="finding-status-badge" [attr.data-status]="f.status">{{ statusLabel(f.status) }}</span>
+    </div>
+
+    <!-- Chapter anchor chips (always visible). Navigation is wired by wb3-f01 via (openChapter). -->
+    <div class="finding-anchors" *ngIf="f.chapterAnchors?.length">
+      <span class="anchors-label muted">{{ label('chapters') }}:</span>
+      <button
+        *ngFor="let a of f.chapterAnchors"
+        type="button"
+        class="anchor-chip"
+        [attr.data-chapter-id]="a.chapterId"
+        [attr.data-testid]="'anchor-chip-' + f.id + '-' + a.chapterId"
+        (click)="onAnchorClick(a)">
+        {{ a.order }}. {{ a.title }}
+      </button>
+    </div>
+
+    <!-- Expanded detail: evidence excerpts + suggested action -->
+    <div class="finding-detail" *ngIf="isExpanded(f.id)" [attr.data-testid]="'finding-detail-' + f.id">
+      <div class="evidence" *ngIf="f.evidence?.length">
+        <p class="detail-label muted">{{ label('evidence') }}</p>
+        <blockquote
+          *ngFor="let e of f.evidence"
+          class="evidence-excerpt"
+          [attr.data-chapter-order]="e.chapterOrder">
+          <app-markdown-text [text]="e.excerpt"></app-markdown-text>
+        </blockquote>
+      </div>
+      <div class="suggested-action" *ngIf="f.suggestedAction">
+        <p class="detail-label muted">{{ label('suggestedAction') }}</p>
+        <app-markdown-text [text]="f.suggestedAction"></app-markdown-text>
+      </div>
+    </div>
+
+    <!-- Lifecycle control: advisory status only (NO Accept/apply). Optimistic + reconcile. -->
+    <div class="finding-actions" [attr.data-testid]="'finding-actions-' + f.id">
+      <button
+        *ngIf="f.status !== 'acknowledged' && f.status !== 'done' && f.status !== 'dismissed'"
+        type="button"
+        class="status-btn"
+        [disabled]="f.patching"
+        [attr.data-testid]="'status-acknowledge-' + f.id"
+        (click)="onStatusAction(f, 'acknowledge')">
+        {{ label('acknowledge') }}
+      </button>
+      <button
+        *ngIf="f.status !== 'done'"
+        type="button"
+        class="status-btn"
+        [disabled]="f.patching"
+        [attr.data-testid]="'status-done-' + f.id"
+        (click)="onStatusAction(f, 'done')">
+        {{ label('done') }}
+      </button>
+      <button
+        *ngIf="f.status !== 'dismissed'"
+        type="button"
+        class="status-btn"
+        [disabled]="f.patching"
+        [attr.data-testid]="'status-dismiss-' + f.id"
+        (click)="onStatusAction(f, 'dismiss')">
+        {{ label('dismiss') }}
+      </button>
+      <button
+        *ngIf="f.status !== 'open'"
+        type="button"
+        class="status-btn secondary"
+        [disabled]="f.patching"
+        [attr.data-testid]="'status-reopen-' + f.id"
+        (click)="onStatusAction(f, 'open')">
+        {{ label('reopen') }}
+      </button>
+      <span *ngIf="f.patching" class="status-spinner" aria-hidden="true"></span>
+      <span
+        *ngIf="f.patchError"
+        class="status-patch-error"
+        role="alert"
+        [attr.data-testid]="'status-patch-error-' + f.id">
+        {{ label('patchError') }}
+      </span>
+    </div>
+  </div>
+</ng-template>

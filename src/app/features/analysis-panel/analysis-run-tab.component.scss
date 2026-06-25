@@ -46,6 +46,9 @@
   font-size: 0.9rem;
   line-height: 1.5;
 }
+.analysis-streaming {
+  white-space: pre-wrap;
+}
 .line-edit-overall {
   margin: 0 0 0.75rem 0;
   font-size: 0.9rem;
@@ -161,17 +164,6 @@
   font-size: 0.8rem;
 }
 .sb-cross-model-warning {
-  margin: 0.3rem 0 0;
-  font-size: 0.8rem;
-  color: #8a5a00;
-}
-.brev-build-failed {
-  margin: 0.3rem 0 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #b00020;
-}
-.brev-build-degraded {
   margin: 0.3rem 0 0;
   font-size: 0.8rem;
   color: #8a5a00;

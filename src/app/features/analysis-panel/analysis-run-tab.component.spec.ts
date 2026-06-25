@@ -131,6 +131,98 @@ describe('AnalysisRunTabComponent', () => {
   });
 
   // =========================================================================
+  // Regression: a completed LiteraryAnalysis routes to app-literary-result and
+  // NEVER dumps the raw resultText JSON through the generic runDisplayText block.
+  // =========================================================================
+
+  describe('completed LiteraryAnalysis run', () => {
+    const literaryJson = JSON.stringify({
+      themes: [{ name: 'Isolation', description: 'Loneliness.', significance: 'major' }],
+      tone: 'Melancholic',
+      toneDescription: 'Wistful throughout.',
+      narrativeVoice: 'First person',
+      narrativeVoiceDescription: 'Confessional narrator.',
+      rhetoricalDevices: [{ name: 'Metaphor', example: 'The city was a beast.', effect: 'Menace.' }],
+      moodProgression: 'Somber to hopeful.',
+      summary: 'A reflective chapter on solitude.',
+    });
+
+    function makeLiteraryResult(overrides: Partial<AnalysisResultDto> = {}): AnalysisResultDto {
+      return {
+        id: 'r-lit',
+        chapterId: 'chap-1',
+        jobId: null,
+        type: 'LiteraryAnalysis',
+        analysisType: 'LiteraryAnalysis',
+        resultText: literaryJson,
+        modelName: 'test-model',
+        createdAt: new Date().toISOString(),
+        scope: 'Chapter',
+        structuredResult: null,
+        sceneId: null,
+        bookId: 'book-1',
+        language: 'he',
+        status: 'Active',
+        proofreadNoChangesHint: false,
+        proofreadResultUnreliable: false,
+        suggestions: [],
+        ...overrides,
+      };
+    }
+
+    it('renders the dedicated app-literary-result view with parsed sections', () => {
+      component.latestResult = makeLiteraryResult();
+      component.selectedAnalysisType = 'LiteraryAnalysis';
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(query('app-literary-result')).not.toBeNull();
+      expect(query('[data-testid="literary-view"]')).not.toBeNull();
+      expect(query('[data-testid="literary-summary"]')).not.toBeNull();
+      expect(query('[data-testid="theme-row"]')).not.toBeNull();
+    });
+
+    it('does NOT dump the raw resultText JSON through the generic block', () => {
+      component.latestResult = makeLiteraryResult();
+      component.selectedAnalysisType = 'LiteraryAnalysis';
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      // The generic single/list block must not render the raw JSON for a Literary result.
+      const single = query('.analysis-single');
+      const list = query('.analysis-list');
+      expect(single).toBeNull();
+      expect(list).toBeNull();
+
+      // Belt-and-braces: no element renders the literal raw JSON brace soup as its text.
+      const host = fixture.nativeElement as HTMLElement;
+      expect(host.querySelector('.analysis-single')).toBeNull();
+      // The raw JSON string must not appear verbatim anywhere outside the (hidden) raw toggle <pre>.
+      expect(host.textContent).not.toContain('"rhetoricalDevices"');
+    });
+
+    it('does NOT show the "no analysis run yet" message for a completed Literary run', () => {
+      component.latestResult = makeLiteraryResult();
+      component.selectedAnalysisType = 'LiteraryAnalysis';
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(query('[data-testid="no-run-yet"]')).toBeNull();
+    });
+
+    it('falls back gracefully (parse-error note, no throw) for malformed Literary resultText', () => {
+      component.latestResult = makeLiteraryResult({ resultText: '{ not valid json' });
+      component.selectedAnalysisType = 'LiteraryAnalysis';
+      component.streamingText = '';
+      expect(() => fixture.detectChanges()).not.toThrow();
+
+      expect(query('[data-testid="literary-parse-error"]')).not.toBeNull();
+      // Still must not fall through to the generic raw block.
+      expect(query('.analysis-single')).toBeNull();
+    });
+  });
+
+  // =========================================================================
   // The empty state still shows when nothing has run
   // =========================================================================
 
@@ -222,6 +314,94 @@ describe('AnalysisRunTabComponent', () => {
 
       expect(query('[data-testid="linguistic-view"]')).toBeNull();
       expect(query('[data-testid="no-run-yet"]')).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // Free-text (Custom / Summarize) result: rendered as Markdown, NOT plain text.
+  // The literal ** / * markers must not survive on screen, and the structured
+  // branches (Linguistic / Literary / Proofread) must be unaffected.
+  // =========================================================================
+
+  describe('free-text (Custom) Markdown result', () => {
+    function makeCustomResult(resultText: string, overrides: Partial<AnalysisResultDto> = {}): AnalysisResultDto {
+      return {
+        id: 'r-custom',
+        chapterId: 'chap-1',
+        jobId: null,
+        type: 'Custom',
+        analysisType: 'Custom',
+        resultText,
+        modelName: 'test-model',
+        createdAt: new Date().toISOString(),
+        scope: 'Chapter',
+        structuredResult: null,
+        sceneId: null,
+        bookId: 'book-1',
+        language: 'he',
+        status: 'Active',
+        proofreadNoChangesHint: false,
+        proofreadResultUnreliable: false,
+        suggestions: [],
+        ...overrides,
+      };
+    }
+
+    it('renders the completed Custom result via app-markdown-text with no literal ** in the host text', () => {
+      // The exact failing shape from the bug report: a bold numbered heading + a bullet.
+      component.latestResult = makeCustomResult('**1. הדילמה:**\n* קושי ראשון\n* קושי שני');
+      component.selectedAnalysisType = 'Custom';
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      const md = query('[data-testid="run-markdown-result"]');
+      expect(md).not.toBeNull();
+      // Markdown was applied: a <strong> exists and the literal asterisks are gone.
+      expect(md.nativeElement.querySelector('strong')).not.toBeNull();
+      const host = fixture.nativeElement as HTMLElement;
+      expect(host.textContent).not.toContain('**');
+      // It is NOT routed through the old plain-text fallback.
+      expect(query('.analysis-list')).toBeNull();
+      // The legacy plain <p.analysis-single> is replaced by the markdown component.
+      expect(host.querySelector('p.analysis-single')).toBeNull();
+    });
+
+    it('renders the streaming partial as plain pre-wrapped text (NOT markdown) while streaming', () => {
+      component.latestResult = null;
+      component.streamingText = '**partial** tokens';
+      component.selectedAnalysisType = 'Custom';
+      fixture.detectChanges();
+
+      // Streaming text is plain (asterisks still present mid-stream); markdown component is not used.
+      expect(query('[data-testid="run-markdown-result"]')).toBeNull();
+      const streaming = query('.analysis-streaming');
+      expect(streaming).not.toBeNull();
+      expect(streaming.nativeElement.textContent).toContain('**partial**');
+    });
+
+    it('does NOT route a LinguisticAnalysis result through the markdown component', () => {
+      component.latestResult = makeLinguisticResult(
+        JSON.stringify({ deviations: [{ metric: 'sentenceCount', sceneValue: 11, chapterBaseline: 9, note: '' }], consistencyIssues: [] })
+      );
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(query('[data-testid="run-markdown-result"]')).toBeNull();
+      expect(query('[data-testid="linguistic-view"]')).not.toBeNull();
+    });
+
+    it('does NOT route a Proofread-with-suggestions result through the markdown component', () => {
+      component.latestResult = makeProofreadResult({ proofreadResultUnreliable: false });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [{
+        id: 'p-1', original: 'teh', suggested: 'the', category: 'spelling', startOffset: 0, endOffset: 3,
+      }];
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      expect(query('[data-testid="run-markdown-result"]')).toBeNull();
+      expect(query('.suggestions-block')).not.toBeNull();
     });
   });
 

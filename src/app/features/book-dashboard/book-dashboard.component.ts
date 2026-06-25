@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, Input, OnInit } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { BookService } from '../../core/services/book.service';
 import {
@@ -12,11 +12,28 @@ import {
   ConflictEntry
 } from '../../core/models/book';
 import { AnalysisResultDto } from '../../core/models/analysis';
+import { ChapterAnchor } from '../../core/models/book-review';
+import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
+import { BookReviewState, BookReviewStatusRowComponent } from './book-review-status-row.component';
+import { BookReviewFindingsComponent } from './book-review-findings.component';
+import { BookStoryBibleComponent } from './book-story-bible.component';
+import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
+
+/** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
+type ReviewTab = 'findings' | 'bible';
 
 @Component({
   selector: 'app-book-dashboard',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [
+    CommonModule,
+    FormsModule,
+    BookSummaryStatusRowComponent,
+    BookReviewStatusRowComponent,
+    BookReviewFindingsComponent,
+    BookStoryBibleComponent,
+    BookChapterSummariesComponent,
+  ],
   template: `
     <div class="book-dashboard" dir="rtl">
       <header class="dashboard-header">
@@ -31,6 +48,77 @@ import { AnalysisResultDto } from '../../core/models/analysis';
         </button>
       </header>
 
+      <!-- Book-scoped status rows (wb3-c01): summary/briefs + developmental review build + status.
+           A finished summary build clears the review's "build briefs first" gate, so its terminal
+           event refreshes the review row. -->
+      <section class="card book-status-card">
+        <app-book-summary-status-row
+          [bookId]="bookId"
+          [bookLanguage]="bookLanguage"
+          (summaryTerminal)="onSummaryTerminal()">
+        </app-book-summary-status-row>
+        <app-book-review-status-row
+          #reviewRow
+          [bookId]="bookId"
+          [bookLanguage]="bookLanguage"
+          (reviewStateChange)="onReviewStateChange($event)">
+        </app-book-review-status-row>
+
+        <!-- Review surfaces (wb3-c02 Findings ledger + wb3-c03 Story Bible). Mounted only when the review is
+             READY/STALE so the not-built / briefs-missing / building states stay owned by the status row
+             above. A lightweight tab toggles between the two views of the same review findings. -->
+        @if (showFindings) {
+          <div class="review-tabs" role="tablist" [attr.dir]="reviewDir">
+            <button
+              type="button"
+              class="review-tab"
+              role="tab"
+              [class.active]="reviewTab === 'findings'"
+              [attr.aria-selected]="reviewTab === 'findings'"
+              data-testid="review-tab-findings"
+              (click)="reviewTab = 'findings'">
+              {{ reviewTabLabel('findings') }}
+            </button>
+            <button
+              type="button"
+              class="review-tab"
+              role="tab"
+              [class.active]="reviewTab === 'bible'"
+              [attr.aria-selected]="reviewTab === 'bible'"
+              data-testid="review-tab-bible"
+              (click)="reviewTab = 'bible'">
+              {{ reviewTabLabel('bible') }}
+            </button>
+          </div>
+
+          @if (reviewTab === 'findings') {
+            <app-book-review-findings
+              [bookId]="bookId"
+              [bookLanguage]="bookLanguage"
+              [refreshToken]="findingsRefreshToken"
+              (openChapter)="onOpenChapterFromFinding($event)">
+            </app-book-review-findings>
+          } @else {
+            <app-book-story-bible
+              [bookId]="bookId"
+              [bookLanguage]="bookLanguage"
+              [refreshToken]="findingsRefreshToken"
+              (openChapter)="onOpenChapterFromFinding($event)">
+            </app-book-story-bible>
+          }
+        }
+      </section>
+
+      <!-- Chapter summaries (wb3-c04): per-chapter user-authoritative summary view + inline edit + the
+           explicit "re-derive analysis" offer, so the user's edited summary drives what the whole-book
+           review sees. Coexists with the c02 Findings / c03 Story Bible review surfaces above. -->
+      <section class="card chapter-summaries-card">
+        <app-book-chapter-summaries
+          [bookId]="bookId"
+          [bookLanguage]="bookLanguage">
+        </app-book-chapter-summaries>
+      </section>
+
       @if (loading && !profile) {
         <p class="empty-hint">טוען…</p>
       } @else if (error) {
@@ -41,16 +129,16 @@ import { AnalysisResultDto } from '../../core/models/analysis';
         <section class="card overview-card">
           <h4>סקירה</h4>
           <div class="overview-grid">
-            <div class="overview-item"><span class="label">ז'אנר</span><span class="value">{{ profile.genre ?? '—' }}</span></div>
-            <div class="overview-item"><span class="label">תת-ז'אנר</span><span class="value">{{ profile.subGenre ?? '—' }}</span></div>
-            <div class="overview-item"><span class="label">קהל יעד</span><span class="value">{{ profile.targetAudience ?? '—' }}</span></div>
+            <div class="overview-item"><span class="label">ז'אנר</span><span class="value">{{ profile.genre ?? '-' }}</span></div>
+            <div class="overview-item"><span class="label">תת-ז'אנר</span><span class="value">{{ profile.subGenre ?? '-' }}</span></div>
+            <div class="overview-item"><span class="label">קהל יעד</span><span class="value">{{ profile.targetAudience ?? '-' }}</span></div>
             <div class="overview-item"><span class="label">רמת ספרות</span>
               <span class="value level-bar">
                 <span class="level-fill" [style.width.%]="(profile.literatureLevel ?? 0) * 10"></span>
                 {{ profile.literatureLevel ?? 0 }}/10
               </span>
             </div>
-            <div class="overview-item"><span class="label">רישום שפה</span><span class="value">{{ profile.languageRegister ?? '—' }}</span></div>
+            <div class="overview-item"><span class="label">רישום שפה</span><span class="value">{{ profile.languageRegister ?? '-' }}</span></div>
           </div>
         </section>
 
@@ -81,7 +169,7 @@ import { AnalysisResultDto } from '../../core/models/analysis';
                 <div class="character-card">
                   <div class="char-avatar">{{ initials(c.name) }}</div>
                   <div class="char-name">{{ c.name }}</div>
-                  <span class="char-role">{{ c.role || '—' }}</span>
+                  <span class="char-role">{{ c.role || '-' }}</span>
                 </div>
               }
             </div>
@@ -145,7 +233,7 @@ import { AnalysisResultDto } from '../../core/models/analysis';
                 <span class="label">קונפליקטים:</span>
                 <ul>
                   @for (c of storyParsed.conflicts; track c.type + (c.description ?? '')) {
-                    <li><span class="conflict-type">{{ c.type }}</span> — {{ c.description ?? '' }} ({{ c.status ?? 'ongoing' }})</li>
+                    <li><span class="conflict-type">{{ c.type }}</span>: {{ c.description ?? '' }} ({{ c.status ?? 'ongoing' }})</li>
                   }
                 </ul>
               </div>
@@ -217,6 +305,35 @@ import { AnalysisResultDto } from '../../core/models/analysis';
       background: #fafafa;
     }
     .card h4 { margin: 0 0 0.5rem 0; font-size: 0.9rem; color: #555; }
+    .book-status-card {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .review-tabs {
+      display: flex;
+      gap: 0.35rem;
+      border-bottom: 1px solid #e3e8ef;
+      margin-top: 0.25rem;
+    }
+    .review-tab {
+      padding: 0.35rem 0.75rem;
+      border: 1px solid transparent;
+      border-bottom: none;
+      background: none;
+      cursor: pointer;
+      font-size: 0.85rem;
+      color: #666;
+      border-radius: 6px 6px 0 0;
+    }
+    .review-tab:hover:not(.active) { background: #f0f4f9; }
+    .review-tab.active {
+      color: #0078d4;
+      font-weight: 600;
+      border-color: #e3e8ef;
+      background: #fff;
+      margin-bottom: -1px;
+    }
     .empty-hint, .error-hint, .muted { font-size: 0.875rem; color: #666; margin: 0; }
     .error-hint { color: #c00; }
     .overview-grid {
@@ -301,9 +418,28 @@ import { AnalysisResultDto } from '../../core/models/analysis';
     .citations { font-size: 0.8rem; color: #666; margin-top: 0.35rem; }
   `]
 })
-export class BookDashboardComponent implements OnInit {
+export class BookDashboardComponent implements OnInit, OnChanges {
   @Input() bookId!: string;
   @Input() bookTitle: string = '';
+  /** Book language (e.g. 'he', 'en'); drives the book-scoped status rows' localization + status key. */
+  @Input() bookLanguage: string | null = null;
+
+  /**
+   * wb3-f01 navigation output: bubbles a chapter-anchor click up to the host (editor-page) so it can
+   * call the existing selectChapter path. The host (editor-page) owns the chapter list and the
+   * selectChapter logic; the dashboard only emits the anchor.
+   */
+  @Output() openChapter = new EventEmitter<ChapterAnchor>();
+
+  /** The hosted review row; refreshed when a summary build finishes (clears its "build briefs first" gate). */
+  @ViewChild('reviewRow') reviewRow?: BookReviewStatusRowComponent;
+
+  /** Latest derived review state reported by the hosted review row; gates the scorecard/ledger mount. */
+  reviewState: BookReviewState = 'unknown';
+  /** Monotonic token passed to the findings panel; bumped when a build terminal warrants a re-read. */
+  findingsRefreshToken = 0;
+  /** Active review tab when the review is READY/STALE: the c02 Findings ledger (default) or c03 Story Bible. */
+  reviewTab: ReviewTab = 'findings';
 
   profile: BookProfileDto | null = null;
   loading = true;
@@ -326,6 +462,102 @@ export class BookDashboardComponent implements OnInit {
 
   ngOnInit(): void {
     this.loadProfile();
+  }
+
+  /**
+   * The editor switches books in place: the host updates [bookId] while the @if keeps THIS dashboard
+   * instance alive (Angular does not recreate it). The hosted child rows (summary/review/story-bible/
+   * chapter-summaries) self-correct via their own OnChanges keyed on bookId, but the dashboard's OWN
+   * state (profile card, parsed structured analysis, the Ask answer, and the active review tab) would
+   * otherwise carry over from the previous book. On a real bookId change (not the first binding, which
+   * ngOnInit already loads), reset that own state and reload the profile so nothing leaks across books.
+   * Skipped on firstChange so the initial load runs once via ngOnInit, not twice.
+   */
+  ngOnChanges(changes: SimpleChanges): void {
+    const bookIdChange = changes['bookId'];
+    if (bookIdChange && !bookIdChange.firstChange) {
+      this.resetOwnState();
+      this.loadProfile();
+    }
+  }
+
+  /**
+   * Clear the dashboard-owned transient state that is NOT re-derived from an @Input on its own, so a
+   * book switch does not show the previous book's profile/answer/tab. loadProfile() resets profile +
+   * parsed structured fields, so this covers the rest: the Ask question/answer, expansion toggles, and
+   * the active review tab (back to the default Findings view). reviewState/findingsRefreshToken are
+   * owned by the hosted review row's re-emit on its own OnChanges, so they self-correct.
+   */
+  private resetOwnState(): void {
+    this.reviewTab = 'findings';
+    this.askQuestion = '';
+    this.asking = false;
+    this.askError = null;
+    this.lastAnswer = null;
+    this.citationChapterIds = [];
+    this.synopsisExpanded = false;
+    this.expandedPlotNode = null;
+  }
+
+  /**
+   * A hosted book-summary build reached a terminal/error state (or a no-op confirmed a fresh summary):
+   * re-read the review status so the review row clears its "build briefs first" gate and any existing
+   * review reflects the new briefs (e.g. goes STALE). Preserves the Phase-2 "summary-terminal also
+   * refreshes review status" behavior across the wb3-c01 component split.
+   */
+  onSummaryTerminal(): void {
+    this.reviewRow?.loadBookReviewStatus();
+  }
+
+  /**
+   * True when the scorecard/ledger should mount: only when the review row reports READY or STALE. STALE
+   * still has persisted findings (an older view of the book), so the ledger is meaningful; not-built /
+   * needs-summary / building / unknown render nothing here (the status row owns those states).
+   */
+  get showFindings(): boolean {
+    return this.reviewState === 'ready' || this.reviewState === 'stale';
+  }
+
+  /**
+   * The hosted review row reported a new derived state. When it transitions INTO ready/stale (e.g. a build
+   * just finished), bump the findings refresh token so the ledger re-reads the freshly built findings.
+   */
+  onReviewStateChange(state: BookReviewState): void {
+    const wasShowing = this.showFindings;
+    this.reviewState = state;
+    if (this.showFindings && !wasShowing) {
+      // Transitioned into a findings-bearing state: force a re-read (covers the build-just-finished case;
+      // a fresh mount loads on its own ngOnChanges, but a token bump is harmless and covers re-entry).
+      this.findingsRefreshToken++;
+    }
+  }
+
+  /**
+   * wb3-f01 navigation seam: a finding's chapter-anchor chip was clicked. Bubble the anchor up to the
+   * host (editor-page) via @Output() openChapter so the host can call its existing selectChapter path.
+   * The dashboard does NOT know about the chapter list or the editor — the host owns both.
+   */
+  onOpenChapterFromFinding(anchor: ChapterAnchor): void {
+    this.openChapter.emit(anchor);
+  }
+
+  /**
+   * Direction for the review-tab bar and review surfaces: follows bookLanguage so an English book renders
+   * ltr tabs while the Hebrew-only dashboard chrome stays rtl. Drives [attr.dir] on review-tabs.
+   */
+  get reviewDir(): 'rtl' | 'ltr' {
+    return (this.bookLanguage ?? '').toLowerCase().startsWith('en') ? 'ltr' : 'rtl';
+  }
+
+  /**
+   * Localized label for a review tab. Follows bookLanguage (not the RTL dashboard chrome) so he/en parity
+   * is preserved. DRAFT Hebrew - flag for native-speaker review before sign-off.
+   */
+  reviewTabLabel(tab: ReviewTab): string {
+    const isEn = (this.bookLanguage ?? '').toLowerCase().startsWith('en');
+    const he: Record<ReviewTab, string> = { findings: 'ממצאים', bible: 'ספר הסיפור' };
+    const en: Record<ReviewTab, string> = { findings: 'Findings', bible: 'Story Bible' };
+    return (isEn ? en : he)[tab];
   }
 
   get synopsisPreview(): string {

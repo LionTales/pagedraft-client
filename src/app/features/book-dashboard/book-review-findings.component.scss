@@ -1,0 +1,362 @@
+// wb3-c02: Dimension Scorecard + Findings Ledger styles. Keeps the muted/neutral palette of the
+// book-dashboard cards; verdict colors: keep=green, improve=amber, cut=red (RTL via [dir] on the root).
+:host {
+  display: block;
+}
+
+.findings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.section-title {
+  margin: 0 0 0.4rem 0;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.muted {
+  color: #666;
+}
+
+.findings-loading,
+.findings-empty,
+.findings-error {
+  margin: 0;
+  font-size: 0.85rem;
+}
+.findings-error {
+  color: #b00020;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: #0078d4;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0;
+}
+
+// ── Scorecard ────────────────────────────────────────────────────────────────
+.scorecard-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.scorecard-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: inherit;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #e3e8ef;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.scorecard-row:hover {
+  background: #f5f8fc;
+}
+.scorecard-row.active {
+  border-color: #0078d4;
+  box-shadow: 0 0 0 1px #0078d4 inset;
+}
+.sc-dimension {
+  font-weight: 600;
+  color: #333;
+}
+.sc-score {
+  font-size: 0.78rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.sc-score[data-score='weak'] {
+  background: #fdecec;
+  color: #b00020;
+}
+.sc-score[data-score='mixed'] {
+  background: #fff4e0;
+  color: #8a5a00;
+}
+.sc-score[data-score='strong'] {
+  background: #e7f5e7;
+  color: #2d6a2d;
+}
+.sc-counts {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+.sc-count {
+  min-width: 1.4rem;
+  text-align: center;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.sc-count.keep {
+  background: #e7f5e7;
+  color: #2d6a2d;
+}
+.sc-count.improve {
+  background: #fff4e0;
+  color: #8a5a00;
+}
+.sc-count.cut {
+  background: #fdecec;
+  color: #b00020;
+}
+
+// ── Ledger ───────────────────────────────────────────────────────────────────
+.ledger-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.ledger-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.verdict-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 12px;
+  border: 1px solid #ddd;
+  background: #fff;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: #555;
+}
+.verdict-chip .verdict-icon {
+  font-weight: 700;
+}
+.verdict-chip.keep.active {
+  border-color: #2d6a2d;
+  background: #e7f5e7;
+  color: #2d6a2d;
+}
+.verdict-chip.improve.active {
+  border-color: #8a5a00;
+  background: #fff4e0;
+  color: #8a5a00;
+}
+.verdict-chip.cut.active {
+  border-color: #b00020;
+  background: #fdecec;
+  color: #b00020;
+}
+
+.ledger-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.5rem;
+}
+.ledger-group.resolved {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #e0e0e0;
+  opacity: 0.85;
+}
+.resolved-title {
+  margin: 0 0 0.2rem 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.finding-row {
+  border: 1px solid #eee;
+  border-inline-start-width: 3px;
+  border-radius: 6px;
+  background: #fff;
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.finding-row.verdict-keep {
+  border-inline-start-color: #2d6a2d;
+}
+.finding-row.verdict-improve {
+  border-inline-start-color: #d69200;
+}
+.finding-row.verdict-cut {
+  border-inline-start-color: #b00020;
+}
+.finding-row.resolved {
+  background: #fafafa;
+}
+
+.finding-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+.finding-verdict-icon {
+  font-weight: 700;
+}
+.finding-row.verdict-keep .finding-verdict-icon {
+  color: #2d6a2d;
+}
+.finding-row.verdict-improve .finding-verdict-icon {
+  color: #d69200;
+}
+.finding-row.verdict-cut .finding-verdict-icon {
+  color: #b00020;
+}
+.dimension-chip {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 10px;
+  background: #eef2f7;
+  color: #44546a;
+  font-weight: 600;
+}
+.finding-rationale {
+  flex: 1;
+  text-align: inherit;
+  color: #333;
+  line-height: 1.35;
+}
+.finding-rationale .expand-caret {
+  font-size: 0.65rem;
+  color: #888;
+  margin-inline-start: 0.25rem;
+}
+.finding-status-badge {
+  font-size: 0.72rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #f0f0f0;
+  color: #666;
+}
+.finding-status-badge[data-status='open'] {
+  background: #e8f0fc;
+  color: #074799;
+}
+.finding-status-badge[data-status='acknowledged'] {
+  background: #eef2f7;
+  color: #44546a;
+}
+.finding-status-badge[data-status='dismissed'] {
+  background: #f0f0f0;
+  color: #777;
+}
+.finding-status-badge[data-status='done'] {
+  background: #e7f5e7;
+  color: #2d6a2d;
+}
+
+.finding-anchors {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+.anchors-label {
+  font-size: 0.75rem;
+}
+.anchor-chip {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 10px;
+  border: 1px solid #d6dde6;
+  background: #fff;
+  color: #0078d4;
+  cursor: pointer;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.anchor-chip:hover {
+  background: #f0f6fc;
+}
+
+.finding-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.35rem 0.5rem;
+  background: #f9fafb;
+  border-radius: 4px;
+}
+.detail-label {
+  margin: 0 0 0.2rem 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.evidence-excerpt {
+  margin: 0 0 0.3rem 0;
+  padding-inline-start: 0.5rem;
+  border-inline-start: 2px solid #d6dde6;
+  font-size: 0.82rem;
+  color: #444;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.suggested-action-text {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #333;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.finding-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+.status-btn {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+  border-radius: 4px;
+  border: 1px solid #d6dde6;
+  background: #fff;
+  color: #0078d4;
+  cursor: pointer;
+}
+.status-btn:hover:not(:disabled) {
+  background: #f0f6fc;
+}
+.status-btn.secondary {
+  color: #666;
+}
+.status-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.status-patch-error {
+  font-size: 0.75rem;
+  color: #b00020;
+}
+.status-spinner {
+  width: 0.8rem;
+  height: 0.8rem;
+  border: 2px solid #cdd9ec;
+  border-top-color: #0078d4;
+  border-radius: 50%;
+  display: inline-block;
+  animation: findings-spin 0.8s linear infinite;
+}
+@keyframes findings-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

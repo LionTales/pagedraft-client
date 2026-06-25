@@ -1,0 +1,88 @@
+<!-- Book summary status row (wb1-f01, relocated wb3-c01). Hidden until a status is available. -->
+<div
+  class="style-baseline-row"
+  *ngIf="bookSummaryState !== 'unknown'"
+  [attr.dir]="bookSummaryDir"
+  data-testid="book-summary-row">
+  <div class="sb-line">
+    <span class="sb-title">{{ bookSummaryLabel('title') }}</span>
+
+    <!-- NOT BUILT -->
+    <ng-container *ngIf="bookSummaryState === 'not-built'">
+      <span class="sb-status sb-not-built" data-testid="bsum-not-built">{{ bookSummaryLabel('notBuilt') }}</span>
+      <button
+        type="button"
+        class="run-btn sb-action"
+        data-testid="bsum-build-now"
+        (click)="openBookSummaryConsent()">
+        {{ bookSummaryLabel('buildNow') }}
+      </button>
+    </ng-container>
+
+    <!-- BUILDING -->
+    <ng-container *ngIf="bookSummaryState === 'building'">
+      <span class="sb-status sb-building" data-testid="bsum-building">
+        {{ bookSummaryProgressMessage || bookSummaryLabel('building') }}
+        <ng-container *ngIf="bookSummaryProgressPercent != null"> ({{ bookSummaryProgressPercent }}%)</ng-container>
+      </span>
+      <span class="sb-spinner" aria-hidden="true"></span>
+    </ng-container>
+
+    <!-- READY -->
+    <ng-container *ngIf="bookSummaryState === 'ready'">
+      <span class="sb-status sb-ready" data-testid="bsum-ready">
+        {{ bookSummaryLabel('coverage') }} {{ bookSummaryCoverage }}
+        <ng-container *ngIf="bookSummaryUpdatedRelative">
+          · {{ bookSummaryLabel('updated') }} {{ bookSummaryUpdatedRelative }}
+        </ng-container>
+      </span>
+    </ng-container>
+
+    <!-- STALE -->
+    <ng-container *ngIf="bookSummaryState === 'stale'">
+      <span class="sb-status sb-stale" data-testid="bsum-stale">
+        {{ bookSummaryLabel('stalePrefix') }} {{ bookSummaryStatus?.staleCount }}
+      </span>
+      <button
+        type="button"
+        class="run-btn sb-action"
+        data-testid="bsum-refresh"
+        (click)="openBookSummaryConsent()">
+        {{ bookSummaryLabel('refresh') }}
+      </button>
+    </ng-container>
+  </div>
+
+  <!-- Cross-model staleness warning: summary exists but was built with a different model. -->
+  <p
+    class="sb-cross-model-warning muted"
+    *ngIf="bookSummaryBuiltWithDifferentModel"
+    [attr.dir]="bookSummaryDir"
+    data-testid="bsum-cross-model-warning">
+    {{ bookSummaryLabel('crossModelWarning') }}
+  </p>
+
+  <!-- CONSENT prompt: estimate + gate. Build endpoint is NOT called until Confirm.
+       Hidden while a build is in flight so a lingering prompt cannot duplicate it. -->
+  <div class="sb-consent" *ngIf="showBookSummaryConsent && !bookSummaryBuilding" data-testid="bsum-consent" [attr.dir]="bookSummaryDir">
+    <p class="sb-consent-title">{{ bookSummaryLabel('consentTitle') }}</p>
+    <p class="sb-consent-body">{{ bookSummaryLabel('consentBody') }}</p>
+    <p class="sb-consent-estimate" data-testid="bsum-consent-estimate">{{ bookSummaryConsentEstimate }}</p>
+    <div class="sb-consent-actions">
+      <button
+        type="button"
+        class="run-btn"
+        data-testid="bsum-consent-confirm"
+        (click)="confirmBookSummaryBuild()">
+        {{ bookSummaryLabel('confirm') }}
+      </button>
+      <button
+        type="button"
+        class="run-btn secondary"
+        data-testid="bsum-consent-cancel"
+        (click)="cancelBookSummaryConsent()">
+        {{ bookSummaryLabel('cancel') }}
+      </button>
+    </div>
+  </div>
+</div>

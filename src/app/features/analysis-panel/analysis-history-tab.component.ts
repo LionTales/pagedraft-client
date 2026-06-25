@@ -4,15 +4,16 @@ import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, isConsist
 import { LineEditParserService, ParsedLineEdit } from '../../core/services/line-edit-parser.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
 import { proofreadDiff } from '../../core/utils/proofread-diff';
-import { analysisItems as splitAnalysisItems } from '../../core/utils/analysis-items';
 import { SuggestionCardComponent } from './suggestion-card.component';
 import { LinguisticResultComponent } from './linguistic-result.component';
+import { LiteraryResultComponent } from './literary-result.component';
+import { MarkdownTextComponent } from './markdown-text.component';
 import { resolveCardLang } from './card-lang';
 
 @Component({
   selector: 'app-analysis-history-tab',
   standalone: true,
-  imports: [CommonModule, SuggestionCardComponent, LinguisticResultComponent],
+  imports: [CommonModule, SuggestionCardComponent, LinguisticResultComponent, LiteraryResultComponent, MarkdownTextComponent],
   templateUrl: './analysis-history-tab.component.html',
   styleUrl: './analysis-history-tab.component.scss'
 })
@@ -356,10 +357,6 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     } catch {
       return [];
     }
-  }
-
-  analysisItems(text: string): string[] {
-    return splitAnalysisItems(text);
   }
 
   onSetHistoryFilter(type: string | null): void {

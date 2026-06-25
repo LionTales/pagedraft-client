@@ -1,0 +1,142 @@
+<!--
+  wb3-c03: Story Bible / continuity ledger (C). The G3 chapter-anchored style-sheet ledger.
+  Three sections - Characters / Threads / Timeline - all derived from the SAME BookReviewFindingsDto the
+  c02 findings panel reads (continuity + character dimension findings). Advisory / display only; no
+  mutation here (the per-finding lifecycle lives in the c02 ledger). The host gates this on the review
+  status row being READY/STALE, so not-built / briefs-missing / building states live in that row, not here.
+  Chapter anchors reuse the c02 anchor-chip + (openChapter) seam for wb3-f01 to wire.
+-->
+<div class="story-bible" [attr.dir]="bibleDir" data-testid="book-story-bible">
+  <!-- LOADING -->
+  <p *ngIf="loading" class="bible-loading muted" data-testid="bible-loading">
+    {{ label('loading') }}
+  </p>
+
+  <!-- LOAD ERROR -->
+  <p
+    *ngIf="loadError"
+    class="bible-error"
+    role="alert"
+    data-testid="bible-error">
+    {{ label('loadError') }}
+  </p>
+
+  <!-- WHOLE-BIBLE EMPTY (review ready/stale, zero findings of any dimension) -->
+  <p
+    *ngIf="!loading && !loadError && isEmpty"
+    class="bible-empty muted"
+    data-testid="bible-empty">
+    {{ label('empty') }}
+  </p>
+
+  <ng-container *ngIf="!loading && !loadError && !isEmpty">
+    <!-- ── Characters ──────────────────────────────────────────────────────── -->
+    <section class="bible-section characters" data-testid="bible-characters">
+      <h4 class="section-title">{{ label('charactersTitle') }}</h4>
+      <div class="entry-list" *ngIf="hasCharacters; else charactersEmpty">
+        <ng-container *ngFor="let f of characterEntries">
+          <ng-container *ngTemplateOutlet="bibleEntry; context: { $implicit: f }"></ng-container>
+        </ng-container>
+      </div>
+      <ng-template #charactersEmpty>
+        <p class="section-empty muted" data-testid="bible-characters-empty">{{ label('charactersEmpty') }}</p>
+      </ng-template>
+    </section>
+
+    <!-- ── Threads (open / dangling / resolved) ────────────────────────────── -->
+    <section class="bible-section threads" data-testid="bible-threads">
+      <h4 class="section-title">{{ label('threadsTitle') }}</h4>
+      <div *ngIf="hasThreads; else threadsEmpty">
+        <ng-container *ngFor="let st of threadStates">
+          <div
+            class="thread-group"
+            *ngIf="threadsFor(st).length > 0"
+            [attr.data-thread-state]="st"
+            [attr.data-testid]="'thread-group-' + st">
+            <p class="thread-state-label" [attr.data-thread-state]="st">
+              {{ threadStateLabel(st) }} ({{ threadsFor(st).length }})
+            </p>
+            <div class="entry-list">
+              <ng-container *ngFor="let f of threadsFor(st)">
+                <ng-container *ngTemplateOutlet="bibleEntry; context: { $implicit: f }"></ng-container>
+              </ng-container>
+            </div>
+          </div>
+        </ng-container>
+      </div>
+      <ng-template #threadsEmpty>
+        <p class="section-empty muted" data-testid="bible-threads-empty">{{ label('threadsEmpty') }}</p>
+      </ng-template>
+    </section>
+
+    <!-- ── Timeline (continuity contradictions, chapter-anchored) ──────────── -->
+    <section class="bible-section timeline" data-testid="bible-timeline">
+      <h4 class="section-title">{{ label('timelineTitle') }}</h4>
+      <div class="entry-list" *ngIf="hasTimeline; else timelineEmpty">
+        <ng-container *ngFor="let f of timelineEntries">
+          <ng-container *ngTemplateOutlet="bibleEntry; context: { $implicit: f }"></ng-container>
+        </ng-container>
+      </div>
+      <ng-template #timelineEmpty>
+        <p class="section-empty muted" data-testid="bible-timeline-empty">{{ label('timelineEmpty') }}</p>
+      </ng-template>
+    </section>
+  </ng-container>
+</div>
+
+<!-- ── A single Story Bible entry (shared by all three sections) ─────────────── -->
+<ng-template #bibleEntry let-f>
+  <div
+    class="bible-entry"
+    [class.verdict-keep]="f.verdict === 'keep'"
+    [class.verdict-improve]="f.verdict === 'improve'"
+    [class.verdict-cut]="f.verdict === 'cut'"
+    [attr.data-verdict]="f.verdict"
+    [attr.data-dimension]="f.dimension"
+    [attr.data-testid]="'bible-entry-' + f.id">
+    <div class="entry-main">
+      <span class="entry-verdict-icon" [attr.title]="verdictLabel(f.verdict)" aria-hidden="true">
+        {{ verdictIcon(f.verdict) }}
+      </span>
+      <button
+        type="button"
+        class="entry-rationale link-btn"
+        [attr.data-testid]="'bible-rationale-' + f.id"
+        (click)="toggleExpand(f.id)">
+        {{ f.rationale }}
+        <span class="expand-caret" aria-hidden="true">{{ isExpanded(f.id) ? '▲' : '▼' }}</span>
+      </button>
+    </div>
+
+    <!-- Chapter anchor chips. Navigation is wired by wb3-f01 via (openChapter). -->
+    <div class="entry-anchors" *ngIf="f.chapterAnchors?.length">
+      <span class="anchors-label muted">{{ label('chapters') }}:</span>
+      <button
+        *ngFor="let a of f.chapterAnchors"
+        type="button"
+        class="anchor-chip"
+        [attr.data-chapter-id]="a.chapterId"
+        [attr.data-testid]="'bible-anchor-' + f.id + '-' + a.chapterId"
+        (click)="onAnchorClick(a)">
+        {{ a.order }}. {{ a.title }}
+      </button>
+    </div>
+
+    <!-- Expanded detail: evidence excerpts + suggested action -->
+    <div class="entry-detail" *ngIf="isExpanded(f.id)" [attr.data-testid]="'bible-detail-' + f.id">
+      <div class="evidence" *ngIf="f.evidence?.length">
+        <p class="detail-label muted">{{ label('evidence') }}</p>
+        <blockquote
+          *ngFor="let e of f.evidence"
+          class="evidence-excerpt"
+          [attr.data-chapter-order]="e.chapterOrder">
+          {{ e.excerpt }}
+        </blockquote>
+      </div>
+      <div class="suggested-action" *ngIf="f.suggestedAction">
+        <p class="detail-label muted">{{ label('suggestedAction') }}</p>
+        <p class="suggested-action-text">{{ f.suggestedAction }}</p>
+      </div>
+    </div>
+  </div>
+</ng-template>

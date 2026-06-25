@@ -118,7 +118,9 @@
         @if (rightPanelTab === 'book' && bookId && book) {
           <app-book-dashboard
             [bookId]="bookId"
-            [bookTitle]="book.title">
+            [bookTitle]="book.title"
+            [bookLanguage]="book.language"
+            (openChapter)="onOpenChapterFromDashboard($event)">
           </app-book-dashboard>
         }
       </div>

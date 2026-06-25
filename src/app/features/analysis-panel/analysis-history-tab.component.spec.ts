@@ -35,6 +35,45 @@ function makeLinguisticResult(
   };
 }
 
+// A full, well-formed LiteraryAnalysisResult JSON (camelCase, matching the backend shape). The backend
+// stores this re-serialized into resultText; the History tab must route it to app-literary-result, not
+// the generic metric-cards / raw textResult block.
+const LITERARY_JSON = JSON.stringify({
+  themes: [{ name: 'Isolation', description: 'Loneliness.', significance: 'major' }],
+  tone: 'Melancholic',
+  toneDescription: 'Wistful throughout.',
+  narrativeVoice: 'First person',
+  narrativeVoiceDescription: 'Confessional narrator.',
+  rhetoricalDevices: [{ name: 'Metaphor', example: 'The city was a beast.', effect: 'Menace.' }],
+  moodProgression: 'Somber to hopeful.',
+  summary: 'A reflective chapter on solitude.',
+});
+
+function makeLiteraryResult(
+  resultText: string | null = LITERARY_JSON,
+  overrides: Partial<AnalysisResultDto> = {}
+): AnalysisResultDto {
+  return {
+    id: 'r-lit',
+    chapterId: 'chap-1',
+    jobId: null,
+    type: 'LiteraryAnalysis',
+    analysisType: 'LiteraryAnalysis',
+    resultText: resultText ?? '',
+    modelName: 'test-model',
+    createdAt: new Date().toISOString(),
+    scope: 'Chapter',
+    structuredResult: null,
+    sceneId: null,
+    bookId: 'book-1',
+    language: 'he',
+    status: 'Active',
+    proofreadNoChangesHint: false,
+    suggestions: [],
+    ...overrides,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Suite
 // ---------------------------------------------------------------------------
@@ -556,6 +595,124 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
 
       const devsBlock = fixture.debugElement.query(By.css('[data-testid="linguistic-deviations"]'));
       expect(devsBlock.nativeElement.textContent).toContain('Style deviations from book');
+    });
+  });
+
+  // =========================================================================
+  // 7. Literary rendering in history
+  //    A historical LiteraryAnalysis result must route to app-literary-result
+  //    (the same dedicated renderer the Run tab now uses) and NEVER fall through
+  //    to the generic metric-cards path or the raw textResult fallback. Mirrors
+  //    the LinguisticAnalysis precedent above.
+  // =========================================================================
+
+  describe('literary rendering in history (LiteraryAnalysis)', () => {
+    it('routes a historical LiteraryAnalysis result to app-literary-result with parsed sections', () => {
+      loadResult(makeLiteraryResult());
+
+      expect(fixture.debugElement.query(By.css('app-literary-result'))).not.toBeNull();
+      const view = fixture.debugElement.query(By.css('[data-testid="literary-view"]'));
+      expect(view).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="literary-summary"]'))).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="theme-row"]'))).not.toBeNull();
+    });
+
+    it('does NOT dump the raw resultText JSON through the generic metric-cards / textResult block', () => {
+      // structuredResult set too, to prove the metric-cards path is also excluded for Literary.
+      loadResult(makeLiteraryResult(LITERARY_JSON, { structuredResult: LITERARY_JSON }));
+
+      expect(fixture.debugElement.query(By.css('.metric-cards'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('.analysis-list'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('.analysis-single'))).toBeNull();
+
+      // The raw JSON must not appear verbatim anywhere outside the (hidden) raw toggle <pre>.
+      const host = fixture.nativeElement as HTMLElement;
+      expect(host.textContent).not.toContain('"rhetoricalDevices"');
+    });
+
+    it('renders the literary view with dir=rtl for a Hebrew historical result', () => {
+      loadResult(makeLiteraryResult(LITERARY_JSON, { language: 'he' }));
+
+      const view = fixture.debugElement.query(By.css('[data-testid="literary-view"]'));
+      expect(view).not.toBeNull();
+      expect(view.nativeElement.getAttribute('dir')).toBe('rtl');
+    });
+
+    it('renders the literary view with dir=ltr for an English historical result', () => {
+      loadResult(makeLiteraryResult(LITERARY_JSON, { language: 'en' }));
+
+      const view = fixture.debugElement.query(By.css('[data-testid="literary-view"]'));
+      expect(view).not.toBeNull();
+      expect(view.nativeElement.getAttribute('dir')).toBe('ltr');
+    });
+
+    it('falls back gracefully (parse-error note, no throw, no generic raw block) for malformed Literary resultText', () => {
+      expect(() => loadResult(makeLiteraryResult('{ not valid json'))).not.toThrow();
+
+      expect(fixture.debugElement.query(By.css('[data-testid="literary-parse-error"]'))).not.toBeNull();
+      // Still must not fall through to the generic raw block.
+      expect(fixture.debugElement.query(By.css('.analysis-single'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('.analysis-list'))).toBeNull();
+    });
+
+    it('does NOT render app-literary-result content for a non-LiteraryAnalysis result', () => {
+      // app-literary-result is always in the DOM (host element), but its view section must be absent.
+      loadResult(makeLinguisticResult({ deviations: [], consistencyIssues: [] }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="literary-view"]'))).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // 8. Free-text (Custom / Summarize) history result rendered as Markdown.
+  //    The literal **/* markers must not survive on screen, and the structured
+  //    branches (Linguistic / Literary) must remain excluded.
+  // =========================================================================
+
+  describe('free-text (Custom) Markdown result in history', () => {
+    function makeCustomResult(resultText: string, overrides: Partial<AnalysisResultDto> = {}): AnalysisResultDto {
+      return {
+        id: 'r-custom',
+        chapterId: 'chap-1',
+        jobId: null,
+        type: 'Custom',
+        analysisType: 'Custom',
+        resultText,
+        modelName: 'test-model',
+        createdAt: new Date().toISOString(),
+        scope: 'Chapter',
+        structuredResult: null,
+        sceneId: null,
+        bookId: 'book-1',
+        language: 'he',
+        status: 'Active',
+        proofreadNoChangesHint: false,
+        suggestions: [],
+        ...overrides,
+      };
+    }
+
+    it('renders a past Custom result via app-markdown-text with no literal ** in the host text', () => {
+      loadResult(makeCustomResult('**1. הדילמה:**\n* קושי ראשון\n* קושי שני'));
+
+      const md = fixture.debugElement.query(By.css('[data-testid="history-markdown-result"]'));
+      expect(md).not.toBeNull();
+      expect(md.nativeElement.querySelector('strong')).not.toBeNull();
+      const host = fixture.nativeElement as HTMLElement;
+      expect(host.textContent).not.toContain('**');
+      // Not routed through the old plain-text fallback.
+      expect(fixture.debugElement.query(By.css('.analysis-list'))).toBeNull();
+      expect(host.querySelector('p.analysis-single')).toBeNull();
+    });
+
+    it('does NOT route a LinguisticAnalysis history result through the markdown component', () => {
+      loadResult(makeLinguisticResult({ deviations: [], consistencyIssues: [] }));
+      expect(fixture.debugElement.query(By.css('[data-testid="history-markdown-result"]'))).toBeNull();
+    });
+
+    it('does NOT route a LiteraryAnalysis history result through the markdown component', () => {
+      loadResult(makeLiteraryResult());
+      expect(fixture.debugElement.query(By.css('[data-testid="history-markdown-result"]'))).toBeNull();
     });
   });
 });

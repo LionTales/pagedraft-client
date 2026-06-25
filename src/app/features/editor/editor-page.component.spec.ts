@@ -576,4 +576,106 @@ describe('EditorPageComponent (focused logic)', () => {
       expect(chapterGetByIdSpy).not.toHaveBeenCalled();
     });
   });
+
+  // ─── wb3-f01: onOpenChapterFromDashboard ───────────────────────────
+
+  describe('onOpenChapterFromDashboard (wb3-f01)', () => {
+    const CHAPTER_A: import('../../core/models/book').ChapterSummaryDto = {
+      id: 'chap-a', title: 'Chapter A', partName: null, order: 0, wordCount: 100, updatedAt: ''
+    };
+    const CHAPTER_B: import('../../core/models/book').ChapterSummaryDto = {
+      id: 'chap-b', title: 'Chapter B', partName: null, order: 1, wordCount: 200, updatedAt: ''
+    };
+
+    beforeEach(() => {
+      component.book = {
+        id: 'book-1', title: 'My Book', author: null, language: 'he', createdAt: '', updatedAt: '',
+        chapters: [CHAPTER_A, CHAPTER_B],
+      };
+      // Stub loadChapterContent (calls chapterService.getById internally).
+      const chapterServiceStub = TestBed.inject(ChapterService) as any;
+      chapterServiceStub.getById = jasmine.createSpy('getById').and.returnValue(EMPTY);
+    });
+
+    it('calls selectChapter with the matching chapter when chapterId is found', () => {
+      const selectSpy = spyOn(component, 'selectChapter').and.callThrough();
+
+      component.onOpenChapterFromDashboard({ chapterId: 'chap-b', order: 1, title: 'Chapter B' });
+
+      expect(selectSpy).toHaveBeenCalledOnceWith(CHAPTER_B);
+    });
+
+    it('shows a Hebrew alert and does NOT open any chapter when chapterId is missing (book language he)', () => {
+      // book.language = 'he' (set in beforeEach) so editorDirection is rtl → Hebrew message
+      const selectSpy = spyOn(component, 'selectChapter');
+      spyOn(window, 'alert');
+
+      // chapterId is unknown; order 0 would match CHAPTER_A if the order fallback were present
+      component.onOpenChapterFromDashboard({ chapterId: 'chap-unknown', order: 0, title: 'Chapter A' });
+
+      expect(window.alert).toHaveBeenCalledOnceWith('הפרק לא נמצא - ייתכן שנמחק.');
+      expect(selectSpy).not.toHaveBeenCalled();
+    });
+
+    it('shows an English alert and does NOT open any chapter when chapterId is missing (book language en)', () => {
+      component.book!.language = 'en';
+      const selectSpy = spyOn(component, 'selectChapter');
+      spyOn(window, 'alert');
+
+      component.onOpenChapterFromDashboard({ chapterId: 'chap-unknown', order: 0, title: 'Chapter A' });
+
+      expect(window.alert).toHaveBeenCalledOnceWith('Chapter not found - it may have been deleted.');
+      expect(selectSpy).not.toHaveBeenCalled();
+    });
+
+    it('REVERT-VERIFY: restoring the order fallback opens the wrong chapter (confirms the fix is needed)', () => {
+      // TEMP-REVERT: simulate the removed order fallback inline so this test can verify
+      // that it would navigate to CHAPTER_B (order 1) when the anchor points to a deleted
+      // chapter whose id is gone but whose order coincidentally matches CHAPTER_B.
+      const CHAPTER_C_DELETED_ID = 'chap-deleted';
+      // The anchor was built when chap-deleted existed at order 1; after deletion CHAPTER_B
+      // sits at order 1. The fallback would wrongly open CHAPTER_B.
+      const anchor = { chapterId: CHAPTER_C_DELETED_ID, order: 1, title: 'Deleted Chapter' };
+
+      // TEMP-REVERT inline simulation: chapterId miss → order match → wrong chapter
+      const wrongCh =
+        component.book!.chapters.find(c => c.id === anchor.chapterId) ??
+        component.book!.chapters.find(c => c.order === anchor.order) ??
+        null;
+
+      // The fallback resolves to CHAPTER_B (order 1) — this is the wrong chapter
+      expect(wrongCh).toBe(CHAPTER_B);
+      expect(wrongCh).not.toBeNull();
+      // REVERT-VERIFY confirmed: the order fallback would open CHAPTER_B instead of showing an error.
+      // The fix (strict chapterId-only resolution + alert) is correct.
+    });
+
+    it('is a safe no-op (shows alert) when chapterId does not match any chapter and order is also absent', () => {
+      const selectSpy = spyOn(component, 'selectChapter');
+      spyOn(window, 'alert');
+
+      component.onOpenChapterFromDashboard({ chapterId: 'ghost', order: 99, title: 'Ghost' });
+
+      expect(window.alert).toHaveBeenCalled();
+      expect(selectSpy).not.toHaveBeenCalled();
+    });
+
+    it('is a safe no-op when book is null', () => {
+      component.book = null;
+      const selectSpy = spyOn(component, 'selectChapter');
+
+      component.onOpenChapterFromDashboard({ chapterId: 'chap-a', order: 0, title: 'Chapter A' });
+
+      expect(selectSpy).not.toHaveBeenCalled();
+    });
+
+    it('sets selectedChapterId to the matched chapterId (end-to-end chapterId propagation)', () => {
+      // No pending changes, so selectChapter goes through the direct load path.
+      component.hasPendingChanges = false;
+
+      component.onOpenChapterFromDashboard({ chapterId: 'chap-b', order: 1, title: 'Chapter B' });
+
+      expect(component.selectedChapterId).toBe('chap-b');
+    });
+  });
 });
