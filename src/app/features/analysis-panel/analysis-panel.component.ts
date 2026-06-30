@@ -54,6 +54,73 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   @Output() revertToVersion = new EventEmitter<string>();
 
   readonly analysisTypes = ANALYSIS_TYPES;
+
+  /** Panel chrome language: book-scoped, Hebrew default, English only for an English book. */
+  get panelLang(): 'he' | 'en' {
+    return (this.bookLanguage?.trim().toLowerCase() || 'he').startsWith('en') ? 'en' : 'he';
+  }
+
+  /** Logical direction for the panel chrome; follows the book language so en books render ltr. */
+  get panelDir(): 'rtl' | 'ltr' {
+    return this.panelLang === 'en' ? 'ltr' : 'rtl';
+  }
+
+  /** Localized panel chrome strings (he default, en when the book is English). Keeps he/en parity. */
+  panelLabel(key: string): string {
+    const he: Record<string, string> = {
+      title: 'ניתוח',
+      customPrompt: 'בקשה מותאמת',
+      customPlaceholder: 'תארו מה תרצו שה-AI ינתח (תמיכה בעברית)...',
+      saveAsTemplate: 'שמור כתבנית',
+      run: 'הרץ ניתוח',
+      running: 'מריץ...',
+      runStreaming: 'הרץ עם הזרמה',
+      streaming: 'מזרים...',
+      highlight: 'הדגש מילים מוצעות במסמך',
+      tabRun: 'ריצה',
+      tabHistory: 'היסטוריה',
+      tabVersions: 'גרסאות',
+    };
+    const en: Record<string, string> = {
+      title: 'Analysis',
+      customPrompt: 'Custom prompt',
+      customPlaceholder: 'Describe what you want the AI to analyze (Hebrew supported)...',
+      saveAsTemplate: 'Save as template',
+      run: 'Run analysis',
+      running: 'Running...',
+      runStreaming: 'Run with streaming',
+      streaming: 'Streaming...',
+      highlight: 'Highlight suggestion words in document',
+      tabRun: 'Run',
+      tabHistory: 'History',
+      tabVersions: 'Versions',
+    };
+    const map = this.panelLang === 'he' ? he : en;
+    return map[key] ?? key;
+  }
+
+  /** Localized label for an analysis-type picker button (he default, en fallback). */
+  analysisTypeLabel(value: string): string {
+    const he: Record<string, string> = {
+      Proofread: 'הגהה',
+      LineEdit: 'עריכת שורה',
+      LinguisticAnalysis: 'לשוני',
+      LiteraryAnalysis: 'ספרותי',
+      Summarization: 'סיכום',
+      Custom: 'מותאם',
+    };
+    const en: Record<string, string> = {
+      Proofread: 'Proofread',
+      LineEdit: 'Line Edit',
+      LinguisticAnalysis: 'Linguistic',
+      LiteraryAnalysis: 'Literary',
+      Summarization: 'Summarize',
+      Custom: 'Custom',
+    };
+    const map = this.panelLang === 'he' ? he : en;
+    return map[value] ?? value;
+  }
+
   selectedAnalysisType: string = 'Proofread';
   prompt = '';
   selectedTemplateId: string | null = null;

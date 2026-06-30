@@ -516,6 +516,7 @@ describe('AnalysisRunTabComponent', () => {
 
     // ---- State 1: UNRELIABLE + has suggestions (PROBLEM 2) ----------------
     it('UNRELIABLE + has suggestions: warning renders, cards do NOT, model name in header', () => {
+      component.bookLanguage = 'en';
       component.latestResult = makeProofreadResult({
         proofreadResultUnreliable: true,
         modelName: 'Ollama:dicta',
@@ -599,6 +600,7 @@ describe('AnalysisRunTabComponent', () => {
 
     // ---- State 3: RELIABLE + no suggestions ------------------------------
     it('RELIABLE + no suggestions: "looks clean" renders, warning does NOT, model name present', () => {
+      component.bookLanguage = 'en';
       component.latestResult = makeProofreadResult({
         proofreadResultUnreliable: false,
         modelName: 'Ollama:dicta',
@@ -637,6 +639,7 @@ describe('AnalysisRunTabComponent', () => {
     it('FINALIZING + no suggestions: "looks clean" is suppressed and a finalizing hint shows instead', () => {
       // Synthetic streaming row: no suggestions, no reliability flag yet. Without the finalizing guard this
       // would wrongly render "No changes needed" even though the run may still surface edits / a warning.
+      component.bookLanguage = 'en';
       component.latestResult = makeProofreadResult({ proofreadResultUnreliable: undefined });
       component.selectedAnalysisType = 'Proofread';
       component.proofreadSuggestions = [];
@@ -958,6 +961,68 @@ describe('AnalysisRunTabComponent', () => {
       component.showBaselineConsent = true;
       component.ngOnChanges({ sceneId: new SimpleChange(null, 'scene-9', false) });
       expect(component.showBaselineConsent).toBeTrue();
+    });
+  });
+
+  // =========================================================================
+  // f01 he/en parity: proofread + line-edit cards receive [lang] from chromeLang
+  // =========================================================================
+
+  describe('f01: proofread suggestion-card renders Hebrew labels for a Hebrew book', () => {
+    const proofreadSuggestion: AnalysisSuggestion = {
+      id: 'pf-1',
+      original: 'הוא הלך',
+      suggested: 'הוא צעד',
+      category: 'style',
+      startOffset: 0,
+      endOffset: 7,
+      reason: 'מילה חלשה',
+    };
+
+    function setupHebrewProofreadRun(): void {
+      component.bookLanguage = 'he';
+      component.latestResult = makeProofreadResult({ proofreadResultUnreliable: false });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [proofreadSuggestion];
+      component.streamingText = '';
+      fixture.detectChanges();
+    }
+
+    it('chromeLang returns "he" when bookLanguage is "he"', () => {
+      component.bookLanguage = 'he';
+      expect(component.chromeLang).toBe('he');
+    });
+
+    it('chromeLang returns "he" when bookLanguage is null (default)', () => {
+      component.bookLanguage = null;
+      expect(component.chromeLang).toBe('he');
+    });
+
+    it('proofread card on a Hebrew book renders Hebrew rationale label (נימוק) when opened', () => {
+      setupHebrewProofreadRun();
+
+      // Open the rationale section on the card.
+      const rationaleToggle = fixture.debugElement.query(
+        By.css('.suggestions-block .rationale-toggle')
+      );
+      expect(rationaleToggle).not.toBeNull();
+      // The toggle label itself should be in Hebrew.
+      expect(rationaleToggle.nativeElement.textContent).toContain('נימוק');
+    });
+
+    it('proofread card on an English book renders English rationale label (Rationale)', () => {
+      component.bookLanguage = 'en';
+      component.latestResult = makeProofreadResult({ proofreadResultUnreliable: false });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [proofreadSuggestion];
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      const rationaleToggle = fixture.debugElement.query(
+        By.css('.suggestions-block .rationale-toggle')
+      );
+      expect(rationaleToggle).not.toBeNull();
+      expect(rationaleToggle.nativeElement.textContent).toContain('Rationale');
     });
   });
 });

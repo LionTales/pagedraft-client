@@ -1,10 +1,10 @@
 <section class="history-tab-content">
   <div class="history-header" *ngIf="history.length || streamingText; else emptyHistory">
-    <span class="history-label">History</span>
+    <span class="history-label">{{ histLabel('history') }}</span>
     <div class="history-filter">
-      <button type="button" [class.active]="!historyFilterType" (click)="onSetHistoryFilter(null)">All</button>
+      <button type="button" [class.active]="!historyFilterType" (click)="onSetHistoryFilter(null)">{{ histLabel('all') }}</button>
       <button type="button" *ngFor="let opt of analysisTypes" [class.active]="historyFilterType === opt.value"
-        (click)="onSetHistoryFilter(opt.value)">{{ opt.label }}</button>
+        (click)="onSetHistoryFilter(opt.value)">{{ analysisTypeLabel(opt.value) }}</button>
     </div>
   </div>
   <nav class="tabs" *ngIf="history.length">
@@ -13,30 +13,31 @@
       *ngFor="let item of history; let i = index"
       [class.active]="i === selectedIndex"
       (click)="selectedIndex = i">
-      {{ item.analysisType || item.type }} · {{ item.createdAt | date:'short' }}
+      {{ analysisTypeLabel(item.analysisType || item.type) }} · {{ itemTime(item.createdAt) }}
     </button>
   </nav>
   <article class="result-view" *ngIf="history.length && currentHistoryItem as current">
     <h4>{{ current.analysisType || current.type }} ({{ current.modelName }})</h4>
     <!-- Proofread (history): unreliable result shows only the warning (no cards, no raw resultText) -->
     <div class="suggestions-block" *ngIf="(current.analysisType || current.type) === 'Proofread' && current.proofreadResultUnreliable">
-      <p class="proofread-length-hint muted">We could not produce a reliable proofread for this section. Try a shorter section (for example, one scene) and run it again.</p>
+      <p class="proofread-length-hint muted">{{ histLabel('unreliableProofread') }}</p>
     </div>
     <!-- Proofread (history): read-only list of suggestions with Accepted/Dismissed status -->
     <ng-container *ngIf="(current.analysisType || current.type) === 'Proofread' && !current.proofreadResultUnreliable && proofreadHistoryItemsWithStatus.length > 0">
       <div class="suggestions-block">
-        <h4>Suggestions: what happened</h4>
+        <h4>{{ histLabel('whatHappened') }}</h4>
         <div class="history-outcome-filter">
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">All</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">Accepted</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'dismissed'" (click)="historySuggestionStatusFilter = 'dismissed'">Dismissed</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'reverted'" (click)="historySuggestionStatusFilter = 'reverted'">Reverted</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">Pending</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">{{ histLabel('all') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">{{ histLabel('accepted') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'dismissed'" (click)="historySuggestionStatusFilter = 'dismissed'">{{ histLabel('dismissed') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'reverted'" (click)="historySuggestionStatusFilter = 'reverted'">{{ histLabel('reverted') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">{{ histLabel('pending') }}</button>
         </div>
         <div class="suggestions-list">
           <app-suggestion-card
             *ngFor="let item of filteredProofreadHistoryItemsWithStatus"
             [suggestion]="item.suggestion"
+            [lang]="chromeLang"
             [readOnly]="item.status !== 'pending'"
             [status]="item.status"
             [loadingExplanation]="!!(item.suggestion.id && explainingSuggestionIds.has(item.suggestion.id))"
@@ -53,17 +54,18 @@
         <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
       </ng-container>
       <div class="line-edit-suggestions" *ngIf="filteredLineEditSuggestionsWithStatusForCurrent.length > 0">
-        <h4>Suggestions: what happened</h4>
+        <h4>{{ histLabel('whatHappened') }}</h4>
         <div class="history-outcome-filter">
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">All</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">Accepted</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'dismissed'" (click)="historySuggestionStatusFilter = 'dismissed'">Dismissed</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'reverted'" (click)="historySuggestionStatusFilter = 'reverted'">Reverted</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">Pending</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">{{ histLabel('all') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">{{ histLabel('accepted') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'dismissed'" (click)="historySuggestionStatusFilter = 'dismissed'">{{ histLabel('dismissed') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'reverted'" (click)="historySuggestionStatusFilter = 'reverted'">{{ histLabel('reverted') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">{{ histLabel('pending') }}</button>
         </div>
         <app-suggestion-card
           *ngFor="let item of filteredLineEditSuggestionsWithStatusForCurrent"
           [suggestion]="item.suggestion"
+          [lang]="chromeLang"
           [readOnly]="true"
           [status]="item.status"
           [loadingExplanation]="!!(item.suggestion.id && explainingSuggestionIds.has(item.suggestion.id))"
@@ -90,11 +92,11 @@
       <div class="line-edit-suggestions" *ngIf="filteredConsistencySuggestionsWithStatusForCurrent.length > 0" data-testid="consistency-history">
         <h4>{{ consistencyCardLang === 'he' ? 'בעיות עקביות' : 'Consistency issues' }}</h4>
         <div class="history-outcome-filter">
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">All</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">Accepted</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'dismissed'" (click)="historySuggestionStatusFilter = 'dismissed'">Dismissed</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'reverted'" (click)="historySuggestionStatusFilter = 'reverted'">Reverted</button>
-          <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">Pending</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'all'" (click)="historySuggestionStatusFilter = 'all'">{{ histLabel('all') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'accepted'" (click)="historySuggestionStatusFilter = 'accepted'">{{ histLabel('accepted') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'dismissed'" (click)="historySuggestionStatusFilter = 'dismissed'">{{ histLabel('dismissed') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'reverted'" (click)="historySuggestionStatusFilter = 'reverted'">{{ histLabel('reverted') }}</button>
+          <button type="button" [class.active]="historySuggestionStatusFilter === 'pending'" (click)="historySuggestionStatusFilter = 'pending'">{{ histLabel('pending') }}</button>
         </div>
         <app-suggestion-card
           *ngFor="let item of filteredConsistencySuggestionsWithStatusForCurrent"
@@ -120,6 +122,6 @@
     </ng-template>
   </article>
   <ng-template #emptyHistory>
-    <p class="muted">No analysis history yet for this {{ sceneId ? 'scene' : 'chapter' }}.</p>
+    <p class="muted">{{ sceneId ? histLabel('noHistoryScene') : histLabel('noHistoryChapter') }}</p>
   </ng-template>
 </section>

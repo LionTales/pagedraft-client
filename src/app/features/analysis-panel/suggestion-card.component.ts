@@ -3,26 +3,71 @@ import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from
 import { AnalysisSuggestion, isConsistencySuggestion } from '../../core/models/analysis';
 import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proofread-diff';
 
+/**
+ * Localized labels for the consistency sub-categories (he/en). Hoisted to a module-level const so
+ * getCategoryLabel does not rebuild this object literal on every change-detection call (the card is
+ * rendered once per suggestion in long lists). Static data, never mutated.
+ */
+const CONSISTENCY_SUB_LABELS: Record<'he' | 'en', Record<string, string>> = {
+  en: {
+    'consistency-register': 'Register',
+    'consistency-tense': 'Tense',
+    'consistency-pov': 'POV'
+  },
+  he: {
+    'consistency-register': 'רישום',
+    'consistency-tense': 'זמן דקדוקי',
+    'consistency-pov': 'נקודת מבט'
+  }
+};
+
 @Component({
   selector: 'app-suggestion-card',
   standalone: true,
   imports: [CommonModule],
   template: `
-    <div class="suggestion-card" [class.stale]="stale" (click)="onCardClick($event)">
-      <div class="suggestion-fields">
-        <span class="stale-badge" *ngIf="stale">Text was edited</span>
+    <div
+      class="suggestion-card"
+      [class.stale]="stale"
+      [class.resolved]="readOnly && status !== undefined && status !== 'pending'"
+      [attr.data-sev]="severity"
+      (click)="onCardClick($event)">
+      <span class="sev-bar" aria-hidden="true"></span>
+
+      <!-- Header: kind chip + severity dot/label + spacer + jump link -->
+      <div class="suggestion-header">
         <span
           class="suggestion-category"
-          [ngClass]="'suggestion-category category-' + (suggestion.category || '').toLowerCase()"
+          [ngClass]="'suggestion-category category-' + (suggestion.category || '').toLowerCase() + ' kind-' + kindClass"
           *ngIf="suggestion.category">
           {{ getCategoryLabel(suggestion.category) }}
         </span>
+        <span class="sev-meta" *ngIf="!navigateOnly && hasChange">
+          <span class="sev-dot" aria-hidden="true"></span>
+          <span class="sev-label">{{ severityLabel }}</span>
+        </span>
+        <span class="header-spacer"></span>
+        <button
+          type="button"
+          class="btn-show jump-link"
+          [class.btn-show-approx]="!hasOffsets"
+          *ngIf="suggestion.original && ((!navigateOnly && hasChange && (hasOffsets || suggestion.id)) || (navigateOnly && hasOffsets))"
+          [disabled]="stale"
+          [title]="stale ? jumpUnavailableTitle : (hasOffsets ? '' : jumpApproxTitle)"
+          (click)="showInDocument.emit(suggestion); $event.stopPropagation()">
+          <span class="jump-icon" aria-hidden="true">&#8594;</span>
+          <span class="jump-label">{{ showLabel }}<ng-container *ngIf="!hasOffsets"> &#8776;</ng-container></span>
+        </button>
+      </div>
+
+      <span class="stale-badge" *ngIf="stale">{{ staleLabel }}</span>
+
+      <!-- Diff / text rows -->
+      <div class="suggestion-fields">
         <div class="suggestion-navigate-text" *ngIf="navigateOnly && suggestion.original">
-          <span class="suggestion-label">Text:</span>
           <span class="suggestion-inline">{{ suggestion.original }}</span>
         </div>
         <div class="suggestion-original" *ngIf="!navigateOnly && suggestion.original !== suggestion.suggested && suggestion.original">
-          <span class="suggestion-label">Original:</span>
           <span class="suggestion-inline">
             @for (f of originalFragments; track f.text + f.type + $index) {
               @switch (f.type) {
@@ -33,7 +78,6 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
           </span>
         </div>
         <div class="suggestion-suggested" *ngIf="!navigateOnly && suggestion.original !== suggestion.suggested">
-          <span class="suggestion-label">Suggested:</span>
           <span class="suggestion-inline">
             @for (f of suggestedFragments; track f.text + f.type + $index) {
               @switch (f.type) {
@@ -43,270 +87,364 @@ import { getSuggestionDiffFragments, DiffFragment } from '../../core/utils/proof
             }
           </span>
         </div>
-        <div class="suggestion-reason" *ngIf="suggestion.reason">
-          <span class="suggestion-label">Reason:</span> {{ suggestion.reason }}
+      </div>
+
+      <!-- Rationale: caret toggles a sunken detail box (evidence + suggested action) -->
+      <div class="suggestion-rationale" *ngIf="hasRationale">
+        <button
+          type="button"
+          class="rationale-toggle"
+          [attr.aria-expanded]="rationaleOpen"
+          (click)="toggleRationale(); $event.stopPropagation()">
+          <span class="rationale-caret" [class.open]="rationaleOpen" aria-hidden="true">&#9656;</span>
+          {{ rationaleToggleLabel }}
+        </button>
+        <div class="rationale-detail" *ngIf="rationaleOpen">
+          <div class="rationale-row" *ngIf="suggestion.reason">
+            <span class="rationale-micro-label">{{ evidenceLabel }}</span>
+            <span class="rationale-value suggestion-reason">{{ suggestion.reason }}</span>
+          </div>
+          <div class="rationale-row" *ngIf="suggestion.explanation || (suggestion.id && !suggestion.explanation)">
+            <span class="rationale-micro-label">{{ suggestedActionLabel }}</span>
+            <span class="rationale-value suggestion-explanation" *ngIf="suggestion.explanation">{{ suggestion.explanation }}</span>
+            <span class="suggestion-explain-action" *ngIf="suggestion.id && !suggestion.explanation">
+              <button
+                type="button"
+                class="btn-why"
+                *ngIf="!loadingExplanation"
+                (click)="explain.emit(suggestion); $event.stopPropagation()">
+                {{ whyLabel }}
+              </button>
+              <span class="explain-loading" *ngIf="loadingExplanation">
+                <span class="spinner-sm"></span> {{ explainingLabel }}
+              </span>
+            </span>
+          </div>
         </div>
       </div>
-      <div class="suggestion-explanation" *ngIf="suggestion.explanation">
-        {{ suggestion.explanation }}
-      </div>
-      <div class="suggestion-explain-action" *ngIf="suggestion.id && !suggestion.explanation">
-        <button
-          type="button"
-          class="btn-why"
-          *ngIf="!loadingExplanation"
-          (click)="explain.emit(suggestion); $event.stopPropagation()">
-          Why?
-        </button>
-        <span class="explain-loading" *ngIf="loadingExplanation">
-          <span class="spinner-sm"></span> Explaining…
-        </span>
-      </div>
+
+      <!-- Advisory actions (editable mode) -->
       <div class="suggestion-actions" *ngIf="!readOnly">
-        <button type="button" class="btn-accept" *ngIf="hasChange && !navigateOnly" [disabled]="stale" (click)="accept.emit(suggestion); $event.stopPropagation()">Accept</button>
-        <button type="button" class="btn-dismiss" (click)="dismiss.emit(suggestion); $event.stopPropagation()">{{ hasChange && !navigateOnly ? 'Dismiss' : 'OK' }}</button>
-        <button
-          type="button"
-          class="btn-show"
-          [class.btn-show-approx]="!hasOffsets"
-          *ngIf="suggestion.original && ((!navigateOnly && hasChange && (hasOffsets || suggestion.id)) || (navigateOnly && hasOffsets))"
-          [disabled]="stale"
-          [title]="stale ? 'Text was edited - location unavailable' : (hasOffsets ? '' : 'Approximate location (search-based)')"
-          (click)="showInDocument.emit(suggestion); $event.stopPropagation()">
-          Show{{ hasOffsets ? '' : ' ≈' }}
-        </button>
+        <button type="button" class="btn-accept" *ngIf="hasChange && !navigateOnly" [disabled]="stale" (click)="accept.emit(suggestion); $event.stopPropagation()">{{ acceptLabel }}</button>
+        <button type="button" class="btn-dismiss" (click)="dismiss.emit(suggestion); $event.stopPropagation()">{{ hasChange && !navigateOnly ? dismissLabel : okLabel }}</button>
       </div>
+
+      <!-- Resolved status + revert (read-only mode) -->
       <div class="suggestion-status" *ngIf="readOnly && status !== undefined">
-        <span class="status-badge" [class.accepted]="status === 'accepted'" [class.dismissed]="status === 'dismissed'" [class.reverted]="status === 'reverted'" [class.pending]="status === 'pending'">{{ status === 'accepted' ? 'Accepted' : status === 'dismissed' ? 'Dismissed' : status === 'reverted' ? 'Reverted' : 'Pending' }}</span>
+        <span class="status-badge" [class.accepted]="status === 'accepted'" [class.dismissed]="status === 'dismissed'" [class.reverted]="status === 'reverted'" [class.pending]="status === 'pending'">{{ statusLabel }}</span>
       </div>
     </div>
   `,
   styles: [`
     .suggestion-card {
+      position: relative;
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
-      border: 1px solid #eee;
-      border-radius: 6px;
-      padding: 0.5rem;
-      background: #fafafa;
+      gap: var(--pd-space-3);
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-lg);
+      padding: var(--pd-space-5);
+      padding-inline-start: calc(var(--pd-space-5) + 3px);
+      background: var(--pd-surface);
+      box-shadow: var(--pd-shadow-1);
       cursor: pointer;
+      transition: box-shadow var(--pd-dur-fast) var(--pd-ease);
     }
     .suggestion-card:hover {
-      background: #f5f5f5;
+      box-shadow: var(--pd-shadow-2);
     }
-    .suggestion-fields {
+    /* Inline-start severity bar */
+    .sev-bar {
+      position: absolute;
+      inset-inline-start: 0;
+      inset-block: 0;
+      width: 3px;
+      border-start-start-radius: var(--pd-radius-lg);
+      border-end-start-radius: var(--pd-radius-lg);
+      background: var(--pd-sev-med);
+    }
+    .suggestion-card[data-sev='high'] .sev-bar { background: var(--pd-sev-high); }
+    .suggestion-card[data-sev='med']  .sev-bar { background: var(--pd-sev-med); }
+    .suggestion-card[data-sev='low']  .sev-bar { background: var(--pd-sev-low); }
+    .suggestion-card.resolved .sev-bar { background: var(--pd-neutral-300); }
+
+    /* Header */
+    .suggestion-header {
       display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-      min-width: 0;
-      cursor: pointer;
+      align-items: center;
+      gap: var(--pd-space-3);
+      flex-wrap: wrap;
     }
-    .suggestion-fields:hover {
-      background: #f0f4fa;
-      border-radius: 4px;
-    }
-    .suggestion-label {
-      font-size: 0.75rem;
-      color: #666;
-      margin-inline-end: 0.25rem;
-    }
-    .suggestion-navigate-text, .suggestion-original, .suggestion-suggested, .suggestion-reason {
-      font-size: 0.85rem;
-      line-height: 1.4;
-    }
-    .suggestion-inline {
-      word-break: break-word;
-    }
-    .frag-equal { color: #333; }
-    .frag-delete { color: #c00; text-decoration: line-through; }
-    .frag-insert { color: #060; font-weight: 500; }
+    .header-spacer { flex: 1 1 auto; }
+
     .suggestion-category {
       display: inline-flex;
       align-items: center;
-      gap: 0.25rem;
-      font-size: 0.7rem;
+      gap: var(--pd-space-2);
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
+      font-weight: var(--pd-weight-medium);
       text-transform: uppercase;
-      border-radius: 999px;
-      padding: 0.1rem 0.4rem;
-      margin-bottom: 0.2rem;
-      background: #e6f0ff;
-      color: #074799;
+      letter-spacing: 0.03em;
+      border-radius: var(--pd-radius-pill);
+      padding: 2px var(--pd-space-3);
+      background: var(--pd-primary-50);
+      color: var(--pd-primary-700);
     }
     .suggestion-category::before {
       content: '';
       display: inline-block;
       width: 0.4rem;
       height: 0.4rem;
-      border-radius: 999px;
+      border-radius: var(--pd-radius-pill);
       background: currentColor;
     }
-    .suggestion-category.category-consistency {
-      background: #fff4e0;
-      color: #b45f06;
+    /* Kind tints: proofread = primary, lineEdit = secondary, linguistic = violet */
+    .suggestion-category.kind-proofread {
+      background: var(--pd-primary-50);
+      color: var(--pd-primary-700);
     }
-    .suggestion-category.category-continuity {
-      background: #ffe9e5;
-      color: #c0392b;
+    .suggestion-category.kind-lineedit {
+      background: var(--pd-secondary-50);
+      color: var(--pd-secondary-700);
     }
-    .suggestion-category.category-clarity {
-      background: #e6f4ff;
-      color: #1565c0;
+    .suggestion-category.kind-linguistic {
+      background: var(--pd-linguistic-bg);
+      color: var(--pd-linguistic-ink);
+      box-shadow: inset 0 0 0 1px var(--pd-linguistic-border);
     }
-    .suggestion-category.category-flow {
-      background: #e5f6ff;
-      color: #0277bd;
-    }
-    .suggestion-category.category-word-choice {
-      background: #e8f0fe;
-      color: #1a73e8;
-    }
-    .suggestion-category.category-structure {
-      background: #e3f2fd;
-      color: #0d47a1;
-    }
-    .suggestion-category.category-redundancy {
-      background: #f3e5f5;
-      color: #6a1b9a;
-    }
-    .suggestion-category.category-style {
-      background: #e0f2f1;
-      color: #00695c;
-    }
-    .suggestion-category.category-consistency-register {
-      background: #fff4e0;
-      color: #b45f06;
-    }
-    .suggestion-category.category-consistency-tense {
-      background: #e8f0fe;
-      color: #1a4fb4;
-    }
-    .suggestion-category.category-consistency-pov {
-      background: #f3e5f5;
-      color: #6a1b9a;
-    }
-    .suggestion-explanation {
-      font-size: 0.8rem;
-      line-height: 1.45;
-      color: #3b5575;
-      background: #f0f5fb;
-      border-inline-start: 3px solid #a8c4e6;
-      padding: 0.35rem 0.5rem;
-      border-radius: 4px;
-    }
-    .suggestion-explain-action {
-      display: flex;
-      align-items: center;
-    }
-    .btn-why {
-      padding: 0.15rem 0.5rem;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      cursor: pointer;
-      border: 1px solid #c8c8c8;
-      background: #fff;
-      color: #555;
-      transition: background 0.15s, border-color 0.15s, color 0.15s;
-    }
-    .btn-why:hover {
-      background: #f0f5fb;
-      border-color: #0078d4;
-      color: #0078d4;
-    }
-    .explain-loading {
-      font-size: 0.75rem;
-      color: #888;
+
+    .sev-meta {
       display: inline-flex;
       align-items: center;
-      gap: 0.3rem;
+      gap: var(--pd-space-2);
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-secondary);
+    }
+    .sev-dot {
+      width: 0.45rem;
+      height: 0.45rem;
+      border-radius: var(--pd-radius-pill);
+      background: var(--pd-sev-med);
+    }
+    .suggestion-card[data-sev='high'] .sev-dot { background: var(--pd-sev-high); }
+    .suggestion-card[data-sev='med']  .sev-dot { background: var(--pd-sev-med); }
+    .suggestion-card[data-sev='low']  .sev-dot { background: var(--pd-sev-low); }
+
+    /* Jump link */
+    .jump-link {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--pd-space-2);
+      background: transparent;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      color: var(--pd-text-link);
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
+      font-weight: var(--pd-weight-medium);
+    }
+    .jump-link:hover { color: var(--pd-primary-500); }
+    .jump-link .jump-label { font-family: var(--pd-font-mono); }
+    .jump-link.btn-show-approx { opacity: 0.85; }
+    .jump-link:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Diff / text rows in the reading serif */
+    .suggestion-fields {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pd-space-2);
+      min-width: 0;
+    }
+    .suggestion-navigate-text, .suggestion-original, .suggestion-suggested {
+      font-family: var(--pd-font-reading);
+      font-size: var(--pd-text-body-sm);
+      line-height: 1.5;
+      border-radius: var(--pd-radius-sm);
+      padding: var(--pd-space-2) var(--pd-space-3);
+    }
+    .suggestion-inline { word-break: break-word; }
+    .suggestion-navigate-text {
+      background: var(--pd-surface-sunken);
+      color: var(--pd-text);
+    }
+    .suggestion-original {
+      background: var(--pd-cut-bg);
+    }
+    .suggestion-suggested {
+      background: var(--pd-keep-bg);
+      font-weight: var(--pd-weight-medium);
+    }
+    .frag-equal { color: var(--pd-text); }
+    .frag-delete { color: var(--pd-cut); text-decoration: line-through; }
+    .frag-insert { color: var(--pd-keep); font-weight: var(--pd-weight-medium); }
+
+    /* Rationale caret + sunken detail box */
+    .suggestion-rationale { display: flex; flex-direction: column; gap: var(--pd-space-3); }
+    .rationale-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--pd-space-2);
+      background: transparent;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      align-self: flex-start;
+      color: var(--pd-text-secondary);
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
+      font-weight: var(--pd-weight-medium);
+    }
+    .rationale-toggle:hover { color: var(--pd-text); }
+    .rationale-caret {
+      display: inline-block;
+      transition: transform var(--pd-dur-fast) var(--pd-ease);
+    }
+    .rationale-caret.open { transform: rotate(90deg); }
+    :host-context([dir='rtl']) .rationale-caret { transform: rotate(180deg); }
+    :host-context([dir='rtl']) .rationale-caret.open { transform: rotate(90deg); }
+
+    .rationale-detail {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pd-space-3);
+      background: var(--pd-surface-sunken);
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-md);
+      padding: var(--pd-space-4);
+    }
+    .rationale-row { display: flex; flex-direction: column; gap: var(--pd-space-1); }
+    .rationale-micro-label {
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: var(--pd-weight-bold);
+      color: var(--pd-text-muted);
+    }
+    .rationale-value {
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-body-sm);
+      line-height: 1.45;
+      color: var(--pd-text-secondary);
+    }
+
+    .suggestion-explain-action { display: flex; align-items: center; }
+    .btn-why {
+      padding: var(--pd-space-1) var(--pd-space-3);
+      border-radius: var(--pd-radius-sm);
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
+      cursor: pointer;
+      border: 1px solid var(--pd-border-strong);
+      background: var(--pd-surface);
+      color: var(--pd-text-secondary);
+      transition: background var(--pd-dur-fast), border-color var(--pd-dur-fast), color var(--pd-dur-fast);
+    }
+    .btn-why:hover {
+      background: var(--pd-primary-50);
+      border-color: var(--pd-primary-600);
+      color: var(--pd-primary-600);
+    }
+    .explain-loading {
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-muted);
+      display: inline-flex;
+      align-items: center;
+      gap: var(--pd-space-2);
     }
     .spinner-sm {
       display: inline-block;
       width: 12px;
       height: 12px;
-      border: 2px solid #ddd;
-      border-top-color: #0078d4;
+      border: 2px solid var(--pd-neutral-200);
+      border-top-color: var(--pd-primary-600);
       border-radius: 50%;
       animation: spin-why 0.7s linear infinite;
     }
     @keyframes spin-why {
       to { transform: rotate(360deg); }
     }
+
+    /* Advisory actions */
     .suggestion-actions {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.35rem;
+      gap: var(--pd-space-3);
     }
     .btn-accept, .btn-dismiss {
-      padding: 0.25rem 0.5rem;
-      border-radius: 4px;
-      font-size: 0.8rem;
+      padding: var(--pd-space-2) var(--pd-space-4);
+      border-radius: var(--pd-radius-sm);
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-body-sm);
+      font-weight: var(--pd-weight-medium);
       cursor: pointer;
       border: 1px solid transparent;
+      transition: background var(--pd-dur-fast), border-color var(--pd-dur-fast), color var(--pd-dur-fast);
     }
     .btn-accept {
-      background: #0078d4;
-      color: #fff;
-      border-color: #0078d4;
+      background: var(--pd-primary-600);
+      color: var(--pd-on-primary);
+      border-color: var(--pd-primary-600);
     }
+    .btn-accept:hover { background: var(--pd-primary-500); border-color: var(--pd-primary-500); }
     .btn-dismiss {
-      background: #fff;
-      color: #555;
-      border-color: #ddd;
+      background: transparent;
+      color: var(--pd-text-secondary);
+      border-color: var(--pd-border-strong);
     }
-    .btn-show {
-      background: #fff;
-      color: #0078d4;
-      border-color: #0078d4;
-    }
-    .btn-show.btn-show-approx {
-      border-style: dashed;
-      opacity: 0.8;
-    }
+    .btn-dismiss:hover { background: var(--pd-surface-sunken); color: var(--pd-text); }
+    .btn-accept:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Resolved state */
+    .suggestion-card.resolved { opacity: 0.66; }
     .suggestion-status {
-      margin-top: 0.25rem;
+      display: flex;
+      align-items: center;
+      gap: var(--pd-space-3);
     }
     .status-badge {
-      font-size: 0.7rem;
-      text-transform: uppercase;
-      padding: 0.15rem 0.4rem;
-      border-radius: 4px;
-      font-weight: 600;
-    }
-    .status-badge.accepted {
-      background: #e6f4ea;
-      color: #1e7e34;
-    }
-    .status-badge.dismissed {
-      background: #fef7e0;
-      color: #996a00;
-    }
-    .status-badge.pending {
-      background: #f0f0f0;
-      color: #666;
-    }
-    .status-badge.reverted {
-      background: #e8f4fd;
-      color: #0d6efd;
-    }
-    .suggestion-card.stale {
-      opacity: 0.5;
-    }
-    .stale-badge {
-      display: inline-block;
-      font-size: 0.65rem;
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
       text-transform: uppercase;
       letter-spacing: 0.03em;
-      padding: 0.1rem 0.35rem;
-      border-radius: 3px;
-      background: #f0ebe0;
-      color: #8a7340;
-      margin-bottom: 0.15rem;
-      width: fit-content;
+      padding: 2px var(--pd-space-3);
+      border-radius: var(--pd-radius-sm);
+      font-weight: var(--pd-weight-bold);
     }
-    .btn-accept:disabled, .btn-show:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
+    .status-badge.accepted {
+      background: var(--pd-keep-bg);
+      color: var(--pd-keep);
+    }
+    .status-badge.dismissed {
+      background: var(--pd-neutral-100);
+      color: var(--pd-text-secondary);
+    }
+    .status-badge.pending {
+      background: var(--pd-neutral-100);
+      color: var(--pd-text-secondary);
+    }
+    .status-badge.reverted {
+      background: var(--pd-info-bg);
+      color: var(--pd-info);
+    }
+
+    /* Stale */
+    .suggestion-card.stale { opacity: 0.5; }
+    .stale-badge {
+      display: inline-block;
+      width: fit-content;
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      padding: 2px var(--pd-space-3);
+      border-radius: var(--pd-radius-sm);
+      background: var(--pd-improve-bg);
+      color: var(--pd-improve);
     }
   `]
 })
@@ -327,8 +465,20 @@ export class SuggestionCardComponent implements OnChanges {
   @Output() showInDocument = new EventEmitter<AnalysisSuggestion>();
   @Output() explain = new EventEmitter<AnalysisSuggestion>();
 
+  /** Rationale detail box open state (presentational only). */
+  rationaleOpen = false;
+
   private _originalFragments: DiffFragment[] = [];
   private _suggestedFragments: DiffFragment[] = [];
+
+  /**
+   * Memoized presentational kind/severity derived from `this.suggestion`. Recomputed only when the
+   * `suggestion` Input reference changes (the parent replaces the suggestion object on update; the
+   * `category` field these read is never mutated in place — verified). severity is computed ONCE here
+   * and reused by severityLabel, instead of twice per change-detection pass.
+   */
+  private _kindClass: 'proofread' | 'lineedit' | 'linguistic' = 'proofread';
+  private _severity: 'high' | 'med' | 'low' = 'low';
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['suggestion']) {
@@ -340,7 +490,21 @@ export class SuggestionCardComponent implements OnChanges {
         this._originalFragments = diff.originalFragments;
         this._suggestedFragments = diff.suggestedFragments;
       }
+      this._kindClass = isConsistencySuggestion(this.suggestion) ? 'linguistic' : 'proofread';
+      this._severity = this.computeSeverity();
     }
+  }
+
+  /** Derive severity from the suggestion category. Called once per `suggestion` change (memoized). */
+  private computeSeverity(): 'high' | 'med' | 'low' {
+    const key = (this.suggestion?.category || '').toLowerCase();
+    if (key.startsWith('consistency') || key === 'continuity') return 'high';
+    if (key === 'clarity' || key === 'flow' || key === 'word-choice' || key === 'structure' || key === 'redundancy' || key === 'style') return 'med';
+    return 'low';
+  }
+
+  toggleRationale(): void {
+    this.rationaleOpen = !this.rationaleOpen;
   }
 
   onFieldsClick(): void {
@@ -383,25 +547,63 @@ export class SuggestionCardComponent implements OnChanges {
     return this._suggestedFragments;
   }
 
+  /** True when there is rationale content (reason, explanation, or an explain-on-demand affordance). */
+  get hasRationale(): boolean {
+    return !!this.suggestion?.reason || !!this.suggestion?.explanation || !!this.suggestion?.id;
+  }
+
+  /**
+   * Presentational kind class for the chip tint: linguistic (consistency-*) gets the violet tint;
+   * everything else gets the primary (proofread) tint. lineEdit is not separately distinguishable
+   * from the suggestion shape alone, so it shares the proofread/primary tint.
+   */
+  get kindClass(): 'proofread' | 'lineedit' | 'linguistic' {
+    return this._kindClass;
+  }
+
+  /**
+   * Presentational severity for the inline-start bar + dot. Consistency/continuity issues read as
+   * high; line-edit clarity/style/flow/word-choice as medium; everything else low. Display-only.
+   * Memoized: computed once per `suggestion` change in ngOnChanges (see computeSeverity).
+   */
+  get severity(): 'high' | 'med' | 'low' {
+    return this._severity;
+  }
+
+  get severityLabel(): string {
+    const en = { high: 'High', med: 'Medium', low: 'Low' } as const;
+    const he = { high: 'גבוה', med: 'בינוני', low: 'נמוך' } as const;
+    return (this.lang === 'he' ? he : en)[this.severity];
+  }
+
+  // ---- Localized button / label strings (he/en parity) --------------------
+  get acceptLabel(): string { return this.lang === 'he' ? 'החל' : 'Accept'; }
+  get dismissLabel(): string { return this.lang === 'he' ? 'התעלם' : 'Dismiss'; }
+  get okLabel(): string { return this.lang === 'he' ? 'אישור' : 'OK'; }
+  get showLabel(): string { return this.lang === 'he' ? 'הצג' : 'Show'; }
+  get whyLabel(): string { return this.lang === 'he' ? 'למה?' : 'Why?'; }
+  get explainingLabel(): string { return this.lang === 'he' ? 'מסביר...' : 'Explaining...'; }
+  get staleLabel(): string { return this.lang === 'he' ? 'הטקסט נערך' : 'Text was edited'; }
+  get rationaleToggleLabel(): string { return this.lang === 'he' ? 'נימוק' : 'Rationale'; }
+  get evidenceLabel(): string { return this.lang === 'he' ? 'ראיה' : 'Evidence'; }
+  get suggestedActionLabel(): string { return this.lang === 'he' ? 'פעולה מוצעת' : 'Suggested action'; }
+  get jumpUnavailableTitle(): string { return this.lang === 'he' ? 'הטקסט נערך - המיקום אינו זמין' : 'Text was edited - location unavailable'; }
+  get jumpApproxTitle(): string { return this.lang === 'he' ? 'מיקום משוער (מבוסס חיפוש)' : 'Approximate location (search-based)'; }
+
+  get statusLabel(): string {
+    const en: Record<string, string> = { accepted: 'Accepted', dismissed: 'Dismissed', reverted: 'Reverted', pending: 'Pending' };
+    const he: Record<string, string> = { accepted: 'הוחל', dismissed: 'נדחה', reverted: 'בוטל', pending: 'ממתין' };
+    const map = this.lang === 'he' ? he : en;
+    return map[this.status ?? 'pending'] ?? map['pending'];
+  }
+
   getCategoryLabel(category: string): string {
     const key = (category || '').toLowerCase();
 
-    // Localized labels for the consistency sub-categories (he/en).
-    const consistencySubLabels: Record<'he' | 'en', Record<string, string>> = {
-      en: {
-        'consistency-register': 'Register',
-        'consistency-tense': 'Tense',
-        'consistency-pov': 'POV'
-      },
-      he: {
-        'consistency-register': 'רישום',
-        'consistency-tense': 'זמן דקדוקי',
-        'consistency-pov': 'נקודת מבט'
-      }
-    };
-
-    if (key in consistencySubLabels[this.lang]) {
-      return consistencySubLabels[this.lang][key];
+    // Localized labels for the consistency sub-categories (he/en); module-level const (see top of file)
+    // so the dictionary is not rebuilt on every call.
+    if (key in CONSISTENCY_SUB_LABELS[this.lang]) {
+      return CONSISTENCY_SUB_LABELS[this.lang][key];
     }
 
     const enLabels: Record<string, string> = {

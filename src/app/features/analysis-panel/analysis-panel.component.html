@@ -1,30 +1,30 @@
-<div class="analysis-panel">
+<div class="analysis-panel" [attr.dir]="panelDir">
   <header class="panel-header">
-    <h3>Analysis</h3>
+    <h3>{{ panelLabel('title') }}</h3>
   </header>
 
   <section class="type-picker-section">
-    <div class="type-picker" role="group" aria-label="Analysis type">
+    <div class="type-picker" role="group" [attr.aria-label]="panelLabel('title')">
       <button
         type="button"
         *ngFor="let opt of analysisTypes"
         [class.active]="selectedAnalysisType === opt.value"
         (click)="onSelectAnalysisType(opt.value)">
-        {{ opt.label }}
+        {{ analysisTypeLabel(opt.value) }}
       </button>
     </div>
   </section>
 
   <section class="prompt-section" *ngIf="selectedAnalysisType === 'Custom'">
-    <label class="prompt-label">Custom prompt</label>
+    <label class="prompt-label">{{ panelLabel('customPrompt') }}</label>
     <textarea
       [(ngModel)]="prompt"
       rows="4"
       class="prompt-input"
-      placeholder="Describe what you want the AI to analyze (Hebrew supported)...">
+      [placeholder]="panelLabel('customPlaceholder')">
     </textarea>
     <button type="button" class="run-btn secondary" [disabled]="!prompt" (click)="saveAsTemplate()">
-      Save as template
+      {{ panelLabel('saveAsTemplate') }}
     </button>
   </section>
 
@@ -35,44 +35,44 @@
         class="run-btn"
         [disabled]="!canRun || isRunning"
         (click)="runAnalysis()">
-        {{ isRunning ? 'Running…' : 'Run analysis' }}
+        {{ isRunning ? panelLabel('running') : panelLabel('run') }}
       </button>
       <button
         type="button"
         class="run-btn secondary"
         [disabled]="!canRun || isRunning"
         (click)="runStreaming()">
-        {{ isRunning ? 'Streaming…' : 'Run with streaming' }}
+        {{ isRunning ? panelLabel('streaming') : panelLabel('runStreaming') }}
       </button>
     </div>
     <p class="run-error" *ngIf="runError">{{ runError }}</p>
     <label class="highlight-option" *ngIf="selectedAnalysisType === 'Proofread'">
       <input type="checkbox" [(ngModel)]="highlightSuggestionsInDocument" (ngModelChange)="onHighlightOptionChange()">
-      <span>Highlight suggestion words in document</span>
+      <span>{{ panelLabel('highlight') }}</span>
     </label>
   </section>
 
-  <nav class="sub-tabs" aria-label="Run, History, or Versions">
+  <nav class="sub-tabs" [attr.aria-label]="panelLabel('title')">
     <button
       type="button"
       class="sub-tab"
       [class.active]="activeSubTab === 'run'"
       (click)="activeSubTab = 'run'">
-      Run
+      {{ panelLabel('tabRun') }}
     </button>
     <button
       type="button"
       class="sub-tab"
       [class.active]="activeSubTab === 'history'"
       (click)="activeSubTab = 'history'">
-      History
+      {{ panelLabel('tabHistory') }}
     </button>
     <button
       type="button"
       class="sub-tab"
       [class.active]="activeSubTab === 'versions'"
       (click)="activeSubTab = 'versions'; loadVersions()">
-      Versions
+      {{ panelLabel('tabVersions') }}
     </button>
   </nav>
 
@@ -133,6 +133,7 @@
     [bookId]="bookId"
     [chapterId]="chapterId"
     [sceneId]="sceneId"
+    [bookLanguage]="bookLanguage"
     [allAnalyses]="allAnalyses"
     [latestResult]="latestResult"
     (revert)="onRevert($event)"
