@@ -25,21 +25,21 @@ export interface ApplyCorrectionEvent {
   template: `
     <div class="issue-panel">
       <header class="panel-header">
-        <h3>Language Issues</h3>
+        <h3>{{ titleLabel }}</h3>
         <div class="header-actions">
           <button
             type="button"
-            class="btn secondary small"
+            class="pd-btn pd-btn-ghost"
             [disabled]="isDetecting"
             (click)="detectIssues()">
-            {{ isDetecting ? 'Detecting…' : 'Detect Issues' }}
+            {{ isDetecting ? detectingLabel : detectLabel }}
           </button>
           <button
             type="button"
-            class="btn secondary small"
+            class="pd-btn pd-btn-ghost"
             [disabled]="!canRewrite || isRewriting"
             (click)="rewriteText()">
-            {{ isRewriting ? 'Rewriting…' : 'Rewrite' }}
+            {{ isRewriting ? rewritingLabel : rewriteLabel }}
           </button>
         </div>
       </header>
@@ -51,14 +51,14 @@ export interface ApplyCorrectionEvent {
 
       <section class="issues-section" *ngIf="issues.length > 0; else noIssues">
         <div class="issues-summary">
-          <span class="summary-item error" *ngIf="errorCount > 0">
-            {{ errorCount }} error{{ errorCount !== 1 ? 's' : '' }}
+          <span class="pd-chip pd-chip-error" *ngIf="errorCount > 0">
+            {{ errorChipLabel }}
           </span>
-          <span class="summary-item warning" *ngIf="warningCount > 0">
-            {{ warningCount }} warning{{ warningCount !== 1 ? 's' : '' }}
+          <span class="pd-chip pd-chip-warn" *ngIf="warningCount > 0">
+            {{ warningChipLabel }}
           </span>
-          <span class="summary-item info" *ngIf="infoCount > 0">
-            {{ infoCount }} info
+          <span class="pd-chip" *ngIf="infoCount > 0">
+            {{ infoChipLabel }}
           </span>
         </div>
 
@@ -78,7 +78,7 @@ export interface ApplyCorrectionEvent {
             </div>
             <div class="issue-message">{{ issue.message }}</div>
             <div class="issue-suggestions" *ngIf="issue.suggestions.length > 0">
-              <span class="suggestions-label">Suggestions:</span>
+              <span class="suggestions-label">{{ suggestionsLabel }}</span>
               <button
                 *ngFor="let suggestion of issue.suggestions.slice(0, 10)"
                 type="button"
@@ -87,21 +87,21 @@ export interface ApplyCorrectionEvent {
                 {{ suggestion }}
               </button>
               <span class="suggestions-more" *ngIf="issue.suggestions.length > 10">
-                + {{ issue.suggestions.length - 10 }} more
+                {{ moreLabel(issue.suggestions.length - 10) }}
               </span>
             </div>
             <div class="issue-actions">
               <button
                 type="button"
-                class="btn-link"
+                class="pd-btn pd-btn-link"
                 (click)="highlightIssue(issue)">
-                Highlight
+                {{ highlightLabel }}
               </button>
               <button
                 type="button"
-                class="btn-link"
+                class="pd-btn pd-btn-link"
                 (click)="dismissIssue(i)">
-                Dismiss
+                {{ dismissLabel }}
               </button>
             </div>
           </div>
@@ -109,27 +109,27 @@ export interface ApplyCorrectionEvent {
       </section>
 
       <ng-template #noIssues>
-        <div class="no-issues">
-          <p class="muted" *ngIf="!hasDetected">Click "Detect Issues" to check for language issues.</p>
-          <p class="muted" *ngIf="hasDetected">No issues detected. Great!</p>
+        <div class="no-issues pd-empty">
+          <p *ngIf="!hasDetected">{{ emptyPromptLabel }}</p>
+          <p *ngIf="hasDetected">{{ emptyCleanLabel }}</p>
         </div>
       </ng-template>
 
       <section class="rewrite-section" *ngIf="rewrittenText">
-        <h4>Rewritten Text</h4>
+        <h4>{{ rewrittenTextLabel }}</h4>
         <div class="rewrite-preview">{{ rewrittenText }}</div>
         <div class="rewrite-actions">
           <button
             type="button"
-            class="btn"
+            class="pd-btn pd-btn-primary"
             (click)="applyRewrite()">
-            Apply Rewrite
+            {{ applyRewriteLabel }}
           </button>
           <button
             type="button"
-            class="btn secondary"
+            class="pd-btn pd-btn-ghost"
             (click)="dismissRewrite()">
-            Dismiss
+            {{ dismissLabel }}
           </button>
         </div>
       </section>
@@ -140,223 +140,223 @@ export interface ApplyCorrectionEvent {
       display: flex;
       flex-direction: column;
       height: 100%;
-      gap: 0.75rem;
+      gap: var(--pd-space-4);
     }
     .panel-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 0.5rem;
-      margin-bottom: 0.25rem;
+      gap: var(--pd-space-3);
+      margin-block-end: var(--pd-space-2);
     }
     .panel-header h3 {
       margin: 0;
-      font-size: 1rem;
-      font-weight: 600;
+      font-size: var(--pd-text-h5);
+      font-weight: var(--pd-weight-bold);
     }
     .header-actions {
       display: flex;
-      gap: 0.35rem;
-    }
-    .btn {
-      padding: 0.35rem 0.75rem;
-      border-radius: 4px;
-      border: none;
-      background: #0078d4;
-      color: #fff;
-      cursor: pointer;
-      font-size: 0.85rem;
-    }
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    .btn.secondary {
-      background: #fff;
-      color: #0078d4;
-      border: 1px solid #0078d4;
-    }
-    .btn.small {
-      padding: 0.25rem 0.5rem;
-      font-size: 0.8rem;
-    }
-    .btn-link {
-      background: none;
-      border: none;
-      color: #0078d4;
-      cursor: pointer;
-      text-decoration: underline;
-      font-size: 0.8rem;
-      padding: 0;
+      gap: var(--pd-space-2);
     }
     .issues-section {
       flex: 1;
-      min-height: 0;
+      min-block-size: 0;
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: var(--pd-space-3);
     }
     .issues-summary {
       display: flex;
-      gap: 0.5rem;
+      gap: var(--pd-space-3);
       flex-wrap: wrap;
-      font-size: 0.85rem;
-    }
-    .summary-item {
-      padding: 0.2rem 0.5rem;
-      border-radius: 999px;
-      font-weight: 500;
-    }
-    .summary-item.error {
-      background: #fee;
-      color: #c00;
-    }
-    .summary-item.warning {
-      background: #ffe;
-      color: #c80;
-    }
-    .summary-item.info {
-      background: #eef;
-      color: #08c;
     }
     .issues-list {
       flex: 1;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: var(--pd-space-3);
     }
     .issue-item {
-      padding: 0.5rem;
-      border-radius: 4px;
-      border: 1px solid #ddd;
-      background: #fff;
+      padding: var(--pd-space-3);
+      border-radius: var(--pd-radius-md);
+      border: 1px solid var(--pd-border);
+      background: var(--pd-surface);
     }
     .issue-item.error {
-      border-left: 3px solid #c00;
+      border-inline-start: 3px solid var(--pd-sev-high);
     }
     .issue-item.warning {
-      border-left: 3px solid #c80;
+      border-inline-start: 3px solid var(--pd-sev-med);
     }
     .issue-item.info {
-      border-left: 3px solid #08c;
+      border-inline-start: 3px solid var(--pd-primary-400);
     }
     .issue-header {
       display: flex;
-      gap: 0.5rem;
+      gap: var(--pd-space-3);
       align-items: center;
-      margin-bottom: 0.25rem;
-      font-size: 0.8rem;
+      margin-block-end: var(--pd-space-2);
+      font-size: var(--pd-text-caption);
     }
     .issue-category {
-      font-weight: 600;
+      font-weight: var(--pd-weight-bold);
       text-transform: capitalize;
     }
     .issue-offset {
-      color: #666;
-      font-family: monospace;
+      color: var(--pd-text-secondary);
+      font-family: var(--pd-font-mono);
     }
     .issue-confidence {
-      color: #999;
-      font-size: 0.75rem;
+      color: var(--pd-text-muted);
+      font-size: var(--pd-text-caption);
     }
     .issue-message {
-      margin-bottom: 0.35rem;
-      font-size: 0.9rem;
-      line-height: 1.4;
+      margin-block-end: var(--pd-space-2);
+      font-size: var(--pd-text-body-sm);
+      line-height: var(--pd-lh-body-sm);
     }
     .issue-suggestions {
-      margin-bottom: 0.35rem;
+      margin-block-end: var(--pd-space-2);
       display: flex;
       flex-wrap: wrap;
-      gap: 0.25rem;
+      gap: var(--pd-space-2);
       align-items: center;
     }
     .suggestions-label {
-      font-size: 0.8rem;
-      color: #666;
-      margin-right: 0.25rem;
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-secondary);
     }
     .suggestion-btn {
-      padding: 0.2rem 0.4rem;
-      border-radius: 3px;
-      border: 1px solid #0078d4;
-      background: #fff;
-      color: #0078d4;
+      padding: var(--pd-space-1) var(--pd-space-3);
+      border-radius: var(--pd-radius-sm);
+      border: 1px solid var(--pd-primary-300);
+      background: var(--pd-surface);
+      color: var(--pd-primary-600);
       cursor: pointer;
-      font-size: 0.8rem;
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-caption);
+      transition: background var(--pd-dur-fast) var(--pd-ease);
     }
     .suggestion-btn:hover {
-      background: #e6f0ff;
+      background: var(--pd-primary-50);
     }
     .suggestions-more {
-      font-size: 0.8rem;
-      color: #666;
-      margin-left: 0.25rem;
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-muted);
     }
     .issue-actions {
       display: flex;
-      gap: 0.5rem;
-      margin-top: 0.25rem;
+      gap: var(--pd-space-3);
+      margin-block-start: var(--pd-space-2);
     }
     .no-issues {
-      padding: 1rem;
+      padding: var(--pd-space-5);
       text-align: center;
     }
-    .muted {
-      color: #666;
-      font-size: 0.85rem;
-    }
     .rewrite-section {
-      border-top: 1px solid #eee;
-      padding-top: 0.5rem;
+      border-block-start: 1px solid var(--pd-divider);
+      padding-block-start: var(--pd-space-4);
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: var(--pd-space-3);
     }
     .rewrite-section h4 {
       margin: 0;
-      font-size: 0.9rem;
-      font-weight: 600;
+      font-size: var(--pd-text-body-sm);
+      font-weight: var(--pd-weight-bold);
     }
     .rewrite-preview {
-      padding: 0.5rem;
-      border-radius: 4px;
-      border: 1px solid #ddd;
-      background: #f9f9f9;
-      font-size: 0.9rem;
-      line-height: 1.5;
-      max-height: 200px;
+      padding: var(--pd-space-3);
+      border-radius: var(--pd-radius-md);
+      border: 1px solid var(--pd-border);
+      background: var(--pd-surface-sunken);
+      font-size: var(--pd-text-body-sm);
+      line-height: var(--pd-lh-body-sm);
+      max-block-size: 200px;
       overflow-y: auto;
       white-space: pre-wrap;
     }
     .rewrite-actions {
       display: flex;
-      gap: 0.35rem;
+      gap: var(--pd-space-3);
     }
     .service-unavailable-banner {
       display: flex;
       align-items: flex-start;
-      gap: 0.5rem;
-      padding: 0.5rem 0.75rem;
-      border-radius: 6px;
-      background: #f0f7ff;
-      border: 1px solid #b3d9ff;
-      font-size: 0.85rem;
+      gap: var(--pd-space-3);
+      padding: var(--pd-space-3) var(--pd-space-4);
+      border-radius: var(--pd-radius-md);
+      background: var(--pd-info-bg);
+      border: 1px solid var(--pd-primary-100);
+      font-size: var(--pd-text-body-sm);
     }
-    .banner-icon { font-size: 1.1rem; }
+    .banner-icon { font-size: var(--pd-text-body); }
     .banner-text {
       margin: 0;
-      color: #004578;
-      line-height: 1.4;
+      color: var(--pd-primary-900);
+      line-height: var(--pd-lh-body-sm);
     }
   `]
 })
 export class IssuePanelComponent implements OnInit, OnChanges {
   @Input() bookId?: string;
   @Input() chapterId?: string;
+  /** Book-scoped chrome language: Hebrew default, English only for an English book. */
+  @Input() bookLanguage: string | null = null;
   @Output() issueHighlighted = new EventEmitter<LanguageIssue>();
   @Output() rewriteApplied = new EventEmitter<ApplyCorrectionEvent>();
+
+  /** Chrome language: 'he' default, 'en' only for an English book (mirrors analysis-panel/history idiom). */
+  get langKey(): 'he' | 'en' {
+    return (this.bookLanguage?.trim().toLowerCase() || 'he').startsWith('en') ? 'en' : 'he';
+  }
+
+  // ---- Localized chrome strings (he/en parity). -----------------------------
+  // DRAFT Hebrew - flag for native-speaker review before sign-off.
+  get titleLabel(): string { return this.langKey === 'he' ? 'בעיות שפה' : 'Language Issues'; }
+  get detectLabel(): string { return this.langKey === 'he' ? 'אתר בעיות' : 'Detect Issues'; }
+  get detectingLabel(): string { return this.langKey === 'he' ? 'מאתר...' : 'Detecting...'; }
+  get rewriteLabel(): string { return this.langKey === 'he' ? 'שכתב' : 'Rewrite'; }
+  get rewritingLabel(): string { return this.langKey === 'he' ? 'משכתב...' : 'Rewriting...'; }
+  get suggestionsLabel(): string { return this.langKey === 'he' ? 'הצעות:' : 'Suggestions:'; }
+  get highlightLabel(): string { return this.langKey === 'he' ? 'הדגש' : 'Highlight'; }
+  get dismissLabel(): string { return this.langKey === 'he' ? 'התעלם' : 'Dismiss'; }
+  get rewrittenTextLabel(): string { return this.langKey === 'he' ? 'טקסט משוכתב' : 'Rewritten Text'; }
+  get applyRewriteLabel(): string { return this.langKey === 'he' ? 'החל שכתוב' : 'Apply Rewrite'; }
+  get emptyPromptLabel(): string {
+    return this.langKey === 'he'
+      ? 'לחצו על "אתר בעיות" כדי לבדוק בעיות שפה.'
+      : 'Click "Detect Issues" to check for language issues.';
+  }
+  get emptyCleanLabel(): string {
+    return this.langKey === 'he' ? 'לא נמצאו בעיות. מצוין!' : 'No issues detected. Great!';
+  }
+
+  /** Count chips: natural Hebrew plural (no trailing English 's'); Hebrew has no singular/plural noun form switch here. */
+  get errorChipLabel(): string {
+    return this.langKey === 'he'
+      ? `${this.errorCount} שגיאות`
+      : `${this.errorCount} error${this.errorCount !== 1 ? 's' : ''}`;
+  }
+  get warningChipLabel(): string {
+    return this.langKey === 'he'
+      ? `${this.warningCount} אזהרות`
+      : `${this.warningCount} warning${this.warningCount !== 1 ? 's' : ''}`;
+  }
+  get infoChipLabel(): string {
+    return this.langKey === 'he' ? `${this.infoCount} מידע` : `${this.infoCount} info`;
+  }
+
+  /** "+ N more" suggestions overflow. */
+  moreLabel(n: number): string {
+    return this.langKey === 'he' ? `+ ${n} נוספות` : `+ ${n} more`;
+  }
+
+  /** Fallback copy when the language checker (e.g. LanguageTool) is unavailable. */
+  get serviceUnavailableFallback(): string {
+    return this.langKey === 'he' ? 'בודק השפה אינו זמין.' : 'The language checker is not available.';
+  }
 
   issues: LanguageIssue[] = [];
   rewrittenText?: string;
@@ -410,7 +410,7 @@ export class IssuePanelComponent implements OnInit, OnChanges {
         this.issues = res.issues;
         this.hasDetected = true;
         this.serviceUnavailableMessage = res.languageToolUnavailable
-          ? (res.languageToolMessage ?? 'The language checker is not available.')
+          ? (res.languageToolMessage ?? this.serviceUnavailableFallback)
           : null;
       },
       error: (err) => {
@@ -429,7 +429,7 @@ export class IssuePanelComponent implements OnInit, OnChanges {
         this.hasDetected = true;
         this.isDetecting = false;
         this.serviceUnavailableMessage = result.metadata?.['languageToolUnavailable']
-          ? (result.metadata?.['languageToolMessage'] ?? 'The language checker is not available.')
+          ? (result.metadata?.['languageToolMessage'] ?? this.serviceUnavailableFallback)
           : null;
       },
       error: (err) => {
