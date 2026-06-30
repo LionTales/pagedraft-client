@@ -99,6 +99,43 @@ export class AnalysisRunTabComponent implements OnChanges {
     return (this.bookLanguage?.trim()) || 'he';
   }
 
+  /** Book-scoped chrome language ('he' default, 'en' for an English book). */
+  get chromeLang(): 'he' | 'en' {
+    return this.language.toLowerCase().startsWith('en') ? 'en' : 'he';
+  }
+
+  /** Localized Run-tab chrome strings (he default, en fallback). Keeps he/en parity. */
+  runLabel(key: string): string {
+    const he: Record<string, string> = {
+      suggestions: 'הצעות',
+      runTime: 'זמן ריצה:',
+      noChangesNeeded: 'אין צורך בשינויים. הטקסט שלך נראה תקין.',
+      finalizing: 'מסיים תוצאות...',
+      liveResult: 'תוצאה חיה',
+      unreliableProofread: 'לא הצלחנו להפיק הגהה אמינה עבור קטע זה. נסו קטע קצר יותר (למשל סצנה אחת) והריצו שוב.',
+      all: 'הכל',
+      couldNotParseLineEdit: 'לא ניתן לפענח תוצאות עריכת שורה מובנות.',
+      showRaw: 'הצג תגובה גולמית',
+      hideRaw: 'הסתר תגובה גולמית',
+      consistencyIssues: 'בעיות עקביות',
+    };
+    const en: Record<string, string> = {
+      suggestions: 'Suggestions',
+      runTime: 'Run time:',
+      noChangesNeeded: 'No changes needed. Your text looks clean.',
+      finalizing: 'Finalizing results...',
+      liveResult: 'Live result',
+      unreliableProofread: 'We could not produce a reliable proofread for this section. Try a shorter section (for example, one scene) and run it again.',
+      all: 'All',
+      couldNotParseLineEdit: 'Could not parse structured line edit results.',
+      showRaw: 'Show raw response',
+      hideRaw: 'Hide raw response',
+      consistencyIssues: 'Consistency issues',
+    };
+    const map = this.chromeLang === 'he' ? he : en;
+    return map[key] ?? key;
+  }
+
   // ── Style baseline status row (a3/a4) ──────────────────────────────────────
 
   /** 'rtl' for Hebrew (default), 'ltr' for English. Drives [dir] on the status row. */

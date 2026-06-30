@@ -1,18 +1,43 @@
+/* ── ds-c05 calm-canvas editor chrome ──────────────────────────────────────
+   The app themes only the CHROME it owns - the page canvas, the 3 zone columns
+   and their dividers, the toolbar wrapper, the status bar and the writing frame.
+   The center editor is the Syncfusion DocumentEditor: its inner text + .e-*
+   internals are Syncfusion-controlled and are deliberately NOT restyled here. */
 .editor-page-wrapper {
   position: relative;
   height: 100vh;
   overflow: hidden;
+  background: var(--pd-surface-sunken);
+  font-family: var(--pd-font-ui);
+  color: var(--pd-text);
 }
 
 .editor-layout {
   display: grid;
-  grid-template-columns: 240px minmax(0, 2fr) 300px;
+  // The right ReviewPanel width is resizable: driven by --review-panel-width (set inline by the
+  // component, clamped + persisted there). Falls back to the default if the var is absent.
+  --review-panel-width: 380px;
+  grid-template-columns: 260px minmax(0, 1fr) var(--review-panel-width);
   height: 100vh;
 }
 
+// While dragging the resize gutter, suppress text selection and force the resize cursor so the
+// drag reads cleanly even when the pointer leaves the thin handle.
+.editor-layout--resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* Focus / distraction-light mode: both side zones are removed from the DOM, so a
+   single centered writing column carries the canvas. */
+.editor-layout--focus {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .sidebar {
-  border-right: 1px solid #eee;
-  padding: 1rem;
+  border-inline-end: 1px solid var(--pd-border);
+  background: var(--pd-surface);
+  padding: var(--pd-space-5);
   overflow-y: auto;
 }
 
@@ -20,58 +45,258 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  gap: var(--pd-space-3);
+  margin-bottom: var(--pd-space-4);
+}
+
+.sidebar-header h3 {
+  margin: 0;
+  font-size: var(--pd-text-h5);
+  line-height: var(--pd-lh-h5);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text);
 }
 
 #custom-toolbar {
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid var(--pd-border);
+  border-start-start-radius: var(--pd-radius-lg);
+  border-start-end-radius: var(--pd-radius-lg);
+  background: var(--pd-surface);
 }
 
 .panel {
-  border-left: 1px solid #eee;
-  padding: 0.5rem 1rem 1rem;
+  border-inline-start: 1px solid var(--pd-border);
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-.panel-tabs {
+/* ── ds-c04 ReviewPanel shell ───────────────────────────────────────────── */
+.review-panel {
+  position: relative;
+  background: var(--pd-surface);
+  font-family: var(--pd-font-ui);
+  height: 100%;
+}
+
+/* Draggable resize gutter on the panel's PHYSICAL LEFT edge (between the center editor and the
+   panel). The panel is the rightmost column of the LTR 3-zone grid, so its left edge is always the
+   editor-facing boundary - regardless of the panel's CONTENT direction (the panel carries
+   [attr.dir] for Hebrew text). We therefore hard-set physical `left: 0` (with `right: auto`) so the
+   handle is NOT flipped by the dir context. It overlays the panel border so the hit target is a
+   thin vertical strip; widening the target on hover/focus keeps it grabbable. */
+.review-resize-handle {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  right: auto;
+  width: 10px;
+  transform: translateX(-50%);
   display: flex;
-  gap: 0.25rem;
-  margin-bottom: 0.5rem;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: var(--pd-z-panel);
+  background: transparent;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+.review-resize-handle:hover,
+.review-resize-handle:focus-visible {
+  background: var(--pd-primary-50);
+}
+.review-resize-handle:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+.review-resize-grip {
+  width: 2px;
+  height: 28px;
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-border-strong);
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+.review-resize-handle:hover .review-resize-grip,
+.review-resize-handle:focus-visible .review-resize-grip {
+  background: var(--pd-primary-400);
 }
 
-.panel-tab {
-  padding: 0.35rem 0.6rem;
-  border: 1px solid #ddd;
-  background: #fff;
+.review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pd-space-3);
+  padding: var(--pd-space-4) var(--pd-space-5);
+  border-bottom: 1px solid var(--pd-divider);
+}
+
+.review-title {
+  margin: 0;
+  font-size: var(--pd-text-h5);
+  line-height: var(--pd-lh-h5);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text);
+}
+
+.review-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--pd-radius-sm);
+  background: transparent;
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-body-sm);
   cursor: pointer;
-  font-size: 0.85rem;
-  border-radius: 4px;
+  transition: background var(--pd-dur-fast) var(--pd-ease), color var(--pd-dur-fast) var(--pd-ease);
+}
+.review-close:hover { background: var(--pd-neutral-100); color: var(--pd-text); }
+.review-close:focus-visible { outline: none; box-shadow: var(--pd-ring); }
+
+.review-seg {
+  padding: var(--pd-space-5);
+  padding-bottom: var(--pd-space-4);
 }
 
-.panel-tab:hover {
-  background: #f5f5f5;
+.review-context {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--pd-space-3);
+  padding: var(--pd-space-4) var(--pd-space-5);
+  background: var(--pd-surface-sunken);
+  border-top: 1px solid var(--pd-divider);
+  border-bottom: 1px solid var(--pd-divider);
 }
 
-.panel-tab.active {
-  background: #0078d4;
-  color: #fff;
-  border-color: #0078d4;
+.scope-pill {
+  flex: 0 0 auto;
+  padding: var(--pd-space-1) var(--pd-space-3);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-primary-50);
+  color: var(--pd-primary-700);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  font-weight: var(--pd-weight-bold);
+  white-space: nowrap;
+}
+.scope-pill--review {
+  background: var(--pd-secondary-50);
+  color: var(--pd-secondary-700);
 }
 
-.panel-content {
+.review-context-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-context-meta {
+  flex: 0 0 auto;
+  font-family: var(--pd-font-mono);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  color: var(--pd-text-muted);
+}
+
+.review-body {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  gap: var(--pd-space-4);
+  padding: var(--pd-space-5);
+  overflow-y: auto;
 }
 
-.panel-content app-analysis-panel,
-.panel-content app-issue-panel,
-.panel-content app-book-dashboard {
+.edit-help-subnav {
+  display: flex;
+  gap: var(--pd-space-2);
+  flex-wrap: wrap;
+}
+
+.edit-help-subnav-btn {
+  padding: var(--pd-space-2) var(--pd-space-4);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-surface);
+  color: var(--pd-text-secondary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  font-weight: var(--pd-weight-semibold);
+  cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease), color var(--pd-dur-fast) var(--pd-ease);
+}
+.edit-help-subnav-btn:hover:not(.active) { background: var(--pd-neutral-100); color: var(--pd-text); }
+.edit-help-subnav-btn:focus-visible { outline: none; box-shadow: var(--pd-ring); }
+.edit-help-subnav-btn.active {
+  background: var(--pd-primary-50);
+  border-color: var(--pd-primary-200);
+  color: var(--pd-primary-700);
+}
+
+/* Collapsed-state re-open affordance. */
+.review-reopen {
+  align-self: flex-start;
+  margin: var(--pd-space-4);
+  padding: var(--pd-space-3) var(--pd-space-5);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-surface);
+  color: var(--pd-primary-700);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-bold);
+  cursor: pointer;
+}
+.review-reopen:hover { background: var(--pd-primary-50); }
+.review-reopen:focus-visible { outline: none; box-shadow: var(--pd-ring); }
+/* P2-6: the reopen affordance lays out its label + the running dot inline. */
+.review-reopen {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+}
+.review-reopen-label { cursor: pointer; }
+
+/* P2-6: "a whole-book build is running" affordance — a small pulsing dot on the chrome
+   (reopen button + focus toggle) that stays visible while the dashboard is unmounted. */
+.review-running-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-primary-600);
+  flex: 0 0 auto;
+  animation: pd-review-running-pulse 1.4s var(--pd-ease) infinite;
+}
+.focus-btn.review-running .review-running-dot {
+  margin-inline-start: var(--pd-space-2);
+}
+/* On the active (filled-primary) focus button the dot needs the on-primary color to stay visible. */
+.focus-btn.active .review-running-dot {
+  background: var(--pd-on-primary);
+}
+@keyframes pd-review-running-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .review-running-dot { animation: none; }
+}
+
+.review-body app-analysis-panel,
+.review-body app-issue-panel,
+.review-body app-book-dashboard {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -79,33 +304,55 @@
 }
 
 .editor-area {
-  padding: 1rem;
+  padding: var(--pd-space-7);
   display: flex;
   align-items: stretch;
-  height: calc(100vh - 2rem);
+  height: 100vh;
   box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* In focus mode the writing frame is centered with a calm reading measure so the
+   canvas reads like a page rather than filling an ultrawide column. */
+.editor-layout--focus .editor-area {
+  justify-content: center;
+}
+.editor-layout--focus .editor-shell {
+  max-width: calc(var(--pd-reading-measure) + 12rem);
 }
 
 .editor-shell {
   display: flex;
   flex-direction: column;
   width: 100%;
+  min-height: 0;
+  background: var(--pd-surface);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-lg);
+  box-shadow: var(--pd-shadow-1);
+  overflow: hidden;
 }
 
 .editor-status {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  font-size: 0.75rem;
-  color: #555;
-  margin-bottom: 0.25rem;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  color: var(--pd-text-secondary);
+  padding: var(--pd-space-3) var(--pd-space-4);
+  border-bottom: 1px solid var(--pd-border);
+  background: var(--pd-surface-sunken);
+  gap: var(--pd-space-3);
 }
 
 .editor-area ejs-documenteditorcontainer {
   display: flex;
   flex-direction: column;
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .editor-area ejs-documenteditorcontainer > * {
@@ -127,25 +374,34 @@
 }
 
 .scope-badge {
-  font-size: 0.7rem;
-  color: #0078d4;
-  margin-inline-start: 0.5rem;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-primary-700);
+  margin-inline-start: var(--pd-space-3);
 }
 
 .save-btn,
 .back-btn {
-  margin-inline-start: 0.5rem;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.8rem;
-  border: 1px solid #0078d4;
-  border-radius: 4px;
-  background: #fff;
-  color: #0078d4;
+  margin-inline-start: var(--pd-space-3);
+  padding: var(--pd-space-2) var(--pd-space-4);
+  font-size: var(--pd-text-body-sm);
+  border: 1px solid var(--pd-primary-600);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-primary-700);
   cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
 }
 
 .save-btn:hover:not(:disabled) {
-  background: #e6f0ff;
+  background: var(--pd-primary-50);
+}
+
+.save-btn:focus-visible,
+.back-btn:focus-visible,
+.dir-btn:focus-visible,
+.focus-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
 }
 
 .save-btn:disabled {
@@ -154,32 +410,57 @@
 }
 
 .back-btn {
-  border-color: #666;
-  color: #333;
+  border-color: var(--pd-border-strong);
+  color: var(--pd-text);
 }
 
 .back-btn:hover {
-  background: #f5f5f5;
+  background: var(--pd-neutral-100);
 }
 
 .direction-btns {
   display: inline-flex;
-  gap: 0.2rem;
-  margin-inline-start: 0.5rem;
+  gap: var(--pd-space-1);
+  margin-inline-start: var(--pd-space-3);
 }
 
 .dir-btn {
-  padding: 0.2rem 0.4rem;
-  font-size: 0.75rem;
-  border: 1px solid #888;
-  border-radius: 4px;
-  background: #fff;
-  color: #333;
+  padding: var(--pd-space-1) var(--pd-space-3);
+  font-size: var(--pd-text-caption);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-text);
   cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
 }
 
 .dir-btn:hover {
-  background: #eee;
+  background: var(--pd-neutral-100);
+}
+
+/* ds-c05 Focus-mode toggle: collapses both side zones to center the writing canvas. */
+.focus-btn {
+  margin-inline-start: var(--pd-space-3);
+  padding: var(--pd-space-2) var(--pd-space-4);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-medium);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-text);
+  cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease), color var(--pd-dur-fast) var(--pd-ease);
+}
+
+.focus-btn:hover {
+  background: var(--pd-neutral-100);
+}
+
+.focus-btn.active {
+  background: var(--pd-primary-600);
+  border-color: var(--pd-primary-600);
+  color: var(--pd-on-primary);
 }
 
 .add-chapter {
@@ -190,9 +471,31 @@
 }
 
 .import-btn {
-  padding: 0.35rem 0.5rem;
-  font-size: 0.8rem;
+  padding: var(--pd-space-2) var(--pd-space-4);
+  font-size: var(--pd-text-body-sm);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-text);
   cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+
+.import-btn:hover {
+  background: var(--pd-neutral-100);
+}
+
+.import-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+/* Empty-state hint shown when no chapter/scene is open. */
+.editor-area > p {
+  margin: auto;
+  color: var(--pd-text-muted);
+  font-size: var(--pd-text-body);
+  text-align: center;
 }
 
 .analysis-overlay {

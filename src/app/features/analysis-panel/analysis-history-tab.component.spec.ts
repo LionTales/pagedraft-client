@@ -463,6 +463,8 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
     }
 
     it('unreliable: shows ONLY the warning (no cards, no "what happened" block, no raw list/single)', () => {
+      // The History chrome (warning copy, "what happened" heading) follows bookLanguage; assert the en copy.
+      component.bookLanguage = 'en';
       const result = makeProofreadResult({ proofreadResultUnreliable: true });
       loadResult(result);
 
@@ -713,6 +715,79 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
     it('does NOT route a LiteraryAnalysis history result through the markdown component', () => {
       loadResult(makeLiteraryResult());
       expect(fixture.debugElement.query(By.css('[data-testid="history-markdown-result"]'))).toBeNull();
+    });
+  });
+
+  // =========================================================================
+  // 9. f01 he/en parity: proofread history cards receive [lang]="chromeLang"
+  //    so Hebrew books show Hebrew rationale labels, not the default English.
+  // =========================================================================
+
+  describe('f01: proofread history card renders Hebrew labels for a Hebrew book', () => {
+    function makeProofreadResultWithSuggestion(language: string): AnalysisResultDto {
+      return {
+        id: 'r-pf-lang',
+        chapterId: 'chap-1',
+        jobId: null,
+        type: 'Proofread',
+        analysisType: 'Proofread',
+        resultText: '',
+        modelName: 'test-model',
+        createdAt: new Date().toISOString(),
+        scope: 'Chapter',
+        structuredResult: null,
+        sceneId: null,
+        bookId: 'book-1',
+        language,
+        status: 'Active',
+        proofreadNoChangesHint: false,
+        suggestions: [
+          {
+            id: 'ps-lang-1',
+            analysisResultId: 'r-pf-lang',
+            originalText: 'הוא הלך',
+            suggestedText: 'הוא צעד',
+            startOffset: 0,
+            endOffset: 7,
+            reason: 'מילה חלשה',
+            category: null,
+            explanation: null,
+            outcome: null,
+            orderIndex: 0,
+            contextBefore: null,
+            contextAfter: null,
+          }
+        ],
+      };
+    }
+
+    it('chromeLang returns "he" when bookLanguage is "he"', () => {
+      component.bookLanguage = 'he';
+      expect(component.chromeLang).toBe('he');
+    });
+
+    it('chromeLang returns "he" when bookLanguage is null (default)', () => {
+      component.bookLanguage = null;
+      expect(component.chromeLang).toBe('he');
+    });
+
+    it('proofread history card on a Hebrew book renders Hebrew rationale toggle label (נימוק)', () => {
+      component.bookLanguage = 'he';
+      loadResult(makeProofreadResultWithSuggestion('he'));
+
+      // The suggestion card's rationale toggle must use the Hebrew label.
+      const rationaleToggle = fixture.debugElement.query(By.css('.suggestions-list .rationale-toggle'));
+      expect(rationaleToggle).not.toBeNull();
+      expect(rationaleToggle.nativeElement.textContent).toContain('נימוק');
+    });
+
+    it('proofread history card on an English book renders English rationale toggle label (Rationale)', () => {
+      component.bookLanguage = 'en';
+      loadResult(makeProofreadResultWithSuggestion('en'));
+
+      const rationaleToggle = fixture.debugElement.query(By.css('.suggestions-list .rationale-toggle'));
+      expect(rationaleToggle).not.toBeNull();
+      expect(rationaleToggle.nativeElement.textContent).toContain('Rationale');
     });
   });
 });

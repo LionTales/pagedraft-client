@@ -19,7 +19,7 @@
       <span class="sb-status sb-not-built" data-testid="brev-not-built">{{ bookReviewLabel('notBuilt') }}</span>
       <button
         type="button"
-        class="run-btn sb-action"
+        class="pd-btn pd-btn-primary sb-action"
         data-testid="brev-build-now"
         (click)="openBookReviewConsent()">
         {{ bookReviewLabel('buildNow') }}
@@ -52,7 +52,7 @@
       </span>
       <button
         type="button"
-        class="run-btn sb-action"
+        class="pd-btn pd-btn-primary sb-action"
         data-testid="brev-refresh"
         (click)="openBookReviewConsent()">
         {{ bookReviewLabel('refresh') }}
@@ -62,7 +62,7 @@
 
   <!-- Cross-model staleness warning: review exists but was built with a different model. -->
   <p
-    class="sb-cross-model-warning muted"
+    class="sb-cross-model-warning"
     *ngIf="bookReviewBuiltWithDifferentModel"
     [attr.dir]="bookReviewDir"
     data-testid="brev-cross-model-warning">
@@ -81,7 +81,7 @@
     {{ bookReviewBuildOutcomeText }}
   </p>
   <p
-    class="brev-build-degraded muted"
+    class="brev-build-degraded"
     *ngIf="bookReviewBuildOutcome === 'degraded' && !bookReviewBuilding"
     [attr.dir]="bookReviewDir"
     data-testid="brev-build-degraded">
@@ -96,14 +96,14 @@
     <div class="sb-consent-actions">
       <button
         type="button"
-        class="run-btn"
+        class="pd-btn pd-btn-primary"
         data-testid="brev-consent-confirm"
         (click)="confirmBookReviewBuild()">
         {{ bookReviewLabel('confirm') }}
       </button>
       <button
         type="button"
-        class="run-btn secondary"
+        class="pd-btn pd-btn-ghost"
         data-testid="brev-consent-cancel"
         (click)="cancelBookReviewConsent()">
         {{ bookReviewLabel('cancel') }}

@@ -1,10 +1,14 @@
 <div class="editor-page-wrapper">
-  <div class="editor-layout">
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <h3>Chapters</h3>
+  <div
+    class="editor-layout"
+    [class.editor-layout--focus]="focusMode"
+    [class.editor-layout--resizing]="isResizingReviewPanel"
+    [style.--review-panel-width.px]="reviewPanelWidth">
+    <aside class="sidebar" *ngIf="!focusMode">
+      <div class="sidebar-header" [attr.dir]="reviewPanelDir">
+        <h3>{{ chaptersHeaderLabel }}</h3>
         @if (bookId) {
-          <button type="button" class="import-btn" (click)="goToImport()">Import DOCX</button>
+          <button type="button" class="import-btn" (click)="goToImport()">{{ importDocxLabel }}</button>
         }
       </div>
       @if (book) {
@@ -12,6 +16,7 @@
           [chapters]="book.chapters"
           [selectedChapterId]="selectedChapterId"
           [selectedSceneId]="selectedSceneId"
+          [bookLanguage]="book.language"
           [expandedChapters]="expandedChapterIds"
           [scenesMap]="scenesByChapter"
           (chapterSelected)="selectChapter($event)"
@@ -41,6 +46,19 @@
               <button type="button" class="dir-btn" title="Right-to-left (RTL)" (click)="setSelectionRtl()">RTL</button>
               <button type="button" class="dir-btn" title="Left-to-right (LTR)" (click)="setSelectionLtr()">LTR</button>
             </span>
+            <button
+              type="button"
+              class="focus-btn"
+              [class.active]="focusMode"
+              [class.review-running]="reviewBuildRunning"
+              [attr.aria-pressed]="focusMode"
+              [title]="reviewBuildRunning ? focusModeLabel + ' · ' + reviewRunningLabel : focusModeLabel"
+              (click)="toggleFocusMode()">
+              {{ focusModeLabel }}
+              @if (reviewBuildRunning) {
+                <span class="review-running-dot" aria-hidden="true"></span>
+              }
+            </button>
             <button type="button" class="save-btn" [disabled]="!hasPendingChanges || isSaving" (click)="saveCurrentDocument()">שמור</button>
             <button type="button" class="back-btn" (click)="goBackToBooks()">חזרה לספרים</button>
           </div>
@@ -61,70 +79,140 @@
         <p>Select a chapter or scene from the sidebar.</p>
       }
     </main>
-    <aside class="panel">
-      <nav class="panel-tabs">
+    @if (reviewPanelOpen && !focusMode) {
+    <aside class="panel review-panel" [attr.dir]="reviewPanelDir">
+      <!-- Draggable resize gutter on the panel's PHYSICAL LEFT edge (between center editor and panel),
+           independent of content direction. Drives --review-panel-width on .editor-layout; clamped +
+           persisted in the component. -->
+      <div
+        class="review-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        tabindex="0"
+        [attr.aria-label]="reviewPanelIsHebrew ? 'שינוי רוחב הלוח' : 'Resize panel'"
+        [attr.aria-valuemin]="reviewPanelMinWidth"
+        [attr.aria-valuemax]="reviewPanelMaxWidth"
+        [attr.aria-valuenow]="reviewPanelWidth"
+        (pointerdown)="onReviewResizeStart($event)"
+        (pointermove)="onReviewResizeMove($event)"
+        (pointerup)="onReviewResizeEnd($event)"
+        (pointercancel)="onReviewResizeEnd($event)"
+        (keydown)="onReviewResizeKeydown($event)">
+        <span class="review-resize-grip" aria-hidden="true"></span>
+      </div>
+      <!-- ds-c04 ReviewPanel shell: header (Assistant + close) -> segmented two-mode switch ->
+           context strip (scope pill + label + meta) -> scrollable body hosting the existing
+           per-chapter analysis (Edit help) and whole-book dashboard (Book review) unchanged. -->
+      <header class="review-header">
+        <h3 class="review-title">{{ reviewPanelTitle }}</h3>
         <button
           type="button"
-          class="panel-tab"
-          [class.active]="rightPanelTab === 'analysis'"
-          (click)="rightPanelTab = 'analysis'">
-          Analysis
+          class="review-close"
+          [attr.aria-label]="reviewPanelCloseLabel"
+          [title]="reviewPanelCloseLabel"
+          (click)="closeReviewPanel()">
+          ✕
         </button>
-        <button
-          type="button"
-          class="panel-tab"
-          [class.active]="rightPanelTab === 'language'"
-          (click)="rightPanelTab = 'language'">
-          Language
-        </button>
-        <button
-          type="button"
-          class="panel-tab"
-          [class.active]="rightPanelTab === 'book'"
-          (click)="rightPanelTab = 'book'">
-          Book
-        </button>
-      </nav>
-      <div class="panel-content">
-        @if (rightPanelTab === 'analysis') {
-          <app-analysis-panel
-            [bookId]="bookId"
-            [chapterId]="selectedChapterId"
-            [sceneId]="selectedSceneId"
-            [bookLanguage]="book?.language ?? 'he'"
-            [documentText]="currentDocumentPlainText"
-            [documentChapterId]="documentOwnerChapterId"
-            [documentSceneId]="documentOwnerSceneId"
-            [saveBeforeRun]="saveBeforeRun"
-            (analysisStarted)="onAnalysisStarted()"
-            (analysisCompleted)="onAnalysisCompleted()"
-            (analysisStatus)="onAnalysisStatus($event)"
-            (analysisProgressPercent)="onAnalysisProgressPercent($event)"
-            (applyCorrection)="onApplyCorrection($event)"
-            (showInDocument)="selectRangeInEditor($event)"
-            (scrollTargetChange)="onScrollTargetChange($event)"
-            (suggestionRangesChange)="applySuggestionHighlights($event)"
-            (revertToVersion)="onRevertToVersion($event)">
-          </app-analysis-panel>
-        }
-        @if (rightPanelTab === 'language') {
-          <app-issue-panel
-            [bookId]="bookId ?? undefined"
-            [chapterId]="selectedChapterId ?? undefined"
-            (rewriteApplied)="onApplyCorrection($event)"
-            (issueHighlighted)="onIssueHighlighted($event)">
-          </app-issue-panel>
-        }
-        @if (rightPanelTab === 'book' && bookId && book) {
+      </header>
+
+      <div class="review-seg">
+        <app-segmented-control
+          [options]="reviewModeOptions"
+          [value]="reviewMode"
+          (valueChange)="onReviewModeChange($event)"
+          [ariaLabel]="reviewPanelTitle"
+          [rtl]="reviewPanelDir === 'rtl'">
+        </app-segmented-control>
+      </div>
+
+      <div class="review-context" [class.review-context--review]="reviewMode === 'review'">
+        <span class="scope-pill" [class.scope-pill--review]="reviewMode === 'review'">
+          {{ reviewScopeLabel }}
+        </span>
+        <span class="review-context-label">{{ reviewContextLabel }}</span>
+        <span class="review-context-meta">{{ reviewContextMeta }}</span>
+      </div>
+
+      <div class="review-body">
+        @if (reviewMode === 'edit') {
+          <!-- Secondary sub-view toggle: per-chapter analysis vs the language engine. Preserves the
+               existing Language panel (out of scope for the two-mode spec but a real feature). -->
+          <nav class="edit-help-subnav" role="radiogroup" [attr.aria-label]="reviewPanelTitle">
+            <button
+              type="button"
+              class="edit-help-subnav-btn"
+              role="radio"
+              [class.active]="editHelpView === 'analysis'"
+              [attr.aria-checked]="editHelpView === 'analysis'"
+              [attr.tabindex]="editHelpView === 'analysis' ? 0 : -1"
+              (click)="editHelpView = 'analysis'">
+              {{ editHelpViewLabel('analysis') }}
+            </button>
+            <button
+              type="button"
+              class="edit-help-subnav-btn"
+              role="radio"
+              [class.active]="editHelpView === 'language'"
+              [attr.aria-checked]="editHelpView === 'language'"
+              [attr.tabindex]="editHelpView === 'language' ? 0 : -1"
+              (click)="editHelpView = 'language'">
+              {{ editHelpViewLabel('language') }}
+            </button>
+          </nav>
+
+          @if (editHelpView === 'analysis') {
+            <app-analysis-panel
+              [bookId]="bookId"
+              [chapterId]="selectedChapterId"
+              [sceneId]="selectedSceneId"
+              [bookLanguage]="book?.language ?? 'he'"
+              [documentText]="currentDocumentPlainText"
+              [documentChapterId]="documentOwnerChapterId"
+              [documentSceneId]="documentOwnerSceneId"
+              [saveBeforeRun]="saveBeforeRun"
+              (analysisStarted)="onAnalysisStarted()"
+              (analysisCompleted)="onAnalysisCompleted()"
+              (analysisStatus)="onAnalysisStatus($event)"
+              (analysisProgressPercent)="onAnalysisProgressPercent($event)"
+              (applyCorrection)="onApplyCorrection($event)"
+              (showInDocument)="selectRangeInEditor($event)"
+              (scrollTargetChange)="onScrollTargetChange($event)"
+              (suggestionRangesChange)="applySuggestionHighlights($event)"
+              (revertToVersion)="onRevertToVersion($event)">
+            </app-analysis-panel>
+          } @else {
+            <app-issue-panel
+              [bookId]="bookId ?? undefined"
+              [chapterId]="selectedChapterId ?? undefined"
+              [bookLanguage]="book?.language ?? 'he'"
+              (rewriteApplied)="onApplyCorrection($event)"
+              (issueHighlighted)="onIssueHighlighted($event)">
+            </app-issue-panel>
+          }
+        } @else if (reviewMode === 'review' && bookId && book) {
           <app-book-dashboard
             [bookId]="bookId"
             [bookTitle]="book.title"
             [bookLanguage]="book.language"
-            (openChapter)="onOpenChapterFromDashboard($event)">
+            (openChapter)="onOpenChapterFromDashboard($event)"
+            (buildRunningChange)="onReviewBuildRunningChange($event)">
           </app-book-dashboard>
         }
       </div>
     </aside>
+    } @else if (!focusMode) {
+      <button
+        type="button"
+        class="review-reopen"
+        [class.review-running]="reviewBuildRunning"
+        [attr.aria-label]="reviewBuildRunning ? reviewPanelTitle + ' · ' + reviewRunningLabel : reviewPanelTitle"
+        [title]="reviewBuildRunning ? reviewPanelTitle + ' · ' + reviewRunningLabel : reviewPanelTitle">
+        <span class="review-reopen-label" (click)="openReviewPanel()">{{ reviewPanelTitle }}</span>
+        @if (reviewBuildRunning) {
+          <span class="review-running-dot" aria-hidden="true"></span>
+        }
+      </button>
+    }
   </div>
   @if (analysisRunning) {
     <div class="analysis-overlay" role="status" aria-live="polite" aria-label="Analysis in progress">

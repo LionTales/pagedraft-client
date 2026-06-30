@@ -1,25 +1,30 @@
-// wb3-c03: Story Bible / continuity ledger styles. Shares the muted/neutral palette of the c02 findings
-// panel; verdict colors: keep=green, improve=amber, cut=red. Thread-state accents reuse those verdict
-// colors (open=amber, dangling=red, resolved=green). RTL via [dir] on the root.
+// wb3-c03: Story Bible / continuity ledger styles (restyled with --pd-* design tokens).
+// Verdict colors: keep=green (--pd-keep), improve=amber (--pd-improve), cut=red (--pd-cut).
+// Thread-state accents reuse verdict token aliases. RTL via [dir] on the root.
 :host {
   display: block;
+  font-family: var(--pd-font-ui);
 }
 
 .story-bible {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  font-size: 0.85rem;
+  gap: var(--pd-space-5);
+  font-size: var(--pd-text-body-sm);
 }
 
 .section-title {
-  margin: 0 0 0.4rem 0;
-  font-size: 0.9rem;
-  color: #555;
+  margin: 0 0 var(--pd-space-3) 0;
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .muted {
-  color: #666;
+  color: var(--pd-text-muted);
 }
 
 .bible-loading,
@@ -27,160 +32,198 @@
 .bible-error,
 .section-empty {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--pd-text-body-sm);
 }
+
 .bible-error {
-  color: #b00020;
+  color: var(--pd-cut);
 }
 
 .link-btn {
   background: none;
   border: none;
-  color: #0078d4;
+  color: var(--pd-text-link);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--pd-text-body-sm);
+  font-family: var(--pd-font-ui);
   padding: 0;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
 }
 
 // ── Sections ─────────────────────────────────────────────────────────────────
 .bible-section {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: var(--pd-space-3);
 }
 
 .entry-list {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: var(--pd-space-3);
 }
 
 // ── Threads grouping ─────────────────────────────────────────────────────────
 .thread-group {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  margin-bottom: 0.5rem;
+  gap: var(--pd-space-3);
+  margin-bottom: var(--pd-space-4);
 }
+
 .thread-state-label {
   margin: 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #555;
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
+
 .thread-state-label[data-thread-state='open'] {
-  color: #8a5a00;
+  color: var(--pd-improve);
 }
+
 .thread-state-label[data-thread-state='dangling'] {
-  color: #b00020;
+  color: var(--pd-cut);
 }
+
 .thread-state-label[data-thread-state='resolved'] {
-  color: #2d6a2d;
+  color: var(--pd-keep);
 }
 
 // ── Entry (shared by all three sections) ─────────────────────────────────────
 .bible-entry {
-  border: 1px solid #eee;
+  background: var(--pd-surface);
+  border: 1px solid var(--pd-border);
   border-inline-start-width: 3px;
-  border-radius: 6px;
-  background: #fff;
-  padding: 0.5rem 0.6rem;
+  border-inline-start-color: var(--pd-border-strong);
+  border-radius: var(--pd-radius-md);
+  padding: var(--pd-space-4) var(--pd-space-5);
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: var(--pd-space-3);
+  box-shadow: var(--pd-shadow-1);
 }
+
 .bible-entry.verdict-keep {
-  border-inline-start-color: #2d6a2d;
+  border-inline-start-color: var(--pd-keep);
 }
+
 .bible-entry.verdict-improve {
-  border-inline-start-color: #d69200;
+  border-inline-start-color: var(--pd-improve);
 }
+
 .bible-entry.verdict-cut {
-  border-inline-start-color: #b00020;
+  border-inline-start-color: var(--pd-cut);
 }
 
 .entry-main {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.45rem;
+  gap: var(--pd-space-3);
 }
+
 .entry-verdict-icon {
-  font-weight: 700;
+  font-weight: var(--pd-weight-bold);
 }
+
 .bible-entry.verdict-keep .entry-verdict-icon {
-  color: #2d6a2d;
+  color: var(--pd-keep);
 }
+
 .bible-entry.verdict-improve .entry-verdict-icon {
-  color: #d69200;
+  color: var(--pd-improve);
 }
+
 .bible-entry.verdict-cut .entry-verdict-icon {
-  color: #b00020;
+  color: var(--pd-cut);
 }
+
 .entry-rationale {
   flex: 1;
   text-align: inherit;
-  color: #333;
-  line-height: 1.35;
+  color: var(--pd-text);
+  line-height: var(--pd-lh-body);
 }
+
 .entry-rationale .expand-caret {
-  font-size: 0.65rem;
-  color: #888;
-  margin-inline-start: 0.25rem;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+  margin-inline-start: var(--pd-space-2);
 }
 
 .entry-anchors {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.3rem;
+  gap: var(--pd-space-2);
 }
+
 .anchors-label {
-  font-size: 0.75rem;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
 }
+
 .anchor-chip {
-  font-size: 0.75rem;
-  padding: 0.1rem 0.45rem;
-  border-radius: 10px;
-  border: 1px solid #d6dde6;
-  background: #fff;
-  color: #0078d4;
+  font-size: var(--pd-text-caption);
+  padding: var(--pd-space-1) var(--pd-space-3);
+  border-radius: var(--pd-radius-pill);
+  border: 1px solid var(--pd-border);
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-link);
   cursor: pointer;
   max-width: 14rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--pd-font-ui);
+  transition: background var(--pd-dur-fast) var(--pd-ease);
 }
+
 .anchor-chip:hover {
-  background: #f0f6fc;
+  background: var(--pd-primary-50);
+  border-color: var(--pd-primary-200);
 }
 
 .entry-detail {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.35rem 0.5rem;
-  background: #f9fafb;
-  border-radius: 4px;
+  gap: var(--pd-space-4);
+  padding: var(--pd-space-4);
+  background: var(--pd-surface-sunken);
+  border-radius: var(--pd-radius-sm);
+  border: 1px solid var(--pd-divider);
 }
+
 .detail-label {
-  margin: 0 0 0.2rem 0;
-  font-size: 0.75rem;
-  font-weight: 600;
+  margin: 0 0 var(--pd-space-2) 0;
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
+
 .evidence-excerpt {
-  margin: 0 0 0.3rem 0;
-  padding-inline-start: 0.5rem;
-  border-inline-start: 2px solid #d6dde6;
-  font-size: 0.82rem;
-  color: #444;
-  line-height: 1.4;
+  margin: 0 0 var(--pd-space-3) 0;
+  padding-inline-start: var(--pd-space-4);
+  border-inline-start: 2px solid var(--pd-border-strong);
+  font-family: var(--pd-font-reading);
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-text-secondary);
+  line-height: var(--pd-lh-body);
   white-space: pre-wrap;
 }
+
 .suggested-action-text {
   margin: 0;
-  font-size: 0.82rem;
-  color: #333;
-  line-height: 1.4;
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-text);
+  line-height: var(--pd-lh-body);
   white-space: pre-wrap;
 }

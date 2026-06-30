@@ -243,6 +243,89 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     expect(component.reviewTabLabel('bible')).toBe('Story Bible');
   });
 
+  // ── P2-6: buildRunningChange aggregation (drives the editor "review running" affordance) ─────
+  // The dashboard aggregates "any whole-book build running" from the summary row's buildingChange
+  // output AND the review row's reviewStateChange === 'building', and re-emits the in-flight value
+  // at unmount so the host's affordance survives the dashboard being @if-destroyed (close / focus).
+  describe('buildRunningChange aggregation (P2-6)', () => {
+    it('emits true when the review row reports building and false when it leaves building', () => {
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      // The review row enters BUILDING (e.g. a user-initiated review build started).
+      component.onReviewStateChange('building');
+      expect(component.buildRunning).toBeTrue();
+      expect(events).toEqual([true]);
+
+      // Staying building is de-duped (no redundant emit).
+      component.onReviewStateChange('building');
+      expect(events).toEqual([true]);
+
+      // Build finishes -> ready: aggregate flips false, emitted once.
+      component.onReviewStateChange('ready');
+      expect(component.buildRunning).toBeFalse();
+      expect(events).toEqual([true, false]);
+    });
+
+    it('emits true when the SUMMARY row reports building via buildingChange (held-open Subject)', () => {
+      // Re-stub the summary service so the real hosted summary row drives a Subject-backed build.
+      const summarySvc = TestBed.inject(BookSummaryService) as any;
+      const progressSvc = TestBed.inject(AnalysisProgressService) as any;
+      summarySvc.buildBookSummary = () => of({ jobId: 'job-1', noOp: false } as any);
+      summarySvc.getBookSummaryStatus = () => NEVER;
+      const poll$ = new Subject<any>();
+      progressSvc.pollBookSummaryProgress = () => poll$.asObservable();
+
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      const summaryRow = fixture.debugElement
+        .query(By.css('app-book-summary-status-row'))
+        .componentInstance as { bookLanguage: string; onBuildBookSummary: () => void };
+      summaryRow.bookLanguage = 'he';
+      summaryRow.onBuildBookSummary();
+
+      // The summary row emitted buildingChange(true); the dashboard aggregated it and emitted true.
+      expect(component.buildRunning).toBeTrue();
+      expect(events).toEqual([true]);
+
+      // Terminal on the OPEN Subject clears it.
+      poll$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
+      expect(component.buildRunning).toBeFalse();
+      expect(events).toEqual([true, false]);
+    });
+
+    it('keeps the host flag TRUE across unmount: ngOnDestroy does not flip a running build to false', () => {
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      // A review build is running.
+      component.onReviewStateChange('building');
+      expect(events).toEqual([true]);
+
+      // The dashboard is @if-destroyed (panel closed / focus mode) WHILE the build runs. The
+      // re-emit at unmount must NOT report false — the build is still running server-side.
+      component.ngOnDestroy();
+      expect(events).toEqual([true]); // still true; no false emitted at unmount
+    });
+
+    it('re-syncs the host on REMOUNT: the first reported state being non-building emits false (clears a host '
+      + 'flag left stuck true by a build that finished while the dashboard was unmounted)', () => {
+      // Remount-after-finish: this fresh instance starts buildRunning=false and lastBuildRunning=null. Its
+      // review row reattaches to the now-FINISHED server job and reports a terminal, non-building state as
+      // its FIRST emit. The host (editor) is still showing the "review running" affordance from before the
+      // unmount, so the dashboard MUST emit false to clear it — even though false matches this fresh
+      // instance's own default. Pre-fix, the dedup against a false baseline swallowed this first emit and
+      // the host stayed stuck true forever.
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      component.onReviewStateChange('ready'); // first signal after reattach: the build is already done
+      expect(component.buildRunning).toBeFalse();
+      expect(events).toEqual([false]);
+    });
+  });
+
   it('renders the book profile sections once a profile loads (existing behavior intact)', () => {
     const bookSvc = TestBed.inject(BookService);
     (bookSvc.getProfile as jasmine.Spy).and.returnValue(
@@ -321,6 +404,29 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       // The new book's profile arrives on the held-open stream and replaces the stale one.
       profile$.next(profileFor('NewGenre'));
       expect(component.profile?.genre).toBe('NewGenre');
+    });
+
+    it('clears buildRunning on book switch so the previous book\'s review-building does not leak into the '
+      + 'new book during the gap before its review status loads', () => {
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      // Book A's developmental review is running: reviewState='building' and the host affordance is lit.
+      component.onReviewStateChange('building');
+      expect(component.buildRunning).toBeTrue();
+      expect(events).toEqual([true]);
+
+      // The editor switches book in place (non-firstChange). The new book's review status has NOT loaded
+      // yet (getReviewStatus is the default NEVER), so the review row will not re-emit for a while.
+      const previous = component.bookId;
+      component.bookId = 'book-2';
+      component.ngOnChanges({ bookId: new SimpleChange(previous, 'book-2', false) });
+
+      // The cached review state is reset and the host is told false immediately — the stale 'building' from
+      // book A cannot keep the "review running" affordance lit for book B across the async status-load gap.
+      expect(component.reviewState).toBe('unknown');
+      expect(component.buildRunning).toBeFalse();
+      expect(events).toEqual([true, false]);
     });
 
     it('does NOT reload or reset on the first ngOnChanges (firstChange) so init loads only once', () => {

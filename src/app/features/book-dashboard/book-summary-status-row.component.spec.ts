@@ -473,6 +473,55 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
     expect(terminalCount).toBe(1);
   });
 
+  // ── P2-6: buildingChange output (drives the editor "review running" affordance) ─────────────
+  // The poll is held OPEN with a Subject so the start->terminal transition lands inside the real
+  // in-flight window (never a synchronous of()).
+  it('P2-6: emits buildingChange(true) on build start and buildingChange(false) on terminal', () => {
+    const summarySvc = TestBed.inject(BookSummaryService);
+    const progressSvc = TestBed.inject(AnalysisProgressService);
+
+    spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+    const poll$ = new Subject<any>();
+    spyOn(progressSvc, 'pollBookSummaryProgress').and.returnValue(poll$.asObservable());
+    spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(NEVER);
+
+    const events: boolean[] = [];
+    component.buildingChange.subscribe((b) => events.push(b));
+
+    component.bookLanguage = 'he';
+    component.onBuildBookSummary();
+    // Build started: building flag flipped true and the output emitted true exactly once.
+    expect(component.bookSummaryBuilding).toBeTrue();
+    expect(events).toEqual([true]);
+
+    // The build is still in flight (Subject open): no further emit.
+    poll$.next({ status: 'running', message: 'working', estimatedCompletionPercent: 40 });
+    expect(events).toEqual([true]);
+
+    // Terminal emit on the open Subject: building flips false and the output emits false.
+    poll$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
+    expect(component.bookSummaryBuilding).toBeFalse();
+    expect(events).toEqual([true, false]);
+  });
+
+  it('P2-6: emits buildingChange(true) when reattaching to an in-progress job advertised by status', () => {
+    const summarySvc = TestBed.inject(BookSummaryService);
+    const progressSvc = TestBed.inject(AnalysisProgressService);
+    spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(
+      of(makeBookSummaryStatus({ activeBuildJobId: 'job-running' }))
+    );
+    spyOn(progressSvc, 'pollBookSummaryProgress').and.returnValue(NEVER);
+
+    const events: boolean[] = [];
+    component.buildingChange.subscribe((b) => events.push(b));
+
+    component.loadBookSummaryStatus();
+
+    // Reattach set building=true via the setter, so the output fired true.
+    expect(component.bookSummaryBuilding).toBeTrue();
+    expect(events).toEqual([true]);
+  });
+
   it('c02: emits summaryTerminal when the build is a NO-OP (already fresh summary)', () => {
     const summarySvc = TestBed.inject(BookSummaryService);
     spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: null, noOp: true } as any));

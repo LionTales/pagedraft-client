@@ -1,10 +1,12 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
-import { Subject } from 'rxjs';
-import { debounceTime, takeUntil } from 'rxjs/operators';
+import { Subject, Subscription, interval, forkJoin, of } from 'rxjs';
+import { debounceTime, takeUntil, switchMap, startWith, map, catchError } from 'rxjs/operators';
 import { DocumentEditorContainerComponent, DocumentEditorContainerModule, ToolbarService } from '@syncfusion/ej2-angular-documenteditor';
 import { BookService } from '../../core/services/book.service';
+import { BookSummaryService } from '../../core/services/book-summary.service';
+import { BookReviewService } from '../../core/services/book-review.service';
 import { ChapterService } from '../../core/services/chapter.service';
 import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
@@ -16,6 +18,7 @@ import { ChapterTreeComponent } from '../chapter-tree/chapter-tree.component';
 import { AnalysisPanelComponent } from '../analysis-panel/analysis-panel.component';
 import { IssuePanelComponent, ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
 import { BookDashboardComponent } from '../book-dashboard/book-dashboard.component';
+import { SegmentedControlComponent, SegmentedOption } from '../../shared/segmented-control/segmented-control.component';
 import { LanguageIssue } from '../../core/models/language-engine';
 import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-analysis';
 import { EditorTextService } from '../../core/services/editor-text.service';
@@ -37,7 +40,8 @@ import { createElement, classList, EventHandler } from '@syncfusion/ej2-base';
     ChapterTreeComponent,
     AnalysisPanelComponent,
     IssuePanelComponent,
-    BookDashboardComponent
+    BookDashboardComponent,
+    SegmentedControlComponent
   ],
   providers: [ToolbarService],
   templateUrl: './editor-page.component.html',
@@ -64,7 +68,69 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   documentOwnerSceneId: string | null = null;
   isSaving = false;
   hasPendingChanges = false;
-  rightPanelTab: 'analysis' | 'language' | 'book' = 'analysis';
+  /**
+   * ds-c04 ReviewPanel mode: the consolidated right panel exposes TWO modes via a SegmentedControl -
+   * 'edit' (per-chapter Edit help: the analysis panel + the optional Language sub-view) and 'review'
+   * (whole-book developmental review: the book dashboard). This replaces the old top-level
+   * Analysis-vs-Book tab split. The Language panel is preserved as a secondary sub-view of Edit help
+   * (it is out of scope for the two-mode spec but is an existing feature we must not drop).
+   */
+  reviewMode: 'edit' | 'review' = 'edit';
+  /** Secondary view within Edit-help mode: 'analysis' (per-chapter analysis) or 'language' (language engine). */
+  editHelpView: 'analysis' | 'language' = 'analysis';
+  /** Whether the ReviewPanel is open; the header close button hides it so the canvas gets full width. */
+  reviewPanelOpen = true;
+  /**
+   * ds-c05 Focus mode: a distraction-light writing mode that collapses BOTH side zones (the left
+   * chapter tree and the right ReviewPanel) so the center writing canvas is centered and gets the
+   * full width. Persisted in component state only (no backend); toggling back restores the panels to
+   * the state they were in before focus was entered.
+   */
+  focusMode = false;
+  /** ReviewPanel open-state remembered when entering focus mode, so exiting restores it exactly. */
+  private reviewPanelOpenBeforeFocus = true;
+
+  /**
+   * P2-6: true while a whole-book build (summary briefs OR developmental review) is running, reported by the
+   * book dashboard via its buildRunningChange output. Held HERE (not in the dashboard) so the affordance keeps
+   * showing on the closed-panel reopen button and the focus-mode toggle even after the dashboard is
+   * @if-destroyed by closing the panel or entering focus mode. The dashboard re-emits the in-flight state at
+   * unmount and, on remount, reattaches to the server-tracked job and emits the terminal/idle state that
+   * clears this flag.
+   *
+   * The dashboard, however, mounts ONLY in Book review mode (reviewMode === 'review'); in Edit help mode it
+   * is not present at all, so it can neither poll nor emit. Without a fallback, a build that finishes while
+   * the dashboard is unmounted (Edit help, panel closed, or focus mode) would never emit false and this flag
+   * would stick true forever. {@link updateReviewBuildReconcile} runs an editor-owned reconciliation poll for
+   * exactly those windows.
+   */
+  reviewBuildRunning = false;
+  /**
+   * Poll period (ms) for the editor-owned reconciliation of {@link reviewBuildRunning} while the dashboard is
+   * unmounted. Matches no specific server cadence; it only needs to clear (or set) the affordance within a
+   * few seconds of the build's state changing. The dashboard's own polls run at 5000ms.
+   */
+  private static readonly REVIEW_BUILD_RECONCILE_MS = 5000;
+  /** Active editor-owned build-status reconcile poll; non-null only while it is running. */
+  private reviewBuildReconcileSub: Subscription | null = null;
+
+  // ── ReviewPanel resize (draggable inline-start gutter) ─────────────────────
+  /** Default right-panel width (px). Raised from the old fixed 320 so the scorecard fits out of the box. */
+  static readonly REVIEW_PANEL_DEFAULT_WIDTH = 380;
+  /** Min/max clamp for the resizable right panel (px). */
+  static readonly REVIEW_PANEL_MIN_WIDTH = 300;
+  static readonly REVIEW_PANEL_MAX_WIDTH = 640;
+  private static readonly REVIEW_PANEL_WIDTH_KEY = 'pd.reviewPanelWidth';
+  /** Current right-panel width in px; bound to the grid via the --review-panel-width custom property. */
+  reviewPanelWidth = EditorPageComponent.REVIEW_PANEL_DEFAULT_WIDTH;
+  /** Template-readable clamp bounds (statics are not accessible from the template). */
+  get reviewPanelMinWidth(): number { return EditorPageComponent.REVIEW_PANEL_MIN_WIDTH; }
+  get reviewPanelMaxWidth(): number { return EditorPageComponent.REVIEW_PANEL_MAX_WIDTH; }
+  /** True while a resize drag is in progress; drives a class that suppresses text selection during drag. */
+  isResizingReviewPanel = false;
+  /** Drag state captured on pointerdown; null when not dragging. */
+  private resizeDrag: { pointerId: number; startX: number; startWidth: number; handle: HTMLElement } | null = null;
+
   /** True while an analysis run or stream is in progress; shows full-screen overlay and blocks interaction. */
   analysisRunning = false;
   /** Human-readable status text shown in the analysis overlay spinner. */
@@ -81,6 +147,383 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     const lang = this.book?.language?.toLowerCase();
     return lang === 'he' || lang === 'ar' ? 'he' : 'en';
   }
+
+  // ── ds-c04 ReviewPanel: localization + chrome ──────────────────────────────
+
+  /** True when the panel chrome should localize to Hebrew (default) vs English (English book). */
+  get reviewPanelIsHebrew(): boolean {
+    return !(this.book?.language ?? '').toLowerCase().startsWith('en');
+  }
+
+  /** Logical direction for the ReviewPanel chrome; follows the book language so en books render ltr. */
+  get reviewPanelDir(): 'rtl' | 'ltr' {
+    return this.reviewPanelIsHebrew ? 'rtl' : 'ltr';
+  }
+
+  /** Localized "Assistant" header title. */
+  get reviewPanelTitle(): string {
+    return this.reviewPanelIsHebrew ? 'עוזר' : 'Assistant';
+  }
+
+  /** Localized "Chapters" sidebar header (book-scoped: Hebrew default, English for en books). */
+  get chaptersHeaderLabel(): string {
+    return this.reviewPanelIsHebrew ? 'פרקים' : 'Chapters';
+  }
+
+  /** Localized "Import DOCX" sidebar action (book-scoped). */
+  get importDocxLabel(): string {
+    return this.reviewPanelIsHebrew ? 'ייבוא DOCX' : 'Import DOCX';
+  }
+
+  /**
+   * The two SegmentedControl options (Edit help / Book review), already localized. Count badges are
+   * intentionally omitted: deriving live pending-edit / findings counts would require new outputs from
+   * the analysis panel and dashboard, which couples into the proven orchestration. The shared
+   * SegmentedControl renders a badge only when `count` is set, so leaving it unset is the no-risk default.
+   *
+   * NIT-7: cached as a field to avoid allocating a fresh array every change-detection cycle. Rebuilt
+   * by {@link rebuildReviewModeOptions} at every site that assigns {@link book}, so a language flip
+   * (he to en or vice-versa) always produces fresh, correctly-localized labels.
+   */
+  reviewModeOptions: SegmentedOption[] = this.buildReviewModeOptions();
+
+  /** Build the localized segment option list from the current {@link reviewPanelIsHebrew} state. */
+  private buildReviewModeOptions(): SegmentedOption[] {
+    const he = this.reviewPanelIsHebrew;
+    return [
+      { value: 'edit', label: he ? 'עזרת עריכה' : 'Edit help' },
+      { value: 'review', label: he ? 'סקירת ספר' : 'Book review' },
+    ];
+  }
+
+  /** Refresh the cached option list after the book (and therefore its language) changes. */
+  private rebuildReviewModeOptions(): void {
+    this.reviewModeOptions = this.buildReviewModeOptions();
+  }
+
+  /**
+   * NIT-2: typed handler for the SegmentedControl valueChange output.
+   * Validates the raw `string` emitted by the control before assigning it to the
+   * narrowly-typed `reviewMode` field so `@if (reviewMode === 'review')` branches remain
+   * type-safe, without touching SegmentedControlComponent's public `value: string` contract.
+   */
+  onReviewModeChange(value: string): void {
+    if (value === 'edit' || value === 'review') {
+      this.reviewMode = value;
+      // Switching to Edit help unmounts the dashboard (which owns the build affordance via polling); switching
+      // back to Book review remounts it. Re-evaluate the editor-owned reconcile so a build that finishes while
+      // in Edit help still clears the affordance instead of sticking on.
+      this.updateReviewBuildReconcile();
+    }
+  }
+
+  /** Scope pill text: this chapter (edit mode) vs whole book (review mode). */
+  get reviewScopeLabel(): string {
+    const he = this.reviewPanelIsHebrew;
+    return this.reviewMode === 'review'
+      ? (he ? 'כל הספר' : 'Whole book')
+      : (he ? 'פרק נוכחי' : 'This chapter');
+  }
+
+  /**
+   * Context label under the segmented control: in edit mode the current chapter/scene title, in review
+   * mode the book title. Falls back to a localized hint when nothing is selected.
+   */
+  get reviewContextLabel(): string {
+    const he = this.reviewPanelIsHebrew;
+    if (this.reviewMode === 'review') {
+      return this.book?.title || (he ? 'הספר כולו' : 'The whole book');
+    }
+    const chapter = this.book?.chapters?.find(c => c.id === this.selectedChapterId);
+    if (!chapter) {
+      return he ? 'בחר פרק' : 'Select a chapter';
+    }
+    if (this.selectedSceneId) {
+      const scenes = this.scenesByChapter[chapter.id] ?? [];
+      const scene = scenes.find(s => s.id === this.selectedSceneId);
+      const sceneLabel = scene?.title || (he ? 'סצנה' : 'Scene');
+      return `${chapter.title} · ${sceneLabel}`;
+    }
+    return chapter.title;
+  }
+
+  /** Mono meta line for the context strip: scope of the open unit (e.g. "scene" or "chapter"/whole book). */
+  get reviewContextMeta(): string {
+    const he = this.reviewPanelIsHebrew;
+    if (this.reviewMode === 'review') {
+      return he ? 'ניתוח התפתחותי' : 'developmental';
+    }
+    return this.selectedSceneId
+      ? (he ? 'סצנה' : 'scene')
+      : (he ? 'פרק' : 'chapter');
+  }
+
+  /** Localized labels for the Edit-help secondary sub-view toggle (analysis vs language engine). */
+  editHelpViewLabel(view: 'analysis' | 'language'): string {
+    const he = this.reviewPanelIsHebrew;
+    return view === 'analysis'
+      ? (he ? 'ניתוח' : 'Analysis')
+      : (he ? 'שפה' : 'Language');
+  }
+
+  /** Localized "close panel" aria/title. */
+  get reviewPanelCloseLabel(): string {
+    return this.reviewPanelIsHebrew ? 'סגור' : 'Close';
+  }
+
+  /** Localized accessible label for the "a whole-book build is running" affordance (he default). */
+  get reviewRunningLabel(): string {
+    return this.reviewPanelIsHebrew ? 'סקירה רצה' : 'Review running';
+  }
+
+  /**
+   * P2-6: the book dashboard reported whether a whole-book build (summary briefs or developmental review) is
+   * in flight. Hold the flag on the editor so the "review running" affordance survives the dashboard being
+   * @if-destroyed (close panel / focus mode); the dashboard re-emits at unmount and on remount. Re-evaluate
+   * the editor-owned reconcile poll so it takes over the moment the dashboard hands the flag off at unmount.
+   */
+  onReviewBuildRunningChange(running: boolean): void {
+    this.reviewBuildRunning = running;
+    this.updateReviewBuildReconcile();
+  }
+
+  /**
+   * True when the book dashboard is currently mounted in the template — it owns {@link reviewBuildRunning}
+   * via its buildRunningChange output (and its own server polling) only in this state. Mirrors the template
+   * guards: the ReviewPanel is open and not in focus mode (outer @if) AND we are in Book review mode with a
+   * loaded book (inner @if). In every other state the dashboard is absent and the editor must reconcile the
+   * flag itself.
+   */
+  private get dashboardMounted(): boolean {
+    return this.reviewPanelOpen && !this.focusMode && this.reviewMode === 'review' && !!this.bookId && !!this.book;
+  }
+
+  /**
+   * Start/stop the editor-owned build-status reconcile poll based on whether it is needed RIGHT NOW. It is
+   * needed only while the dashboard is unmounted (otherwise the dashboard owns the flag) and a build is
+   * believed to be running (so we watch for it to finish) — or when `force` requests a one-off check after a
+   * context change (e.g. a book switch) to establish the new book's state. The poll self-stops once it reads
+   * an idle (not-running) server state, so it does not run indefinitely.
+   */
+  private updateReviewBuildReconcile(force = false): void {
+    if (this.dashboardMounted || !this.bookId) {
+      this.stopReviewBuildReconcile();
+      return;
+    }
+    const shouldPoll = this.reviewBuildRunning || force;
+    if (!shouldPoll) {
+      this.stopReviewBuildReconcile();
+      return;
+    }
+    if (force || !this.reviewBuildReconcileSub) {
+      this.startReviewBuildReconcile();
+    }
+  }
+
+  /**
+   * Poll the summary + review status endpoints for the current book and reconcile {@link reviewBuildRunning}:
+   * the affordance is on when EITHER advertises an active build job. Runs an immediate check then repeats on
+   * an interval until the build is observed idle (then stops). A transient status-call error leaves the flag
+   * untouched and lets the next tick retry, so a network blip neither clears a real affordance nor sticks one
+   * on. Stops itself if the context changes mid-flight (book switch) or the dashboard (re)mounts and resumes
+   * ownership.
+   */
+  private startReviewBuildReconcile(): void {
+    const bookId = this.bookId;
+    if (!bookId) return;
+    const lang = this.book?.language ?? 'he';
+    this.stopReviewBuildReconcile();
+    this.reviewBuildReconcileSub = interval(EditorPageComponent.REVIEW_BUILD_RECONCILE_MS)
+      .pipe(
+        startWith(0),
+        switchMap(() =>
+          forkJoin([
+            this.bookSummaryService.getBookSummaryStatus(bookId, lang).pipe(
+              map(s => ({ ok: true, running: s.activeBuildJobId != null })),
+              catchError(() => of({ ok: false, running: false }))
+            ),
+            this.bookReviewService.getReviewStatus(bookId, lang).pipe(
+              map(s => ({ ok: true, running: s.activeBuildJobId != null })),
+              catchError(() => of({ ok: false, running: false }))
+            ),
+          ])
+        ),
+        takeUntil(this.destroy$)
+      )
+      .subscribe(([summary, review]) => {
+        // The dashboard remounted (it owns the flag now) or the user switched books: drop this poll.
+        if (this.dashboardMounted || this.bookId !== bookId) {
+          this.stopReviewBuildReconcile();
+          return;
+        }
+        // Only act on a definitive reading (both calls succeeded); otherwise keep polling and leave the flag.
+        if (!summary.ok || !review.ok) return;
+        this.reviewBuildRunning = summary.running || review.running;
+        if (!this.reviewBuildRunning) {
+          this.stopReviewBuildReconcile();
+        }
+      });
+  }
+
+  /** Tear down the editor-owned reconcile poll if one is running. */
+  private stopReviewBuildReconcile(): void {
+    this.reviewBuildReconcileSub?.unsubscribe();
+    this.reviewBuildReconcileSub = null;
+  }
+
+  /** Close the ReviewPanel (header ✕). Re-evaluate the reconcile poll: closing unmounts the dashboard. */
+  closeReviewPanel(): void {
+    this.reviewPanelOpen = false;
+    this.updateReviewBuildReconcile();
+  }
+
+  /** Reopen the ReviewPanel (collapsed reopen button). The dashboard remounts if we are in Book review mode. */
+  openReviewPanel(): void {
+    this.reviewPanelOpen = true;
+    this.updateReviewBuildReconcile();
+  }
+
+  // ── ds-c05 Focus mode ──────────────────────────────────────────────────────
+
+  /** Localized label for the focus-mode toggle button (he default). */
+  get focusModeLabel(): string {
+    const he = this.reviewPanelIsHebrew;
+    return this.focusMode
+      ? (he ? 'יציאה ממיקוד' : 'Exit focus')
+      : (he ? 'מיקוד' : 'Focus');
+  }
+
+  /**
+   * Toggle distraction-light focus mode. Entering remembers the ReviewPanel open-state and collapses
+   * both side zones; exiting restores the panel to exactly how it was. Pure component state - no
+   * backend, no editor-logic side effects (the Syncfusion canvas is untouched).
+   */
+  toggleFocusMode(): void {
+    if (!this.focusMode) {
+      this.reviewPanelOpenBeforeFocus = this.reviewPanelOpen;
+      this.focusMode = true;
+      this.reviewPanelOpen = false;
+    } else {
+      this.focusMode = false;
+      this.reviewPanelOpen = this.reviewPanelOpenBeforeFocus;
+    }
+    // Entering focus unmounts the dashboard; exiting may remount it. Re-evaluate the editor-owned reconcile
+    // so the "review running" affordance on the focus toggle clears when a build finishes during focus mode.
+    this.updateReviewBuildReconcile();
+  }
+
+  // ── ReviewPanel resize ──────────────────────────────────────────────────────
+
+  /** Clamp a candidate panel width to the allowed [min, max] range. */
+  private clampReviewPanelWidth(px: number): number {
+    return Math.max(
+      EditorPageComponent.REVIEW_PANEL_MIN_WIDTH,
+      Math.min(EditorPageComponent.REVIEW_PANEL_MAX_WIDTH, Math.round(px))
+    );
+  }
+
+  /** Restore the persisted panel width from localStorage (clamped); falls back to the default. */
+  private restoreReviewPanelWidth(): void {
+    try {
+      const raw = localStorage.getItem(EditorPageComponent.REVIEW_PANEL_WIDTH_KEY);
+      const parsed = raw != null ? Number(raw) : NaN;
+      if (Number.isFinite(parsed)) {
+        this.reviewPanelWidth = this.clampReviewPanelWidth(parsed);
+      }
+    } catch {
+      // localStorage unavailable (private mode / SSR): keep the default width.
+    }
+  }
+
+  /** Persist the current panel width to localStorage. */
+  private persistReviewPanelWidth(): void {
+    try {
+      localStorage.setItem(
+        EditorPageComponent.REVIEW_PANEL_WIDTH_KEY,
+        String(this.reviewPanelWidth)
+      );
+    } catch {
+      // Ignore persistence failures; the in-memory width still applies for this session.
+    }
+  }
+
+  /**
+   * Begin a drag-to-resize on the ReviewPanel gutter. The handle sits on the panel's PHYSICAL LEFT
+   * edge (the editor-facing boundary of the rightmost grid column), independent of the panel's
+   * content direction. Dragging the pointer LEFT widens the panel; dragging RIGHT narrows it.
+   */
+  onReviewResizeStart(event: PointerEvent): void {
+    const handle = event.currentTarget as HTMLElement | null;
+    if (!handle) return;
+    event.preventDefault();
+    this.resizeDrag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: this.reviewPanelWidth,
+      handle,
+    };
+    this.isResizingReviewPanel = true;
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture is best-effort; pointermove/up still fire without it.
+    }
+  }
+
+  /** Update the panel width as the pointer moves (no persistence yet). */
+  onReviewResizeMove(event: PointerEvent): void {
+    const drag = this.resizeDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    // The handle is on the panel's PHYSICAL LEFT edge, so the delta is purely physical and
+    // independent of content direction: moving the pointer LEFT (clientX decreasing) widens the
+    // panel, moving RIGHT narrows it. widen = startX - currentX.
+    const widen = drag.startX - event.clientX;
+    this.reviewPanelWidth = this.clampReviewPanelWidth(drag.startWidth + widen);
+  }
+
+  /** End the drag and persist the chosen width. */
+  onReviewResizeEnd(event: PointerEvent): void {
+    const drag = this.resizeDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    try {
+      drag.handle.releasePointerCapture(event.pointerId);
+    } catch {
+      // ignore
+    }
+    this.resizeDrag = null;
+    this.isResizingReviewPanel = false;
+    this.persistReviewPanelWidth();
+  }
+
+  /**
+   * Keyboard resize for the separator handle: arrow keys nudge the width by a step, Home/End jump to
+   * the min/max. The handle is on the panel's PHYSICAL LEFT edge, so ArrowLeft widens (increase
+   * width) and ArrowRight narrows - matching the drag direction, independent of content direction.
+   */
+  onReviewResizeKeydown(event: KeyboardEvent): void {
+    const step = 16;
+    let next: number | null = null;
+    switch (event.key) {
+      case 'ArrowLeft':
+        next = this.reviewPanelWidth + step;
+        break;
+      case 'ArrowRight':
+        next = this.reviewPanelWidth - step;
+        break;
+      case 'Home':
+        next = EditorPageComponent.REVIEW_PANEL_MAX_WIDTH;
+        break;
+      case 'End':
+        next = EditorPageComponent.REVIEW_PANEL_MIN_WIDTH;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    this.reviewPanelWidth = this.clampReviewPanelWidth(next);
+    this.persistReviewPanelWidth();
+  }
+
   private pendingLoadTarget: { chapterId: string; sceneId?: string } | null = null;
   private isOpeningDocument = false;
   /** Last suggestion ranges applied for highlights; used for re-application when needed. */
@@ -113,6 +556,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     private route: ActivatedRoute,
     private router: Router,
     private bookService: BookService,
+    private bookSummaryService: BookSummaryService,
+    private bookReviewService: BookReviewService,
     private chapterService: ChapterService,
     private sceneService: SceneService,
     private syncService: SyncService,
@@ -124,12 +569,23 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    this.restoreReviewPanelWidth();
     this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
       this.bookId = params['bookId'] ?? null;
+      // A book switch invalidates the previous book's whole-book-build affordance (it is per-book). Clear the
+      // stale flag and stop any reconcile poll for the old book; the new book's state is re-established below
+      // once it loads (editor-owned reconcile), or by the dashboard when it (re)mounts in Book review mode.
+      this.reviewBuildRunning = false;
+      this.stopReviewBuildReconcile();
       if (this.bookId) {
         this.syncService.connect().then(() => this.syncService.joinBook(this.bookId!));
         this.bookService.getById(this.bookId).subscribe(b => {
           this.book = b;
+          this.rebuildReviewModeOptions();
+          // Establish THIS book's build affordance: when the dashboard is not mounted (Edit help / panel
+          // closed / focus mode) it cannot report it, so reconcile once against the server (force) — this
+          // both surfaces a build already running for the new book and avoids a stale carry-over.
+          this.updateReviewBuildReconcile(true);
           if (b.chapters.length && !this.selectedChapterId) this.selectChapter(b.chapters[0]);
         });
       }
@@ -196,7 +652,10 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   private refreshBook(): void {
     if (!this.bookId) return;
-    this.bookService.getById(this.bookId).subscribe(b => { this.book = b; });
+    this.bookService.getById(this.bookId).subscribe(b => {
+      this.book = b;
+      this.rebuildReviewModeOptions();
+    });
   }
 
   onReorder(newOrder: { chapterId: string; order: number }[]): void {
@@ -216,22 +675,26 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   addChapter(): void {
     if (!this.bookId || !this.book) return;
-    const title = prompt('Chapter title', 'New chapter')?.trim() || 'New chapter';
+    const he = this.reviewPanelIsHebrew;
+    const defaultTitle = he ? 'פרק חדש' : 'New chapter';
+    const title = prompt(he ? 'כותרת הפרק' : 'Chapter title', defaultTitle)?.trim() || defaultTitle;
     this.chapterService.create(this.bookId, title, null, this.book.chapters.length).subscribe({
       next: (created) => {
         this.bookService.getById(this.bookId!).subscribe(b => {
           this.book = b;
+          this.rebuildReviewModeOptions();
           this.selectChapter(created);
         });
       },
-      error: () => alert('Failed to add chapter.')
+      error: () => alert(he ? 'הוספת הפרק נכשלה.' : 'Failed to add chapter.')
     });
   }
 
   renameChapter(ch: ChapterSummaryDto): void {
     if (!this.bookId || !this.book) return;
     const current = ch.title;
-    const next = prompt('Rename chapter:', current)?.trim();
+    const he = this.reviewPanelIsHebrew;
+    const next = prompt(he ? 'שינוי שם הפרק:' : 'Rename chapter:', current)?.trim();
     if (!next || next === current) {
       return;
     }
@@ -244,14 +707,16 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         }
       },
       error: () => {
-        alert('Failed to rename chapter.');
+        alert(he ? 'שינוי שם הפרק נכשל.' : 'Failed to rename chapter.');
       }
     });
   }
 
   deleteChapter(ch: ChapterSummaryDto): void {
     if (!this.bookId || !this.book) return;
-    const confirmed = confirm(`Delete chapter "${ch.title}"? This cannot be undone.`);
+    const confirmed = confirm(this.reviewPanelIsHebrew
+      ? `למחוק את הפרק "${ch.title}"? לא ניתן לבטל פעולה זו.`
+      : `Delete chapter "${ch.title}"? This cannot be undone.`);
     if (!confirmed) return;
 
     this.chapterService.delete(this.bookId, ch.id).subscribe({
@@ -269,7 +734,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         }
       },
       error: () => {
-        alert('Failed to delete chapter.');
+        alert(this.reviewPanelIsHebrew ? 'מחיקת הפרק נכשלה.' : 'Failed to delete chapter.');
       }
     });
   }
@@ -279,6 +744,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     if (this.bookId) this.syncService.leaveBook(this.bookId);
     if (this._scrollSettleTimer) clearTimeout(this._scrollSettleTimer);
     this.destroyCustomToolbar();
+    this.stopReviewBuildReconcile();
     this.destroy$.next();
     this.destroy$.complete();
   }
@@ -346,14 +812,18 @@ export class EditorPageComponent implements OnInit, OnDestroy {
           this.expandedChapterIds = [...this.expandedChapterIds, ch.id];
         }
       },
-      error: () => alert('Split scenes failed. Save the chapter first so it has content to split.')
+      error: () => alert(this.reviewPanelIsHebrew
+        ? 'הפיצול לסצנות נכשל. שמרו תחילה את הפרק כדי שיהיה לו תוכן לפיצול.'
+        : 'Split scenes failed. Save the chapter first so it has content to split.')
     });
   }
 
   onDeleteScene(event: { scene: SceneSummaryDto; chapterId: string }): void {
     if (!this.bookId) return;
     const { scene, chapterId } = event;
-    const confirmed = confirm(`Delete scene "${scene.title}"? This cannot be undone.`);
+    const confirmed = confirm(this.reviewPanelIsHebrew
+      ? `למחוק את הסצנה "${scene.title}"? לא ניתן לבטל פעולה זו.`
+      : `Delete scene "${scene.title}"? This cannot be undone.`);
     if (!confirmed) return;
     // Optimistically remove the scene from the tree (cheap and reversible). Do NOT
     // switch the editor away from the scene yet: loading chapter content here would
@@ -376,7 +846,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       error: () => {
         // The scene was not deleted. Reconcile the tree from the server; the editor
         // was never touched, so the still-selected scene and its unsaved edits remain.
-        alert('Failed to delete scene.');
+        alert(this.reviewPanelIsHebrew ? 'מחיקת הסצנה נכשלה.' : 'Failed to delete scene.');
         this.loadScenesForChapter(chapterId);
       }
     });
@@ -388,7 +858,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   onClearScenes(ch: ChapterSummaryDto): void {
     const bookId = this.bookId;
     if (!bookId) return;
-    const confirmed = confirm(`Remove all scenes from "${ch.title}"? The chapter content is kept; only the scene split is removed.`);
+    const confirmed = confirm(this.reviewPanelIsHebrew
+      ? `להסיר את כל הסצנות מ"${ch.title}"? תוכן הפרק נשמר; רק חלוקת הסצנות מוסרת.`
+      : `Remove all scenes from "${ch.title}"? The chapter content is kept; only the scene split is removed.`);
     if (!confirmed) return;
     this.sceneService.clear(bookId, ch.id).subscribe({
       next: () => {
@@ -399,7 +871,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
         }
       },
       error: () => {
-        alert('Failed to remove scenes. Please try again.');
+        alert(this.reviewPanelIsHebrew ? 'הסרת הסצנות נכשלה. נסו שוב.' : 'Failed to remove scenes. Please try again.');
         // The clear may have applied server-side despite the HTTP error (or a hub
         // event already mutated local state). Reload the scene list AND reconcile
         // the selection against the server: if the selected scene in this chapter is

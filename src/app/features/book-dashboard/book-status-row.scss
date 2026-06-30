@@ -1,116 +1,149 @@
-// Shared status-row styles for the book-scoped status rows hosted in the Book dashboard
-// (book-summary-status-row + book-review-status-row). Ported verbatim from the analysis
-// run-tab styles (wb3-c01 relocation) so the rows keep their original look.
+// Shared status-row styles for the book-scoped status rows in the Book dashboard
+// (book-summary-status-row + book-review-status-row). Token-based reskin (ds-f04).
+// Reuses .pd-btn / .pd-chip from _base.scss (global); component-local rules handle
+// the row layout, state chips, spinners, banners, and the consent panel.
+
 .style-baseline-row {
-  border: 1px solid #e3e8ef;
-  border-radius: 4px;
-  background: #f7f9fc;
-  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-surface-sunken);
+  padding: var(--pd-space-3) var(--pd-space-4);
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: var(--pd-space-3);
 }
+
+// ── Main status line ──────────────────────────────────────────────────────────
+
 .sb-line {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--pd-space-3);
 }
+
 .sb-title {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #333;
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text);
 }
+
+// State chips: reuse .pd-chip base via the HTML, colour overrides here by state.
+
 .sb-status {
-  font-size: 0.82rem;
-  color: #555;
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text-secondary);
 }
-.sb-status.sb-not-built { color: #8a5a00; }
-.sb-status.sb-building { color: #074799; }
-.sb-status.sb-ready { color: #2d6a2d; }
-.sb-status.sb-stale { color: #8a5a00; }
-.sb-action {
-  padding: 0.2rem 0.6rem;
-  font-size: 0.8rem;
+
+.sb-status.sb-not-built {
+  color: var(--pd-improve);   // amber: stale / not-yet-built
 }
+
+.sb-status.sb-building {
+  color: var(--pd-primary-700);
+}
+
+.sb-status.sb-ready {
+  color: var(--pd-keep);      // green: good state
+}
+
+.sb-status.sb-stale {
+  color: var(--pd-improve);   // amber: needs refresh
+}
+
+// Inline hint (e.g. "build summary first") — muted secondary text.
 .sb-hint-inline {
-  font-size: 0.8rem;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
 }
+
+// Action buttons inherit .pd-btn via the HTML; .sb-action tightens padding for the inline row.
+.sb-action {
+  padding: var(--pd-space-1) var(--pd-space-4);
+  font-size: var(--pd-text-caption);
+}
+
+// ── Cross-model warning ────────────────────────────────────────────────────────
+
 .sb-cross-model-warning {
-  margin: 0.3rem 0 0;
-  font-size: 0.8rem;
-  color: #8a5a00;
+  margin: 0;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-improve);
 }
+
+// ── Build-outcome banners ─────────────────────────────────────────────────────
+
 .brev-build-failed {
-  margin: 0.3rem 0 0;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: #b00020;
+  margin: 0;
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-cut);
 }
+
 .brev-build-degraded {
-  margin: 0.3rem 0 0;
-  font-size: 0.8rem;
-  color: #8a5a00;
+  margin: 0;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-improve);
 }
+
+// ── Spinner ───────────────────────────────────────────────────────────────────
+
 .sb-spinner {
-  width: 0.85rem;
-  height: 0.85rem;
-  border: 2px solid #cdd9ec;
-  border-top-color: #0078d4;
-  border-radius: 50%;
+  flex-shrink: 0;
+  inline-size: var(--pd-space-5);
+  block-size: var(--pd-space-5);
+  border: 2px solid var(--pd-neutral-200);
+  border-top-color: var(--pd-primary-600);
+  border-radius: var(--pd-radius-pill);
   display: inline-block;
   animation: sb-spin 0.8s linear infinite;
 }
+
 @keyframes sb-spin {
   to { transform: rotate(360deg); }
 }
+
+// ── Consent panel ─────────────────────────────────────────────────────────────
+
 .sb-consent {
-  border-top: 1px solid #e3e8ef;
-  padding-top: 0.4rem;
+  border-block-start: 1px solid var(--pd-divider);
+  padding-block-start: var(--pd-space-3);
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: var(--pd-space-2);
 }
+
 .sb-consent-title {
   margin: 0;
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text);
 }
+
 .sb-consent-body {
   margin: 0;
-  font-size: 0.8rem;
-  color: #555;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
 }
+
 .sb-consent-estimate {
   margin: 0;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: #074799;
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-primary-700);
 }
+
 .sb-consent-actions {
   display: flex;
-  gap: 0.4rem;
-  margin-top: 0.15rem;
+  flex-wrap: wrap;
+  gap: var(--pd-space-3);
+  margin-block-start: var(--pd-space-1);
 }
+
+// ── Legacy .muted helper (used by brev-needs-summary-hint and sb-cross-model-warning in HTML) ──
+
 .muted {
-  color: #666;
-  font-size: 0.85rem;
-}
-.run-btn {
-  padding: 0.35rem 0.75rem;
-  border-radius: 4px;
-  border: none;
-  background: #0078d4;
-  color: #fff;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.run-btn.secondary {
-  background: #fff;
-  color: #0078d4;
-  border: 1px solid #0078d4;
-}
-.run-btn.sb-action {
-  padding: 0.2rem 0.6rem;
-  font-size: 0.8rem;
+  color: var(--pd-text-muted);
+  font-size: var(--pd-text-caption);
 }

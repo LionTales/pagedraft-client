@@ -1,5 +1,7 @@
-// wb3-c02: Dimension Scorecard + Findings Ledger styles. Keeps the muted/neutral palette of the
-// book-dashboard cards; verdict colors: keep=green, improve=amber, cut=red (RTL via [dir] on the root).
+// wb3-c02: Dimension Scorecard + Findings Ledger styles.
+// ds-c03: the FINDING ROWS (.finding-card and descendants) are restyled to the FindingCard spec using
+// --pd-* tokens only. The Scorecard block below is LEFT for ds-f02; shared chrome (section title,
+// loading/empty/error, ledger head + verdict filter chips, group wrappers) is kept lightweight.
 :host {
   display: block;
 }
@@ -7,350 +9,523 @@
 .findings-panel {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  font-size: 0.85rem;
+  gap: var(--pd-space-4);
+  font-size: var(--pd-text-body-sm);
 }
 
 .section-title {
-  margin: 0 0 0.4rem 0;
-  font-size: 0.9rem;
-  color: #555;
+  margin: 0 0 var(--pd-space-3) 0;
+  font-size: var(--pd-text-h5);
+  color: var(--pd-text-secondary);
 }
 
 .muted {
-  color: #666;
+  color: var(--pd-text-secondary);
 }
 
 .findings-loading,
 .findings-empty,
 .findings-error {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: var(--pd-text-body-sm);
 }
 .findings-error {
-  color: #b00020;
+  color: var(--pd-cut);
 }
 
 .link-btn {
   background: none;
   border: none;
-  color: #0078d4;
+  color: var(--pd-text-link);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--pd-text-body-sm);
   padding: 0;
 }
 
-// ── Scorecard ────────────────────────────────────────────────────────────────
-.scorecard-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-.scorecard-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  align-items: center;
-  gap: 0.6rem;
-  width: 100%;
-  text-align: inherit;
-  padding: 0.4rem 0.6rem;
-  border: 1px solid #e3e8ef;
-  border-radius: 6px;
-  background: #fff;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.scorecard-row:hover {
-  background: #f5f8fc;
-}
-.scorecard-row.active {
-  border-color: #0078d4;
-  box-shadow: 0 0 0 1px #0078d4 inset;
-}
-.sc-dimension {
-  font-weight: 600;
-  color: #333;
-}
-.sc-score {
-  font-size: 0.78rem;
-  padding: 0.1rem 0.45rem;
-  border-radius: 10px;
-  font-weight: 600;
-}
-.sc-score[data-score='weak'] {
-  background: #fdecec;
-  color: #b00020;
-}
-.sc-score[data-score='mixed'] {
-  background: #fff4e0;
-  color: #8a5a00;
-}
-.sc-score[data-score='strong'] {
-  background: #e7f5e7;
-  color: #2d6a2d;
-}
-.sc-counts {
-  display: inline-flex;
-  gap: 0.3rem;
-}
-.sc-count {
-  min-width: 1.4rem;
-  text-align: center;
-  padding: 0.1rem 0.35rem;
-  border-radius: 4px;
-  font-size: 0.78rem;
-  font-weight: 600;
-}
-.sc-count.keep {
-  background: #e7f5e7;
-  color: #2d6a2d;
-}
-.sc-count.improve {
-  background: #fff4e0;
-  color: #8a5a00;
-}
-.sc-count.cut {
-  background: #fdecec;
-  color: #b00020;
+// ── DimensionScorecard (ds-f02) — at-a-glance health strip ─────────────────────
+// White card with --pd-surface/--pd-border/--pd-radius-lg/--pd-shadow-1.
+.scorecard {
+  background: var(--pd-surface);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-lg);
+  box-shadow: var(--pd-shadow-1);
+  overflow: hidden;
 }
 
-// ── Ledger ───────────────────────────────────────────────────────────────────
+// Card header: title + "N dimensions assessed" + overall score figure.
+.scorecard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--pd-space-4) var(--pd-space-5);
+  border-block-end: 1px solid var(--pd-border);
+  gap: var(--pd-space-4);
+}
+.scorecard-header-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-1);
+  min-width: 0;
+}
+.scorecard-title {
+  margin: 0;
+  font-size: var(--pd-text-h5);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text);
+  line-height: var(--pd-lh-h5);
+}
+.scorecard-sub {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+  line-height: var(--pd-lh-caption);
+}
+
+// Overall NN/100 figure: colored by verdict band.
+.scorecard-overall {
+  flex: none;
+  font-size: var(--pd-text-h4);
+  font-weight: var(--pd-weight-bold);
+  line-height: 1;
+  color: var(--pd-text-secondary);
+}
+.scorecard-overall[data-verdict='keep']    { color: var(--pd-keep); }
+.scorecard-overall[data-verdict='improve'] { color: var(--pd-improve); }
+.scorecard-overall[data-verdict='cut']     { color: var(--pd-cut); }
+
+// Body: RESPONSIVE grid so the scorecard never clips horizontally at narrow panel widths.
+// auto-fit + minmax wraps cells onto additional rows when the panel is too narrow for one row,
+// instead of the old single-row column flow that overflowed the fixed-width panel.
+.scorecard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+}
+
+// Individual dimension cell (button reset + flex column layout).
+// Cell separators use box-shadow insets (inline-start + block-start) rather than borders so they
+// read as a continuous grid even when cells wrap to a second row; the first column/row edges are
+// masked by clipping to the rounded card via the parent's overflow:hidden.
+.scorecard-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--pd-space-2);
+  padding: var(--pd-space-4) var(--pd-space-4);
+  width: 100%;
+  min-width: 0;
+  text-align: inherit;
+  background: none;
+  border: none;
+  box-shadow:
+    inset 1px 0 0 0 var(--pd-border),
+    inset 0 1px 0 0 var(--pd-border);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+
+  &:hover {
+    background: var(--pd-surface-sunken);
+  }
+}
+// Active (selected dimension filter): tinted background + colored border.
+.scorecard-cell.active {
+  background: var(--pd-primary-50);
+}
+.scorecard-cell.active.verdict-keep    { background: var(--pd-keep-bg); }
+.scorecard-cell.active.verdict-improve { background: var(--pd-improve-bg); }
+.scorecard-cell.active.verdict-cut     { background: var(--pd-cut-bg); }
+
+// Dimension label: caption, medium weight, secondary text.
+// Wraps within its cell (and breaks long words) so a long dimension name never overflows.
+.sc-dimension {
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text-secondary);
+  line-height: var(--pd-lh-caption);
+  width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+// Big score figure: verdict color.
+.sc-score {
+  font-size: var(--pd-text-h5);
+  font-weight: var(--pd-weight-bold);
+  line-height: 1;
+  color: var(--pd-text-secondary); // fallback
+}
+.scorecard-cell.verdict-keep    .sc-score { color: var(--pd-keep); }
+.scorecard-cell.verdict-improve .sc-score { color: var(--pd-improve); }
+.scorecard-cell.verdict-cut     .sc-score { color: var(--pd-cut); }
+
+// 6px meter track + fill.
+.sc-meter {
+  display: block;
+  width: 100%;
+  height: 6px;
+  background: var(--pd-neutral-100);
+  border-radius: var(--pd-radius-pill);
+  overflow: hidden;
+}
+.sc-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-neutral-300); // fallback
+  transition: width var(--pd-dur-base) var(--pd-ease);
+}
+.scorecard-cell.verdict-keep    .sc-meter-fill { background: var(--pd-keep); }
+.scorecard-cell.verdict-improve .sc-meter-fill { background: var(--pd-improve); }
+.scorecard-cell.verdict-cut     .sc-meter-fill { background: var(--pd-cut); }
+
+// "N findings" label: caption, muted.
+.sc-findings-label {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+  line-height: var(--pd-lh-caption);
+}
+
+// ── Ledger head + verdict filter chips ─────────────────────────────────────────
 .ledger-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: var(--pd-space-3);
 }
 .ledger-filters {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--pd-space-2);
 }
 .verdict-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.2rem 0.55rem;
-  border-radius: 12px;
-  border: 1px solid #ddd;
-  background: #fff;
+  gap: var(--pd-space-2);
+  padding: var(--pd-space-2) var(--pd-space-4);
+  border-radius: var(--pd-radius-pill);
+  border: 1px solid var(--pd-border);
+  background: var(--pd-surface);
   cursor: pointer;
-  font-size: 0.8rem;
-  color: #555;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
 }
 .verdict-chip .verdict-icon {
-  font-weight: 700;
+  font-weight: var(--pd-weight-bold);
 }
 .verdict-chip.keep.active {
-  border-color: #2d6a2d;
-  background: #e7f5e7;
-  color: #2d6a2d;
+  border-color: var(--pd-keep-border);
+  background: var(--pd-keep-bg);
+  color: var(--pd-keep);
 }
 .verdict-chip.improve.active {
-  border-color: #8a5a00;
-  background: #fff4e0;
-  color: #8a5a00;
+  border-color: var(--pd-improve-border);
+  background: var(--pd-improve-bg);
+  color: var(--pd-improve);
 }
 .verdict-chip.cut.active {
-  border-color: #b00020;
-  background: #fdecec;
-  color: #b00020;
+  border-color: var(--pd-cut-border);
+  background: var(--pd-cut-bg);
+  color: var(--pd-cut);
 }
 
+// ── Ledger groups ──────────────────────────────────────────────────────────────
 .ledger-group {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  margin-top: 0.5rem;
+  gap: var(--pd-space-4);
+  margin-top: var(--pd-space-3);
 }
 .ledger-group.resolved {
-  margin-top: 0.75rem;
-  padding-top: 0.5rem;
-  border-top: 1px dashed #e0e0e0;
-  opacity: 0.85;
+  margin-top: var(--pd-space-5);
+  padding-top: var(--pd-space-3);
+  border-top: 1px dashed var(--pd-border);
 }
 .resolved-title {
-  margin: 0 0 0.2rem 0;
-  font-size: 0.8rem;
-  font-weight: 600;
+  margin: 0 0 var(--pd-space-1) 0;
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-bold);
 }
 
-.finding-row {
-  border: 1px solid #eee;
-  border-inline-start-width: 3px;
-  border-radius: 6px;
-  background: #fff;
-  padding: 0.5rem 0.6rem;
+// ── FindingCard (ds-c03) ───────────────────────────────────────────────────────
+// White card, --pd-radius-lg, --pd-shadow-1, with a 4px inline-start verdict ACCENT bar.
+.finding-card {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: var(--pd-space-3);
+  background: var(--pd-surface);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-lg);
+  box-shadow: var(--pd-shadow-1);
+  padding: var(--pd-space-4) var(--pd-space-5);
+  // The accent bar lives on the inline-start padding edge (logical, RTL-safe).
+  padding-inline-start: var(--pd-space-5);
 }
-.finding-row.verdict-keep {
-  border-inline-start-color: #2d6a2d;
+// 4px verdict accent bar on the inline-start edge.
+.finding-card::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 4px;
+  border-start-start-radius: var(--pd-radius-lg);
+  border-end-start-radius: var(--pd-radius-lg);
+  background: var(--pd-neutral-300);
 }
-.finding-row.verdict-improve {
-  border-inline-start-color: #d69200;
+.finding-card.verdict-keep::before {
+  background: var(--pd-keep);
 }
-.finding-row.verdict-cut {
-  border-inline-start-color: #b00020;
+.finding-card.verdict-improve::before {
+  background: var(--pd-improve);
 }
-.finding-row.resolved {
-  background: #fafafa;
+.finding-card.verdict-cut::before {
+  background: var(--pd-cut);
+}
+// Muted/done/dismissed: neutral accent + dimmed card.
+.finding-card.is-muted::before {
+  background: var(--pd-neutral-300);
+}
+.finding-card.is-muted {
+  opacity: 0.62;
 }
 
-.finding-main {
+// Header (wraps): verdict pill + dimension chip + severity + spacer + jump link.
+.finding-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.45rem;
+  gap: var(--pd-space-3);
 }
-.finding-verdict-icon {
-  font-weight: 700;
+.header-spacer {
+  flex: 1 1 auto;
 }
-.finding-row.verdict-keep .finding-verdict-icon {
-  color: #2d6a2d;
+
+// Verdict pill: uppercase, verdict -bg/base/-border, with a leading dot.
+.verdict-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  padding: var(--pd-space-1) var(--pd-space-3);
+  border-radius: var(--pd-radius-pill);
+  border: 1px solid var(--pd-neutral-300);
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-bold);
+  letter-spacing: 0.03em;
 }
-.finding-row.verdict-improve .finding-verdict-icon {
-  color: #d69200;
+.verdict-pill .verdict-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--pd-radius-pill);
+  background: currentColor;
+  flex: none;
 }
-.finding-row.verdict-cut .finding-verdict-icon {
-  color: #b00020;
+.finding-card.verdict-keep .verdict-pill {
+  background: var(--pd-keep-bg);
+  border-color: var(--pd-keep-border);
+  color: var(--pd-keep);
 }
+.finding-card.verdict-improve .verdict-pill {
+  background: var(--pd-improve-bg);
+  border-color: var(--pd-improve-border);
+  color: var(--pd-improve);
+}
+.finding-card.verdict-cut .verdict-pill {
+  background: var(--pd-cut-bg);
+  border-color: var(--pd-cut-border);
+  color: var(--pd-cut);
+}
+
+// Dimension chip: neutral fill, secondary text.
 .dimension-chip {
-  font-size: 0.75rem;
-  padding: 0.1rem 0.45rem;
-  border-radius: 10px;
-  background: #eef2f7;
-  color: #44546a;
-  font-weight: 600;
+  font-size: var(--pd-text-caption);
+  padding: var(--pd-space-1) var(--pd-space-3);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-secondary);
+  font-weight: var(--pd-weight-medium);
 }
-.finding-rationale {
-  flex: 1;
-  text-align: inherit;
-  color: #333;
-  line-height: 1.35;
-}
-.finding-rationale .expand-caret {
-  font-size: 0.65rem;
-  color: #888;
-  margin-inline-start: 0.25rem;
-}
-.finding-status-badge {
-  font-size: 0.72rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 4px;
-  background: #f0f0f0;
-  color: #666;
-}
-.finding-status-badge[data-status='open'] {
-  background: #e8f0fc;
-  color: #074799;
-}
-.finding-status-badge[data-status='acknowledged'] {
-  background: #eef2f7;
-  color: #44546a;
-}
-.finding-status-badge[data-status='dismissed'] {
-  background: #f0f0f0;
-  color: #777;
-}
-.finding-status-badge[data-status='done'] {
-  background: #e7f5e7;
-  color: #2d6a2d;
+.severity-text {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
 }
 
+// Jump-to-chapter link (chapter icon + label, link color).
 .finding-anchors {
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.3rem;
+  gap: var(--pd-space-3);
 }
-.anchors-label {
-  font-size: 0.75rem;
-}
-.anchor-chip {
-  font-size: 0.75rem;
-  padding: 0.1rem 0.45rem;
-  border-radius: 10px;
-  border: 1px solid #d6dde6;
-  background: #fff;
-  color: #0078d4;
+.jump-chapter-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  background: none;
+  border: none;
+  padding: 0;
   cursor: pointer;
-  max-width: 14rem;
+  color: var(--pd-text-link);
+  font-size: var(--pd-text-caption);
+  max-width: 16rem;
+}
+.jump-chapter-link:hover {
+  text-decoration: underline;
+}
+.jump-chapter-link .jump-icon {
+  flex: none;
+  font-size: var(--pd-text-body-sm);
+  line-height: 1;
+}
+.jump-chapter-link .jump-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.anchor-chip:hover {
-  background: #f0f6fc;
+
+// Bold title (the rationale headline) + caret toggling the detail box.
+.finding-title {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--pd-space-2);
+  width: 100%;
+  text-align: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--pd-neutral-900);
+  font-weight: var(--pd-weight-bold);
+  font-size: var(--pd-text-h5);
+  line-height: var(--pd-lh-h5);
+}
+.finding-title .finding-title-text {
+  flex: 1;
+}
+.finding-title .expand-caret {
+  flex: none;
+  font-size: 0.65rem;
+  color: var(--pd-text-muted);
+  margin-inline-start: var(--pd-space-2);
+  font-weight: var(--pd-weight-regular);
 }
 
+// Sunken detail box: EVIDENCE + SUGGESTED ACTION uppercase micro-labels.
 .finding-detail {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.35rem 0.5rem;
-  background: #f9fafb;
-  border-radius: 4px;
+  gap: var(--pd-space-4);
+  padding: var(--pd-space-4);
+  background: var(--pd-surface-sunken);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-md);
 }
 .detail-label {
-  margin: 0 0 0.2rem 0;
-  font-size: 0.75rem;
-  font-weight: 600;
+  margin: 0 0 var(--pd-space-2) 0;
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pd-text-muted);
 }
 .evidence-excerpt {
-  margin: 0 0 0.3rem 0;
-  padding-inline-start: 0.5rem;
-  border-inline-start: 2px solid #d6dde6;
-  font-size: 0.82rem;
-  color: #444;
-  line-height: 1.4;
-  white-space: pre-wrap;
-}
-.suggested-action-text {
-  margin: 0;
-  font-size: 0.82rem;
-  color: #333;
-  line-height: 1.4;
+  margin: 0 0 var(--pd-space-2) 0;
+  padding-inline-start: var(--pd-space-3);
+  border-inline-start: 2px solid var(--pd-border-strong);
+  font-family: var(--pd-font-reading);
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-text);
+  line-height: 1.45;
   white-space: pre-wrap;
 }
 
+// ── Advisory lifecycle row ─────────────────────────────────────────────────────
 .finding-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--pd-space-3);
 }
+
+// Status tag (Acknowledged / Done / Dismissed).
+.status-tag {
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  padding: var(--pd-space-1) var(--pd-space-3);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-secondary);
+}
+.status-tag.acknowledged {
+  background: var(--pd-primary-50);
+  color: var(--pd-primary-700);
+}
+.status-tag[data-status='done'] {
+  background: var(--pd-keep-bg);
+  color: var(--pd-keep);
+}
+.status-tag[data-status='dismissed'] {
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-muted);
+}
+
+// Lifecycle buttons: primary Acknowledge, ghost Dismiss, link Mark done / Revert.
 .status-btn {
-  padding: 0.2rem 0.55rem;
-  font-size: 0.78rem;
-  border-radius: 4px;
-  border: 1px solid #d6dde6;
-  background: #fff;
-  color: #0078d4;
+  font-size: var(--pd-text-body-sm);
   cursor: pointer;
-}
-.status-btn:hover:not(:disabled) {
-  background: #f0f6fc;
-}
-.status-btn.secondary {
-  color: #666;
+  border-radius: var(--pd-radius-sm);
 }
 .status-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
+// Primary (Acknowledge).
+.status-btn.primary {
+  padding: var(--pd-space-2) var(--pd-space-5);
+  border: 1px solid var(--pd-primary-600);
+  background: var(--pd-primary-600);
+  color: var(--pd-on-primary);
+  font-weight: var(--pd-weight-medium);
+}
+.status-btn.primary:hover:not(:disabled) {
+  background: var(--pd-primary-hover);
+  border-color: var(--pd-primary-hover);
+}
+// Ghost (Dismiss).
+.status-btn.ghost {
+  padding: var(--pd-space-2) var(--pd-space-5);
+  border: 1px solid var(--pd-border-strong);
+  background: var(--pd-surface);
+  color: var(--pd-text-secondary);
+}
+.status-btn.ghost:hover:not(:disabled) {
+  background: var(--pd-surface-sunken);
+}
+// Link (Mark done / Revert).
+.status-btn.link {
+  padding: var(--pd-space-2) 0;
+  border: none;
+  background: none;
+  color: var(--pd-text-link);
+}
+.status-btn.link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.status-btn.link.revert {
+  color: var(--pd-text-secondary);
+}
+
 .status-patch-error {
-  font-size: 0.75rem;
-  color: #b00020;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-cut);
 }
 .status-spinner {
   width: 0.8rem;
   height: 0.8rem;
-  border: 2px solid #cdd9ec;
-  border-top-color: #0078d4;
+  border: 2px solid var(--pd-primary-100);
+  border-top-color: var(--pd-primary-600);
   border-radius: 50%;
   display: inline-block;
   animation: findings-spin 0.8s linear infinite;

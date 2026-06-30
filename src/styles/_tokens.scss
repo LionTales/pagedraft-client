@@ -1,0 +1,153 @@
+/* ============================================================================
+   PageDraft Design System - Tokens (from claude.ai/design "PageDraft Design System")
+   Blue-forward, writer-first. Sibling to PageWise, own identity.
+   All tokens are CSS custom properties on :root. Prefix --pd-.
+   ============================================================================ */
+
+:root {
+  /* --- Brand: Primary blue ramp (50 lightest -> 900 darkest) -------------- */
+  --pd-primary-50:  #eef5fc;
+  --pd-primary-100: #d6e6f7;
+  --pd-primary-200: #aecdf0;
+  --pd-primary-300: #7fb0e2;
+  --pd-primary-400: #5193d7;
+  --pd-primary-500: #2c79cc;   /* hover / interactive */
+  --pd-primary-600: #1565c0;   /* PRIMARY - default actions, brand */
+  --pd-primary-700: #11529c;   /* pressed */
+  --pd-primary-800: #0d3f78;
+  --pd-primary-900: #0a2f57;   /* headings on light, deep brand */
+
+  --pd-primary:        var(--pd-primary-600);
+  --pd-primary-hover:  var(--pd-primary-500);
+  --pd-primary-press:  var(--pd-primary-700);
+  --pd-on-primary:     #ffffff;
+
+  /* --- Secondary: cool teal accent (away from purple) -------------------- */
+  --pd-secondary-50:  #e6f4f4;
+  --pd-secondary-100: #c3e6e6;
+  --pd-secondary-300: #5cbcbc;
+  --pd-secondary-500: #0f8a8a;  /* SECONDARY accent */
+  --pd-secondary-700: #0a6464;
+
+  --pd-secondary:     var(--pd-secondary-500);
+  --pd-on-secondary:  #ffffff;
+
+  /* --- Neutrals: cool-tinted greys --------------------------------------- */
+  --pd-neutral-0:   #ffffff;
+  --pd-neutral-50:  #f7f9fb;   /* app canvas tint */
+  --pd-neutral-100: #eef1f5;   /* subtle fills */
+  --pd-neutral-200: #e1e6ec;   /* borders / dividers */
+  --pd-neutral-300: #cdd5de;   /* strong borders */
+  --pd-neutral-400: #9aa6b4;   /* disabled text / icons */
+  --pd-neutral-500: #6b7888;   /* placeholder */
+  --pd-neutral-600: #4d5563;   /* secondary text */
+  --pd-neutral-700: #353c47;   /* body text */
+  --pd-neutral-800: #232931;   /* strong text */
+  --pd-neutral-900: #14181d;   /* max contrast */
+
+  /* --- Surfaces & text (semantic aliases) -------------------------------- */
+  --pd-surface:           var(--pd-neutral-0);
+  --pd-surface-sunken:    var(--pd-neutral-50);
+  --pd-surface-raised:    var(--pd-neutral-0);
+  --pd-surface-brand:     var(--pd-primary-50);
+  --pd-border:            var(--pd-neutral-200);
+  --pd-border-strong:     var(--pd-neutral-300);
+  --pd-divider:           var(--pd-neutral-200);
+
+  --pd-text:              var(--pd-neutral-800);
+  --pd-text-secondary:    var(--pd-neutral-600);
+  --pd-text-muted:        var(--pd-neutral-600);
+  --pd-text-on-brand:     #ffffff;
+  --pd-text-link:         var(--pd-primary-600);
+
+  /* --- Semantic / verdict (keep close to PageWise family) ----------------
+     Book + sentence verdicts: keep = green, improve = amber, cut = red.    */
+  --pd-keep:        #3aa564;   /* success / keep  (PageWise #4caf50) */
+  --pd-keep-bg:     #e7f5ed;
+  --pd-keep-border: #b9e2c9;
+
+  --pd-improve:        #d98a0b;  /* caution / improve (PageWise #f9a825) */
+  --pd-improve-bg:     #fdf2dd;
+  --pd-improve-border: #f3d79a;
+
+  --pd-cut:        #d6453f;     /* warn / cut (PageWise #d32f2f) */
+  --pd-cut-bg:     #fbe9e8;
+  --pd-cut-border: #f1c2bf;
+
+  --pd-info:       var(--pd-primary-600);
+  --pd-info-bg:    var(--pd-primary-50);
+
+  /* --- Severity (sentence findings) -------------------------------------- */
+  --pd-sev-high:   var(--pd-cut);
+  --pd-sev-med:    var(--pd-improve);
+  --pd-sev-low:    var(--pd-neutral-400);
+
+  /* --- Linguistic category tint (the ONE place violet survives, as a
+     category tint not a brand color - used by the SuggestionCard kind chip) */
+  --pd-linguistic-bg:     #efeaf9;
+  --pd-linguistic-ink:    #5b3da8;
+  --pd-linguistic-border: #ded3f2;
+
+  /* --- Typography --------------------------------------------------------
+     UI = Roboto family (shared w/ PageWise stack); reading = serif canvas. */
+  --pd-font-ui:      "Roboto", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --pd-font-reading: "Source Serif 4", "Iowan Old Style", Georgia, "Times New Roman", serif;
+  --pd-font-mono:    "Roboto Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Type scale (mirrors PageWise: body 16 -> h1 40) */
+  --pd-text-caption: 13px;   --pd-lh-caption: 18px;
+  --pd-text-body-sm: 14px;   --pd-lh-body-sm: 20px;
+  --pd-text-body:    16px;   --pd-lh-body:    24px;
+  --pd-text-h5:      16px;   --pd-lh-h5:      24px;   /* bold */
+  --pd-text-h4:      19px;   --pd-lh-h4:      28px;
+  --pd-text-h3:      24px;   --pd-lh-h3:      32px;
+  --pd-text-h2:      32px;   --pd-lh-h2:      40px;
+  --pd-text-h1:      40px;   --pd-lh-h1:      48px;
+
+  --pd-weight-regular:  400;
+  --pd-weight-medium:   500;
+  --pd-weight-semibold: 600;
+  --pd-weight-bold:     700;
+
+  /* --- Spacing scale (4px base) ------------------------------------------ */
+  --pd-space-1:  2px;
+  --pd-space-2:  4px;
+  --pd-space-3:  8px;
+  --pd-space-4:  12px;
+  --pd-space-5:  16px;
+  --pd-space-6:  20px;
+  --pd-space-7:  24px;
+  --pd-space-8:  32px;
+  --pd-space-9:  40px;
+  --pd-space-10: 48px;
+  --pd-space-11: 64px;
+
+  /* --- Radius ------------------------------------------------------------ */
+  --pd-radius-sm:   4px;
+  --pd-radius-md:   8px;
+  --pd-radius-lg:   12px;
+  --pd-radius-xl:   16px;
+  --pd-radius-pill: 999px;
+
+  /* --- Elevation / shadow ------------------------------------------------ */
+  --pd-shadow-0: none;
+  --pd-shadow-1: 0 1px 2px rgba(20, 24, 29, 0.06), 0 1px 1px rgba(20, 24, 29, 0.04);
+  --pd-shadow-2: 0 2px 6px rgba(20, 24, 29, 0.08), 0 1px 2px rgba(20, 24, 29, 0.05);
+  --pd-shadow-3: 0 6px 16px rgba(13, 63, 120, 0.12), 0 2px 6px rgba(20, 24, 29, 0.06);
+  --pd-shadow-4: 0 12px 32px rgba(13, 63, 120, 0.16), 0 4px 10px rgba(20, 24, 29, 0.08);
+
+  --pd-ring: 0 0 0 3px rgba(21, 101, 192, 0.30);  /* focus ring */
+
+  /* --- Motion ------------------------------------------------------------ */
+  --pd-ease:        cubic-bezier(0.2, 0, 0, 1);
+  --pd-dur-fast:    120ms;
+  --pd-dur-base:    200ms;
+  --pd-dur-slow:    320ms;
+
+  /* --- Layout ------------------------------------------------------------ */
+  --pd-z-panel:     10;
+  --pd-z-sticky:    50;
+  --pd-z-overlay:   100;
+  --pd-z-dialog:    200;
+  --pd-reading-measure: 68ch;   /* calm canvas width */
+}

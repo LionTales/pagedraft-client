@@ -4,6 +4,7 @@ import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, isConsist
 import { LineEditParserService, ParsedLineEdit } from '../../core/services/line-edit-parser.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
 import { proofreadDiff } from '../../core/utils/proofread-diff';
+import { formatRelativeTime } from '../../core/utils/relative-time';
 import { SuggestionCardComponent } from './suggestion-card.component';
 import { LinguisticResultComponent } from './linguistic-result.component';
 import { LiteraryResultComponent } from './literary-result.component';
@@ -66,6 +67,70 @@ export class AnalysisHistoryTabComponent implements OnChanges {
     private lineEditParser: LineEditParserService,
     private suggestionKeyService: SuggestionKeyService
   ) {}
+
+  /** Book-scoped chrome language ('he' default, 'en' for an English book). */
+  get chromeLang(): 'he' | 'en' {
+    return (this.bookLanguage?.trim().toLowerCase() || 'he').startsWith('en') ? 'en' : 'he';
+  }
+
+  /** Localized History-tab chrome strings (he default, en fallback). Keeps he/en parity. */
+  histLabel(key: string): string {
+    const he: Record<string, string> = {
+      history: 'היסטוריה',
+      all: 'הכל',
+      whatHappened: 'הצעות: מה קרה',
+      accepted: 'הוחל',
+      dismissed: 'נדחה',
+      reverted: 'בוטל',
+      pending: 'ממתין',
+      consistencyIssues: 'בעיות עקביות',
+      unreliableProofread: 'לא הצלחנו להפיק הגהה אמינה עבור קטע זה. נסו קטע קצר יותר (למשל סצנה אחת) והריצו שוב.',
+      noHistoryScene: 'אין עדיין היסטוריית ניתוח לסצנה זו.',
+      noHistoryChapter: 'אין עדיין היסטוריית ניתוח לפרק זה.',
+    };
+    const en: Record<string, string> = {
+      history: 'History',
+      all: 'All',
+      whatHappened: 'Suggestions: what happened',
+      accepted: 'Accepted',
+      dismissed: 'Dismissed',
+      reverted: 'Reverted',
+      pending: 'Pending',
+      consistencyIssues: 'Consistency issues',
+      unreliableProofread: 'We could not produce a reliable proofread for this section. Try a shorter section (for example, one scene) and run it again.',
+      noHistoryScene: 'No analysis history yet for this scene.',
+      noHistoryChapter: 'No analysis history yet for this chapter.',
+    };
+    const map = this.chromeLang === 'he' ? he : en;
+    return map[key] ?? key;
+  }
+
+  /** Timezone-aware relative time for a history item's createdAt (no raw | date). Follows the book language. */
+  itemTime(iso: string | null | undefined): string {
+    return formatRelativeTime(iso, this.chromeLang);
+  }
+
+  /** Localized label for an analysis-type filter button (he default, en fallback). */
+  analysisTypeLabel(value: string): string {
+    const he: Record<string, string> = {
+      Proofread: 'הגהה',
+      LineEdit: 'עריכת שורה',
+      LinguisticAnalysis: 'לשוני',
+      LiteraryAnalysis: 'ספרותי',
+      Summarization: 'סיכום',
+      Custom: 'מותאם',
+    };
+    const en: Record<string, string> = {
+      Proofread: 'Proofread',
+      LineEdit: 'Line Edit',
+      LinguisticAnalysis: 'Linguistic',
+      LiteraryAnalysis: 'Literary',
+      Summarization: 'Summarize',
+      Custom: 'Custom',
+    };
+    const map = this.chromeLang === 'he' ? he : en;
+    return map[value] ?? value;
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['history']) {
