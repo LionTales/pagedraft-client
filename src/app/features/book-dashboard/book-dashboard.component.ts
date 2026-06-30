@@ -544,8 +544,16 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   reviewState: BookReviewState = 'unknown';
   /** Latest "summary build in flight" flag from the hosted summary row (its buildingChange output). */
   private summaryBuilding = false;
-  /** Last buildRunning value emitted to the host; used to emit only on real transitions. */
-  private lastBuildRunning = false;
+  /**
+   * Last buildRunning value emitted to the host; used to dedupe redundant emits. Starts null (NOT false) so
+   * the FIRST emit after any (re)mount always fires and re-syncs the host, even when this fresh instance's
+   * aggregate is already false. Without the null sentinel a build that FINISHES while the dashboard is
+   * unmounted (panel closed / focus mode) would leave the host's flag stuck true forever: the remounted
+   * instance starts at buildRunning=false, the children's reattach-and-report-idle emit is the first
+   * emitBuildRunning() call, and it would be de-duped against a false baseline — so the host never hears
+   * the build ended. null !== false forces that first idle emit through.
+   */
+  private lastBuildRunning: boolean | null = null;
   /** Monotonic token passed to the findings panel; bumped when a build terminal warrants a re-read. */
   findingsRefreshToken = 0;
   /** Active review tab when the review is READY/STALE: the c02 Findings ledger (default) or c03 Story Bible. */

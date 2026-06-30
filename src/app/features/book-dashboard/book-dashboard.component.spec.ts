@@ -308,6 +308,22 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       component.ngOnDestroy();
       expect(events).toEqual([true]); // still true; no false emitted at unmount
     });
+
+    it('re-syncs the host on REMOUNT: the first reported state being non-building emits false (clears a host '
+      + 'flag left stuck true by a build that finished while the dashboard was unmounted)', () => {
+      // Remount-after-finish: this fresh instance starts buildRunning=false and lastBuildRunning=null. Its
+      // review row reattaches to the now-FINISHED server job and reports a terminal, non-building state as
+      // its FIRST emit. The host (editor) is still showing the "review running" affordance from before the
+      // unmount, so the dashboard MUST emit false to clear it — even though false matches this fresh
+      // instance's own default. Pre-fix, the dedup against a false baseline swallowed this first emit and
+      // the host stayed stuck true forever.
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      component.onReviewStateChange('ready'); // first signal after reattach: the build is already done
+      expect(component.buildRunning).toBeFalse();
+      expect(events).toEqual([false]);
+    });
   });
 
   it('renders the book profile sections once a profile loads (existing behavior intact)', () => {
