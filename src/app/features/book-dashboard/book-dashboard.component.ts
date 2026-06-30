@@ -613,8 +613,16 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    * Clear the dashboard-owned transient state that is NOT re-derived from an @Input on its own, so a
    * book switch does not show the previous book's profile/answer/tab. loadProfile() resets profile +
    * parsed structured fields, so this covers the rest: the Ask question/answer, expansion toggles, and
-   * the active review tab (back to the default Findings view). reviewState/findingsRefreshToken are
-   * owned by the hosted review row's re-emit on its own OnChanges, so they self-correct.
+   * the active review tab (back to the default Findings view). findingsRefreshToken is owned by the
+   * hosted review row's re-emit on its own OnChanges, so it self-corrects.
+   *
+   * The cached whole-book-build inputs (reviewState + summaryBuilding) are reset HERE rather than left to
+   * self-correct: the child rows reset synchronously, but the review row only RE-EMITS its real state after
+   * its status HTTP returns. Until then a stale reviewState==='building' from the previous book would keep
+   * buildRunning true and light the host's "review running" affordance for the WRONG book (and if that
+   * status load errors it never re-emits, leaving the affordance stuck). Reset both to a not-running
+   * baseline and push it to the host now; the rows re-emit the new book's true state when their requests
+   * return.
    */
   private resetOwnState(): void {
     this.reviewTab = 'findings';
@@ -625,6 +633,9 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
     this.citationChapterIds = [];
     this.synopsisExpanded = false;
     this.expandedPlotNode = null;
+    this.reviewState = 'unknown';
+    this.summaryBuilding = false;
+    this.emitBuildRunning();
   }
 
   /**

@@ -406,6 +406,29 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(component.profile?.genre).toBe('NewGenre');
     });
 
+    it('clears buildRunning on book switch so the previous book\'s review-building does not leak into the '
+      + 'new book during the gap before its review status loads', () => {
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      // Book A's developmental review is running: reviewState='building' and the host affordance is lit.
+      component.onReviewStateChange('building');
+      expect(component.buildRunning).toBeTrue();
+      expect(events).toEqual([true]);
+
+      // The editor switches book in place (non-firstChange). The new book's review status has NOT loaded
+      // yet (getReviewStatus is the default NEVER), so the review row will not re-emit for a while.
+      const previous = component.bookId;
+      component.bookId = 'book-2';
+      component.ngOnChanges({ bookId: new SimpleChange(previous, 'book-2', false) });
+
+      // The cached review state is reset and the host is told false immediately — the stale 'building' from
+      // book A cannot keep the "review running" affordance lit for book B across the async status-load gap.
+      expect(component.reviewState).toBe('unknown');
+      expect(component.buildRunning).toBeFalse();
+      expect(events).toEqual([true, false]);
+    });
+
     it('does NOT reload or reset on the first ngOnChanges (firstChange) so init loads only once', () => {
       const bookSvc = TestBed.inject(BookService);
       const getProfile = bookSvc.getProfile as jasmine.Spy;
