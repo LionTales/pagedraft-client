@@ -8,8 +8,8 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
   standalone: true,
   imports: [CommonModule, DragDropModule],
   template: `
-    <div class="chapter-tree-root" *ngIf="flatChapters().length; else empty">
-      <button type="button" class="add-chapter" (click)="addChapterClicked()">Add chapter</button>
+    <div class="chapter-tree-root" *ngIf="flatChapters().length; else empty" [attr.dir]="dir">
+      <button type="button" class="add-chapter" (click)="addChapterClicked()">{{ label('addChapter') }}</button>
 
       <div
         cdkDropList
@@ -20,7 +20,7 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
         @for (ch of flatChapters(); track ch.id; let i = $index) {
           @if (isNewPartHeader(i, ch.partName)) {
             <div class="part-header">
-              {{ ch.partName || 'General' }}
+              {{ ch.partName || label('general') }}
             </div>
           }
 
@@ -36,7 +36,7 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
                 class="expand-btn"
                 [class.expanded]="isExpanded(ch.id)"
                 (click)="toggleExpand(ch.id, $event)"
-                aria-label="Toggle scenes">
+                [attr.aria-label]="label('toggleScenes')">
                 {{ isExpanded(ch.id) ? '▼' : '▶' }}
               </button>
               <span class="drag-handle" cdkDragHandle>::</span>
@@ -56,7 +56,7 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
                   </div>
                 }
                 @if ((scenesByChapter()[ch.id] || []).length === 0) {
-                  <p class="no-scenes">No scenes. Use "Split scenes" on the chapter.</p>
+                  <p class="no-scenes">{{ label('noScenes') }}</p>
                 }
               </div>
             }
@@ -69,13 +69,13 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
           class="context-menu"
           [style.top.px]="contextMenu.y"
           [style.left.px]="contextMenu.x">
-          <button type="button" (click)="onRename(contextMenu.chapter)">Rename</button>
-          <button type="button" (click)="onSplitScenes(contextMenu.chapter)">Split scenes</button>
+          <button type="button" (click)="onRename(contextMenu.chapter)">{{ label('rename') }}</button>
+          <button type="button" (click)="onSplitScenes(contextMenu.chapter)">{{ label('splitScenes') }}</button>
           <button
             type="button"
             [disabled]="scenesKnownEmpty(contextMenu.chapter.id)"
-            (click)="onClearScenes(contextMenu.chapter)">Remove all scenes</button>
-          <button type="button" (click)="onDelete(contextMenu.chapter)">Delete</button>
+            (click)="onClearScenes(contextMenu.chapter)">{{ label('removeAllScenes') }}</button>
+          <button type="button" (click)="onDelete(contextMenu.chapter)">{{ label('delete') }}</button>
         </div>
       }
 
@@ -84,101 +84,103 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
           class="context-menu"
           [style.top.px]="sceneContextMenu.y"
           [style.left.px]="sceneContextMenu.x">
-          <button type="button" (click)="onDeleteScene(sceneContextMenu.scene, sceneContextMenu.chapterId)">Delete scene</button>
+          <button type="button" (click)="onDeleteScene(sceneContextMenu.scene, sceneContextMenu.chapterId)">{{ label('deleteScene') }}</button>
         </div>
       }
     </div>
 
     <ng-template #empty>
-      <button type="button" class="add-chapter" (click)="addChapterClicked()">Add first chapter</button>
-      <p class="empty">No chapters yet.</p>
+      <button type="button" class="add-chapter" (click)="addChapterClicked()" [attr.dir]="dir">{{ label('addFirstChapter') }}</button>
+      <p class="empty" [attr.dir]="dir">{{ label('noChapters') }}</p>
     </ng-template>
   `,
   styles: [`
     .chapter-tree-root {
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: var(--pd-space-4);
     }
 
     .chapter-drop-list {
       display: flex;
       flex-direction: column;
-      gap: 0.125rem;
+      gap: var(--pd-space-1);
     }
 
     .part-header {
-      margin-top: 0.5rem;
-      font-size: 0.8rem;
-      font-weight: 600;
+      margin-block-start: var(--pd-space-4);
+      font-size: var(--pd-text-caption);
+      font-weight: var(--pd-weight-bold);
       text-transform: uppercase;
       letter-spacing: 0.04em;
-      color: #777;
+      color: var(--pd-text-muted);
     }
 
     .chapter-block {
       display: flex;
       flex-direction: column;
-      gap: 0.125rem;
+      gap: var(--pd-space-1);
     }
 
     .chapter-row {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      padding: 0.35rem 0.4rem;
-      border-radius: 4px;
+      gap: var(--pd-space-3);
+      padding: var(--pd-space-2) var(--pd-space-3);
+      border-radius: var(--pd-radius-sm);
       cursor: pointer;
-      transition: background-color 0.15s ease;
+      transition: background-color var(--pd-dur-fast) var(--pd-ease);
     }
 
     .chapter-row:hover {
-      background-color: #f4f4f4;
+      background-color: var(--pd-neutral-100);
     }
 
     .chapter-row.active {
-      background-color: #e6f0ff;
+      background-color: var(--pd-primary-50);
+      color: var(--pd-primary-700);
     }
 
     .expand-btn {
-      width: 1.25rem;
+      inline-size: 1.25rem;
       padding: 0;
       border: none;
       background: none;
       cursor: pointer;
-      font-size: 0.6rem;
-      color: #666;
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-secondary);
       flex-shrink: 0;
     }
 
     .expand-btn.expanded {
-      color: #0078d4;
+      color: var(--pd-primary-600);
     }
 
     .scene-list {
-      padding-inline-start: 1.5rem;
+      padding-inline-start: var(--pd-space-7);
       display: flex;
       flex-direction: column;
-      gap: 0.125rem;
+      gap: var(--pd-space-1);
     }
 
     .scene-row {
       display: flex;
       align-items: center;
-      padding: 0.25rem 0.4rem;
-      border-radius: 4px;
+      padding: var(--pd-space-2) var(--pd-space-3);
+      border-radius: var(--pd-radius-sm);
       cursor: pointer;
-      font-size: 0.85rem;
-      color: #444;
-      transition: background-color 0.15s ease;
+      font-size: var(--pd-text-body-sm);
+      color: var(--pd-text);
+      transition: background-color var(--pd-dur-fast) var(--pd-ease);
     }
 
     .scene-row:hover {
-      background-color: #f0f0f0;
+      background-color: var(--pd-neutral-100);
     }
 
     .scene-row.active {
-      background-color: #e6f0ff;
+      background-color: var(--pd-primary-50);
+      color: var(--pd-primary-700);
     }
 
     .scene-title {
@@ -188,16 +190,16 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
     }
 
     .no-scenes {
-      font-size: 0.75rem;
-      color: #888;
-      margin: 0.25rem 0 0 0;
-      padding-inline-start: 0.25rem;
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-muted);
+      margin: var(--pd-space-2) 0 0 0;
+      padding-inline-start: var(--pd-space-2);
     }
 
     .drag-handle {
       cursor: grab;
-      font-size: 0.75rem;
-      color: #aaa;
+      font-size: var(--pd-text-caption);
+      color: var(--pd-neutral-400);
       user-select: none;
     }
 
@@ -209,51 +211,65 @@ import { ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
     }
 
     .badge {
-      font-size: 0.75rem;
-      color: #666;
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-secondary);
     }
 
     .add-chapter {
       width: 100%;
-      margin-bottom: 0.25rem;
-      padding: 0.5rem;
+      margin-block-end: var(--pd-space-2);
+      padding: var(--pd-space-3) var(--pd-space-5);
+      border-radius: var(--pd-radius-md);
+      border: 1px solid var(--pd-border-strong);
+      background: transparent;
+      color: var(--pd-text);
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-body-sm);
+      font-weight: var(--pd-weight-medium);
       cursor: pointer;
+      transition: background var(--pd-dur-fast) var(--pd-ease);
+    }
+
+    .add-chapter:hover {
+      background: var(--pd-neutral-50);
     }
 
     .empty {
-      color: #666;
-      font-size: 0.875rem;
-      margin-top: 0.5rem;
+      color: var(--pd-text-secondary);
+      font-size: var(--pd-text-body-sm);
+      margin-block-start: var(--pd-space-4);
     }
 
     .context-menu {
       position: fixed;
-      z-index: 1000;
-      background: #fff;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
-      padding: 0.25rem 0;
-      min-width: 140px;
+      z-index: var(--pd-z-overlay);
+      background: var(--pd-surface);
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-md);
+      box-shadow: var(--pd-shadow-2);
+      padding: var(--pd-space-2) 0;
+      min-inline-size: 140px;
     }
 
     .context-menu button {
       display: block;
       width: 100%;
-      padding: 0.3rem 0.75rem;
+      padding: var(--pd-space-2) var(--pd-space-5);
       border: none;
       background: transparent;
-      text-align: left;
-      font-size: 0.85rem;
+      text-align: start;
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-body-sm);
+      color: var(--pd-text);
       cursor: pointer;
     }
 
     .context-menu button:hover:not(:disabled) {
-      background: #f3f3f3;
+      background: var(--pd-neutral-50);
     }
 
     .context-menu button:disabled {
-      color: #aaa;
+      color: var(--pd-neutral-400);
       cursor: default;
     }
   `]
@@ -265,6 +281,8 @@ export class ChapterTreeComponent {
 
   @Input() selectedChapterId: string | null = null;
   @Input() selectedSceneId: string | null = null;
+  /** Book language (e.g. 'he', 'en'). The chapter tree is book-scoped: Hebrew default, English for en books. */
+  @Input() bookLanguage: string | null = null;
   @Input() set expandedChapters(ids: string[]) {
     this._expandedChapters.set(ids ?? []);
   }
@@ -292,6 +310,48 @@ export class ChapterTreeComponent {
   );
 
   scenesByChapter = computed(() => this._scenesByChapter());
+
+  /** Book-scoped chrome language ('he' default, 'en' for an English book). */
+  get lang(): 'he' | 'en' {
+    return (this.bookLanguage?.trim().toLowerCase() || 'he').startsWith('en') ? 'en' : 'he';
+  }
+
+  /** Logical direction for the chrome; follows the book language so en books render ltr. */
+  get dir(): 'rtl' | 'ltr' {
+    return this.lang === 'en' ? 'ltr' : 'rtl';
+  }
+
+  /** Localized chapter-tree chrome strings (he default, en fallback). Keeps he/en parity. */
+  label(key: string): string {
+    const he: Record<string, string> = {
+      addChapter: 'הוספת פרק',
+      addFirstChapter: 'הוספת פרק ראשון',
+      general: 'כללי',
+      toggleScenes: 'הצג/הסתר סצנות',
+      noScenes: 'אין סצנות. השתמשו ב"פיצול לסצנות" על הפרק.',
+      rename: 'שינוי שם',
+      splitScenes: 'פיצול לסצנות',
+      removeAllScenes: 'הסרת כל הסצנות',
+      delete: 'מחיקת פרק',
+      deleteScene: 'מחיקת סצנה',
+      noChapters: 'אין עדיין פרקים.',
+    };
+    const en: Record<string, string> = {
+      addChapter: 'Add chapter',
+      addFirstChapter: 'Add first chapter',
+      general: 'General',
+      toggleScenes: 'Toggle scenes',
+      noScenes: 'No scenes. Use "Split scenes" on the chapter.',
+      rename: 'Rename',
+      splitScenes: 'Split scenes',
+      removeAllScenes: 'Remove all scenes',
+      delete: 'Delete',
+      deleteScene: 'Delete scene',
+      noChapters: 'No chapters yet.',
+    };
+    const map = this.lang === 'he' ? he : en;
+    return map[key] ?? key;
+  }
 
   contextMenu = {
     visible: false,

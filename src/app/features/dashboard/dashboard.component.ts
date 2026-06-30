@@ -1,39 +1,39 @@
 import { Component, OnInit } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
-import { DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { BookService } from '../../core/services/book.service';
 import { BookDto } from '../../core/models/book';
+import { formatRelativeTime } from '../../core/utils/relative-time';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [RouterLink, DatePipe, FormsModule],
+  imports: [RouterLink, FormsModule],
   template: `
-    <div class="dashboard">
-      <header>
+    <div class="dashboard" [attr.dir]="dir">
+      <header class="dash-header">
         <h1>Pagedraft</h1>
         @if (!showCreateForm) {
-          <button (click)="showCreateForm = true">New book</button>
+          <button class="pd-btn pd-btn-primary" (click)="showCreateForm = true">{{ label('newBook') }}</button>
         }
       </header>
       @if (showCreateForm) {
         <div class="create-form">
-          <h2>New book</h2>
+          <h2>{{ label('newBook') }}</h2>
           <div class="field">
-            <label for="new-book-title">Title</label>
-            <input id="new-book-title" type="text" [(ngModel)]="newBookTitle" placeholder="Untitled" />
+            <label for="new-book-title">{{ label('titleField') }}</label>
+            <input id="new-book-title" type="text" [(ngModel)]="newBookTitle" [placeholder]="label('untitled')" />
           </div>
           <div class="field">
-            <label for="new-book-language">Language</label>
+            <label for="new-book-language">{{ label('languageField') }}</label>
             <select id="new-book-language" [(ngModel)]="newBookLanguage">
-              <option value="he">Hebrew</option>
-              <option value="en">English</option>
+              <option value="he">{{ label('optionHebrew') }}</option>
+              <option value="en">{{ label('optionEnglish') }}</option>
             </select>
           </div>
           <div class="form-actions">
-            <button type="button" (click)="cancelCreate()">Cancel</button>
-            <button type="button" (click)="submitCreate()" [disabled]="creating">Create</button>
+            <button type="button" class="pd-btn pd-btn-ghost" (click)="cancelCreate()">{{ label('cancel') }}</button>
+            <button type="button" class="pd-btn pd-btn-primary" (click)="submitCreate()" [disabled]="creating">{{ creating ? label('creating') : label('create') }}</button>
           </div>
         </div>
       }
@@ -42,43 +42,112 @@ import { BookDto } from '../../core/models/book';
           <li>
             <div class="book-main">
               <a [routerLink]="['/books', b.id]">{{ b.title }}</a>
-              <span class="meta">{{ b.author || 'No author' }} · {{ b.updatedAt | date:'short' }}</span>
+              <span class="meta">{{ b.author || label('noAuthor') }} &middot; {{ relativeTime(b.updatedAt, b.language) }}</span>
             </div>
             <div class="book-actions">
-              <button type="button" (click)="openBook(b.id)">Open</button>
-              <button type="button" (click)="goToImport(b.id)">Import DOCX</button>
-              <button type="button" class="btn-delete" (click)="deleteBook(b)" [disabled]="deletingId === b.id">Delete</button>
+              <button type="button" class="pd-btn pd-btn-ghost" (click)="openBook(b.id)">{{ label('open') }}</button>
+              <button type="button" class="pd-btn pd-btn-ghost" (click)="goToImport(b.id)">{{ label('importDocx') }}</button>
+              <button type="button" class="pd-btn pd-btn-ghost btn-delete" (click)="deleteBook(b)" [disabled]="deletingId === b.id">{{ label('delete') }}</button>
             </div>
           </li>
         } @empty {
-          <li class="empty">No books. Create one to get started.</li>
+          <li class="pd-empty">{{ label('empty') }}</li>
         }
       </ul>
     </div>
   `,
   styles: [`
-    .dashboard { padding: 1.5rem; max-width: 800px; margin: 0 auto; }
-    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
-    h1 { margin: 0; font-size: 1.5rem; }
-    .book-list { list-style: none; padding: 0; margin: 0; }
-    .book-list li { padding: 0.75rem; border-bottom: 1px solid #eee; display: flex; flex-direction: column; gap: 0.35rem; }
-    .book-main a { font-weight: 500; text-decoration: none; color: #333; }
+    .dashboard {
+      padding: var(--pd-space-7);
+      max-inline-size: 800px;
+      margin-inline: auto;
+    }
+    .dash-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-block-end: var(--pd-space-7);
+    }
+    .dash-header h1 {
+      margin: 0;
+      font-size: var(--pd-text-h3);
+      color: var(--pd-neutral-900);
+    }
+    .book-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .book-list li {
+      padding: var(--pd-space-4) var(--pd-space-3);
+      border-block-end: 1px solid var(--pd-divider);
+      display: flex;
+      flex-direction: column;
+      gap: var(--pd-space-2);
+    }
+    .book-main a {
+      font-weight: var(--pd-weight-medium);
+      text-decoration: none;
+      color: var(--pd-text);
+    }
     .book-main a:hover { text-decoration: underline; }
-    .meta { font-size: 0.875rem; color: #666; display: block; margin-top: 0.15rem; }
-    .book-actions { display: flex; gap: 0.5rem; }
-    .book-actions button { padding: 0.35rem 0.75rem; cursor: pointer; }
-    .book-actions .btn-delete { color: #b00; border-color: #d88; }
-    .book-actions .btn-delete:hover:not(:disabled) { background: #fee; }
-    .empty { color: #666; }
-    .create-form { background: #f9f9f9; border: 1px solid #eee; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem; max-width: 400px; }
-    .create-form h2 { margin: 0 0 1rem 0; font-size: 1.125rem; }
-    .create-form .field { margin-bottom: 0.75rem; }
-    .create-form label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; color: #333; }
-    .create-form input, .create-form select { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; }
+    .meta {
+      font-size: var(--pd-text-body-sm);
+      color: var(--pd-text-secondary);
+      display: block;
+      margin-block-start: var(--pd-space-1);
+    }
+    .book-actions {
+      display: flex;
+      gap: var(--pd-space-3);
+      flex-wrap: wrap;
+    }
+    .btn-delete {
+      color: var(--pd-cut);
+      border-color: var(--pd-cut-border);
+    }
+    .btn-delete:hover:not(:disabled) {
+      background: var(--pd-cut-bg);
+    }
+    .create-form {
+      background: var(--pd-surface-sunken);
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-lg);
+      padding: var(--pd-space-6);
+      margin-block-end: var(--pd-space-7);
+      max-inline-size: 400px;
+    }
+    .create-form h2 {
+      margin: 0 0 var(--pd-space-5) 0;
+      font-size: var(--pd-text-h5);
+    }
+    .create-form .field {
+      margin-block-end: var(--pd-space-4);
+    }
+    .create-form label {
+      display: block;
+      font-size: var(--pd-text-body-sm);
+      font-weight: var(--pd-weight-medium);
+      margin-block-end: var(--pd-space-2);
+      color: var(--pd-text);
+    }
+    .create-form input,
+    .create-form select {
+      width: 100%;
+      padding: var(--pd-space-3) var(--pd-space-4);
+      border: 1px solid var(--pd-border-strong);
+      border-radius: var(--pd-radius-md);
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-body);
+      color: var(--pd-text);
+      background: var(--pd-surface);
+    }
     .create-form select { cursor: pointer; }
-    .create-form .form-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
-    .create-form .form-actions button { padding: 0.5rem 1rem; cursor: pointer; }
-    .create-form .form-actions button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .create-form .form-actions {
+      display: flex;
+      gap: var(--pd-space-3);
+      margin-block-start: var(--pd-space-5);
+    }
   `]
 })
 export class DashboardComponent implements OnInit {
@@ -88,6 +157,67 @@ export class DashboardComponent implements OnInit {
   newBookLanguage = 'he';
   creating = false;
   deletingId: string | null = null;
+
+  // ── Localization (app-level surface: no book language; defaults to Hebrew-first) ──
+
+  /** Dashboard chrome is always Hebrew-first; no per-book language applies here. */
+  private get langKey(): 'he' | 'en' {
+    return 'he';
+  }
+
+  get dir(): 'rtl' | 'ltr' {
+    return this.langKey === 'he' ? 'rtl' : 'ltr';
+  }
+
+  /** Localized static chrome label. DRAFT Hebrew - flag for native-speaker review before sign-off. */
+  label(key: string): string {
+    const he: Record<string, string> = {
+      newBook: 'ספר חדש',
+      titleField: 'כותרת',
+      untitled: 'ללא כותרת',
+      languageField: 'שפה',
+      optionHebrew: 'עברית',
+      optionEnglish: 'אנגלית',
+      cancel: 'ביטול',
+      create: 'יצירה',
+      creating: 'יוצר...',
+      noAuthor: 'ללא מחבר',
+      open: 'פתיחה',
+      importDocx: 'ייבוא DOCX',
+      delete: 'מחיקה',
+      empty: 'אין ספרים. צרו ספר חדש כדי להתחיל.',
+    };
+    const en: Record<string, string> = {
+      newBook: 'New book',
+      titleField: 'Title',
+      untitled: 'Untitled',
+      languageField: 'Language',
+      optionHebrew: 'Hebrew',
+      optionEnglish: 'English',
+      cancel: 'Cancel',
+      create: 'Create',
+      creating: 'Creating...',
+      noAuthor: 'No author',
+      open: 'Open',
+      importDocx: 'Import DOCX',
+      delete: 'Delete',
+      empty: 'No books. Create one to get started.',
+    };
+    const map = this.langKey === 'he' ? he : en;
+    return map[key] ?? key;
+  }
+
+  /** Localized delete confirm message (includes the book title). */
+  private deleteConfirmMessage(title: string): string {
+    if (this.langKey === 'he') {
+      return `למחוק את "${title}"? פעולה זו אינה הפיכה.`;
+    }
+    return `Delete "${title}"? This cannot be undone.`;
+  }
+
+  relativeTime(iso: string | null | undefined, lang?: string): string {
+    return formatRelativeTime(iso, lang === 'he' ? 'he' : 'en');
+  }
 
   constructor(private bookService: BookService, private router: Router) {}
 
@@ -123,7 +253,7 @@ export class DashboardComponent implements OnInit {
   }
 
   deleteBook(book: BookDto): void {
-    if (!confirm(`Delete "${book.title}"? This cannot be undone.`)) return;
+    if (!confirm(this.deleteConfirmMessage(book.title))) return;
     this.deletingId = book.id;
     this.bookService.delete(book.id).subscribe({
       next: () => {

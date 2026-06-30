@@ -24,7 +24,7 @@ interface ImportChapterView extends ImportPreviewChapterDto {
           <h2>Import DOCX</h2>
           <p class="subtitle">Upload a DOCX file and review detected chapters before importing.</p>
         </div>
-        <button type="button" class="back-btn" [routerLink]="['/books', bookId]">Back to book</button>
+        <a class="pd-btn pd-btn-ghost" [routerLink]="['/books', bookId]">Back to book</a>
       </header>
 
       <section class="dropzone-section">
@@ -37,11 +37,11 @@ interface ImportChapterView extends ImportPreviewChapterDto {
           <ng-container *ngIf="!isUploading; else uploadingTpl">
             <p *ngIf="!preview">
               <strong>Drop your DOCX here</strong> or
-              <button type="button" class="link-btn" (click)="fileInput.click()">browse</button>
+              <button type="button" class="pd-btn pd-btn-link" (click)="fileInput.click()">browse</button>
             </p>
             <p *ngIf="preview">
               Selected file: <strong>{{ preview.fileName }}</strong> ({{ preview.fileSize | number }} bytes)
-              <button type="button" class="link-btn" (click)="fileInput.click()">change</button>
+              <button type="button" class="pd-btn pd-btn-link" (click)="fileInput.click()">change</button>
             </p>
             <input
               type="file"
@@ -51,11 +51,11 @@ interface ImportChapterView extends ImportPreviewChapterDto {
               (change)="onFileSelected($event)" />
           </ng-container>
           <ng-template #uploadingTpl>
-            <p>Uploading and analyzing…</p>
+            <p class="pd-loading">Uploading and analyzing...</p>
           </ng-template>
         </div>
         <p class="hint">Only .docx files are supported. Large files may take a few seconds to analyze.</p>
-        <p *ngIf="error" class="error">{{ error }}</p>
+        <p *ngIf="error" class="import-error">{{ error }}</p>
       </section>
 
       <section *ngIf="chapters.length" class="preview-section">
@@ -71,12 +71,12 @@ interface ImportChapterView extends ImportPreviewChapterDto {
             </label>
           </div>
           <div class="actions">
-            <button type="button" (click)="setAll(true)">Select all</button>
-            <button type="button" (click)="setAll(false)">Clear all</button>
+            <button type="button" class="pd-btn pd-btn-ghost" (click)="setAll(true)">Select all</button>
+            <button type="button" class="pd-btn pd-btn-ghost" (click)="setAll(false)">Clear all</button>
           </div>
         </div>
 
-        <div *ngIf="mode === 'overwrite'" class="warning">
+        <div *ngIf="mode === 'overwrite'" class="overwrite-warning">
           This will replace all existing chapters of this book. Make sure you have a backup before proceeding.
         </div>
 
@@ -118,10 +118,10 @@ interface ImportChapterView extends ImportPreviewChapterDto {
         </div>
 
         <div class="footer-actions">
-          <button type="button" class="primary" [disabled]="isImporting || !hasSelection()" (click)="confirm()">
-            {{ isImporting ? 'Importing…' : 'Import chapters' }}
+          <button type="button" class="pd-btn pd-btn-primary" [disabled]="isImporting || !hasSelection()" (click)="confirm()">
+            {{ isImporting ? 'Importing...' : 'Import chapters' }}
           </button>
-          <button type="button" (click)="cancel()">Cancel</button>
+          <button type="button" class="pd-btn pd-btn-ghost" (click)="cancel()">Cancel</button>
         </div>
       </section>
     </div>
@@ -129,131 +129,138 @@ interface ImportChapterView extends ImportPreviewChapterDto {
   styles: [
     `
       .import-page {
-        max-width: 960px;
-        margin: 0 auto;
-        padding: 1.5rem;
+        max-inline-size: 960px;
+        margin-inline: auto;
+        padding: var(--pd-space-7);
       }
       .import-header {
         display: flex;
         justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1.5rem;
-        gap: 1rem;
+        align-items: flex-start;
+        margin-block-end: var(--pd-space-7);
+        gap: var(--pd-space-5);
+      }
+      .import-header h2 {
+        margin: 0;
       }
       .subtitle {
-        margin: 0.25rem 0 0;
-        color: #666;
-        font-size: 0.9rem;
-      }
-      .back-btn {
-        padding: 0.35rem 0.75rem;
-        border-radius: 4px;
-        border: 1px solid #ccc;
-        background: #fff;
-        cursor: pointer;
+        margin: var(--pd-space-2) 0 0;
+        color: var(--pd-text-secondary);
+        font-size: var(--pd-text-body-sm);
       }
       .dropzone-section {
-        margin-bottom: 1.5rem;
+        margin-block-end: var(--pd-space-7);
       }
       .dropzone {
-        border: 2px dashed #ccc;
-        border-radius: 8px;
-        padding: 1.5rem;
+        border: 2px dashed var(--pd-border-strong);
+        border-radius: var(--pd-radius-lg);
+        padding: var(--pd-space-8);
         text-align: center;
         cursor: pointer;
-        transition: border-color 0.2s, background-color 0.2s;
+        transition: border-color var(--pd-dur-base) var(--pd-ease),
+                    background-color var(--pd-dur-base) var(--pd-ease);
       }
       .dropzone.drag-over {
-        border-color: #0078d4;
-        background-color: #f0f8ff;
-      }
-      .link-btn {
-        border: none;
-        background: none;
-        padding: 0;
-        margin: 0;
-        color: #0078d4;
-        cursor: pointer;
-        text-decoration: underline;
+        border-color: var(--pd-primary-600);
+        background-color: var(--pd-primary-50);
       }
       .hint {
-        margin-top: 0.5rem;
-        font-size: 0.85rem;
-        color: #666;
+        margin-block-start: var(--pd-space-3);
+        font-size: var(--pd-text-body-sm);
+        color: var(--pd-text-muted);
       }
-      .error {
-        margin-top: 0.5rem;
-        color: #b00020;
+      .import-error {
+        margin-block-start: var(--pd-space-3);
+        color: var(--pd-cut);
+        font-size: var(--pd-text-body-sm);
       }
       .preview-section {
-        margin-top: 1rem;
+        margin-block-start: var(--pd-space-5);
       }
       .preview-toolbar {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        gap: 1rem;
-        margin-bottom: 0.75rem;
+        gap: var(--pd-space-5);
+        margin-block-end: var(--pd-space-4);
+        flex-wrap: wrap;
+      }
+      .mode-toggle {
+        display: flex;
+        gap: var(--pd-space-5);
+        flex-wrap: wrap;
       }
       .mode-toggle label {
-        margin-right: 1rem;
-        font-size: 0.9rem;
+        font-size: var(--pd-text-body-sm);
+        color: var(--pd-text);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: var(--pd-space-2);
       }
-      .actions button {
-        margin-left: 0.5rem;
+      .actions {
+        display: flex;
+        gap: var(--pd-space-3);
       }
-      .warning {
-        background: #fff4e5;
-        border-left: 4px solid #ffa000;
-        padding: 0.5rem 0.75rem;
-        margin-bottom: 0.75rem;
-        font-size: 0.9rem;
+      .overwrite-warning {
+        background: var(--pd-improve-bg);
+        border-inline-start: 4px solid var(--pd-improve);
+        padding: var(--pd-space-3) var(--pd-space-4);
+        margin-block-end: var(--pd-space-4);
+        font-size: var(--pd-text-body-sm);
+        color: var(--pd-text);
+        border-radius: 0 var(--pd-radius-sm) var(--pd-radius-sm) 0;
       }
       .preview-table {
         width: 100%;
         border-collapse: collapse;
-        margin-bottom: 0.75rem;
+        margin-block-end: var(--pd-space-4);
       }
       .preview-table th,
       .preview-table td {
-        border: 1px solid #eee;
-        padding: 0.4rem 0.5rem;
+        border: 1px solid var(--pd-border);
+        padding: var(--pd-space-2) var(--pd-space-3);
         vertical-align: top;
-        font-size: 0.9rem;
+        font-size: var(--pd-text-body-sm);
       }
       .preview-table th {
-        background: #fafafa;
-        text-align: left;
+        background: var(--pd-surface-sunken);
+        text-align: start;
+        font-weight: var(--pd-weight-medium);
+        color: var(--pd-text-secondary);
       }
       .order-input {
-        width: 3rem;
+        inline-size: 3rem;
+        border: 1px solid var(--pd-border);
+        border-radius: var(--pd-radius-sm);
+        padding: var(--pd-space-1) var(--pd-space-2);
+        font-family: var(--pd-font-ui);
+        font-size: var(--pd-text-body-sm);
       }
       .text-input {
         width: 100%;
         box-sizing: border-box;
+        border: 1px solid var(--pd-border);
+        border-radius: var(--pd-radius-sm);
+        padding: var(--pd-space-1) var(--pd-space-2);
+        font-family: var(--pd-font-ui);
+        font-size: var(--pd-text-body-sm);
       }
       .snippet {
-        max-width: 320px;
+        max-inline-size: 320px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        color: var(--pd-text-secondary);
       }
       .summary {
-        font-size: 0.9rem;
-        color: #555;
-        margin-bottom: 0.75rem;
+        font-size: var(--pd-text-body-sm);
+        color: var(--pd-text-secondary);
+        margin-block-end: var(--pd-space-4);
       }
       .footer-actions {
         display: flex;
-        gap: 0.5rem;
-      }
-      .primary {
-        padding: 0.45rem 0.9rem;
-        border-radius: 4px;
-        border: none;
-        background: #0078d4;
-        color: #fff;
-        cursor: pointer;
+        gap: var(--pd-space-3);
       }
     `,
   ],

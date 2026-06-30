@@ -195,6 +195,54 @@ describe('ChapterTreeComponent', () => {
     });
   });
 
+  // ─── book-scoped chrome localization (he default / en book) ──────────────
+
+  describe('chrome localization follows the book language', () => {
+    it('defaults to Hebrew labels + rtl when no bookLanguage is set', () => {
+      component.bookLanguage = null;
+      fixture.detectChanges();
+
+      expect(component.lang).toBe('he');
+      expect(component.dir).toBe('rtl');
+      expect(component.label('addChapter')).toBe('הוספת פרק');
+      expect(component.label('splitScenes')).toBe('פיצול לסצנות');
+      expect(component.label('removeAllScenes')).toBe('הסרת כל הסצנות');
+      expect(component.label('deleteScene')).toBe('מחיקת סצנה');
+      expect(component.label('general')).toBe('כללי');
+      expect(component.label('toggleScenes')).toBe('הצג/הסתר סצנות');
+    });
+
+    it('uses English labels + ltr when the book language is English', () => {
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+
+      expect(component.lang).toBe('en');
+      expect(component.dir).toBe('ltr');
+      expect(component.label('addChapter')).toBe('Add chapter');
+      expect(component.label('splitScenes')).toBe('Split scenes');
+      expect(component.label('removeAllScenes')).toBe('Remove all scenes');
+      expect(component.label('deleteScene')).toBe('Delete scene');
+      expect(component.label('general')).toBe('General');
+      expect(component.label('toggleScenes')).toBe('Toggle scenes');
+    });
+
+    it('treats an explicit Hebrew language code as Hebrew', () => {
+      component.bookLanguage = 'he';
+      fixture.detectChanges();
+
+      expect(component.lang).toBe('he');
+      expect(component.dir).toBe('rtl');
+      expect(component.label('noChapters')).toBe('אין עדיין פרקים.');
+    });
+
+    it('renders a localized add-chapter button in the template', () => {
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      const btn = (fixture.nativeElement as HTMLElement).querySelector('.add-chapter');
+      expect(btn?.textContent?.trim()).toBe('Add chapter');
+    });
+  });
+
   // ─── closeSceneContextMenu ────────────────────────────────────────────────
 
   describe('closeSceneContextMenu', () => {
