@@ -1,0 +1,256 @@
+/* ============================================================================
+   PageDraft base - global element + helper styling on the design tokens.
+   Conservative: does not restyle Syncfusion (.e-*) element selectors, and the
+   app-chrome globals below (focus ring, scrollbars, body font) are scoped so
+   they do NOT bleed into the Syncfusion DocumentEditor or its dialogs/popups.
+   ============================================================================ */
+
+/* Syncfusion control roots we must theme AROUND, never restyle. The editor host
+   is `.e-de-ctnr`; its dialogs/popups (table insert, hyperlink, etc.) render at
+   body level as `.e-dialog`/`.e-popup`. App-chrome globals exclude these roots
+   and everything inside them. Defined once, reused by every scoped global below.
+   `:where(... *)` keeps the negation at zero specificity so it never outweighs a
+   component rule. */
+$sf-roots: '.e-de-ctnr, .e-dialog, .e-popup, .e-de-floating-menu, .e-de-tooltip';
+$not-sf:   ':not(#{$sf-roots}):not(:where(#{$sf-roots}) *)';
+
+/* box-sizing stays global: Syncfusion expects border-box and re-asserts
+   content-box on its own inputs where it needs it (verified in-browser), so the
+   editor renders correctly with this global. */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body);
+  line-height: var(--pd-lh-body);
+  color: var(--pd-text);
+  background: var(--pd-surface-sunken);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Note on the body font + the editor: --pd-font-ui (Roboto stack) is INHERITED
+   into the Syncfusion editor host, but this is benign and left intentionally -
+   Syncfusion's own material theme already sets the same Roboto family on its
+   visible chrome (.e-btn/.e-input/.e-toolbar) and the document text is rendered
+   from explicit SFDT font runs, so the inherited body font reaches no visible
+   Syncfusion surface it does not already match. Forcing it off (font: initial)
+   would push the editor host to Times New Roman, actively breaking it - verified
+   in-browser. So we theme around Syncfusion by NOT touching its font here. */
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0 0 var(--pd-space-4);
+  color: var(--pd-neutral-900);
+  line-height: 1.2;
+  font-weight: var(--pd-weight-bold);
+}
+h1 { font-size: var(--pd-text-h1); }
+h2 { font-size: var(--pd-text-h2); }
+h3 { font-size: var(--pd-text-h3); }
+h4 { font-size: var(--pd-text-h4); font-weight: var(--pd-weight-medium); }
+h5 { font-size: var(--pd-text-h5); }
+h6 { font-size: var(--pd-text-body); }
+
+a { color: var(--pd-text-link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* App focus ring: blue ring + small radius on app chrome only. Excludes the
+   Syncfusion editor host + its dialogs/popups so the editor toolbar buttons and
+   dialog inputs keep their own (Syncfusion) focus treatment. App buttons, inputs
+   and links still get the ring (the `.pd-btn`/component `:focus-visible` rules
+   reinforce it). */
+:focus-visible#{$not-sf} {
+  outline: none;
+  box-shadow: var(--pd-ring);
+  border-radius: var(--pd-radius-sm);
+}
+
+/* Calm reading canvas helper (serif, generous measure). */
+.pd-reading {
+  max-inline-size: var(--pd-reading-measure);
+  margin-inline: auto;
+  font-family: var(--pd-font-reading);
+}
+
+/* Thin, cool scrollbars on app chrome only. Excludes the Syncfusion editor host
+   + dialogs/popups so the document editor keeps its own (auto-width) scrollbars.
+   `scrollbar-width` does not inherit, so this exclusion fully keeps the editor's
+   native scrollbar width. `scrollbar-color` DOES inherit, so the editor's thumb
+   still picks up the cool-grey tint from an ancestor - this is purely cosmetic
+   and harmless (it does not change scrollbar size/behavior), so we leave it
+   rather than reset it on `.e-*` and risk restyling Syncfusion. */
+*#{$not-sf} {
+  scrollbar-width: thin;
+  scrollbar-color: var(--pd-neutral-300) transparent;
+}
+
+/* ============================================================================
+   Shared button utilities (.pd-btn)
+   Base + modifier classes for app buttons. Use --pd-* tokens only.
+   Usage: class="pd-btn pd-btn-primary"  /  "pd-btn pd-btn-ghost"  /  "pd-btn pd-btn-link"
+   Size is controlled by padding (defaults to compact; no extra size modifier needed for most uses).
+   ============================================================================ */
+
+.pd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pd-space-2);
+  padding: var(--pd-space-2) var(--pd-space-5);     /* default: compact action size */
+  border-radius: var(--pd-radius-md);
+  border: 1px solid transparent;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-medium);
+  line-height: var(--pd-lh-body-sm);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background var(--pd-dur-fast) var(--pd-ease),
+              border-color var(--pd-dur-fast) var(--pd-ease),
+              color var(--pd-dur-fast) var(--pd-ease);
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: var(--pd-ring);
+  }
+
+  &:disabled,
+  &[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+}
+
+/* Primary: filled --pd-primary-600 background, white text. */
+.pd-btn-primary {
+  background: var(--pd-primary-600);
+  color: var(--pd-on-primary);
+  border-color: var(--pd-primary-600);
+
+  &:hover:not(:disabled) { background: var(--pd-primary-hover); border-color: var(--pd-primary-hover); }
+  &:active:not(:disabled) { background: var(--pd-primary-press); border-color: var(--pd-primary-press); }
+}
+
+/* Ghost: transparent background, strong border. */
+.pd-btn-ghost {
+  background: transparent;
+  color: var(--pd-text);
+  border-color: var(--pd-border-strong);
+
+  &:hover:not(:disabled) { background: var(--pd-neutral-50); }
+  &:active:not(:disabled) { background: var(--pd-neutral-100); }
+}
+
+/* Link: no border, no background; link color. */
+.pd-btn-link {
+  background: transparent;
+  color: var(--pd-text-link);
+  border-color: transparent;
+  padding-inline: var(--pd-space-1);
+
+  &:hover:not(:disabled) { text-decoration: underline; }
+}
+
+/* ============================================================================
+   Shared state helpers (.pd-empty, .pd-loading, .pd-error-msg)
+   Consistent empty/loading/error visual treatment across all surfaces.
+   Usage: add class to the container or message element; no extra markup required.
+   ============================================================================ */
+
+/* Empty state: centred, muted, caption-sized. */
+.pd-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pd-space-3);
+  padding: var(--pd-space-8) var(--pd-space-5);
+  color: var(--pd-text-muted);
+  font-size: var(--pd-text-body-sm);
+  text-align: center;
+
+  p { margin: 0; }
+}
+
+/* Loading state: same layout + a subtle pulse animation. */
+.pd-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pd-space-3);
+  padding: var(--pd-space-8) var(--pd-space-5);
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-body-sm);
+  text-align: center;
+  animation: pd-pulse 1.4s ease-in-out infinite;
+
+  p { margin: 0; }
+}
+
+@keyframes pd-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+/* Inline error message (non-banner). */
+.pd-error-msg {
+  color: var(--pd-cut);
+  font-size: var(--pd-text-body-sm);
+  margin-block-start: var(--pd-space-2);
+}
+
+/* ============================================================================
+   Shared chip utilities (.pd-chip)
+   Pill-shaped inline label. Default: neutral fill. Optional tone modifiers.
+   Usage: class="pd-chip"  /  "pd-chip pd-chip-primary"  /  "pd-chip pd-chip-success" etc.
+   ============================================================================ */
+
+.pd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pd-space-1);
+  padding: var(--pd-space-1) var(--pd-space-3);
+  border-radius: var(--pd-radius-pill);
+  border: 1px solid var(--pd-border);
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-secondary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  line-height: var(--pd-lh-caption);
+  white-space: nowrap;
+}
+
+/* Primary tint (brand-tinted label, e.g. "Edit help" scope pill). */
+.pd-chip-primary {
+  background: var(--pd-primary-50);
+  border-color: var(--pd-primary-100);
+  color: var(--pd-primary-700);
+}
+
+/* Success / keep (green). */
+.pd-chip-success {
+  background: var(--pd-keep-bg);
+  border-color: var(--pd-keep-border);
+  color: var(--pd-keep);
+}
+
+/* Warn / improve (amber). */
+.pd-chip-warn {
+  background: var(--pd-improve-bg);
+  border-color: var(--pd-improve-border);
+  color: var(--pd-improve);
+}
+
+/* Error / cut (red). */
+.pd-chip-error {
+  background: var(--pd-cut-bg);
+  border-color: var(--pd-cut-border);
+  color: var(--pd-cut);
+}

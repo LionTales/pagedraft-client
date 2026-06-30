@@ -1,5 +1,19 @@
 /* You can add global styles to this file, and also import other style files */
 
+/* Self-hosted design-system fonts (no Google Fonts CDN). Family names match the
+   --pd-font-* stacks in _tokens.scss exactly so the tokens resolve to these
+   faces offline. Roboto = UI, Source Serif 4 = reading, Roboto Mono = meta. */
+@import '@fontsource/roboto/400.css';
+@import '@fontsource/roboto/500.css';
+@import '@fontsource/roboto/700.css';
+@import '@fontsource/source-serif-4/400.css';
+@import '@fontsource/source-serif-4/600.css';
+@import '@fontsource/roboto-mono/400.css';
+
+/* PageDraft design-system tokens (blue-forward). Must load first so all
+   components + base can resolve the --pd-* custom properties. */
+@import './styles/tokens';
+
 /* Syncfusion EJ2 theme for DocumentEditor and its dependencies */
 @import '../node_modules/@syncfusion/ej2-base/styles/material.css';
 @import '../node_modules/@syncfusion/ej2-buttons/styles/material.css';
@@ -10,3 +24,7 @@
 @import '../node_modules/@syncfusion/ej2-splitbuttons/styles/material.css';
 @import '../node_modules/@syncfusion/ej2-dropdowns/styles/material.css';
 @import '../node_modules/@syncfusion/ej2-documenteditor/styles/material.css';
+
+/* PageDraft base element + helpers (loads after Syncfusion so app chrome can
+   intentionally override Material defaults; does not touch .e-* selectors). */
+@import './styles/base';
