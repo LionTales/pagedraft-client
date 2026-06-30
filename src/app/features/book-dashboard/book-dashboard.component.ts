@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { BookService } from '../../core/services/book.service';
 import {
@@ -55,7 +55,8 @@ type ReviewTab = 'findings' | 'bible';
         <app-book-summary-status-row
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
-          (summaryTerminal)="onSummaryTerminal()">
+          (summaryTerminal)="onSummaryTerminal()"
+          (buildingChange)="onSummaryBuildingChange($event)">
         </app-book-summary-status-row>
         <app-book-review-status-row
           #reviewRow
@@ -276,149 +277,244 @@ type ReviewTab = 'findings' | 'bible';
     .book-dashboard {
       display: flex;
       flex-direction: column;
-      gap: 1rem;
-      padding: 0.25rem 0;
+      gap: var(--pd-space-5);
+      padding: var(--pd-space-2) 0;
       overflow-y: auto;
       max-height: 100%;
+      font-family: var(--pd-font-ui);
     }
     .dashboard-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 0.5rem;
+      gap: var(--pd-space-3);
     }
-    .dashboard-title { margin: 0; font-size: 1rem; font-weight: 600; }
+    .dashboard-title {
+      margin: 0;
+      font-size: var(--pd-text-h5);
+      line-height: var(--pd-lh-h5);
+      font-weight: var(--pd-weight-bold);
+      color: var(--pd-text);
+    }
     .refresh-btn {
-      padding: 0.35rem 0.6rem;
-      border: 1px solid #ddd;
-      background: #fff;
+      padding: var(--pd-space-2) var(--pd-space-4);
+      border: 1px solid var(--pd-border);
+      background: var(--pd-surface);
       cursor: pointer;
-      border-radius: 4px;
-      font-size: 1.1rem;
+      border-radius: var(--pd-radius-sm);
+      font-size: var(--pd-text-body);
+      color: var(--pd-text-secondary);
+      transition: background var(--pd-dur-fast) var(--pd-ease);
     }
-    .refresh-btn:hover:not(:disabled) { background: #f5f5f5; }
+    .refresh-btn:hover:not(:disabled) { background: var(--pd-surface-sunken); }
     .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .card {
-      border: 1px solid #eee;
-      border-radius: 8px;
-      padding: 0.75rem 1rem;
-      background: #fafafa;
+      background: var(--pd-surface);
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-lg);
+      padding: var(--pd-space-5);
+      box-shadow: var(--pd-shadow-1);
     }
-    .card h4 { margin: 0 0 0.5rem 0; font-size: 0.9rem; color: #555; }
+    .card h4 {
+      margin: 0 0 var(--pd-space-4) 0;
+      font-size: var(--pd-text-body-sm);
+      line-height: var(--pd-lh-body-sm);
+      font-weight: var(--pd-weight-bold);
+      color: var(--pd-text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
     .book-status-card {
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: var(--pd-space-4);
     }
     .review-tabs {
       display: flex;
-      gap: 0.35rem;
-      border-bottom: 1px solid #e3e8ef;
-      margin-top: 0.25rem;
+      gap: var(--pd-space-2);
+      border-bottom: 1px solid var(--pd-divider);
+      margin-top: var(--pd-space-3);
     }
     .review-tab {
-      padding: 0.35rem 0.75rem;
+      padding: var(--pd-space-3) var(--pd-space-5);
       border: 1px solid transparent;
       border-bottom: none;
       background: none;
       cursor: pointer;
-      font-size: 0.85rem;
-      color: #666;
-      border-radius: 6px 6px 0 0;
+      font-size: var(--pd-text-body-sm);
+      font-family: var(--pd-font-ui);
+      color: var(--pd-text-secondary);
+      border-radius: var(--pd-radius-sm) var(--pd-radius-sm) 0 0;
+      transition: background var(--pd-dur-fast) var(--pd-ease), color var(--pd-dur-fast) var(--pd-ease);
     }
-    .review-tab:hover:not(.active) { background: #f0f4f9; }
+    .review-tab:hover:not(.active) { background: var(--pd-surface-sunken); }
     .review-tab.active {
-      color: #0078d4;
-      font-weight: 600;
-      border-color: #e3e8ef;
-      background: #fff;
+      color: var(--pd-primary-700);
+      font-weight: var(--pd-weight-bold);
+      border-color: var(--pd-divider);
+      background: var(--pd-surface);
       margin-bottom: -1px;
     }
-    .empty-hint, .error-hint, .muted { font-size: 0.875rem; color: #666; margin: 0; }
-    .error-hint { color: #c00; }
+    .empty-hint, .muted { font-size: var(--pd-text-body-sm); color: var(--pd-text-muted); margin: 0; }
+    .error-hint { font-size: var(--pd-text-body-sm); color: var(--pd-cut); margin: 0; }
     .overview-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 0.5rem 1rem;
-      font-size: 0.85rem;
+      gap: var(--pd-space-4) var(--pd-space-7);
+      font-size: var(--pd-text-body-sm);
     }
-    .overview-item .label { display: block; color: #666; }
-    .overview-item .value { font-weight: 500; }
+    .overview-item .label {
+      display: block;
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-muted);
+      margin-bottom: var(--pd-space-1);
+    }
+    .overview-item .value { font-weight: var(--pd-weight-medium); color: var(--pd-text); }
     .level-bar {
       display: inline-flex;
       align-items: center;
-      gap: 0.35rem;
+      gap: var(--pd-space-3);
     }
     .level-fill {
       display: inline-block;
       height: 6px;
       min-width: 20px;
       max-width: 80px;
-      background: #0078d4;
-      border-radius: 3px;
+      background: var(--pd-primary-600);
+      border-radius: var(--pd-radius-pill);
     }
-    .synopsis-text { font-size: 0.9rem; line-height: 1.5; }
+    .synopsis-text {
+      font-family: var(--pd-font-reading);
+      font-size: var(--pd-text-body);
+      line-height: var(--pd-lh-body);
+      color: var(--pd-text);
+    }
     .synopsis-preview, .synopsis-full { white-space: pre-wrap; }
-    .link-btn { background: none; border: none; color: #0078d4; cursor: pointer; font-size: 0.85rem; padding: 0.25rem 0; }
+    .link-btn {
+      background: none;
+      border: none;
+      color: var(--pd-text-link);
+      cursor: pointer;
+      font-size: var(--pd-text-body-sm);
+      font-family: var(--pd-font-ui);
+      padding: var(--pd-space-2) 0;
+    }
+    .link-btn:hover { text-decoration: underline; }
     .characters-scroll {
       display: flex;
-      gap: 0.75rem;
+      gap: var(--pd-space-4);
       overflow-x: auto;
-      padding-bottom: 0.5rem;
+      padding-bottom: var(--pd-space-3);
     }
     .character-card {
       flex: 0 0 auto;
       width: 100px;
       text-align: center;
-      padding: 0.5rem;
-      border: 1px solid #e0e0e0;
-      border-radius: 6px;
-      background: #fff;
+      padding: var(--pd-space-4);
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-md);
+      background: var(--pd-surface);
     }
     .char-avatar {
       width: 36px;
       height: 36px;
-      margin: 0 auto 0.35rem;
+      margin: 0 auto var(--pd-space-3);
       border-radius: 50%;
-      background: #e0e0e0;
+      background: var(--pd-neutral-100);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 0.8rem;
-      font-weight: 600;
+      font-size: var(--pd-text-caption);
+      font-weight: var(--pd-weight-bold);
+      color: var(--pd-text-secondary);
     }
-    .char-name { font-weight: 600; font-size: 0.85rem; }
-    .char-role { font-size: 0.75rem; color: #666; }
-    .relationships { margin-top: 0.75rem; font-size: 0.85rem; }
-    .relationships .label { display: block; margin-bottom: 0.25rem; color: #666; }
-    .rel-line { margin-bottom: 0.2rem; }
-    .plot-timeline { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.5rem; }
-    .plot-node { border: 1px solid #e0e0e0; border-radius: 6px; overflow: hidden; }
+    .char-name { font-weight: var(--pd-weight-bold); font-size: var(--pd-text-body-sm); color: var(--pd-text); }
+    .char-role { font-size: var(--pd-text-caption); color: var(--pd-text-muted); }
+    .relationships { margin-top: var(--pd-space-5); font-size: var(--pd-text-body-sm); }
+    .relationships .label {
+      display: block;
+      margin-bottom: var(--pd-space-2);
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-muted);
+    }
+    .rel-line { margin-bottom: var(--pd-space-2); color: var(--pd-text); }
+    .plot-timeline { display: flex; flex-wrap: wrap; gap: var(--pd-space-3); margin-bottom: var(--pd-space-4); }
+    .plot-node {
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-md);
+      overflow: hidden;
+    }
     .plot-label {
-      padding: 0.35rem 0.6rem;
-      background: #fff;
+      padding: var(--pd-space-3) var(--pd-space-4);
+      background: var(--pd-surface);
       border: none;
       cursor: pointer;
-      font-size: 0.85rem;
+      font-size: var(--pd-text-body-sm);
+      font-family: var(--pd-font-ui);
+      color: var(--pd-text);
       width: 100%;
-      text-align: right;
+      text-align: inherit;
+      transition: background var(--pd-dur-fast) var(--pd-ease);
     }
-    .plot-label:hover { background: #f5f5f5; }
-    .plot-detail { margin: 0.5rem; font-size: 0.8rem; color: #444; white-space: pre-wrap; }
-    .pacing, .conflicts { font-size: 0.85rem; margin-top: 0.5rem; }
-    .conflicts ul { margin: 0.25rem 0 0 0; padding-right: 1.25rem; }
-    .conflict-type { font-weight: 500; }
-    .ask-input-row { display: flex; gap: 0.35rem; margin-bottom: 0.5rem; }
-    .ask-input { flex: 1; padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9rem; }
-    .ask-btn { padding: 0.5rem 0.75rem; background: #0078d4; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
-    .ask-btn:hover:not(:disabled) { background: #106ebe; }
+    .plot-label:hover { background: var(--pd-surface-sunken); }
+    .plot-detail {
+      margin: var(--pd-space-4);
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-secondary);
+      white-space: pre-wrap;
+      font-family: var(--pd-font-reading);
+      line-height: var(--pd-lh-body);
+    }
+    .pacing, .conflicts { font-size: var(--pd-text-body-sm); margin-top: var(--pd-space-4); }
+    .conflicts ul { margin: var(--pd-space-2) 0 0 0; padding-inline-end: var(--pd-space-6); }
+    .conflict-type { font-weight: var(--pd-weight-medium); }
+    .ask-input-row { display: flex; gap: var(--pd-space-3); margin-bottom: var(--pd-space-4); }
+    .ask-input {
+      flex: 1;
+      padding: var(--pd-space-3) var(--pd-space-4);
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-sm);
+      font-size: var(--pd-text-body-sm);
+      font-family: var(--pd-font-ui);
+      color: var(--pd-text);
+      background: var(--pd-surface);
+    }
+    .ask-input:focus {
+      outline: none;
+      box-shadow: var(--pd-ring);
+      border-color: var(--pd-primary-600);
+    }
+    .ask-btn {
+      padding: var(--pd-space-3) var(--pd-space-5);
+      background: var(--pd-primary-600);
+      color: var(--pd-on-primary);
+      border: none;
+      border-radius: var(--pd-radius-sm);
+      cursor: pointer;
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-body-sm);
+      transition: background var(--pd-dur-fast) var(--pd-ease);
+    }
+    .ask-btn:hover:not(:disabled) { background: var(--pd-primary-hover); }
     .ask-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .answer-block { margin-top: 0.5rem; padding: 0.5rem; background: #fff; border-radius: 4px; border: 1px solid #eee; }
-    .answer-text { white-space: pre-wrap; font-size: 0.9rem; line-height: 1.5; }
-    .citations { font-size: 0.8rem; color: #666; margin-top: 0.35rem; }
+    .answer-block {
+      margin-top: var(--pd-space-4);
+      padding: var(--pd-space-4) var(--pd-space-5);
+      background: var(--pd-surface-sunken);
+      border-radius: var(--pd-radius-md);
+      border: 1px solid var(--pd-border);
+    }
+    .answer-text {
+      white-space: pre-wrap;
+      font-family: var(--pd-font-reading);
+      font-size: var(--pd-text-body);
+      line-height: var(--pd-lh-body);
+      color: var(--pd-text);
+    }
+    .citations { font-size: var(--pd-text-caption); color: var(--pd-text-muted); margin-top: var(--pd-space-3); }
   `]
 })
-export class BookDashboardComponent implements OnInit, OnChanges {
+export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   @Input() bookId!: string;
   @Input() bookTitle: string = '';
   /** Book language (e.g. 'he', 'en'); drives the book-scoped status rows' localization + status key. */
@@ -431,11 +527,25 @@ export class BookDashboardComponent implements OnInit, OnChanges {
    */
   @Output() openChapter = new EventEmitter<ChapterAnchor>();
 
+  /**
+   * P2-6: emits whether a whole-book build (summary briefs OR developmental review) is currently running.
+   * The host (editor-page) holds the last-emitted value so it can show a "review running" affordance on the
+   * closed-panel reopen button and the focus-mode toggle EVEN WHILE THIS DASHBOARD IS UNMOUNTED — closing the
+   * panel or entering focus mode @if-destroys the dashboard and its poll subscriptions, but the build keeps
+   * running server-side and reattaches on remount (server-keyed activeBuildJobId). Emitted on every change AND
+   * once in ngOnDestroy so the host captures the in-flight state at the moment of unmount.
+   */
+  @Output() buildRunningChange = new EventEmitter<boolean>();
+
   /** The hosted review row; refreshed when a summary build finishes (clears its "build briefs first" gate). */
   @ViewChild('reviewRow') reviewRow?: BookReviewStatusRowComponent;
 
   /** Latest derived review state reported by the hosted review row; gates the scorecard/ledger mount. */
   reviewState: BookReviewState = 'unknown';
+  /** Latest "summary build in flight" flag from the hosted summary row (its buildingChange output). */
+  private summaryBuilding = false;
+  /** Last buildRunning value emitted to the host; used to emit only on real transitions. */
+  private lastBuildRunning = false;
   /** Monotonic token passed to the findings panel; bumped when a build terminal warrants a re-read. */
   findingsRefreshToken = 0;
   /** Active review tab when the review is READY/STALE: the c02 Findings ledger (default) or c03 Story Bible. */
@@ -479,6 +589,16 @@ export class BookDashboardComponent implements OnInit, OnChanges {
       this.resetOwnState();
       this.loadProfile();
     }
+  }
+
+  /**
+   * P2-6: re-emit the current build-running state at the moment of unmount so the host's affordance flag is
+   * accurate when the dashboard is @if-destroyed mid-build (close panel / focus mode). The host keeps the
+   * flag and shows the affordance until the build is observed to finish — which happens on the NEXT mount,
+   * when the rows reattach to the server-tracked job and emit a terminal/idle state.
+   */
+  ngOnDestroy(): void {
+    this.emitBuildRunning();
   }
 
   /**
@@ -530,6 +650,34 @@ export class BookDashboardComponent implements OnInit, OnChanges {
       // a fresh mount loads on its own ngOnChanges, but a token bump is harmless and covers re-entry).
       this.findingsRefreshToken++;
     }
+    // The review-build component of buildRunning is derived from reviewState === 'building'; re-evaluate.
+    this.emitBuildRunning();
+  }
+
+  /**
+   * P2-6: the hosted summary row reported whether its briefs build is in flight (its buildingChange output).
+   * Record it and re-evaluate the aggregate build-running flag passed up to the host.
+   */
+  onSummaryBuildingChange(building: boolean): void {
+    this.summaryBuilding = building;
+    this.emitBuildRunning();
+  }
+
+  /**
+   * True when ANY whole-book build is in flight: the briefs/summary build (tracked via the summary row's
+   * buildingChange output) OR the developmental review build (reviewState === 'building'). Drives the host's
+   * "review running" affordance.
+   */
+  get buildRunning(): boolean {
+    return this.summaryBuilding || this.reviewState === 'building';
+  }
+
+  /** Emit buildRunningChange to the host only when the aggregate value actually changed (de-duped). */
+  private emitBuildRunning(): void {
+    const running = this.buildRunning;
+    if (running === this.lastBuildRunning) return;
+    this.lastBuildRunning = running;
+    this.buildRunningChange.emit(running);
   }
 
   /**

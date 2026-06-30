@@ -243,6 +243,73 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     expect(component.reviewTabLabel('bible')).toBe('Story Bible');
   });
 
+  // ── P2-6: buildRunningChange aggregation (drives the editor "review running" affordance) ─────
+  // The dashboard aggregates "any whole-book build running" from the summary row's buildingChange
+  // output AND the review row's reviewStateChange === 'building', and re-emits the in-flight value
+  // at unmount so the host's affordance survives the dashboard being @if-destroyed (close / focus).
+  describe('buildRunningChange aggregation (P2-6)', () => {
+    it('emits true when the review row reports building and false when it leaves building', () => {
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      // The review row enters BUILDING (e.g. a user-initiated review build started).
+      component.onReviewStateChange('building');
+      expect(component.buildRunning).toBeTrue();
+      expect(events).toEqual([true]);
+
+      // Staying building is de-duped (no redundant emit).
+      component.onReviewStateChange('building');
+      expect(events).toEqual([true]);
+
+      // Build finishes -> ready: aggregate flips false, emitted once.
+      component.onReviewStateChange('ready');
+      expect(component.buildRunning).toBeFalse();
+      expect(events).toEqual([true, false]);
+    });
+
+    it('emits true when the SUMMARY row reports building via buildingChange (held-open Subject)', () => {
+      // Re-stub the summary service so the real hosted summary row drives a Subject-backed build.
+      const summarySvc = TestBed.inject(BookSummaryService) as any;
+      const progressSvc = TestBed.inject(AnalysisProgressService) as any;
+      summarySvc.buildBookSummary = () => of({ jobId: 'job-1', noOp: false } as any);
+      summarySvc.getBookSummaryStatus = () => NEVER;
+      const poll$ = new Subject<any>();
+      progressSvc.pollBookSummaryProgress = () => poll$.asObservable();
+
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      const summaryRow = fixture.debugElement
+        .query(By.css('app-book-summary-status-row'))
+        .componentInstance as { bookLanguage: string; onBuildBookSummary: () => void };
+      summaryRow.bookLanguage = 'he';
+      summaryRow.onBuildBookSummary();
+
+      // The summary row emitted buildingChange(true); the dashboard aggregated it and emitted true.
+      expect(component.buildRunning).toBeTrue();
+      expect(events).toEqual([true]);
+
+      // Terminal on the OPEN Subject clears it.
+      poll$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
+      expect(component.buildRunning).toBeFalse();
+      expect(events).toEqual([true, false]);
+    });
+
+    it('keeps the host flag TRUE across unmount: ngOnDestroy does not flip a running build to false', () => {
+      const events: boolean[] = [];
+      component.buildRunningChange.subscribe((b) => events.push(b));
+
+      // A review build is running.
+      component.onReviewStateChange('building');
+      expect(events).toEqual([true]);
+
+      // The dashboard is @if-destroyed (panel closed / focus mode) WHILE the build runs. The
+      // re-emit at unmount must NOT report false — the build is still running server-side.
+      component.ngOnDestroy();
+      expect(events).toEqual([true]); // still true; no false emitted at unmount
+    });
+  });
+
   it('renders the book profile sections once a profile loads (existing behavior intact)', () => {
     const bookSvc = TestBed.inject(BookService);
     (bookSvc.getProfile as jasmine.Spy).and.returnValue(

@@ -12,7 +12,7 @@
       <span class="sb-status sb-not-built" data-testid="bsum-not-built">{{ bookSummaryLabel('notBuilt') }}</span>
       <button
         type="button"
-        class="run-btn sb-action"
+        class="pd-btn pd-btn-primary sb-action"
         data-testid="bsum-build-now"
         (click)="openBookSummaryConsent()">
         {{ bookSummaryLabel('buildNow') }}
@@ -45,7 +45,7 @@
       </span>
       <button
         type="button"
-        class="run-btn sb-action"
+        class="pd-btn pd-btn-primary sb-action"
         data-testid="bsum-refresh"
         (click)="openBookSummaryConsent()">
         {{ bookSummaryLabel('refresh') }}
@@ -55,7 +55,7 @@
 
   <!-- Cross-model staleness warning: summary exists but was built with a different model. -->
   <p
-    class="sb-cross-model-warning muted"
+    class="sb-cross-model-warning"
     *ngIf="bookSummaryBuiltWithDifferentModel"
     [attr.dir]="bookSummaryDir"
     data-testid="bsum-cross-model-warning">
@@ -71,14 +71,14 @@
     <div class="sb-consent-actions">
       <button
         type="button"
-        class="run-btn"
+        class="pd-btn pd-btn-primary"
         data-testid="bsum-consent-confirm"
         (click)="confirmBookSummaryBuild()">
         {{ bookSummaryLabel('confirm') }}
       </button>
       <button
         type="button"
-        class="run-btn secondary"
+        class="pd-btn pd-btn-ghost"
         data-testid="bsum-consent-cancel"
         (click)="cancelBookSummaryConsent()">
         {{ bookSummaryLabel('cancel') }}

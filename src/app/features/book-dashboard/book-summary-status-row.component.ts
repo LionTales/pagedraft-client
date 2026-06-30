@@ -31,11 +31,31 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
 
   /** Fired when a summary build reaches a terminal/error state (or a no-op confirms a fresh summary). */
   @Output() summaryTerminal = new EventEmitter<void>();
+  /**
+   * Emits whether a summary build is currently in flight. Fired whenever `bookSummaryBuilding` changes
+   * (build start, reattach to an in-progress job, terminal/error), so the dashboard host can aggregate a
+   * "review running" affordance that stays visible even after the dashboard is unmounted (close panel /
+   * focus mode). The host holds the last-emitted value; the row itself is destroyed on unmount.
+   */
+  @Output() buildingChange = new EventEmitter<boolean>();
 
   /** Latest book-summary status read for the current book (null while loading / no book). */
   bookSummaryStatus: BookSummaryStatusDto | null = null;
-  /** True while a summary build job is in flight (drives the BUILDING state). */
-  bookSummaryBuilding = false;
+  /** Backing field for {@link bookSummaryBuilding}; mutated only via the setter so the change emits. */
+  private _bookSummaryBuilding = false;
+  /**
+   * True while a summary build job is in flight (drives the BUILDING state). Backed by a setter so every
+   * transition emits {@link buildingChange} to the host — including the reattach-to-an-in-progress-job
+   * path — without having to remember to emit at each of the many assignment sites.
+   */
+  get bookSummaryBuilding(): boolean {
+    return this._bookSummaryBuilding;
+  }
+  set bookSummaryBuilding(value: boolean) {
+    if (this._bookSummaryBuilding === value) return;
+    this._bookSummaryBuilding = value;
+    this.buildingChange.emit(value);
+  }
   /** Live summary build progress 0..100 (null = indeterminate). */
   bookSummaryProgressPercent: number | null = null;
   /** Human-readable progress message from the summary build job. */

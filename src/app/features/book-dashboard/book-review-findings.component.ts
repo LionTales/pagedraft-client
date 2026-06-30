@@ -92,6 +92,18 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
 
   /** The dimensions rendered in the scorecard + as ledger group order. */
   readonly dimensions: Dimension[] = ['plot', 'character', 'pacing', 'tone', 'theme', 'continuity'];
+
+  /**
+   * Memoized scorecard rows + derived overall score/verdict. Rebuilt only when `this.scores` changes
+   * (the rows + score read ONLY `this.scores` and the static `this.dimensions` order — NOT language).
+   * The scorecardRows getter is read several times per change-detection pass (template + overallScore +
+   * overallVerdict), each of which previously rebuilt the Map; caching collapses that to one rebuild
+   * per scores change. Invalidated by setting _scorecardCacheKey to a non-matching ref.
+   */
+  private _scorecardCacheKey: DimensionScore[] | null = null;
+  private _scorecardRows: DimensionScore[] = [];
+  private _overallScore = 0;
+  private _overallVerdict: 'keep' | 'improve' | 'cut' = 'cut';
   /** Active verdicts the ledger groups by (the muted/secondary group is keyed off status, not verdict). */
   readonly verdicts: Verdict[] = ['keep', 'improve', 'cut'];
 
@@ -182,13 +194,34 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
   // review build, not a live ledger-filter tally.
 
   /** The scorecard rows in the canonical dimension order, skipping dimensions with no score row.
-   *  Reads from `this.scores` (server build-time rollup) — NOT from `this.findings`. */
+   *  Reads from `this.scores` (server build-time rollup) — NOT from `this.findings`.
+   *  Memoized: rebuilt only when the `this.scores` reference changes (reassigned wholesale in
+   *  loadFindings/resetView), so the per-CD reads (template + overallScore + overallVerdict) share
+   *  one Map rebuild. */
   get scorecardRows(): DimensionScore[] {
+    this.refreshScorecardCache();
+    return this._scorecardRows;
+  }
+
+  /**
+   * Recompute the memoized scorecard rows + overall score/verdict when the `this.scores` reference
+   * changes. `scores` is assigned wholesale (loadFindings, resetView), never mutated in place, so a
+   * reference compare is a complete invalidation trigger for everything these values read (`this.scores`
+   * + the static `this.dimensions` order). Language is intentionally NOT part of the key: rows/score
+   * depend only on scores; localization happens in separate label getters.
+   */
+  private refreshScorecardCache(): void {
+    if (this._scorecardCacheKey === this.scores) return;
+    this._scorecardCacheKey = this.scores;
+
     const byDim = new Map<Dimension, DimensionScore>();
     for (const s of this.scores) byDim.set(s.dimension, s);
-    return this.dimensions
+    this._scorecardRows = this.dimensions
       .map((d) => byDim.get(d))
       .filter((s): s is DimensionScore => !!s);
+
+    this._overallScore = this.computeOverallScore(this._scorecardRows);
+    this._overallVerdict = this.computeOverallVerdict(this._overallScore);
   }
 
   /** Toggle the dimension filter from a scorecard row click (clears on re-click of the active row). */
@@ -387,6 +420,22 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
     }
   }
 
+  /** Localized severity label (1 minor / 2 moderate / 3 major). DRAFT Hebrew - flag for native review. */
+  severityLabel(severity: number): string {
+    const he: Record<number, string> = {
+      1: 'חומרה נמוכה',
+      2: 'חומרה בינונית',
+      3: 'חומרה גבוהה',
+    };
+    const en: Record<number, string> = {
+      1: 'Minor',
+      2: 'Moderate',
+      3: 'Major',
+    };
+    const map = this.langKey === 'he' ? he : en;
+    return map[severity] ?? '';
+  }
+
   /** Localized holistic score label. DRAFT Hebrew - flag for native-speaker review before sign-off. */
   scoreLabel(score: DimensionScoreLabel): string {
     const he: Record<DimensionScoreLabel, string> = {
@@ -422,7 +471,7 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
   /** Localized static chrome label. DRAFT Hebrew - flag for native-speaker review before sign-off. */
   label(key: string): string {
     const he: Record<string, string> = {
-      scorecardTitle: 'סקירת ממדים',
+      scorecardTitle2: 'מצב התפתחותי',
       ledgerTitle: 'ממצאים',
       allDimensions: 'כל הממדים',
       allVerdicts: 'הכל',
@@ -444,7 +493,7 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
       less: 'פחות',
     };
     const en: Record<string, string> = {
-      scorecardTitle: 'Dimension scorecard',
+      scorecardTitle2: 'Developmental health',
       ledgerTitle: 'Findings',
       allDimensions: 'All dimensions',
       allVerdicts: 'All',
@@ -467,5 +516,90 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
     };
     const map = this.langKey === 'he' ? he : en;
     return map[key] ?? key;
+  }
+
+  // ── DimensionScorecard helpers (ds-f02) ───────────────────────────────────────
+
+  /**
+   * Map a DimensionScoreLabel to the verdict band name used for coloring.
+   * strong -> keep, mixed -> improve, weak -> cut.
+   */
+  scoreLabelToVerdict(score: DimensionScoreLabel): 'keep' | 'improve' | 'cut' {
+    switch (score) {
+      case 'strong': return 'keep';
+      case 'mixed':  return 'improve';
+      case 'weak':   return 'cut';
+    }
+  }
+
+  /**
+   * Map a DimensionScoreLabel to a 0-100 meter fill %.
+   * Fixed band per label: strong=80, mixed=50, weak=25.
+   */
+  scoreLabelToFill(score: DimensionScoreLabel): number {
+    switch (score) {
+      case 'strong': return 80;
+      case 'mixed':  return 50;
+      case 'weak':   return 25;
+      default:       return 25; // unknown score string treated as weakest band
+    }
+  }
+
+  /** Total findings count for a scorecard row (keep + improve + cut). */
+  scorecardFindingsCount(s: DimensionScore): number {
+    return (s.keepCount ?? 0) + (s.improveCount ?? 0) + (s.cutCount ?? 0);
+  }
+
+  /**
+   * Localized "N findings" / "N ממצאים" label for a scorecard cell.
+   */
+  findingsCountLabel(n: number): string {
+    return this.langKey === 'he' ? `${n} ממצאים` : `${n} findings`;
+  }
+
+  /**
+   * Localized "N dimensions assessed" / "N ממדים נבדקו" sub-header label.
+   */
+  dimensionsAssessedLabel(n: number): string {
+    return this.langKey === 'he' ? `${n} ממדים נבדקו` : `${n} dimensions assessed`;
+  }
+
+  /**
+   * Overall health score (0-100) derived from all scorecard rows.
+   * Average of the per-dimension fill values (strong=80, mixed=50, weak=25).
+   * Memoized: recomputed only when `this.scores` changes (see refreshScorecardCache / computeOverallScore).
+   */
+  get overallScore(): number {
+    this.refreshScorecardCache();
+    return this._overallScore;
+  }
+
+  /**
+   * f02 NaN guard preserved verbatim: a Number.isFinite coercion on each per-row fill (unknown score
+   * label -> 25) plus a final Number.isFinite(avg) ? avg : 0 fallback so the rendered figure is never "NaN".
+   */
+  private computeOverallScore(rows: DimensionScore[]): number {
+    if (rows.length === 0) return 0;
+    const sum = rows.reduce(
+      (acc, s) => acc + (Number.isFinite(this.scoreLabelToFill(s.score)) ? this.scoreLabelToFill(s.score) : 25),
+      0,
+    );
+    const avg = Math.round(sum / rows.length);
+    return Number.isFinite(avg) ? avg : 0;
+  }
+
+  /**
+   * Overall verdict band for the overall score figure: >=70 keep, >=45 improve, else cut.
+   * Memoized: recomputed only when `this.scores` changes (see refreshScorecardCache / computeOverallVerdict).
+   */
+  get overallVerdict(): 'keep' | 'improve' | 'cut' {
+    this.refreshScorecardCache();
+    return this._overallVerdict;
+  }
+
+  private computeOverallVerdict(s: number): 'keep' | 'improve' | 'cut' {
+    if (s >= 70) return 'keep';
+    if (s >= 45) return 'improve';
+    return 'cut';
   }
 }

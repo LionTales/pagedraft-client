@@ -193,32 +193,141 @@ interface ChapterSummaryRow {
     </section>
   `,
   styles: [`
-    .chapter-summaries { display: flex; flex-direction: column; gap: 0.5rem; }
-    .cs-title { margin: 0 0 0.25rem 0; font-size: 0.9rem; color: #555; }
-    .cs-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
-    .cs-row { border: 1px solid #eee; border-radius: 6px; padding: 0.5rem 0.75rem; background: #fff; }
-    .cs-row-head { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
-    .cs-chapter-title { font-weight: 600; font-size: 0.875rem; }
-    .cs-badges { display: flex; gap: 0.35rem; }
-    .cs-badge { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 10px; white-space: nowrap; }
-    .cs-badge-edited { background: #e6f0ff; color: #0050b3; }
-    .cs-badge-analysis { background: #f0eaff; color: #531dab; }
-    .cs-badge-stale { background: #fff3e0; color: #ad6800; }
-    .cs-summary-text { white-space: pre-wrap; font-size: 0.85rem; line-height: 1.5; margin: 0.4rem 0; }
-    .cs-summary-analysis { color: #444; }
-    .cs-analysis-note { font-size: 0.75rem; color: #531dab; margin: 0.3rem 0 0.1rem 0; font-style: italic; }
-    .cs-textarea { width: 100%; box-sizing: border-box; font-size: 0.85rem; padding: 0.4rem; border: 1px solid #ddd; border-radius: 4px; resize: vertical; }
-    .cs-actions { display: flex; gap: 0.35rem; margin-top: 0.4rem; }
-    .cs-btn { padding: 0.3rem 0.6rem; border: 1px solid #ddd; background: #fafafa; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
-    .cs-btn:hover:not(:disabled) { background: #f0f0f0; }
+    .chapter-summaries {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pd-space-4);
+      font-family: var(--pd-font-ui);
+    }
+    .cs-title {
+      margin: 0 0 var(--pd-space-2) 0;
+      font-size: var(--pd-text-body-sm);
+      line-height: var(--pd-lh-body-sm);
+      font-weight: var(--pd-weight-bold);
+      color: var(--pd-text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .cs-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--pd-space-4);
+    }
+    .cs-row {
+      background: var(--pd-surface);
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-md);
+      padding: var(--pd-space-4) var(--pd-space-5);
+      box-shadow: var(--pd-shadow-1);
+    }
+    .cs-row-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--pd-space-4);
+    }
+    .cs-chapter-title {
+      font-weight: var(--pd-weight-bold);
+      font-size: var(--pd-text-body-sm);
+      color: var(--pd-text);
+    }
+    .cs-badges { display: flex; gap: var(--pd-space-2); flex-wrap: wrap; }
+    .cs-badge {
+      font-size: var(--pd-text-caption);
+      padding: var(--pd-space-1) var(--pd-space-3);
+      border-radius: var(--pd-radius-pill);
+      white-space: nowrap;
+      font-weight: var(--pd-weight-medium);
+      background: var(--pd-neutral-100);
+      color: var(--pd-text-secondary);
+    }
+    .cs-badge-edited {
+      background: var(--pd-primary-50);
+      color: var(--pd-primary-700);
+    }
+    .cs-badge-analysis {
+      background: var(--pd-linguistic-bg);
+      color: var(--pd-linguistic-ink);
+    }
+    .cs-badge-stale {
+      background: var(--pd-improve-bg);
+      color: var(--pd-improve);
+    }
+    .cs-summary-text {
+      white-space: pre-wrap;
+      font-family: var(--pd-font-reading);
+      font-size: var(--pd-text-body-sm);
+      line-height: var(--pd-lh-body);
+      color: var(--pd-text);
+      margin: var(--pd-space-3) 0;
+    }
+    .cs-summary-analysis { color: var(--pd-text-secondary); }
+    .cs-analysis-note {
+      font-size: var(--pd-text-caption);
+      color: var(--pd-linguistic-ink);
+      margin: var(--pd-space-3) 0 var(--pd-space-2) 0;
+      font-style: italic;
+    }
+    .cs-textarea {
+      width: 100%;
+      box-sizing: border-box;
+      font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-body-sm);
+      line-height: var(--pd-lh-body);
+      padding: var(--pd-space-3) var(--pd-space-4);
+      border: 1px solid var(--pd-border);
+      border-radius: var(--pd-radius-sm);
+      resize: vertical;
+      color: var(--pd-text);
+      background: var(--pd-surface);
+    }
+    .cs-textarea:focus {
+      outline: none;
+      box-shadow: var(--pd-ring);
+      border-color: var(--pd-primary-600);
+    }
+    .cs-actions { display: flex; gap: var(--pd-space-3); margin-top: var(--pd-space-3); flex-wrap: wrap; }
+    .cs-btn {
+      padding: var(--pd-space-2) var(--pd-space-4);
+      border: 1px solid var(--pd-border);
+      background: var(--pd-surface);
+      border-radius: var(--pd-radius-sm);
+      cursor: pointer;
+      font-size: var(--pd-text-body-sm);
+      font-family: var(--pd-font-ui);
+      color: var(--pd-text-secondary);
+      transition: background var(--pd-dur-fast) var(--pd-ease);
+    }
+    .cs-btn:hover:not(:disabled) { background: var(--pd-surface-sunken); }
     .cs-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .cs-btn-primary { background: #0078d4; color: #fff; border-color: #0078d4; }
-    .cs-btn-primary:hover:not(:disabled) { background: #106ebe; }
-    .cs-muted { font-size: 0.8rem; color: #666; margin: 0.3rem 0; }
-    .cs-error { font-size: 0.8rem; color: #c00; margin: 0.3rem 0; }
-    .cs-rederive-offer { margin-top: 0.5rem; padding: 0.5rem; background: #f5f9ff; border: 1px solid #d6e4ff; border-radius: 4px; }
-    .cs-rederive-prompt { font-size: 0.8rem; color: #333; margin: 0 0 0.3rem 0; }
-    .cs-rederive-result { font-size: 0.8rem; color: #237804; margin: 0.4rem 0 0 0; }
+    .cs-btn-primary {
+      background: var(--pd-primary-600);
+      color: var(--pd-on-primary);
+      border-color: var(--pd-primary-600);
+    }
+    .cs-btn-primary:hover:not(:disabled) { background: var(--pd-primary-hover); }
+    .cs-muted { font-size: var(--pd-text-body-sm); color: var(--pd-text-muted); margin: var(--pd-space-2) 0; }
+    .cs-error { font-size: var(--pd-text-body-sm); color: var(--pd-cut); margin: var(--pd-space-2) 0; }
+    .cs-rederive-offer {
+      margin-top: var(--pd-space-4);
+      padding: var(--pd-space-4);
+      background: var(--pd-info-bg);
+      border: 1px solid var(--pd-primary-100);
+      border-radius: var(--pd-radius-md);
+    }
+    .cs-rederive-prompt {
+      font-size: var(--pd-text-body-sm);
+      color: var(--pd-text);
+      margin: 0 0 var(--pd-space-3) 0;
+    }
+    .cs-rederive-result {
+      font-size: var(--pd-text-body-sm);
+      color: var(--pd-keep);
+      margin: var(--pd-space-3) 0 0 0;
+    }
   `]
 })
 export class BookChapterSummariesComponent implements OnChanges, OnDestroy {

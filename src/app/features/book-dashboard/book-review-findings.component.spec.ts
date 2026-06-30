@@ -545,4 +545,35 @@ describe('BookReviewFindingsComponent (wb3-c02)', () => {
     for (const s of scores) expect(component.scoreLabel(s)).not.toBe(s);
     for (const s of statuses) expect(component.statusLabel(s)).not.toBe(s);
   });
+
+  // ── NaN guard: unknown DimensionScore.score string (f02) ────────────────────
+
+  it('overallScore is a finite number in [0,100] and never renders "NaN" when a DimensionScore carries an unknown score string', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(
+      of(
+        makeFindingsDto({
+          findings: [],
+          scores: [
+            // Known label mixed alongside an unknown label injected via `as any`.
+            makeScore({ dimension: 'plot', score: 'mixed' }),
+            makeScore({ dimension: 'character', score: 'unknown_future_value' as any }),
+          ],
+        })
+      )
+    );
+    triggerInit();
+    fixture.detectChanges();
+
+    // overallScore must be a finite number in the valid range.
+    const score = component.overallScore;
+    expect(Number.isFinite(score)).toBeTrue();
+    expect(score).toBeGreaterThanOrEqual(0);
+    expect(score).toBeLessThanOrEqual(100);
+
+    // The rendered figure must NOT be the string "NaN".
+    const scorecardEl = query('[data-testid="findings-scorecard"]');
+    expect(scorecardEl).not.toBeNull();
+    expect(scorecardEl.nativeElement.textContent).not.toContain('NaN');
+  });
 });
