@@ -110,7 +110,7 @@
           class="review-close"
           [attr.aria-label]="reviewPanelCloseLabel"
           [title]="reviewPanelCloseLabel"
-          (click)="reviewPanelOpen = false">
+          (click)="closeReviewPanel()">
           ✕
         </button>
       </header>
@@ -207,7 +207,7 @@
         [class.review-running]="reviewBuildRunning"
         [attr.aria-label]="reviewBuildRunning ? reviewPanelTitle + ' · ' + reviewRunningLabel : reviewPanelTitle"
         [title]="reviewBuildRunning ? reviewPanelTitle + ' · ' + reviewRunningLabel : reviewPanelTitle">
-        <span class="review-reopen-label" (click)="reviewPanelOpen = true">{{ reviewPanelTitle }}</span>
+        <span class="review-reopen-label" (click)="openReviewPanel()">{{ reviewPanelTitle }}</span>
         @if (reviewBuildRunning) {
           <span class="review-running-dot" aria-hidden="true"></span>
         }

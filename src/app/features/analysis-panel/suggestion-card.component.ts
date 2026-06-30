@@ -482,6 +482,15 @@ export class SuggestionCardComponent implements OnChanges {
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['suggestion']) {
+      // Collapse the rationale detail when this card instance is bound to a DIFFERENT suggestion. Lists
+      // (filtered/reordered, or any future trackBy) can reuse a card instance for another item; rationaleOpen
+      // is presentational state that would otherwise stay expanded for the wrong suggestion until toggled.
+      // Keyed on the stable suggestion id (falling back to object identity) so an in-place / immutable
+      // explanation update to the SAME suggestion (the "Why?" flow) does NOT collapse an open rationale.
+      const ch = changes['suggestion'];
+      if (this.suggestionIdentity(ch.previousValue) !== this.suggestionIdentity(ch.currentValue)) {
+        this.rationaleOpen = false;
+      }
       if (!this.suggestion || this.suggestion.original === this.suggestion.suggested) {
         this._originalFragments = [];
         this._suggestedFragments = [];
@@ -493,6 +502,16 @@ export class SuggestionCardComponent implements OnChanges {
       this._kindClass = isConsistencySuggestion(this.suggestion) ? 'linguistic' : 'proofread';
       this._severity = this.computeSeverity();
     }
+  }
+
+  /**
+   * Stable identity for a suggestion used to decide whether a card reuse is a real item swap. Prefers the
+   * server `id` (survives an immutable replacement of the SAME suggestion, e.g. when an explanation is
+   * grafted on); falls back to object identity for id-less suggestions (proofread/lineEdit without a server
+   * id never receive explanation updates, so their reference is a sound key).
+   */
+  private suggestionIdentity(s: AnalysisSuggestion | undefined): unknown {
+    return s?.id ?? s;
   }
 
   /** Derive severity from the suggestion category. Called once per `suggestion` change (memoized). */

@@ -7,6 +7,8 @@ import { BookDetailDto } from '../../core/models/book';
 import { of, EMPTY, throwError, Subject } from 'rxjs';
 import { EditorPageComponent } from './editor-page.component';
 import { BookService } from '../../core/services/book.service';
+import { BookSummaryService } from '../../core/services/book-summary.service';
+import { BookReviewService } from '../../core/services/book-review.service';
 import { ChapterService } from '../../core/services/chapter.service';
 import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
@@ -65,6 +67,16 @@ describe('EditorPageComponent (focused logic)', () => {
         { provide: ActivatedRoute, useValue: { params: of({}) } },
         { provide: Router, useValue: { navigate: jasmine.createSpy() } },
         { provide: BookService, useValue: { getById: () => EMPTY } },
+        // P2-6: the editor reconciles the whole-book build affordance via these when the dashboard is
+        // unmounted. Default to "no active build"; individual tests re-stub as needed.
+        {
+          provide: BookSummaryService,
+          useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) },
+        },
+        {
+          provide: BookReviewService,
+          useValue: { getReviewStatus: () => of({ activeBuildJobId: null }) },
+        },
         {
           provide: ChapterService,
           useValue: {
@@ -949,6 +961,16 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
         // Held-open book load: the controlled Subject lets us assert the in-between state
         // (bookId set, book not yet resolved) before emitting.
         { provide: BookService, useValue: { getById: () => bookLoad$.asObservable() } },
+        // P2-6: editor-owned reconcile of the build affordance while the dashboard is unmounted. Default to
+        // "no active build"; tests re-stub to simulate a build that is still running / has finished.
+        {
+          provide: BookSummaryService,
+          useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) },
+        },
+        {
+          provide: BookReviewService,
+          useValue: { getReviewStatus: () => of({ activeBuildJobId: null }) },
+        },
         {
           provide: ChapterService,
           useValue: { update: () => of({}), create: () => EMPTY, delete: () => EMPTY, getById: () => EMPTY, reorder: () => EMPTY },
@@ -1158,6 +1180,10 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       component.selectedChapterId = 'chap-1';
       fixture.detectChanges();
 
+      // The build is genuinely in flight server-side. Entering focus unmounts the dashboard, so the editor's
+      // own reconcile is what now confirms the build is still running and HOLDS the affordance on the toggle.
+      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: 'job-1' });
+
       // Build starts, then the user enters focus mode (which also closes the panel + unmounts the dashboard).
       buildRunning$.next(true);
       component.toggleFocusMode();
@@ -1199,6 +1225,61 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       expect(reopen).not.toBeNull();
       expect(reopen.classList.contains('review-running')).toBe(false);
       expect(reopen.querySelector('.review-running-dot')).toBeNull();
+    });
+
+    // ── P2-6 Bug: the dashboard is the ONLY poller but mounts solely in Book review mode. A build that
+    //    finishes while in Edit help (or a book switched there) must still clear the affordance — the editor
+    //    reconciles the flag against the status endpoints whenever the dashboard is unmounted. ──
+    it('clears the affordance when a build FINISHES while in Edit help mode (dashboard unmounted, editor reconciles)', () => {
+      // Build starts in Book review mode (dashboard mounted): the editor flag flips true.
+      buildRunning$.next(true);
+      expect(component.reviewBuildRunning).toBe(true);
+
+      // The server now reports both whole-book surfaces idle (the build finished). Default stubs already
+      // return a null activeBuildJobId, but make the "finished" intent explicit.
+      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: null });
+      (TestBed.inject(BookReviewService) as any).getReviewStatus = () => of({ activeBuildJobId: null });
+
+      // User switches to Edit help: the dashboard (the only poller) is @if-destroyed. Pre-fix nothing would
+      // ever emit false again and the affordance would stick on forever; the editor-owned reconcile clears it.
+      component.onReviewModeChange('edit');
+      fixture.detectChanges();
+      expect(has('app-book-dashboard')).toBe(false);
+      expect(component.reviewBuildRunning).toBe(false);
+    });
+
+    it('KEEPS the affordance while in Edit help when the build is still running (reconcile does not over-clear)', () => {
+      // The build is genuinely still in flight server-side (summary surface advertises an active job).
+      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: 'job-1' });
+      (TestBed.inject(BookReviewService) as any).getReviewStatus = () => of({ activeBuildJobId: null });
+
+      buildRunning$.next(true);
+      component.onReviewModeChange('edit');
+      fixture.detectChanges();
+
+      // Dashboard is gone, but the editor reconcile confirms the build is still running, so the flag holds.
+      expect(has('app-book-dashboard')).toBe(false);
+      expect(component.reviewBuildRunning).toBe(true);
+    });
+
+    it('drops a stale affordance when the user changes books while in Edit help (per-book flag reset)', () => {
+      // A build is running for book-1 and the user is in Edit help (dashboard unmounted); the reconcile keeps
+      // the affordance lit while the job is active.
+      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: 'job-1' });
+      buildRunning$.next(true);
+      component.onReviewModeChange('edit');
+      fixture.detectChanges();
+      expect(component.reviewBuildRunning).toBe(true);
+
+      // The user switches to a different book that has no build running. The route emits the new id: the
+      // editor must drop the previous book's affordance at once rather than carry the stale flag over.
+      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: null });
+      routeParams$.next({ bookId: 'book-2' });
+      expect(component.reviewBuildRunning).toBe(false);
+
+      // And once the new book loads, the reconcile confirms no build for it.
+      bookLoad$.next({ ...BOOK, id: 'book-2' });
+      expect(component.reviewBuildRunning).toBe(false);
     });
   });
 });

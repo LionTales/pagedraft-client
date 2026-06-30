@@ -1,3 +1,4 @@
+import { SimpleChange } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { SuggestionCardComponent } from './suggestion-card.component';
@@ -350,6 +351,57 @@ describe('SuggestionCardComponent', () => {
     it('Dismiss button label is Dismiss (not OK) for pure-deletion non-consistency suggestion', () => {
       const dismiss = fixture.debugElement.query(By.css('.btn-dismiss'));
       expect(dismiss.nativeElement.textContent.trim()).toBe('Dismiss');
+    });
+  });
+
+  // =========================================================================
+  // Bug 1: rationaleOpen is per-suggestion presentational state. When a list
+  // reuses a card instance for ANOTHER suggestion (filter/reorder/trackBy), the
+  // detail panel must collapse — but an in-place / immutable explanation update
+  // to the SAME suggestion (the "Why?" flow) must keep it open.
+  // =========================================================================
+
+  describe('rationale open-state across suggestion reuse (Bug 1)', () => {
+    it('collapses an open rationale when the card instance is reused for a DIFFERENT suggestion', () => {
+      const first = buildSuggestion({ id: 'a-1', original: 'x', suggested: 'y', reason: 'r1' });
+      component.suggestion = first;
+      component.ngOnChanges({ suggestion: new SimpleChange(undefined, first, true) });
+      component.toggleRationale();
+      expect(component.rationaleOpen).toBeTrue();
+
+      // The list reused this same instance for a different item (e.g. after a filter/reorder).
+      const second = buildSuggestion({ id: 'b-2', original: 'p', suggested: 'q', reason: 'r2' });
+      component.suggestion = second;
+      component.ngOnChanges({ suggestion: new SimpleChange(first, second, false) });
+      expect(component.rationaleOpen).toBeFalse();
+    });
+
+    it('collapses for id-less suggestions reused by object identity (different reference)', () => {
+      const first = buildSuggestion({ original: 'x', suggested: 'y', reason: 'r1' }); // no id
+      component.suggestion = first;
+      component.ngOnChanges({ suggestion: new SimpleChange(undefined, first, true) });
+      component.toggleRationale();
+      expect(component.rationaleOpen).toBeTrue();
+
+      const second = buildSuggestion({ original: 'p', suggested: 'q', reason: 'r2' }); // no id, new ref
+      component.suggestion = second;
+      component.ngOnChanges({ suggestion: new SimpleChange(first, second, false) });
+      expect(component.rationaleOpen).toBeFalse();
+    });
+
+    it('keeps the rationale open when the SAME suggestion (same id) is replaced to graft an explanation', () => {
+      const s = buildSuggestion({ id: 'same-1', original: 'x', suggested: 'y', reason: 'r' });
+      component.suggestion = s;
+      component.ngOnChanges({ suggestion: new SimpleChange(undefined, s, true) });
+      component.toggleRationale();
+      expect(component.rationaleOpen).toBeTrue();
+
+      // The "Why?" flow grafts an explanation. Even if done immutably (new object, SAME id), the open
+      // rationale the user is reading must NOT collapse out from under them.
+      const explained = { ...s, explanation: 'because of POV drift' };
+      component.suggestion = explained;
+      component.ngOnChanges({ suggestion: new SimpleChange(s, explained, false) });
+      expect(component.rationaleOpen).toBeTrue();
     });
   });
 });

@@ -1,10 +1,12 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
-import { Subject } from 'rxjs';
-import { debounceTime, takeUntil } from 'rxjs/operators';
+import { Subject, Subscription, interval, forkJoin, of } from 'rxjs';
+import { debounceTime, takeUntil, switchMap, startWith, map, catchError } from 'rxjs/operators';
 import { DocumentEditorContainerComponent, DocumentEditorContainerModule, ToolbarService } from '@syncfusion/ej2-angular-documenteditor';
 import { BookService } from '../../core/services/book.service';
+import { BookSummaryService } from '../../core/services/book-summary.service';
+import { BookReviewService } from '../../core/services/book-review.service';
 import { ChapterService } from '../../core/services/chapter.service';
 import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
@@ -95,8 +97,22 @@ export class EditorPageComponent implements OnInit, OnDestroy {
    * @if-destroyed by closing the panel or entering focus mode. The dashboard re-emits the in-flight state at
    * unmount and, on remount, reattaches to the server-tracked job and emits the terminal/idle state that
    * clears this flag.
+   *
+   * The dashboard, however, mounts ONLY in Book review mode (reviewMode === 'review'); in Edit help mode it
+   * is not present at all, so it can neither poll nor emit. Without a fallback, a build that finishes while
+   * the dashboard is unmounted (Edit help, panel closed, or focus mode) would never emit false and this flag
+   * would stick true forever. {@link updateReviewBuildReconcile} runs an editor-owned reconciliation poll for
+   * exactly those windows.
    */
   reviewBuildRunning = false;
+  /**
+   * Poll period (ms) for the editor-owned reconciliation of {@link reviewBuildRunning} while the dashboard is
+   * unmounted. Matches no specific server cadence; it only needs to clear (or set) the affordance within a
+   * few seconds of the build's state changing. The dashboard's own polls run at 5000ms.
+   */
+  private static readonly REVIEW_BUILD_RECONCILE_MS = 5000;
+  /** Active editor-owned build-status reconcile poll; non-null only while it is running. */
+  private reviewBuildReconcileSub: Subscription | null = null;
 
   // ── ReviewPanel resize (draggable inline-start gutter) ─────────────────────
   /** Default right-panel width (px). Raised from the old fixed 320 so the scorecard fits out of the box. */
@@ -194,6 +210,10 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   onReviewModeChange(value: string): void {
     if (value === 'edit' || value === 'review') {
       this.reviewMode = value;
+      // Switching to Edit help unmounts the dashboard (which owns the build affordance via polling); switching
+      // back to Book review remounts it. Re-evaluate the editor-owned reconcile so a build that finishes while
+      // in Edit help still clears the affordance instead of sticking on.
+      this.updateReviewBuildReconcile();
     }
   }
 
@@ -259,10 +279,108 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /**
    * P2-6: the book dashboard reported whether a whole-book build (summary briefs or developmental review) is
    * in flight. Hold the flag on the editor so the "review running" affordance survives the dashboard being
-   * @if-destroyed (close panel / focus mode); the dashboard re-emits at unmount and on remount.
+   * @if-destroyed (close panel / focus mode); the dashboard re-emits at unmount and on remount. Re-evaluate
+   * the editor-owned reconcile poll so it takes over the moment the dashboard hands the flag off at unmount.
    */
   onReviewBuildRunningChange(running: boolean): void {
     this.reviewBuildRunning = running;
+    this.updateReviewBuildReconcile();
+  }
+
+  /**
+   * True when the book dashboard is currently mounted in the template — it owns {@link reviewBuildRunning}
+   * via its buildRunningChange output (and its own server polling) only in this state. Mirrors the template
+   * guards: the ReviewPanel is open and not in focus mode (outer @if) AND we are in Book review mode with a
+   * loaded book (inner @if). In every other state the dashboard is absent and the editor must reconcile the
+   * flag itself.
+   */
+  private get dashboardMounted(): boolean {
+    return this.reviewPanelOpen && !this.focusMode && this.reviewMode === 'review' && !!this.bookId && !!this.book;
+  }
+
+  /**
+   * Start/stop the editor-owned build-status reconcile poll based on whether it is needed RIGHT NOW. It is
+   * needed only while the dashboard is unmounted (otherwise the dashboard owns the flag) and a build is
+   * believed to be running (so we watch for it to finish) — or when `force` requests a one-off check after a
+   * context change (e.g. a book switch) to establish the new book's state. The poll self-stops once it reads
+   * an idle (not-running) server state, so it does not run indefinitely.
+   */
+  private updateReviewBuildReconcile(force = false): void {
+    if (this.dashboardMounted || !this.bookId) {
+      this.stopReviewBuildReconcile();
+      return;
+    }
+    const shouldPoll = this.reviewBuildRunning || force;
+    if (!shouldPoll) {
+      this.stopReviewBuildReconcile();
+      return;
+    }
+    if (force || !this.reviewBuildReconcileSub) {
+      this.startReviewBuildReconcile();
+    }
+  }
+
+  /**
+   * Poll the summary + review status endpoints for the current book and reconcile {@link reviewBuildRunning}:
+   * the affordance is on when EITHER advertises an active build job. Runs an immediate check then repeats on
+   * an interval until the build is observed idle (then stops). A transient status-call error leaves the flag
+   * untouched and lets the next tick retry, so a network blip neither clears a real affordance nor sticks one
+   * on. Stops itself if the context changes mid-flight (book switch) or the dashboard (re)mounts and resumes
+   * ownership.
+   */
+  private startReviewBuildReconcile(): void {
+    const bookId = this.bookId;
+    if (!bookId) return;
+    const lang = this.book?.language ?? 'he';
+    this.stopReviewBuildReconcile();
+    this.reviewBuildReconcileSub = interval(EditorPageComponent.REVIEW_BUILD_RECONCILE_MS)
+      .pipe(
+        startWith(0),
+        switchMap(() =>
+          forkJoin([
+            this.bookSummaryService.getBookSummaryStatus(bookId, lang).pipe(
+              map(s => ({ ok: true, running: s.activeBuildJobId != null })),
+              catchError(() => of({ ok: false, running: false }))
+            ),
+            this.bookReviewService.getReviewStatus(bookId, lang).pipe(
+              map(s => ({ ok: true, running: s.activeBuildJobId != null })),
+              catchError(() => of({ ok: false, running: false }))
+            ),
+          ])
+        ),
+        takeUntil(this.destroy$)
+      )
+      .subscribe(([summary, review]) => {
+        // The dashboard remounted (it owns the flag now) or the user switched books: drop this poll.
+        if (this.dashboardMounted || this.bookId !== bookId) {
+          this.stopReviewBuildReconcile();
+          return;
+        }
+        // Only act on a definitive reading (both calls succeeded); otherwise keep polling and leave the flag.
+        if (!summary.ok || !review.ok) return;
+        this.reviewBuildRunning = summary.running || review.running;
+        if (!this.reviewBuildRunning) {
+          this.stopReviewBuildReconcile();
+        }
+      });
+  }
+
+  /** Tear down the editor-owned reconcile poll if one is running. */
+  private stopReviewBuildReconcile(): void {
+    this.reviewBuildReconcileSub?.unsubscribe();
+    this.reviewBuildReconcileSub = null;
+  }
+
+  /** Close the ReviewPanel (header ✕). Re-evaluate the reconcile poll: closing unmounts the dashboard. */
+  closeReviewPanel(): void {
+    this.reviewPanelOpen = false;
+    this.updateReviewBuildReconcile();
+  }
+
+  /** Reopen the ReviewPanel (collapsed reopen button). The dashboard remounts if we are in Book review mode. */
+  openReviewPanel(): void {
+    this.reviewPanelOpen = true;
+    this.updateReviewBuildReconcile();
   }
 
   // ── ds-c05 Focus mode ──────────────────────────────────────────────────────
@@ -289,6 +407,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       this.focusMode = false;
       this.reviewPanelOpen = this.reviewPanelOpenBeforeFocus;
     }
+    // Entering focus unmounts the dashboard; exiting may remount it. Re-evaluate the editor-owned reconcile
+    // so the "review running" affordance on the focus toggle clears when a build finishes during focus mode.
+    this.updateReviewBuildReconcile();
   }
 
   // ── ReviewPanel resize ──────────────────────────────────────────────────────
@@ -435,6 +556,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     private route: ActivatedRoute,
     private router: Router,
     private bookService: BookService,
+    private bookSummaryService: BookSummaryService,
+    private bookReviewService: BookReviewService,
     private chapterService: ChapterService,
     private sceneService: SceneService,
     private syncService: SyncService,
@@ -449,11 +572,20 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     this.restoreReviewPanelWidth();
     this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
       this.bookId = params['bookId'] ?? null;
+      // A book switch invalidates the previous book's whole-book-build affordance (it is per-book). Clear the
+      // stale flag and stop any reconcile poll for the old book; the new book's state is re-established below
+      // once it loads (editor-owned reconcile), or by the dashboard when it (re)mounts in Book review mode.
+      this.reviewBuildRunning = false;
+      this.stopReviewBuildReconcile();
       if (this.bookId) {
         this.syncService.connect().then(() => this.syncService.joinBook(this.bookId!));
         this.bookService.getById(this.bookId).subscribe(b => {
           this.book = b;
           this.rebuildReviewModeOptions();
+          // Establish THIS book's build affordance: when the dashboard is not mounted (Edit help / panel
+          // closed / focus mode) it cannot report it, so reconcile once against the server (force) — this
+          // both surfaces a build already running for the new book and avoids a stale carry-over.
+          this.updateReviewBuildReconcile(true);
           if (b.chapters.length && !this.selectedChapterId) this.selectChapter(b.chapters[0]);
         });
       }
@@ -612,6 +744,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     if (this.bookId) this.syncService.leaveBook(this.bookId);
     if (this._scrollSettleTimer) clearTimeout(this._scrollSettleTimer);
     this.destroyCustomToolbar();
+    this.stopReviewBuildReconcile();
     this.destroy$.next();
     this.destroy$.complete();
   }
