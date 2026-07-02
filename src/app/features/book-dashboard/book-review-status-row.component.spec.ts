@@ -999,6 +999,147 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
     });
   });
 
+  // ── wb4-c06 FIX: build-shape captured from the LIVE build terminal survives the post-build status refresh ──
+  // The window/continuity/failed-window shape is build-time-only: the persisted status probe reports 0/false,
+  // and loadBookReviewStatus() (run at every build terminal) replaces bookReviewStatus with that zeroed probe.
+  // The row now captures the shape from the TERMINAL progress payload so the window detail + partial warning
+  // still render after a real build completes.
+  describe('wb4-c06 fix: window detail + partial warning survive the post-build status refresh', () => {
+    it('window detail renders after a build terminal even though the status refresh zeroes windowCount', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      // The post-build status refresh returns the ZEROED build-shape (the persisted probe) but real chapter
+      // coverage + ready, exactly as the backend does after an async build.
+      const status$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(status$.asObservable());
+
+      component.bookLanguage = 'en';
+      component.onBuildBookReview();
+
+      // Terminal progress carries the LIVE build-shape (3 windows + continuity pass, no failures).
+      poll$.next({
+        status: 'succeeded', message: 'built', estimatedCompletionPercent: 100,
+        bookReviewWindowCount: 3, bookReviewRanContinuityReduce: true, bookReviewFailedWindows: 0,
+      });
+      // The post-build status refresh: READY, real coverage, but the build-shape ZEROED (status probe default).
+      status$.next(makeBookReviewStatus({
+        language: 'en', ready: true, activeBuildJobId: null,
+        chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      }));
+      fixture.detectChanges();
+
+      expect(component.bookReviewState).toBe('ready');
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      // The captured shape (3 windows + continuity pass) renders, NOT the zeroed status probe.
+      expect(text).toContain('3 windows');
+      expect(text).toContain('continuity pass');
+    });
+
+    it('partial-window warning renders after a build terminal despite the zeroed status refresh', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      const status$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(status$.asObservable());
+
+      component.bookLanguage = 'en';
+      component.onBuildBookReview();
+
+      // A degraded terminal: 5 windows, 2 failed.
+      poll$.next({
+        status: 'succeeded', message: 'Built with warnings (2 failed)', estimatedCompletionPercent: 100,
+        bookReviewWindowCount: 5, bookReviewRanContinuityReduce: false, bookReviewFailedWindows: 2,
+      });
+      status$.next(makeBookReviewStatus({
+        language: 'en', ready: true, activeBuildJobId: null,
+        chaptersReviewed: 4, chaptersTotal: 5,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      }));
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-partial-warning"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('2');
+      expect(text).toContain('windows failed');
+    });
+
+    it('a LEGACY build terminal (windowCount 0) hides the window detail even after the refresh', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      const status$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(status$.asObservable());
+
+      component.bookLanguage = 'en';
+      component.onBuildBookReview();
+
+      // Legacy per-dimension build: windowCount 0 (no windows). A captured 0 must HIDE the detail (nullish
+      // coalesce, not falling through to any status value).
+      poll$.next({
+        status: 'succeeded', message: 'built', estimatedCompletionPercent: 100,
+        bookReviewWindowCount: 0, bookReviewRanContinuityReduce: false, bookReviewFailedWindows: 0,
+      });
+      status$.next(makeBookReviewStatus({
+        language: 'en', ready: true, activeBuildJobId: null,
+        chaptersReviewed: 3, chaptersTotal: 3,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      }));
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull(); // coverage text still shows (chaptersTotal > 0)
+      expect(el.nativeElement.textContent).not.toContain('windows');
+      expect(query('[data-testid="brev-partial-warning"]')).toBeNull();
+    });
+
+    it('a FAILED (total-failure) terminal does NOT apply a build-shape (the displayed review is the preserved prior one)', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'en';
+      component.onBuildBookReview();
+
+      // A total failure is a 'failed' terminal that still carries a shape (all windows failed). The persist was
+      // SKIPPED, so this build's shape must NOT surface — the window detail + partial warning stay hidden.
+      poll$.next({
+        status: 'failed', message: 'no findings produced', estimatedCompletionPercent: 100,
+        bookReviewWindowCount: 2, bookReviewRanContinuityReduce: false, bookReviewFailedWindows: 2,
+      });
+
+      expect(component.bookReviewBuildOutcome).toBe('failed');
+      expect(component.bookReviewBuildWindowCount).toBeNull();
+      expect(component.bookReviewBuildFailedWindows).toBeNull();
+      expect(component.bookReviewBuildRanContinuityReduce).toBeNull();
+    });
+
+    it('captured build-shape is cleared on a book switch (does not leak onto the next book)', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+      // Simulate a prior build's captured shape.
+      component.bookReviewBuildWindowCount = 3;
+      component.bookReviewBuildRanContinuityReduce = true;
+      component.bookReviewBuildFailedWindows = 1;
+
+      component.bookId = 'book-2';
+      component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
+
+      expect(component.bookReviewBuildWindowCount).toBeNull();
+      expect(component.bookReviewBuildRanContinuityReduce).toBeNull();
+      expect(component.bookReviewBuildFailedWindows).toBeNull();
+    });
+  });
+
   // ── c01: emit 'building' at the START of a user-initiated build ─────────────
   // A rebuild keeps the row at ready/stale the whole build, so the host kept the OLD findings on screen
   // and the post-build ready/stale emit was a no-op token bump (already showing). Emitting 'building' up

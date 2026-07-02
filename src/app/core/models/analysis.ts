@@ -107,6 +107,16 @@ export interface AnalysisProgressDto {
   completedChunks: number;
   message: string;
   estimatedCompletionPercent: number;
+  /**
+   * Whole-book REVIEW build-shape (wb4-c06). Populated ONLY on a BookReview build's TERMINAL progress poll —
+   * the LIVE build-completion channel for the window/continuity/failed-window provenance the persisted status
+   * probe reports as 0/false. Undefined/null on every other progress route and before a review build reaches
+   * its terminal. The review status row captures these at the terminal so the "N windows[, continuity pass]"
+   * detail + the "N windows failed" partial warning survive the post-build status refresh (which zeroes them).
+   */
+  bookReviewWindowCount?: number | null;
+  bookReviewRanContinuityReduce?: boolean | null;
+  bookReviewFailedWindows?: number | null;
 }
 
 export interface StartAnalysisJobResponse {

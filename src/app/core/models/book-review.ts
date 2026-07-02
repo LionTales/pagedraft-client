@@ -106,8 +106,11 @@ export interface BookReviewFindingsDto {
  * Coverage-provenance fields (wb4-c06):
  *   chaptersReviewed / chaptersTotal are PERSISTED (reliably reported by the status probe).
  *   windowCount / ranSynthesis / ranContinuityReduce / failedWindows are NOT persisted — they
- *   reflect the build-time shape and are reported as 0/false by the status probe. Render them
- *   ONLY when > 0 / true (i.e. from a live build-completion payload), never show "0 windows".
+ *   reflect the build-time shape and this status DTO ALWAYS reports them as 0/false. The LIVE build-shape
+ *   (window detail + partial-window warning) is delivered instead on the REVIEW PROGRESS terminal payload
+ *   (AnalysisProgressDto.bookReviewWindowCount / ...RanContinuityReduce / ...FailedWindows) and captured by
+ *   the status row at the build terminal, so it survives the post-build status refresh that zeroes these.
+ *   Render them ONLY when > 0 / true, never show "0 windows".
  */
 export interface BookReviewStatusDto {
   bookId: string;
