@@ -243,6 +243,35 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     expect(component.rows[0].view?.summaryText).toBe('NEW content.');
   });
 
+  // bug1: refreshSignal firing WHILE the initial chapter-list load is still in flight must NOT start a second
+  // getById. rows is empty for the whole in-flight window (loadChapterList clears it synchronously and only
+  // repopulates it in the async next handler), so without the loadingList guard the rows.length === 0 branch
+  // would re-enter loadChapterList and open a duplicate list subscription.
+  it('(bug1) does NOT start a second chapter-list load when refreshSignal fires while the list is still loading', () => {
+    const getByIdSpy = spyOn(bookServiceMock, 'getById').and.returnValue(getByIdSubject.asObservable());
+    triggerInit();
+
+    // Initial list load is in flight: loadingList true, rows still empty, exactly one getById so far.
+    expect(component.loadingList).toBeTrue();
+    expect(component.rows.length).toBe(0);
+    expect(getByIdSpy).toHaveBeenCalledTimes(1);
+
+    // Host bumps refreshSignal mid-load (build-complete fan-out racing the initial mount fetch).
+    component.refreshSignal = 1;
+    component.ngOnChanges({ refreshSignal: new SimpleChange(0, 1, false) });
+    fixture.detectChanges();
+
+    // The in-flight load must not be duplicated.
+    expect(getByIdSpy).toHaveBeenCalledTimes(1);
+
+    // The original load still resolves normally and populates the rows once.
+    getByIdSubject.next(makeBookDetail());
+    getByIdSubject.complete();
+    fixture.detectChanges();
+    expect(component.rows.length).toBe(2);
+    expect(getByIdSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores the initial refreshSignal binding (firstChange must not trigger a refetch)', () => {
     const spy = spyOn(component, 'refreshSummaries').and.callThrough();
     component.ngOnChanges({ refreshSignal: new SimpleChange(undefined, 0, true) });

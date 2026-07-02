@@ -383,6 +383,11 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
     // only if the list never loaded; otherwise refresh each row without clearing or flashing the list.
     const refresh = changes['refreshSignal'];
     if (refresh && !refresh.firstChange) {
+      // A chapter-list load already in flight will populate the rows and fetch their (now-built) summaries
+      // itself, so bail rather than start a duplicate getById. (rows is empty for the whole in-flight window,
+      // so the rows.length === 0 branch would otherwise re-enter loadChapterList mid-load — the same reason
+      // refreshSummaries guards on loadingList.)
+      if (this.loadingList) return;
       if (this.rows.length === 0) {
         this.loadChapterList();
       } else {
