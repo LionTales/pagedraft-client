@@ -64,6 +64,20 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
   /** True while the book-review consent prompt is open. */
   showBookReviewConsent = false;
 
+  // ── wb4-c06 build-shape captured from the LIVE build-completion (progress terminal) payload ──────────
+  // The window/continuity/failed-window provenance is build-time-only: the persisted status probe reports it
+  // as 0/false, and loadBookReviewStatus() (run at every build terminal) REPLACES bookReviewStatus with that
+  // zeroed probe. So the window detail + partial-window warning are captured HERE, from the terminal progress
+  // payload, into dedicated fields that survive the status refresh. Null = no live build this session for the
+  // current book (the getters then fall back to bookReviewStatus, i.e. hidden). Reset on a new build / context
+  // change so a stale shape never leaks onto a different book or a later rebuild.
+  /** Window count from the last live build terminal; null until a build completes this session. */
+  bookReviewBuildWindowCount: number | null = null;
+  /** Whether the continuity reduce pass ran in the last live build; null until a build completes this session. */
+  bookReviewBuildRanContinuityReduce: boolean | null = null;
+  /** Failed-window count from the last live build terminal; null until a build completes this session. */
+  bookReviewBuildFailedWindows: number | null = null;
+
   /**
    * True after a review build TERMINAL until the NEXT successful status response reconciles the banner.
    * Carried as state (not a per-call flag) so the intent survives an overlapping refresh canceling the
@@ -193,6 +207,11 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
     this.bookReviewBuildOutcomeMessage = '';
     this.bookReviewBuildOutcomeCount = null;
     this.bookReviewPendingPostBuildReconcile = false;
+    // Clear the captured build-shape so a previous book's / build's window detail never leaks after a context
+    // switch (the getters then fall back to the current status, i.e. hidden until the next build terminal).
+    this.bookReviewBuildWindowCount = null;
+    this.bookReviewBuildRanContinuityReduce = null;
+    this.bookReviewBuildFailedWindows = null;
   }
 
   // ── Build orchestration ─────────────────────────────────────────────────────
@@ -213,6 +232,11 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
     this.bookReviewBuildOutcomeCount = null;
     this.bookReviewPendingPostBuildReconcile = false;
     this.bookReviewHandledTerminalJobId = null;
+    // NOTE: do NOT clear the captured build-shape here. It describes the CURRENTLY-DISPLAYED (last-persisted)
+    // review, and is not rendered while building (the window detail lives only in the READY state). Clearing it
+    // up front would wipe it for a build that turns out to be a NO-OP or race-bail (no jobId → no progress
+    // terminal to repopulate it), even though the cached review + READY state are unchanged. It is instead
+    // (re)set ONLY on a 'succeeded' terminal (a persist actually happened) and cleared only on a context switch.
     // c01: emit 'building' at the START of a user-initiated build so the host unmounts the findings/bible
     // panel (showFindings=false) for the duration. Without this the host stays on ready/stale and keeps the
     // PREVIOUS findings on screen, and the post-build ready/stale emit is a no-op token bump (already
@@ -267,6 +291,20 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
           this.bookReviewBuilding = false;
           this.stopBookReviewProgress();
           this.bookReviewHandledTerminalJobId = jobId;
+          // wb4-c06: (re)capture the TRANSIENT build-shape from THIS terminal payload BEFORE loadBookReviewStatus()
+          // below replaces bookReviewStatus with the zeroed status probe. These feed the window detail + partial
+          // warning getters so they render right after the build. ONLY a 'succeeded' terminal updates the shape:
+          // a succeeded build PERSISTED, so the displayed review (and thus its shape) changed — this includes the
+          // degraded/partial build, a 'succeeded' terminal carrying failedWindows > 0. A FAILED (total failure) or
+          // CANCELED (briefs-missing / race-bail) terminal SKIPPED the persist, so the displayed review is the
+          // PRESERVED PRIOR one and the captured shape still describes it — leave it untouched (do NOT null it, or
+          // a failed rebuild / a failed job reattached from another tab would wipe the window detail of a review
+          // that is still on screen in READY). The shape is cleared only on a context switch.
+          if (status === 'succeeded') {
+            this.bookReviewBuildWindowCount = p.bookReviewWindowCount ?? null;
+            this.bookReviewBuildRanContinuityReduce = p.bookReviewRanContinuityReduce ?? null;
+            this.bookReviewBuildFailedWindows = p.bookReviewFailedWindows ?? null;
+          }
           // Surface the terminal outcome so a total failure is not a silent green finish.
           // FAILED = all dimensions failed (no findings); a SUCCEEDED message that flags failed dimensions
           // ("built with warnings ... (N failed)") is a PARTIAL/degraded build. Canceled shows nothing.
@@ -368,6 +406,15 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       buildFailed: 'בניית הסקירה נכשלה: אף ממד לא הניב ממצאים. נסו שוב; אם התקלה חוזרת ייתכן שהספר גדול מדי עבור המודל.',
       buildDegraded: 'הסקירה נבנתה חלקית: חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
       buildDegradedWithCount: 'הסקירה נבנתה חלקית: {count} ממצאים נשמרו, אך חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
+      // wb4-c06 coverage strings — DRAFT: needs native-speaker review.
+      /** "Reviewed N/N chapters" shown in READY state (chaptersReviewed/chaptersTotal substituted by the getter). */
+      reviewedChapters: 'נסקרו {reviewed}/{total} פרקים',
+      /** Subtle detail shown only when windowCount > 0 (not persisted; hidden on status-probe reload). */
+      windowDetail: '{windows} חלונות',
+      /** Added to window detail when ranContinuityReduce is true. */
+      continuityPass: 'מעבר רציפות',
+      /** PARTIAL warning shown only when failedWindows > 0. */
+      partialWindowsFailed: '{failed} חלונות נכשלו',
     };
     const en: Record<string, string> = {
       title: 'Developmental review',
@@ -386,9 +433,70 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       buildFailed: 'The review build failed: no dimension produced findings. Try again; if it persists the book may be too large for the model.',
       buildDegraded: 'The review built partially: some dimensions failed. Results may be incomplete; refresh to try again.',
       buildDegradedWithCount: 'The review built partially: {count} findings were saved, but some dimensions failed. Results may be incomplete; refresh to try again.',
+      // wb4-c06 coverage strings
+      /** "Reviewed N/N chapters" shown in READY state. */
+      reviewedChapters: 'Reviewed {reviewed}/{total} chapters',
+      /** Subtle detail shown only when windowCount > 0. */
+      windowDetail: '{windows} windows',
+      /** Added to window detail when ranContinuityReduce is true. */
+      continuityPass: 'continuity pass',
+      /** PARTIAL warning shown only when failedWindows > 0. */
+      partialWindowsFailed: '{failed} windows failed',
     };
     const map = lang === 'he' ? he : en;
     return map[key] ?? key;
+  }
+
+  // ── Coverage-provenance (wb4-c06) ───────────────────────────────────────────
+
+  /**
+   * "Reviewed N/N chapters" label for the READY state.
+   * Populated from chaptersReviewed/chaptersTotal (persisted fields — reliable on status probe).
+   * Returns empty string when chaptersTotal is 0 (no data yet).
+   */
+  get bookReviewCoverageText(): string {
+    const s = this.bookReviewStatus;
+    if (!s || !s.chaptersTotal) return '';
+    const base = this.bookReviewLabel('reviewedChapters')
+      .replace('{reviewed}', String(s.chaptersReviewed))
+      .replace('{total}', String(s.chaptersTotal));
+    const pct = (s.chaptersReviewed / s.chaptersTotal * 100);
+    const pctStr = Number.isInteger(pct) ? String(pct) : pct.toFixed(1).replace(/\.0$/, '');
+    return `${base} (${pctStr}%)`;
+  }
+
+  /**
+   * Subtle window/continuity-pass detail for the READY state.
+   * Rendered ONLY when the window count > 0. The window count / continuity flag are BUILD-SHAPE: the persisted
+   * status probe reports them as 0/false, so they are read from the TRANSIENT shape captured at the last live
+   * build terminal (bookReviewBuild*), which survives the post-build status refresh; the status DTO is a
+   * fallback (used by the reattach-less test path and kept for back-compat). Nullish-coalesce (not ||) so a
+   * genuine captured 0 (the legacy per-dimension build, which has no windows) correctly HIDES the detail rather
+   * than falling through to the status value. Format: "W windows" or "W windows, continuity pass".
+   */
+  get bookReviewWindowDetail(): string {
+    const s = this.bookReviewStatus;
+    if (!s) return '';
+    const windowCount = this.bookReviewBuildWindowCount ?? s.windowCount;
+    if (!windowCount) return '';
+    const ranContinuity = this.bookReviewBuildRanContinuityReduce ?? s.ranContinuityReduce;
+    const windowPart = this.bookReviewLabel('windowDetail').replace('{windows}', String(windowCount));
+    return ranContinuity
+      ? `${windowPart}, ${this.bookReviewLabel('continuityPass')}`
+      : windowPart;
+  }
+
+  /**
+   * PARTIAL warning text for the READY state when a window failed. Failed-window count is BUILD-SHAPE (0 on the
+   * status probe), so it is read from the TRANSIENT shape captured at the last live build terminal, with the
+   * status DTO as a fallback. Nullish-coalesce so a captured 0 hides the warning. Empty when no window failed.
+   */
+  get bookReviewPartialWarningText(): string {
+    const s = this.bookReviewStatus;
+    if (!s) return '';
+    const failedWindows = this.bookReviewBuildFailedWindows ?? s.failedWindows;
+    if (!failedWindows) return '';
+    return this.bookReviewLabel('partialWindowsFailed').replace('{failed}', String(failedWindows));
   }
 
   /**

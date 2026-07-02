@@ -43,6 +43,24 @@
           · {{ bookReviewLabel('updated') }} {{ bookReviewUpdatedRelative }}
         </ng-container>
       </span>
+      <!-- Coverage: "Reviewed N/N chapters" (persisted; shown whenever chaptersTotal > 0) -->
+      <span
+        class="sb-coverage-detail muted"
+        *ngIf="bookReviewCoverageText"
+        data-testid="brev-coverage-chapters">
+        {{ bookReviewCoverageText }}
+        <!-- Window/continuity detail: ONLY when windowCount > 0 (build-shape; hidden on reload) -->
+        <ng-container *ngIf="bookReviewWindowDetail">
+          ({{ bookReviewWindowDetail }})
+        </ng-container>
+      </span>
+      <!-- PARTIAL warning: shown ONLY when failedWindows > 0 (build-shape; hidden on reload) -->
+      <span
+        class="sb-partial-warning"
+        *ngIf="bookReviewPartialWarningText"
+        data-testid="brev-partial-warning">
+        {{ bookReviewPartialWarningText }}
+      </span>
     </ng-container>
 
     <!-- STALE -->

@@ -37,6 +37,13 @@ function makeBookReviewStatus(
     hasBriefs: true,
     activeBuildJobId: null,
     ready: true,
+    // wb4-c06 coverage fields: defaults match the status-probe case (0/false - not persisted)
+    chaptersReviewed: 0,
+    chaptersTotal: 0,
+    windowCount: 0,
+    ranSynthesis: false,
+    ranContinuityReduce: false,
+    failedWindows: 0,
     ...overrides,
   };
 }
@@ -811,6 +818,383 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
       expect(pollSpy).toHaveBeenCalledWith('book-1', 'job-running', jasmine.anything());
       expect(component.bookReviewBuilding).toBeTrue();
+    });
+  });
+
+  // ── wb4-c06: Coverage provenance (chaptersReviewed/Total, windowCount, failedWindows) ──────
+
+  describe('wb4-c06: coverage provenance in READY state', () => {
+    it('READY with coverage: renders "Reviewed N/N chapters" when chaptersTotal > 0 (he)', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 8, chaptersTotal: 10,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      expect(component.bookReviewState).toBe('ready');
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('8');
+      expect(text).toContain('10');
+      // Hebrew: "נסקרו"
+      expect(text).toContain('נסקרו');
+    });
+
+    it('READY with coverage: renders "Reviewed N/N chapters" in English when bookLanguage is en', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 5, chaptersTotal: 6,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('Reviewed');
+      expect(text).toContain('5');
+      expect(text).toContain('6');
+    });
+
+    it('READY without coverage (chaptersTotal=0): coverage element is NOT rendered', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 0, chaptersTotal: 0, windowCount: 0,
+      });
+      fixture.detectChanges();
+
+      expect(query('[data-testid="brev-coverage-chapters"]')).toBeNull();
+    });
+
+    it('READY with windowCount > 0: shows window detail inside coverage element', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 3, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('3 windows');
+      expect(text).not.toContain('continuity pass');
+    });
+
+    it('READY with windowCount > 0 and ranContinuityReduce: shows window detail + continuity pass', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 3, ranContinuityReduce: true, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('3 windows');
+      expect(text).toContain('continuity pass');
+    });
+
+    it('READY with windowCount=0: window detail element is NOT rendered (never shows "0 windows")', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      const coverageEl = query('[data-testid="brev-coverage-chapters"]');
+      // Coverage text renders (chaptersTotal > 0) but window detail must NOT appear
+      expect(coverageEl).not.toBeNull();
+      expect(coverageEl.nativeElement.textContent).not.toContain('0 windows');
+      expect(coverageEl.nativeElement.textContent).not.toContain('windows');
+    });
+
+    it('PARTIAL warning (en): shows failedWindows warning when failedWindows > 0', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 4, chaptersTotal: 5,
+        windowCount: 5, ranContinuityReduce: false, failedWindows: 2,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-partial-warning"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('2');
+      expect(text).toContain('windows failed');
+    });
+
+    it('PARTIAL warning (he): shows Hebrew failedWindows warning when failedWindows > 0', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 3, chaptersTotal: 4,
+        windowCount: 4, ranContinuityReduce: false, failedWindows: 1,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-partial-warning"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('1');
+      expect(text).toContain('נכשלו');
+    });
+
+    it('PARTIAL warning absent: NOT rendered when failedWindows=0 (status-probe default)', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 4, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      expect(query('[data-testid="brev-partial-warning"]')).toBeNull();
+    });
+
+    it('FAILED banner still shows when bookReviewBuildOutcome is "failed" (coverage fields do not suppress it)', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        hasReview: false, ready: false,
+        chaptersReviewed: 0, chaptersTotal: 0, windowCount: 0,
+        ranContinuityReduce: false, failedWindows: 0,
+      });
+      component.bookReviewBuilding = false;
+      component.bookReviewBuildOutcome = 'failed';
+      component.bookReviewBuildOutcomeMessage = '';
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-build-failed"]');
+      expect(el).not.toBeNull();
+      expect(el.nativeElement.getAttribute('role')).toBe('alert');
+      expect(el.nativeElement.textContent).toContain('נכשלה');
+    });
+
+    it('PARTIAL coverage: bookReviewCoverageText contains real done/total AND decimal percentage', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 40, chaptersTotal: 64,
+      });
+      fixture.detectChanges();
+
+      const text = component.bookReviewCoverageText;
+      expect(text).toContain('40/64');
+      expect(text).toContain('(62.5%)');
+    });
+
+    it('FULL coverage: bookReviewCoverageText contains (100%) when all chapters reviewed', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 48, chaptersTotal: 48,
+      });
+      fixture.detectChanges();
+
+      const text = component.bookReviewCoverageText;
+      expect(text).toContain('(100%)');
+    });
+
+    it('chaptersTotal=0: bookReviewCoverageText is empty and brev-coverage-chapters is absent', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 0, chaptersTotal: 0,
+      });
+      fixture.detectChanges();
+
+      expect(component.bookReviewCoverageText).toBe('');
+      expect(query('[data-testid="brev-coverage-chapters"]')).toBeNull();
+    });
+  });
+
+  // ── wb4-c06 FIX: build-shape captured from the LIVE build terminal survives the post-build status refresh ──
+  // The window/continuity/failed-window shape is build-time-only: the persisted status probe reports 0/false,
+  // and loadBookReviewStatus() (run at every build terminal) replaces bookReviewStatus with that zeroed probe.
+  // The row now captures the shape from the TERMINAL progress payload so the window detail + partial warning
+  // still render after a real build completes.
+  describe('wb4-c06 fix: window detail + partial warning survive the post-build status refresh', () => {
+    it('window detail renders after a build terminal even though the status refresh zeroes windowCount', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      // The post-build status refresh returns the ZEROED build-shape (the persisted probe) but real chapter
+      // coverage + ready, exactly as the backend does after an async build.
+      const status$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(status$.asObservable());
+
+      component.bookLanguage = 'en';
+      component.onBuildBookReview();
+
+      // Terminal progress carries the LIVE build-shape (3 windows + continuity pass, no failures).
+      poll$.next({
+        status: 'succeeded', message: 'built', estimatedCompletionPercent: 100,
+        bookReviewWindowCount: 3, bookReviewRanContinuityReduce: true, bookReviewFailedWindows: 0,
+      });
+      // The post-build status refresh: READY, real coverage, but the build-shape ZEROED (status probe default).
+      status$.next(makeBookReviewStatus({
+        language: 'en', ready: true, activeBuildJobId: null,
+        chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      }));
+      fixture.detectChanges();
+
+      expect(component.bookReviewState).toBe('ready');
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      // The captured shape (3 windows + continuity pass) renders, NOT the zeroed status probe.
+      expect(text).toContain('3 windows');
+      expect(text).toContain('continuity pass');
+    });
+
+    it('partial-window warning renders after a build terminal despite the zeroed status refresh', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      const status$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(status$.asObservable());
+
+      component.bookLanguage = 'en';
+      component.onBuildBookReview();
+
+      // A degraded terminal: 5 windows, 2 failed.
+      poll$.next({
+        status: 'succeeded', message: 'Built with warnings (2 failed)', estimatedCompletionPercent: 100,
+        bookReviewWindowCount: 5, bookReviewRanContinuityReduce: false, bookReviewFailedWindows: 2,
+      });
+      status$.next(makeBookReviewStatus({
+        language: 'en', ready: true, activeBuildJobId: null,
+        chaptersReviewed: 4, chaptersTotal: 5,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      }));
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-partial-warning"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('2');
+      expect(text).toContain('windows failed');
+    });
+
+    it('a LEGACY build terminal (windowCount 0) hides the window detail even after the refresh', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      const status$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(status$.asObservable());
+
+      component.bookLanguage = 'en';
+      component.onBuildBookReview();
+
+      // Legacy per-dimension build: windowCount 0 (no windows). A captured 0 must HIDE the detail (nullish
+      // coalesce, not falling through to any status value).
+      poll$.next({
+        status: 'succeeded', message: 'built', estimatedCompletionPercent: 100,
+        bookReviewWindowCount: 0, bookReviewRanContinuityReduce: false, bookReviewFailedWindows: 0,
+      });
+      status$.next(makeBookReviewStatus({
+        language: 'en', ready: true, activeBuildJobId: null,
+        chaptersReviewed: 3, chaptersTotal: 3,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      }));
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull(); // coverage text still shows (chaptersTotal > 0)
+      expect(el.nativeElement.textContent).not.toContain('windows');
+      expect(query('[data-testid="brev-partial-warning"]')).toBeNull();
+    });
+
+    it('Bug 1: a NO-OP rebuild (already fresh) preserves the window detail — no terminal repopulates it', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      // The POST no-ops (review already fresh): no jobId, so NO progress poll / terminal runs.
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: null, noOp: true } as any));
+      const pollSpy = spyOn(reviewSvc, 'getReviewProgress').and.returnValue(NEVER);
+      const readyStatus = makeBookReviewStatus({
+        language: 'en', ready: true, activeBuildJobId: null,
+        chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0, // the zeroed status probe
+      });
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(of(readyStatus));
+
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = readyStatus;
+      // A prior live build in this session captured the shape currently on screen.
+      component.bookReviewBuildWindowCount = 4;
+      component.bookReviewBuildRanContinuityReduce = true;
+
+      component.onBuildBookReview();
+      fixture.detectChanges();
+
+      // No build ran (no poll), the review + READY state are unchanged, so the window detail MUST survive.
+      expect(pollSpy).not.toHaveBeenCalled();
+      expect(component.bookReviewState).toBe('ready');
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('4 windows');
+      expect(text).toContain('continuity pass');
+    });
+
+    it('Bug 2: a FAILED terminal PRESERVES the captured shape describing the still-displayed cached review', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'en';
+      // A prior successful build's shape describes the review currently on screen.
+      component.bookReviewBuildWindowCount = 3;
+      component.bookReviewBuildRanContinuityReduce = true;
+      component.bookReviewBuildFailedWindows = 0;
+
+      component.onBuildBookReview();
+
+      // The rebuild TOTAL-fails: persist skipped, the displayed review is unchanged. This build's shape (2 windows,
+      // 2 failed) must NOT be applied, AND the prior captured shape must NOT be wiped (it still describes what is
+      // on screen in READY). Applying 2/2 would be misleading; nulling it would erase a valid detail (Bug 2).
+      poll$.next({
+        status: 'failed', message: 'no findings produced', estimatedCompletionPercent: 100,
+        bookReviewWindowCount: 2, bookReviewRanContinuityReduce: false, bookReviewFailedWindows: 2,
+      });
+
+      expect(component.bookReviewBuildOutcome).toBe('failed');
+      expect(component.bookReviewBuildWindowCount).toBe(3);
+      expect(component.bookReviewBuildRanContinuityReduce).toBeTrue();
+      expect(component.bookReviewBuildFailedWindows).toBe(0);
+    });
+
+    it('Bug 2: a CANCELED terminal (e.g. a failed job reattached from another tab) preserves the captured shape', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'en';
+      component.bookReviewBuildWindowCount = 5;
+      component.bookReviewBuildRanContinuityReduce = false;
+      component.bookReviewBuildFailedWindows = 1;
+
+      component.onBuildBookReview();
+      poll$.next({ status: 'canceled', message: 'reattaching', estimatedCompletionPercent: 0 });
+
+      // A canceled build produced no new review → the on-screen review + its shape are unchanged.
+      expect(component.bookReviewBuildWindowCount).toBe(5);
+      expect(component.bookReviewBuildRanContinuityReduce).toBeFalse();
+      expect(component.bookReviewBuildFailedWindows).toBe(1);
+    });
+
+    it('captured build-shape is cleared on a book switch (does not leak onto the next book)', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+      // Simulate a prior build's captured shape.
+      component.bookReviewBuildWindowCount = 3;
+      component.bookReviewBuildRanContinuityReduce = true;
+      component.bookReviewBuildFailedWindows = 1;
+
+      component.bookId = 'book-2';
+      component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
+
+      expect(component.bookReviewBuildWindowCount).toBeNull();
+      expect(component.bookReviewBuildRanContinuityReduce).toBeNull();
+      expect(component.bookReviewBuildFailedWindows).toBeNull();
     });
   });
 
