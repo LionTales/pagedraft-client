@@ -368,6 +368,15 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       buildFailed: 'בניית הסקירה נכשלה: אף ממד לא הניב ממצאים. נסו שוב; אם התקלה חוזרת ייתכן שהספר גדול מדי עבור המודל.',
       buildDegraded: 'הסקירה נבנתה חלקית: חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
       buildDegradedWithCount: 'הסקירה נבנתה חלקית: {count} ממצאים נשמרו, אך חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
+      // wb4-c06 coverage strings — DRAFT: needs native-speaker review.
+      /** "Reviewed N/N chapters" shown in READY state (chaptersReviewed/chaptersTotal substituted by the getter). */
+      reviewedChapters: 'נסקרו {reviewed}/{total} פרקים',
+      /** Subtle detail shown only when windowCount > 0 (not persisted; hidden on status-probe reload). */
+      windowDetail: '{windows} חלונות',
+      /** Added to window detail when ranContinuityReduce is true. */
+      continuityPass: 'מעבר רציפות',
+      /** PARTIAL warning shown only when failedWindows > 0. */
+      partialWindowsFailed: '{failed} חלונות נכשלו',
     };
     const en: Record<string, string> = {
       title: 'Developmental review',
@@ -386,9 +395,63 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       buildFailed: 'The review build failed: no dimension produced findings. Try again; if it persists the book may be too large for the model.',
       buildDegraded: 'The review built partially: some dimensions failed. Results may be incomplete; refresh to try again.',
       buildDegradedWithCount: 'The review built partially: {count} findings were saved, but some dimensions failed. Results may be incomplete; refresh to try again.',
+      // wb4-c06 coverage strings
+      /** "Reviewed N/N chapters" shown in READY state. */
+      reviewedChapters: 'Reviewed {reviewed}/{total} chapters',
+      /** Subtle detail shown only when windowCount > 0. */
+      windowDetail: '{windows} windows',
+      /** Added to window detail when ranContinuityReduce is true. */
+      continuityPass: 'continuity pass',
+      /** PARTIAL warning shown only when failedWindows > 0. */
+      partialWindowsFailed: '{failed} windows failed',
     };
     const map = lang === 'he' ? he : en;
     return map[key] ?? key;
+  }
+
+  // ── Coverage-provenance (wb4-c06) ───────────────────────────────────────────
+
+  /**
+   * "Reviewed N/N chapters" label for the READY state.
+   * Populated from chaptersReviewed/chaptersTotal (persisted fields — reliable on status probe).
+   * Returns empty string when chaptersTotal is 0 (no data yet).
+   */
+  get bookReviewCoverageText(): string {
+    const s = this.bookReviewStatus;
+    if (!s || !s.chaptersTotal) return '';
+    const base = this.bookReviewLabel('reviewedChapters')
+      .replace('{reviewed}', String(s.chaptersReviewed))
+      .replace('{total}', String(s.chaptersTotal));
+    const pct = (s.chaptersReviewed / s.chaptersTotal * 100);
+    const pctStr = Number.isInteger(pct) ? String(pct) : pct.toFixed(1).replace(/\.0$/, '');
+    return `${base} (${pctStr}%)`;
+  }
+
+  /**
+   * Subtle window/continuity-pass detail for the READY state.
+   * Rendered ONLY when windowCount > 0 (build-shape field: 0 on status-probe reload).
+   * Format: "W windows" or "W windows, continuity pass" when ranContinuityReduce is also true.
+   * Returns empty string when windowCount is 0 or falsy (the common reload case).
+   */
+  get bookReviewWindowDetail(): string {
+    const s = this.bookReviewStatus;
+    if (!s || !s.windowCount) return '';
+    const windowPart = this.bookReviewLabel('windowDetail').replace('{windows}', String(s.windowCount));
+    if (s.ranContinuityReduce) {
+      return `${windowPart}, ${this.bookReviewLabel('continuityPass')}`;
+    }
+    return windowPart;
+  }
+
+  /**
+   * PARTIAL warning text for the READY state when failedWindows > 0.
+   * Build-shape field: 0 on status-probe reload, so this is visible only right after a live build.
+   * Returns empty string when failedWindows is 0 or falsy.
+   */
+  get bookReviewPartialWarningText(): string {
+    const s = this.bookReviewStatus;
+    if (!s || !s.failedWindows) return '';
+    return this.bookReviewLabel('partialWindowsFailed').replace('{failed}', String(s.failedWindows));
   }
 
   /**

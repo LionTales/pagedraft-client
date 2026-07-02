@@ -37,6 +37,13 @@ function makeBookReviewStatus(
     hasBriefs: true,
     activeBuildJobId: null,
     ready: true,
+    // wb4-c06 coverage fields: defaults match the status-probe case (0/false - not persisted)
+    chaptersReviewed: 0,
+    chaptersTotal: 0,
+    windowCount: 0,
+    ranSynthesis: false,
+    ranContinuityReduce: false,
+    failedWindows: 0,
     ...overrides,
   };
 }
@@ -811,6 +818,184 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
       expect(pollSpy).toHaveBeenCalledWith('book-1', 'job-running', jasmine.anything());
       expect(component.bookReviewBuilding).toBeTrue();
+    });
+  });
+
+  // ── wb4-c06: Coverage provenance (chaptersReviewed/Total, windowCount, failedWindows) ──────
+
+  describe('wb4-c06: coverage provenance in READY state', () => {
+    it('READY with coverage: renders "Reviewed N/N chapters" when chaptersTotal > 0 (he)', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 8, chaptersTotal: 10,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      expect(component.bookReviewState).toBe('ready');
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('8');
+      expect(text).toContain('10');
+      // Hebrew: "נסקרו"
+      expect(text).toContain('נסקרו');
+    });
+
+    it('READY with coverage: renders "Reviewed N/N chapters" in English when bookLanguage is en', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 5, chaptersTotal: 6,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('Reviewed');
+      expect(text).toContain('5');
+      expect(text).toContain('6');
+    });
+
+    it('READY without coverage (chaptersTotal=0): coverage element is NOT rendered', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 0, chaptersTotal: 0, windowCount: 0,
+      });
+      fixture.detectChanges();
+
+      expect(query('[data-testid="brev-coverage-chapters"]')).toBeNull();
+    });
+
+    it('READY with windowCount > 0: shows window detail inside coverage element', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 3, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('3 windows');
+      expect(text).not.toContain('continuity pass');
+    });
+
+    it('READY with windowCount > 0 and ranContinuityReduce: shows window detail + continuity pass', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 3, ranContinuityReduce: true, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('3 windows');
+      expect(text).toContain('continuity pass');
+    });
+
+    it('READY with windowCount=0: window detail element is NOT rendered (never shows "0 windows")', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      const coverageEl = query('[data-testid="brev-coverage-chapters"]');
+      // Coverage text renders (chaptersTotal > 0) but window detail must NOT appear
+      expect(coverageEl).not.toBeNull();
+      expect(coverageEl.nativeElement.textContent).not.toContain('0 windows');
+      expect(coverageEl.nativeElement.textContent).not.toContain('windows');
+    });
+
+    it('PARTIAL warning (en): shows failedWindows warning when failedWindows > 0', () => {
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = makeBookReviewStatus({
+        language: 'en', chaptersReviewed: 4, chaptersTotal: 5,
+        windowCount: 5, ranContinuityReduce: false, failedWindows: 2,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-partial-warning"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('2');
+      expect(text).toContain('windows failed');
+    });
+
+    it('PARTIAL warning (he): shows Hebrew failedWindows warning when failedWindows > 0', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 3, chaptersTotal: 4,
+        windowCount: 4, ranContinuityReduce: false, failedWindows: 1,
+      });
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-partial-warning"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('1');
+      expect(text).toContain('נכשלו');
+    });
+
+    it('PARTIAL warning absent: NOT rendered when failedWindows=0 (status-probe default)', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 4, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      expect(query('[data-testid="brev-partial-warning"]')).toBeNull();
+    });
+
+    it('FAILED banner still shows when bookReviewBuildOutcome is "failed" (coverage fields do not suppress it)', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        hasReview: false, ready: false,
+        chaptersReviewed: 0, chaptersTotal: 0, windowCount: 0,
+        ranContinuityReduce: false, failedWindows: 0,
+      });
+      component.bookReviewBuilding = false;
+      component.bookReviewBuildOutcome = 'failed';
+      component.bookReviewBuildOutcomeMessage = '';
+      fixture.detectChanges();
+
+      const el = query('[data-testid="brev-build-failed"]');
+      expect(el).not.toBeNull();
+      expect(el.nativeElement.getAttribute('role')).toBe('alert');
+      expect(el.nativeElement.textContent).toContain('נכשלה');
+    });
+
+    it('PARTIAL coverage: bookReviewCoverageText contains real done/total AND decimal percentage', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 40, chaptersTotal: 64,
+      });
+      fixture.detectChanges();
+
+      const text = component.bookReviewCoverageText;
+      expect(text).toContain('40/64');
+      expect(text).toContain('(62.5%)');
+    });
+
+    it('FULL coverage: bookReviewCoverageText contains (100%) when all chapters reviewed', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 48, chaptersTotal: 48,
+      });
+      fixture.detectChanges();
+
+      const text = component.bookReviewCoverageText;
+      expect(text).toContain('(100%)');
+    });
+
+    it('chaptersTotal=0: bookReviewCoverageText is empty and brev-coverage-chapters is absent', () => {
+      component.bookReviewStatus = makeBookReviewStatus({
+        chaptersReviewed: 0, chaptersTotal: 0,
+      });
+      fixture.detectChanges();
+
+      expect(component.bookReviewCoverageText).toBe('');
+      expect(query('[data-testid="brev-coverage-chapters"]')).toBeNull();
     });
   });
 

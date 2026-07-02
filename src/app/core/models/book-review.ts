@@ -93,7 +93,8 @@ export interface BookReviewFindingsDto {
  * Response for GET .../review/status — coverage + freshness of the cached whole-book review.
  * Mirrors BookReviewStatusDto (camelCase): bookId, language, hasReview, findingCount,
  * lastUpdatedAt, builtWithModel, activeModel, builtWithDifferentModel, staleVsBriefs,
- * hasBriefs, activeBuildJobId, ready.
+ * hasBriefs, activeBuildJobId, ready, chaptersReviewed, chaptersTotal, windowCount,
+ * ranSynthesis, ranContinuityReduce, failedWindows.
  *
  * Status state machine (derived from these fields):
  *   NOT BUILT      = !hasReview
@@ -101,6 +102,12 @@ export interface BookReviewFindingsDto {
  *   BUILDING       = activeBuildJobId is non-null (in-flight job; attach for progress)
  *   READY          = ready === true (hasBriefs && hasReview && !builtWithDifferentModel && !staleVsBriefs)
  *   STALE          = hasReview && (staleVsBriefs || builtWithDifferentModel)
+ *
+ * Coverage-provenance fields (wb4-c06):
+ *   chaptersReviewed / chaptersTotal are PERSISTED (reliably reported by the status probe).
+ *   windowCount / ranSynthesis / ranContinuityReduce / failedWindows are NOT persisted — they
+ *   reflect the build-time shape and are reported as 0/false by the status probe. Render them
+ *   ONLY when > 0 / true (i.e. from a live build-completion payload), never show "0 windows".
  */
 export interface BookReviewStatusDto {
   bookId: string;
@@ -141,12 +148,46 @@ export interface BookReviewStatusDto {
    * are gone/degraded (a state where a build would report BriefsMissing rather than no-op).
    */
   ready: boolean;
+  // ── Coverage-provenance fields (wb4-c06) ────────────────────────────────────
+  /**
+   * Number of chapters included in the review (persisted; reliably reported by status probe).
+   * Render as "Reviewed N/chaptersTotal chapters" in the READY state.
+   */
+  chaptersReviewed: number;
+  /**
+   * Total chapters in the book at review-build time (persisted; reliably reported by status probe).
+   */
+  chaptersTotal: number;
+  /**
+   * Number of multi-chapter windows used during a windowed review build.
+   * NOT persisted — the status probe reports 0; only > 0 when returned from the live build-completion
+   * payload. Render ONLY when > 0; NEVER show "0 windows".
+   */
+  windowCount: number;
+  /**
+   * True when the build ran a synthesis pass over all window outputs.
+   * NOT persisted — the status probe reports false; only reliable at build time.
+   * Show the continuity-pass detail ONLY when ranContinuityReduce === true.
+   */
+  ranSynthesis: boolean;
+  /**
+   * True when the build ran a continuity-reduce pass over windowed findings.
+   * NOT persisted — the status probe reports false; only reliable at build time.
+   * Show the continuity-pass detail ONLY when this is true.
+   */
+  ranContinuityReduce: boolean;
+  /**
+   * Number of windows that failed during a windowed build.
+   * NOT persisted — the status probe reports 0; render the PARTIAL warning ONLY when > 0.
+   */
+  failedWindows: number;
 }
 
 /**
  * Response for POST .../review — async build started (or no-op / briefs-missing).
  * Mirrors StartBookReviewBuildResponse (camelCase): jobId, language, noOp, ready,
- * briefsMissing, findingCount, message.
+ * briefsMissing, findingCount, message, chaptersReviewed, chaptersTotal, windowCount,
+ * ranSynthesis, ranContinuityReduce, failedWindows.
  */
 export interface StartBookReviewBuildResponse {
   /** Build job id to poll for progress; null when noOp or briefsMissing (no build started). */
@@ -164,4 +205,17 @@ export interface StartBookReviewBuildResponse {
   /** Current persisted finding count for (bookId, language). */
   findingCount: number;
   message: string;
+  // ── Coverage-provenance fields (wb4-c06, defensive mirror) ──────────────────
+  /** Chapters included in the review; see BookReviewStatusDto for field semantics. */
+  chaptersReviewed?: number;
+  /** Total chapters in the book at build time; see BookReviewStatusDto. */
+  chaptersTotal?: number;
+  /** Window count; NOT persisted — only reliable in this build-start response. See BookReviewStatusDto. */
+  windowCount?: number;
+  /** Whether a synthesis pass ran; NOT persisted. See BookReviewStatusDto. */
+  ranSynthesis?: boolean;
+  /** Whether a continuity-reduce pass ran; NOT persisted. See BookReviewStatusDto. */
+  ranContinuityReduce?: boolean;
+  /** Windows that failed; NOT persisted. See BookReviewStatusDto. */
+  failedWindows?: number;
 }
