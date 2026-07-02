@@ -1100,7 +1100,38 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
       expect(query('[data-testid="brev-partial-warning"]')).toBeNull();
     });
 
-    it('a FAILED (total-failure) terminal does NOT apply a build-shape (the displayed review is the preserved prior one)', () => {
+    it('Bug 1: a NO-OP rebuild (already fresh) preserves the window detail — no terminal repopulates it', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      // The POST no-ops (review already fresh): no jobId, so NO progress poll / terminal runs.
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: null, noOp: true } as any));
+      const pollSpy = spyOn(reviewSvc, 'getReviewProgress').and.returnValue(NEVER);
+      const readyStatus = makeBookReviewStatus({
+        language: 'en', ready: true, activeBuildJobId: null,
+        chaptersReviewed: 4, chaptersTotal: 4,
+        windowCount: 0, ranContinuityReduce: false, failedWindows: 0, // the zeroed status probe
+      });
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(of(readyStatus));
+
+      component.bookLanguage = 'en';
+      component.bookReviewStatus = readyStatus;
+      // A prior live build in this session captured the shape currently on screen.
+      component.bookReviewBuildWindowCount = 4;
+      component.bookReviewBuildRanContinuityReduce = true;
+
+      component.onBuildBookReview();
+      fixture.detectChanges();
+
+      // No build ran (no poll), the review + READY state are unchanged, so the window detail MUST survive.
+      expect(pollSpy).not.toHaveBeenCalled();
+      expect(component.bookReviewState).toBe('ready');
+      const el = query('[data-testid="brev-coverage-chapters"]');
+      expect(el).not.toBeNull();
+      const text = el.nativeElement.textContent as string;
+      expect(text).toContain('4 windows');
+      expect(text).toContain('continuity pass');
+    });
+
+    it('Bug 2: a FAILED terminal PRESERVES the captured shape describing the still-displayed cached review', () => {
       const reviewSvc = TestBed.inject(BookReviewService);
       spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
       const poll$ = new Subject<any>();
@@ -1108,19 +1139,46 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
       spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
 
       component.bookLanguage = 'en';
+      // A prior successful build's shape describes the review currently on screen.
+      component.bookReviewBuildWindowCount = 3;
+      component.bookReviewBuildRanContinuityReduce = true;
+      component.bookReviewBuildFailedWindows = 0;
+
       component.onBuildBookReview();
 
-      // A total failure is a 'failed' terminal that still carries a shape (all windows failed). The persist was
-      // SKIPPED, so this build's shape must NOT surface — the window detail + partial warning stay hidden.
+      // The rebuild TOTAL-fails: persist skipped, the displayed review is unchanged. This build's shape (2 windows,
+      // 2 failed) must NOT be applied, AND the prior captured shape must NOT be wiped (it still describes what is
+      // on screen in READY). Applying 2/2 would be misleading; nulling it would erase a valid detail (Bug 2).
       poll$.next({
         status: 'failed', message: 'no findings produced', estimatedCompletionPercent: 100,
         bookReviewWindowCount: 2, bookReviewRanContinuityReduce: false, bookReviewFailedWindows: 2,
       });
 
       expect(component.bookReviewBuildOutcome).toBe('failed');
-      expect(component.bookReviewBuildWindowCount).toBeNull();
-      expect(component.bookReviewBuildFailedWindows).toBeNull();
-      expect(component.bookReviewBuildRanContinuityReduce).toBeNull();
+      expect(component.bookReviewBuildWindowCount).toBe(3);
+      expect(component.bookReviewBuildRanContinuityReduce).toBeTrue();
+      expect(component.bookReviewBuildFailedWindows).toBe(0);
+    });
+
+    it('Bug 2: a CANCELED terminal (e.g. a failed job reattached from another tab) preserves the captured shape', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(poll$.asObservable());
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'en';
+      component.bookReviewBuildWindowCount = 5;
+      component.bookReviewBuildRanContinuityReduce = false;
+      component.bookReviewBuildFailedWindows = 1;
+
+      component.onBuildBookReview();
+      poll$.next({ status: 'canceled', message: 'reattaching', estimatedCompletionPercent: 0 });
+
+      // A canceled build produced no new review → the on-screen review + its shape are unchanged.
+      expect(component.bookReviewBuildWindowCount).toBe(5);
+      expect(component.bookReviewBuildRanContinuityReduce).toBeFalse();
+      expect(component.bookReviewBuildFailedWindows).toBe(1);
     });
 
     it('captured build-shape is cleared on a book switch (does not leak onto the next book)', () => {

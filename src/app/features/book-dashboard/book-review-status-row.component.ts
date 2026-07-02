@@ -232,11 +232,11 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
     this.bookReviewBuildOutcomeCount = null;
     this.bookReviewPendingPostBuildReconcile = false;
     this.bookReviewHandledTerminalJobId = null;
-    // Clear the prior build-shape so the OLD window detail does not linger while the new build runs; the new
-    // terminal repopulates it.
-    this.bookReviewBuildWindowCount = null;
-    this.bookReviewBuildRanContinuityReduce = null;
-    this.bookReviewBuildFailedWindows = null;
+    // NOTE: do NOT clear the captured build-shape here. It describes the CURRENTLY-DISPLAYED (last-persisted)
+    // review, and is not rendered while building (the window detail lives only in the READY state). Clearing it
+    // up front would wipe it for a build that turns out to be a NO-OP or race-bail (no jobId → no progress
+    // terminal to repopulate it), even though the cached review + READY state are unchanged. It is instead
+    // (re)set ONLY on a 'succeeded' terminal (a persist actually happened) and cleared only on a context switch.
     // c01: emit 'building' at the START of a user-initiated build so the host unmounts the findings/bible
     // panel (showFindings=false) for the duration. Without this the host stays on ready/stale and keeps the
     // PREVIOUS findings on screen, and the post-build ready/stale emit is a no-op token bump (already
@@ -291,22 +291,19 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
           this.bookReviewBuilding = false;
           this.stopBookReviewProgress();
           this.bookReviewHandledTerminalJobId = jobId;
-          // wb4-c06: capture the TRANSIENT build-shape from THIS terminal payload BEFORE loadBookReviewStatus()
+          // wb4-c06: (re)capture the TRANSIENT build-shape from THIS terminal payload BEFORE loadBookReviewStatus()
           // below replaces bookReviewStatus with the zeroed status probe. These feed the window detail + partial
-          // warning getters so they render right after the build (the degraded/partial build is a 'succeeded'
-          // terminal carrying failedWindows > 0). On a FAILED (total failure) or CANCELED (briefs-missing)
-          // terminal the persist was SKIPPED, so the displayed review is the PRESERVED PRIOR one and this build's
-          // shape does not describe it — CLEAR the captured shape so a stale window detail / partial warning
-          // cannot linger (this also clears a shape left by a prior build on the reattach path, which does not
-          // run onBuildBookReview's reset).
+          // warning getters so they render right after the build. ONLY a 'succeeded' terminal updates the shape:
+          // a succeeded build PERSISTED, so the displayed review (and thus its shape) changed — this includes the
+          // degraded/partial build, a 'succeeded' terminal carrying failedWindows > 0. A FAILED (total failure) or
+          // CANCELED (briefs-missing / race-bail) terminal SKIPPED the persist, so the displayed review is the
+          // PRESERVED PRIOR one and the captured shape still describes it — leave it untouched (do NOT null it, or
+          // a failed rebuild / a failed job reattached from another tab would wipe the window detail of a review
+          // that is still on screen in READY). The shape is cleared only on a context switch.
           if (status === 'succeeded') {
             this.bookReviewBuildWindowCount = p.bookReviewWindowCount ?? null;
             this.bookReviewBuildRanContinuityReduce = p.bookReviewRanContinuityReduce ?? null;
             this.bookReviewBuildFailedWindows = p.bookReviewFailedWindows ?? null;
-          } else {
-            this.bookReviewBuildWindowCount = null;
-            this.bookReviewBuildRanContinuityReduce = null;
-            this.bookReviewBuildFailedWindows = null;
           }
           // Surface the terminal outcome so a total failure is not a silent green finish.
           // FAILED = all dimensions failed (no findings); a SUCCEEDED message that flags failed dimensions
