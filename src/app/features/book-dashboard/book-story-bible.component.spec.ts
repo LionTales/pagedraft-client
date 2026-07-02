@@ -292,6 +292,81 @@ describe('BookStoryBibleComponent (wb3-c03)', () => {
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
+  // ── Refresh on build completion (rf-f04 / build-complete fan-out) ─────────────────
+  // The host bumps refreshSignal when a book-summary build COMPLETES. The Story Bible is summary-derived
+  // (its findings can change once the fresh briefs are built), so it must re-read the SAME (book, language)
+  // findings IN PLACE - no loading flash, no error wipe - mirroring the chapter-summaries silent refresh.
+
+  it('re-reads findings IN PLACE when refreshSignal bumps, keeping prior content visible (held-open Subject)', () => {
+    const svc = TestBed.inject(BookReviewService);
+    // First load resolves with one continuity finding, then the refresh is held open.
+    const first$ = new Subject<BookReviewFindingsDto>();
+    const second$ = new Subject<BookReviewFindingsDto>();
+    const spy = spyOn(svc, 'getReviewFindings').and.returnValues(
+      first$.asObservable(),
+      second$.asObservable()
+    );
+
+    triggerInit();
+    fixture.detectChanges();
+    first$.next(makeDto({ findings: [makeFinding({ id: 'cont-1', dimension: 'continuity', rationale: 'Original thread.' })] }));
+    first$.complete();
+    fixture.detectChanges();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(query('[data-testid="bible-entry-cont-1"]')).not.toBeNull();
+
+    // Build completes -> host bumps refreshSignal. A second GET fires and is held open.
+    component.refreshSignal = 1;
+    component.ngOnChanges({ refreshSignal: new SimpleChange(0, 1, false) });
+    fixture.detectChanges();
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    // IN PLACE: while the refresh is in flight, the prior content stays and NO loading flash appears.
+    expect(component.loading).toBeFalse();
+    expect(query('[data-testid="bible-loading"]')).toBeNull();
+    expect(query('[data-testid="bible-entry-cont-1"]')).not.toBeNull();
+
+    // The refresh resolves with the newly built findings, replacing the old ones.
+    second$.next(makeDto({ findings: [makeFinding({ id: 'cont-2', dimension: 'continuity', rationale: 'Fresh thread from the rebuilt brief.' })] }));
+    second$.complete();
+    fixture.detectChanges();
+    expect(query('[data-testid="bible-entry-cont-2"]')).not.toBeNull();
+    expect(query('[data-testid="bible-entry-cont-1"]')).toBeNull();
+  });
+
+  it('ignores the initial refreshSignal binding (firstChange must not trigger a refetch)', () => {
+    const svc = TestBed.inject(BookReviewService);
+    const spy = spyOn(svc, 'getReviewFindings').and.returnValue(of(makeDto()));
+    // The very first @Input binding fires ngOnChanges with firstChange=true; it must NOT fetch.
+    component.ngOnChanges({ refreshSignal: new SimpleChange(undefined, 0, true) });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('silent refreshSignal error keeps prior content visible and does NOT show the error state', () => {
+    const svc = TestBed.inject(BookReviewService);
+    const first$ = new Subject<BookReviewFindingsDto>();
+    const second$ = new Subject<BookReviewFindingsDto>();
+    spyOn(svc, 'getReviewFindings').and.returnValues(first$.asObservable(), second$.asObservable());
+
+    triggerInit();
+    fixture.detectChanges();
+    first$.next(makeDto({ findings: [makeFinding({ id: 'cont-1', dimension: 'continuity', rationale: 'Existing thread.' })] }));
+    first$.complete();
+    fixture.detectChanges();
+    expect(query('[data-testid="bible-entry-cont-1"]')).not.toBeNull();
+
+    // Build completes -> silent refresh; the refresh GET then fails transiently.
+    component.refreshSignal = 1;
+    component.ngOnChanges({ refreshSignal: new SimpleChange(0, 1, false) });
+    second$.error(new Error('transient'));
+    fixture.detectChanges();
+
+    // No error state surfaces and the prior content is still visible (good state not discarded).
+    expect(component.loadError).toBeFalse();
+    expect(query('[data-testid="bible-error"]')).toBeNull();
+    expect(query('[data-testid="bible-entry-cont-1"]')).not.toBeNull();
+  });
+
   // ── he/en parity ─────────────────────────────────────────────────────────────
 
   it('renders English labels when the book language is English', () => {

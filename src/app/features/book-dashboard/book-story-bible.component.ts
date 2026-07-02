@@ -61,6 +61,14 @@ export class BookStoryBibleComponent implements OnChanges, OnDestroy {
    * findings without changing book/language. Mirrors the c02 findings panel's refreshToken.
    */
   @Input() refreshToken = 0;
+  /**
+   * Bumped by the host (dashboard) when a book-summary build COMPLETES (rf-f04 / build-complete fan-out).
+   * The Story Bible is summary-derived: a completed build rebuilds the briefs the review reads, so its
+   * findings can change. Re-read them in place (no clear/flash), exactly like refreshToken does. Separate
+   * input from refreshToken so the two host signals (review-build terminal vs summary-build completion) stay
+   * independent; both funnel into the same in-place loadFindings().
+   */
+  @Input() refreshSignal = 0;
 
   /**
    * Navigation seam for wb3-f01: emitted when the user clicks a chapter-anchor chip. The host (later)
@@ -98,8 +106,19 @@ export class BookStoryBibleComponent implements OnChanges, OnDestroy {
     if (changes['bookId'] || changes['bookLanguage']) {
       this.resetView();
       this.loadFindings();
-    } else if (changes['refreshToken'] && !changes['refreshToken'].firstChange) {
+      return;
+    }
+    // A review-build terminal (refreshToken) re-reads the SAME (book, language) findings, preserving the
+    // existing loading-flash behavior. A summary-build completion (refreshSignal, rf-f04) also re-reads, but
+    // SILENTLY: the Story Bible is already showing findings, so keep them visible (no loading flash, no error
+    // wipe) while the fresh briefs load - mirroring the chapter-summaries silent-refresh pattern. Skip the
+    // initial binding for both.
+    const refreshToken = changes['refreshToken'];
+    const refreshSignal = changes['refreshSignal'];
+    if (refreshToken && !refreshToken.firstChange) {
       this.loadFindings();
+    } else if (refreshSignal && !refreshSignal.firstChange) {
+      this.loadFindings(true);
     }
   }
 
@@ -109,15 +128,22 @@ export class BookStoryBibleComponent implements OnChanges, OnDestroy {
 
   // ── Load ─────────────────────────────────────────────────────────────────────
 
-  /** Fetch findings for the current (book, language). Drops a response after a context switch. */
-  loadFindings(): void {
+  /**
+   * Fetch findings for the current (book, language). Drops a response after a context switch.
+   *
+   * `silent` (a build-complete refresh): keep the currently rendered findings visible while the new ones
+   * load - no loading flash - and, on a transient fetch error, leave the prior content in place rather than
+   * degrading a good view to the error state (matching the chapter-summaries silent-refresh: do not discard
+   * good state on an unverified/failed op). The default (context change / refreshToken) path is unchanged.
+   */
+  loadFindings(silent = false): void {
     if (!this.bookId) {
       this.findings = [];
       return;
     }
     const bookId = this.bookId;
     const lang = this.language;
-    this.loading = true;
+    if (!silent) this.loading = true;
     this.loadError = false;
     this.findingsSub?.unsubscribe();
     this.findingsSub = this.bookReviewService.getReviewFindings(bookId, lang).subscribe({
@@ -131,7 +157,9 @@ export class BookStoryBibleComponent implements OnChanges, OnDestroy {
       error: () => {
         if (this.bookId !== bookId || this.language !== lang) return;
         this.loading = false;
-        this.loadError = true;
+        // On a silent refresh a transient error must NOT degrade a previously-good view to the error state -
+        // leave the existing findings intact and stay invisible to the user.
+        if (!silent) this.loadError = true;
         this.cdr.detectChanges();
       },
     });
