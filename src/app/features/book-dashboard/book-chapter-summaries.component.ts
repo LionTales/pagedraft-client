@@ -42,6 +42,13 @@ interface ChapterSummaryRow {
   rederiving: boolean;
   /** Terminal re-derive outcome message to surface (localized at render via the response text), or null. */
   rederiveResult: 'done' | 'partial' | 'error' | null;
+  /**
+   * The in-flight summary-GET subscription for THIS row (supersession slot). A fresh load for the same row
+   * cancels+replaces it BEFORE issuing the new request, so a slow older response can never land after (and
+   * overwrite) a newer one — both pass the same bookId/language stale-guard, so last-write-wins would be
+   * wrong. Cleared on the load's terminal (next OR error). Torn down in ngOnDestroy.
+   */
+  loadSub?: Subscription;
 }
 
 /**
@@ -334,6 +341,12 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
   @Input() bookId: string | null = null;
   /** Book language (e.g. 'he', 'en'). Defaults to 'he'. Drives localization, [dir], and the summary key. */
   @Input() bookLanguage: string | null = null;
+  /**
+   * Bumped by the host (dashboard) when the book-summary build COMPLETES, so this surface re-fetches the
+   * newly built briefs. Without it the list fetches once at mount and shows a stale "no summary yet" for
+   * chapters whose briefs finished after mount (see plan rf-f04 / build-complete fan-out).
+   */
+  @Input() refreshSignal = 0;
 
   rows: ChapterSummaryRow[] = [];
   loadingList = false;
@@ -364,11 +377,30 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['bookId'] || changes['bookLanguage']) {
       this.loadChapterList();
+      return;
+    }
+    // Host bumped refreshSignal (a book-summary build completed): re-fetch summaries in place. Full reload
+    // only if the list never loaded; otherwise refresh each row without clearing or flashing the list.
+    const refresh = changes['refreshSignal'];
+    if (refresh && !refresh.firstChange) {
+      // A chapter-list load already in flight will populate the rows and fetch their (now-built) summaries
+      // itself, so bail rather than start a duplicate getById. (rows is empty for the whole in-flight window,
+      // so the rows.length === 0 branch would otherwise re-enter loadChapterList mid-load — the same reason
+      // refreshSummaries guards on loadingList.)
+      if (this.loadingList) return;
+      if (this.rows.length === 0) {
+        this.loadChapterList();
+      } else {
+        this.refreshSummaries();
+      }
     }
   }
 
   ngOnDestroy(): void {
     this.subs.forEach((s) => s.unsubscribe());
+    // Per-row summary loads live in their own supersession slot (loadRowSummary), not this.subs — tear those
+    // down too so no in-flight summary GET survives destruction.
+    this.rows.forEach((r) => r.loadSub?.unsubscribe());
   }
 
   // ── Load ─────────────────────────────────────────────────────────────────────
@@ -420,28 +452,49 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
     );
   }
 
-  private loadRowSummary(row: ChapterSummaryRow): void {
+  /**
+   * Re-fetch every row's summary IN PLACE (no list reset, no loading flash), skipping rows the user is
+   * actively editing/saving/re-deriving. Called when the host signals a book-summary build completed, so
+   * chapters whose briefs finished after this surface mounted stop showing the stale "no summary" state.
+   */
+  refreshSummaries(): void {
+    if (!this.bookId || this.loadingList) return;
+    this.rows.forEach((r) => {
+      if (r.editing || r.saving || r.rederiving) return;
+      this.loadRowSummary(r, true);
+    });
+  }
+
+  private loadRowSummary(row: ChapterSummaryRow, silent = false): void {
     if (!this.bookId) return;
     const bookId = this.bookId;
     const lang = this.language;
-    row.loading = true;
+    // Supersession: cancel any prior in-flight load for THIS row before issuing a new one. A refresh that
+    // races an older load for the same chapter would otherwise let whichever HTTP response lands LAST win —
+    // both pass the bookId/language stale-guard, so an older response could overwrite a newer one. Cancelling
+    // the prior subscription guarantees it can never emit into this row again.
+    row.loadSub?.unsubscribe();
+    // On a silent refresh keep the current content visible (no loading flash) until the new view arrives.
+    if (!silent) row.loading = true;
     row.loadError = false;
-    this.subs.push(
-      this.summaryService.getChapterSummary(bookId, row.chapterId, lang).subscribe({
-        next: (view) => {
-          if (this.bookId !== bookId || this.language !== lang) return;
-          row.view = view;
-          row.loading = false;
-          this.cdr.detectChanges();
-        },
-        error: () => {
-          if (this.bookId !== bookId || this.language !== lang) return;
-          row.loading = false;
-          row.loadError = true;
-          this.cdr.detectChanges();
-        },
-      })
-    );
+    row.loadSub = this.summaryService.getChapterSummary(bookId, row.chapterId, lang).subscribe({
+      next: (view) => {
+        row.loadSub = undefined;
+        if (this.bookId !== bookId || this.language !== lang) return;
+        row.view = view;
+        row.loading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        row.loadSub = undefined;
+        if (this.bookId !== bookId || this.language !== lang) return;
+        row.loading = false;
+        // On a silent refresh a transient error must NOT degrade a previously-good row to error state —
+        // leave the existing content intact and stay invisible to the user.
+        if (!silent) row.loadError = true;
+        this.cdr.detectChanges();
+      },
+    });
   }
 
   // ── Edit / save ──────────────────────────────────────────────────────────────

@@ -326,6 +326,76 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     });
   });
 
+  // ── c01: summary-build-complete fan-out to EVERY summary-derived surface (rf-f04) ──
+  // When a book-summary build COMPLETES (buildingChange true->false), the dashboard must re-fetch every
+  // summary-derived surface: the chapter-summaries list + the Story Bible (both via [refreshSignal]) AND the
+  // dashboard-owned profile card (via loadProfile()). Only a true->false transition fans out; a build START
+  // (false->true) and no-change ticks must not.
+  describe('summary-build-complete fan-out (c01 / rf-f04)', () => {
+    it('bumps summaryDerivedRefresh and reloads the profile on a build COMPLETION (true -> false)', () => {
+      const bookSvc = TestBed.inject(BookService);
+      const getProfile = bookSvc.getProfile as jasmine.Spy;
+      const profileCallsBefore = getProfile.calls.count();
+      const refreshBefore = component.summaryDerivedRefresh;
+
+      // A build starts (false -> true): no fan-out yet (nothing has completed).
+      component.onSummaryBuildingChange(true);
+      expect(component.summaryDerivedRefresh).toBe(refreshBefore);
+      expect(getProfile.calls.count()).toBe(profileCallsBefore);
+
+      // The build COMPLETES (true -> false): fan out to all summary-derived surfaces.
+      component.onSummaryBuildingChange(false);
+      expect(component.summaryDerivedRefresh).toBe(refreshBefore + 1);
+      // The dashboard-owned profile card is re-fetched (its own [refreshSignal] does not exist).
+      expect(getProfile.calls.count()).toBe(profileCallsBefore + 1);
+    });
+
+    it('does NOT fan out on a build START or a no-change tick', () => {
+      const bookSvc = TestBed.inject(BookService);
+      const getProfile = bookSvc.getProfile as jasmine.Spy;
+      const profileCallsBefore = getProfile.calls.count();
+      const refreshBefore = component.summaryDerivedRefresh;
+
+      // false -> false (no build in flight, no completion).
+      component.onSummaryBuildingChange(false);
+      // false -> true (build starts).
+      component.onSummaryBuildingChange(true);
+      // true -> true (still building).
+      component.onSummaryBuildingChange(true);
+
+      expect(component.summaryDerivedRefresh).toBe(refreshBefore);
+      expect(getProfile.calls.count()).toBe(profileCallsBefore);
+    });
+
+    it('binds summaryDerivedRefresh to the chapter-summaries surface', () => {
+      const cs = fixture.debugElement.query(By.css('app-book-chapter-summaries')).componentInstance;
+      expect(cs.refreshSignal).toBe(component.summaryDerivedRefresh);
+
+      // A completion bump propagates to the child's [refreshSignal].
+      component.onSummaryBuildingChange(true);
+      component.onSummaryBuildingChange(false);
+      fixture.detectChanges();
+      expect(cs.refreshSignal).toBe(component.summaryDerivedRefresh);
+    });
+
+    it('binds summaryDerivedRefresh to the Story Bible surface (when the review is ready/stale)', () => {
+      // Mount the Story Bible: review ready + switch to the bible tab.
+      component.onReviewStateChange('ready');
+      fixture.detectChanges();
+      fixture.debugElement.query(By.css('[data-testid="review-tab-bible"]')).nativeElement.click();
+      fixture.detectChanges();
+
+      const bible = fixture.debugElement.query(By.css('app-book-story-bible')).componentInstance;
+      expect(bible.refreshSignal).toBe(component.summaryDerivedRefresh);
+
+      // A completion bump propagates to the bible's [refreshSignal] (independent of its refreshToken).
+      component.onSummaryBuildingChange(true);
+      component.onSummaryBuildingChange(false);
+      fixture.detectChanges();
+      expect(bible.refreshSignal).toBe(component.summaryDerivedRefresh);
+    });
+  });
+
   it('renders the book profile sections once a profile loads (existing behavior intact)', () => {
     const bookSvc = TestBed.inject(BookService);
     (bookSvc.getProfile as jasmine.Spy).and.returnValue(

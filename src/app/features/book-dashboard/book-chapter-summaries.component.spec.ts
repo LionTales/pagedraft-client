@@ -170,6 +170,171 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     expect(text.nativeElement.textContent).toContain('Summary of one.');
   });
 
+  // ── Refresh on build completion (rf-f04 / build-complete fan-out) ─────────────────
+
+  it('re-fetches summaries IN PLACE when refreshSignal changes, replacing a stale "no summary" state', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // Mounted mid-build: this chapter's brief is not built yet -> "no summary yet".
+    getSummarySubjects.get('ch-1')!.next(
+      makeView({ chapterId: 'ch-1', summaryText: '', hasSummary: false, hasStructuredBrief: false, structuredBrief: null })
+    );
+    fixture.detectChanges();
+    expect(query('[data-testid="cs-no-summary"]')).not.toBeNull();
+
+    // Build completes -> host bumps refreshSignal. The re-fetch must NOT clear/flash the list (in place).
+    component.refreshSignal = 1;
+    component.ngOnChanges({ refreshSignal: new SimpleChange(0, 1, false) });
+    fixture.detectChanges();
+    expect(query('[data-testid="cs-list-loading"]')).toBeNull();
+
+    // The in-place re-fetch resolves with the now-built brief.
+    getSummarySubjects.get('ch-1')!.next(
+      makeView({ chapterId: 'ch-1', summaryText: '', hasSummary: false, hasStructuredBrief: true, structuredBrief: makeStructuredBrief() })
+    );
+    fixture.detectChanges();
+
+    const refreshedRow = query('[data-testid="cs-row-ch-1"]');
+    expect(query('[data-testid="cs-no-summary"]')).toBeNull();
+    expect(refreshedRow.query(By.css('[data-testid="cs-structured-fallback"]'))).not.toBeNull();
+    expect(refreshedRow.query(By.css('[data-testid="cs-badge-analysis"]'))).not.toBeNull();
+  });
+
+  // c02: same-key request supersession. A refresh that races an in-flight load for the SAME row must cancel
+  // the prior request so a slow OLDER response cannot land after (and overwrite) a newer one — both pass the
+  // same bookId/language stale-guard, so last-write-wins would render stale content.
+  it('(c02) supersedes an in-flight row load: the OLDER response is ignored once a newer load is issued', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // First (initial) load for ch-1 is in flight on the auto-created Subject; DO NOT resolve it yet.
+    const firstSubject = getSummarySubjects.get('ch-1')!;
+
+    // A refresh (build-complete fan-out) issues a SECOND load for the SAME row while the first is in flight.
+    // Hand the second getChapterSummary call a DISTINCT Subject so we can control the two responses
+    // independently — this models two separate HTTP requests for the same chapter.
+    const secondSubject = new Subject<ChapterSummaryViewDto>();
+    spyOn(summaryServiceMock, 'getChapterSummary').and.returnValue(secondSubject.asObservable());
+
+    component.refreshSignal = 1;
+    component.ngOnChanges({ refreshSignal: new SimpleChange(0, 1, false) });
+    fixture.detectChanges();
+
+    // Resolve the NEWER (second) request first with the fresh content.
+    secondSubject.next(makeView({ chapterId: 'ch-1', summaryText: 'NEW content.' }));
+    secondSubject.complete();
+    fixture.detectChanges();
+    expect(query('[data-testid="cs-summary-text"]').nativeElement.textContent).toContain('NEW content.');
+
+    // Now the OLDER (first) request finally resolves LAST with stale content. Because the refresh cancelled
+    // the first subscription BEFORE issuing the second, this emit must be ignored — the newer content stays.
+    firstSubject.next(makeView({ chapterId: 'ch-1', summaryText: 'STALE content.' }));
+    firstSubject.complete();
+    fixture.detectChanges();
+
+    const text = query('[data-testid="cs-summary-text"]').nativeElement.textContent;
+    expect(text).toContain('NEW content.');
+    expect(text).not.toContain('STALE content.');
+    expect(component.rows[0].view?.summaryText).toBe('NEW content.');
+  });
+
+  // bug1: refreshSignal firing WHILE the initial chapter-list load is still in flight must NOT start a second
+  // getById. rows is empty for the whole in-flight window (loadChapterList clears it synchronously and only
+  // repopulates it in the async next handler), so without the loadingList guard the rows.length === 0 branch
+  // would re-enter loadChapterList and open a duplicate list subscription.
+  it('(bug1) does NOT start a second chapter-list load when refreshSignal fires while the list is still loading', () => {
+    const getByIdSpy = spyOn(bookServiceMock, 'getById').and.returnValue(getByIdSubject.asObservable());
+    triggerInit();
+
+    // Initial list load is in flight: loadingList true, rows still empty, exactly one getById so far.
+    expect(component.loadingList).toBeTrue();
+    expect(component.rows.length).toBe(0);
+    expect(getByIdSpy).toHaveBeenCalledTimes(1);
+
+    // Host bumps refreshSignal mid-load (build-complete fan-out racing the initial mount fetch).
+    component.refreshSignal = 1;
+    component.ngOnChanges({ refreshSignal: new SimpleChange(0, 1, false) });
+    fixture.detectChanges();
+
+    // The in-flight load must not be duplicated.
+    expect(getByIdSpy).toHaveBeenCalledTimes(1);
+
+    // The original load still resolves normally and populates the rows once.
+    getByIdSubject.next(makeBookDetail());
+    getByIdSubject.complete();
+    fixture.detectChanges();
+    expect(component.rows.length).toBe(2);
+    expect(getByIdSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores the initial refreshSignal binding (firstChange must not trigger a refetch)', () => {
+    const spy = spyOn(component, 'refreshSummaries').and.callThrough();
+    component.ngOnChanges({ refreshSignal: new SimpleChange(undefined, 0, true) });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  // f01: silent refresh preserves prior content on error
+  it('(f01-a) silent refresh error keeps prior content visible and does NOT show the load-error state', () => {
+    // Arrange: mount with one chapter, resolve the initial load with valid content.
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // Initial (non-silent) load resolves with good content.
+    getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'Existing summary.' }));
+    getSummarySubjects.get('ch-1')!.complete();
+    fixture.detectChanges();
+
+    // Confirm the good content is shown.
+    expect(query('[data-testid="cs-summary-text"]')).not.toBeNull();
+    expect(query('[data-testid="cs-row-error"]')).toBeNull();
+
+    // Simulate build-complete: host bumps refreshSignal -> triggers silent re-fetch.
+    // A NEW Subject is registered for the next getChapterSummary call (mock creates per-chapterId).
+    // Reset the map entry so the mock creates a fresh Subject for the silent fetch.
+    getSummarySubjects.delete('ch-1');
+    component.refreshSignal = 1;
+    component.ngOnChanges({ refreshSignal: new SimpleChange(0, 1, false) });
+    fixture.detectChanges();
+
+    // The silent re-fetch is in flight; prior content must remain (no loading flash, no error yet).
+    expect(query('[data-testid="cs-row-loading"]')).toBeNull();
+    expect(query('[data-testid="cs-summary-text"]')).not.toBeNull();
+
+    // Now the silent re-fetch fails with a transient error.
+    getSummarySubjects.get('ch-1')!.error(new Error('transient'));
+    fixture.detectChanges();
+
+    // (a) No load-error state — the silent failure must be invisible.
+    expect(query('[data-testid="cs-row-error"]')).toBeNull();
+    // (b) The previously-rendered content is still visible.
+    expect(query('[data-testid="cs-summary-text"]')).not.toBeNull();
+    expect(query('[data-testid="cs-summary-text"]').nativeElement.textContent).toContain('Existing summary.');
+  });
+
+  it('(f01-b) non-silent (initial) load error DOES surface the load-error state', () => {
+    // Arrange: mount with one chapter, but the initial (non-silent) load fails.
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // The initial non-silent fetch errors.
+    getSummarySubjects.get('ch-1')!.error(new Error('network error'));
+    fixture.detectChanges();
+
+    // The load-error state MUST render for a non-silent failure.
+    expect(query('[data-testid="cs-row-error"]')).not.toBeNull();
+    // And there is no prior content to show.
+    expect(query('[data-testid="cs-summary-text"]')).toBeNull();
+  });
+
   // ── Edited + stale badges ───────────────────────────────────────────────────────
 
   it('shows the EDITED badge when the summary is user-edited', () => {

@@ -104,6 +104,7 @@ type ReviewTab = 'findings' | 'bible';
               [bookId]="bookId"
               [bookLanguage]="bookLanguage"
               [refreshToken]="findingsRefreshToken"
+              [refreshSignal]="summaryDerivedRefresh"
               (openChapter)="onOpenChapterFromFinding($event)">
             </app-book-story-bible>
           }
@@ -116,7 +117,8 @@ type ReviewTab = 'findings' | 'bible';
       <section class="card chapter-summaries-card">
         <app-book-chapter-summaries
           [bookId]="bookId"
-          [bookLanguage]="bookLanguage">
+          [bookLanguage]="bookLanguage"
+          [refreshSignal]="summaryDerivedRefresh">
         </app-book-chapter-summaries>
       </section>
 
@@ -545,6 +547,16 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   /** Latest "summary build in flight" flag from the hosted summary row (its buildingChange output). */
   private summaryBuilding = false;
   /**
+   * Bumped on each summary-build COMPLETION (buildingChange true->false) and fanned out to EVERY
+   * summary-derived surface so each re-fetches the newly built briefs in place: the chapter-summaries list
+   * ([refreshSignal]) AND the Story Bible ([refreshSignal]). The dashboard-owned profile card is re-fetched
+   * directly (loadProfile()) on the same completion, since it has no child @Input to bind. The status row owns
+   * the build; these surfaces have no other completion signal, so without the fan-out they show a stale "no
+   * summary yet" (or a stale profile / Story Bible) for briefs that finish after they mounted while the panel
+   * stays mounted (rf-f04 / build-complete fan-out).
+   */
+  summaryDerivedRefresh = 0;
+  /**
    * Last buildRunning value emitted to the host; used to dedupe redundant emits. Starts null (NOT false) so
    * the FIRST emit after any (re)mount always fires and re-syncs the host, even when this fresh instance's
    * aggregate is already false. Without the null sentinel a build that FINISHES while the dashboard is
@@ -678,7 +690,18 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    * Record it and re-evaluate the aggregate build-running flag passed up to the host.
    */
   onSummaryBuildingChange(building: boolean): void {
+    const wasBuilding = this.summaryBuilding;
     this.summaryBuilding = building;
+    // Build just COMPLETED (true -> false): fan out to EVERY summary-derived surface so none shows stale
+    // "no summary yet" for briefs that finished after it mounted (rf-f04). The bump drives the child surfaces
+    // that expose a refreshSignal @Input (chapter-summaries + Story Bible) to re-fetch in place; the
+    // dashboard-owned profile card has no such @Input, so reload it directly. loadProfile() keeps the current
+    // profile visible until the new one resolves (it only reassigns this.profile in its next handler), so the
+    // reload is in place with no flash - matching the child surfaces' silent-refresh behavior.
+    if (wasBuilding && !building) {
+      this.summaryDerivedRefresh++;
+      this.loadProfile();
+    }
     this.emitBuildRunning();
   }
 
