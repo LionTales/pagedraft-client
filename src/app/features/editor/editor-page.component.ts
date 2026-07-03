@@ -1,23 +1,25 @@
 import { CommonModule } from '@angular/common';
 import { Component, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
-import { Subject, Subscription, interval, forkJoin, of } from 'rxjs';
-import { debounceTime, takeUntil, switchMap, startWith, map, catchError } from 'rxjs/operators';
+import { ImportHandoffCardComponent } from './import-handoff-card/import-handoff-card.component';
+import { Subject, Subscription } from 'rxjs';
+import { debounceTime, takeUntil } from 'rxjs/operators';
 import { DocumentEditorContainerComponent, DocumentEditorContainerModule, ToolbarService } from '@syncfusion/ej2-angular-documenteditor';
 import { BookService } from '../../core/services/book.service';
-import { BookSummaryService } from '../../core/services/book-summary.service';
-import { BookReviewService } from '../../core/services/book-review.service';
 import { ChapterService } from '../../core/services/chapter.service';
 import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisService } from '../../core/services/analysis.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
+import { ReviseContextService } from '../../core/services/revise-context.service';
 import { BookDetailDto, ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
 import { ChapterAnchor } from '../../core/models/book-review';
 import { ChapterTreeComponent } from '../chapter-tree/chapter-tree.component';
 import { AnalysisPanelComponent } from '../analysis-panel/analysis-panel.component';
 import { IssuePanelComponent, ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
 import { BookDashboardComponent } from '../book-dashboard/book-dashboard.component';
+import { ChapterFindingsChecklistComponent } from './chapter-findings-checklist.component';
 import { SegmentedControlComponent, SegmentedOption } from '../../shared/segmented-control/segmented-control.component';
 import { LanguageIssue } from '../../core/models/language-engine';
 import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-analysis';
@@ -41,7 +43,9 @@ import { createElement, classList, EventHandler } from '@syncfusion/ej2-base';
     AnalysisPanelComponent,
     IssuePanelComponent,
     BookDashboardComponent,
-    SegmentedControlComponent
+    ChapterFindingsChecklistComponent,
+    SegmentedControlComponent,
+    ImportHandoffCardComponent,
   ],
   providers: [ToolbarService],
   templateUrl: './editor-page.component.html',
@@ -52,6 +56,9 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   docEditor?: DocumentEditorContainerComponent;
   @ViewChild(AnalysisPanelComponent, { static: false })
   analysisPanel?: AnalysisPanelComponent;
+  /** rf-f13: reference to the mounted dashboard so the checklist "View" action can select the Findings tab. */
+  @ViewChild(BookDashboardComponent, { static: false })
+  dashboardComp?: BookDashboardComponent;
 
   book: BookDetailDto | null = null;
   selectedChapterId: string | null = null;
@@ -76,6 +83,24 @@ export class EditorPageComponent implements OnInit, OnDestroy {
    * (it is out of scope for the two-mode spec but is an existing feature we must not drop).
    */
   reviewMode: 'edit' | 'review' = 'edit';
+
+  // ── rf-f03 Import handoff card ──────────────────────────────────────────────
+
+  /**
+   * rf-f03: true when the editor was reached by navigating FROM the import page (the `imported=1`
+   * query param is present). Shows the guided handoff card in the Review panel. Cleared when the user
+   * clicks "Start review" (keeps review mode) or "Just let me edit" (switches to edit mode).
+   * Falls back gracefully on refresh: the query param is gone so this is false and the non-imported
+   * path runs unchanged.
+   */
+  showHandoffCard = false;
+
+  /** Chapter count from router state (set by import-page confirm); null after refresh (not in state). */
+  importedChapters: number | null = null;
+  /** Word total from router state; null after refresh. */
+  importedWords: number | null = null;
+  /** Part count from router state; null after refresh. */
+  importedParts: number | null = null;
   /** Secondary view within Edit-help mode: 'analysis' (per-chapter analysis) or 'language' (language engine). */
   editHelpView: 'analysis' | 'language' = 'analysis';
   /** Whether the ReviewPanel is open; the header close button hides it so the canvas gets full width. */
@@ -91,28 +116,18 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   private reviewPanelOpenBeforeFocus = true;
 
   /**
-   * P2-6: true while a whole-book build (summary briefs OR developmental review) is running, reported by the
-   * book dashboard via its buildRunningChange output. Held HERE (not in the dashboard) so the affordance keeps
-   * showing on the closed-panel reopen button and the focus-mode toggle even after the dashboard is
-   * @if-destroyed by closing the panel or entering focus mode. The dashboard re-emits the in-flight state at
-   * unmount and, on remount, reattaches to the server-tracked job and emits the terminal/idle state that
-   * clears this flag.
-   *
-   * The dashboard, however, mounts ONLY in Book review mode (reviewMode === 'review'); in Edit help mode it
-   * is not present at all, so it can neither poll nor emit. Without a fallback, a build that finishes while
-   * the dashboard is unmounted (Edit help, panel closed, or focus mode) would never emit false and this flag
-   * would stick true forever. {@link updateReviewBuildReconcile} runs an editor-owned reconciliation poll for
-   * exactly those windows.
+   * rf-c02: true while a whole-book build (summary briefs OR developmental review) is running FOR THE CURRENT
+   * BOOK. Now DERIVED from the single job registry ({@link JobRegistryService.anyRunningForBook$}) rather than
+   * from the dashboard's buildRunningChange @Output + an editor-owned reconcile poll (both deleted). The
+   * registry survives the dashboard being @if-destroyed (close panel / focus mode / Edit help) and re-discovers
+   * in-flight jobs on book load via {@link JobRegistryService.reattach}, so the affordance stays correct while
+   * the dashboard is unmounted WITHOUT a second poller. Book-scoped: the subscription is re-created per book so
+   * a job for book A can never light book B (the wrong-book guard). The status rows PUBLISH their build to the
+   * registry (track()) on start; the stepper/badge/reopen affordance READS the registry here.
    */
   reviewBuildRunning = false;
-  /**
-   * Poll period (ms) for the editor-owned reconciliation of {@link reviewBuildRunning} while the dashboard is
-   * unmounted. Matches no specific server cadence; it only needs to clear (or set) the affordance within a
-   * few seconds of the build's state changing. The dashboard's own polls run at 5000ms.
-   */
-  private static readonly REVIEW_BUILD_RECONCILE_MS = 5000;
-  /** Active editor-owned build-status reconcile poll; non-null only while it is running. */
-  private reviewBuildReconcileSub: Subscription | null = null;
+  /** Current subscription to the registry's per-book running flag; re-created on each book load, torn down on switch/destroy. */
+  private reviewBuildRunningSub: Subscription | null = null;
 
   // ── ReviewPanel resize (draggable inline-start gutter) ─────────────────────
   /** Default right-panel width (px). Raised from the old fixed 320 so the scorecard fits out of the box. */
@@ -134,7 +149,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /** True while an analysis run or stream is in progress; shows full-screen overlay and blocks interaction. */
   analysisRunning = false;
   /** Human-readable status text shown in the analysis overlay spinner. */
-  analysisStatusText = 'Running analysis…';
+  analysisStatusText = 'מריץ ניתוח…'; // DRAFT he - needs native review
   /** Numeric percent (0–100) for analysis overlay progress bar; null when unknown. */
   analysisStatusPercent: number | null = null;
   /** Used for editor-shell dir attribute (e.g. 'rtl' for Hebrew). */
@@ -201,6 +216,27 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     this.reviewModeOptions = this.buildReviewModeOptions();
   }
 
+  // ── rf-f03 Import handoff card handlers ────────────────────────────────────
+
+  /**
+   * rf-f03: "Start review" clicked on the handoff card. The card has already started the summary
+   * build (consent is the click itself). Dismiss the card and stay in Book review mode so the
+   * dashboard / Stage-1 panel is visible immediately.
+   */
+  onHandoffStartReview(): void {
+    this.showHandoffCard = false;
+    this.reviewMode = 'review';
+  }
+
+  /**
+   * rf-f03: "Just let me edit" clicked on the handoff card. Non-blocking escape hatch: dismiss
+   * the card and switch to Edit help mode. No build is triggered.
+   */
+  onHandoffEditMode(): void {
+    this.showHandoffCard = false;
+    this.reviewMode = 'edit';
+  }
+
   /**
    * NIT-2: typed handler for the SegmentedControl valueChange output.
    * Validates the raw `string` emitted by the control before assigning it to the
@@ -210,10 +246,23 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   onReviewModeChange(value: string): void {
     if (value === 'edit' || value === 'review') {
       this.reviewMode = value;
-      // Switching to Edit help unmounts the dashboard (which owns the build affordance via polling); switching
-      // back to Book review remounts it. Re-evaluate the editor-owned reconcile so a build that finishes while
-      // in Edit help still clears the affordance instead of sticking on.
-      this.updateReviewBuildReconcile();
+      // rf-c02: no reconcile to re-evaluate. The "review running" affordance is derived from the job registry
+      // ({@link reviewBuildRunningSub}), which is independent of whether the dashboard is mounted, so switching
+      // modes cannot strand a stale flag.
+    }
+  }
+
+  /**
+   * rf-f13: the per-chapter findings checklist emitted switchToReview (user clicked "View" on a finding
+   * or "Back to findings"). Switch to review mode (same as any switchToReview path) AND ensure the
+   * dashboard lands on the Findings sub-tab rather than whichever tab was last active.
+   * Consistent with how f04's onStepperReviseRequested() selects the Findings tab from within the
+   * dashboard itself: here we do the same selection from the outside via the ViewChild reference.
+   */
+  onChecklistSwitchToReview(): void {
+    this.onReviewModeChange('review');
+    if (this.dashboardComp) {
+      this.dashboardComp.reviewTab = 'findings';
     }
   }
 
@@ -242,9 +291,10 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       const scenes = this.scenesByChapter[chapter.id] ?? [];
       const scene = scenes.find(s => s.id === this.selectedSceneId);
       const sceneLabel = scene?.title || (he ? 'סצנה' : 'Scene');
-      return `${chapter.title} · ${sceneLabel}`;
+      const chapterLabel = chapter.title || (he ? 'ללא כותרת' : 'Untitled'); // DRAFT he - needs native review
+      return `${chapterLabel} · ${sceneLabel}`;
     }
-    return chapter.title;
+    return chapter.title || (he ? 'ללא כותרת' : 'Untitled'); // DRAFT he - needs native review
   }
 
   /** Mono meta line for the context strip: scope of the open unit (e.g. "scene" or "chapter"/whole book). */
@@ -277,110 +327,34 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * P2-6: the book dashboard reported whether a whole-book build (summary briefs or developmental review) is
-   * in flight. Hold the flag on the editor so the "review running" affordance survives the dashboard being
-   * @if-destroyed (close panel / focus mode); the dashboard re-emits at unmount and on remount. Re-evaluate
-   * the editor-owned reconcile poll so it takes over the moment the dashboard hands the flag off at unmount.
+   * rf-c02: (re)subscribe the "review running" affordance to the SINGLE job registry, scoped to the given
+   * book. This is the one truth the stepper/badge/reopen affordance reads; it replaces the dashboard's
+   * buildRunningChange @Output AND the deleted editor-owned reconcile poll. anyRunningForBook$ stays correct
+   * while the dashboard is @if-destroyed (close panel / focus mode / Edit help) because the registry's own
+   * reused poll keeps running and {@link JobRegistryService.reattach} (called on book load) re-discovers a
+   * build already in flight for a freshly-loaded book. Re-created per book so a job for book A can never light
+   * book B — the wrong-book guard. distinctUntilChanged already lives inside anyRunningForBook$.
    */
-  onReviewBuildRunningChange(running: boolean): void {
-    this.reviewBuildRunning = running;
-    this.updateReviewBuildReconcile();
-  }
-
-  /**
-   * True when the book dashboard is currently mounted in the template — it owns {@link reviewBuildRunning}
-   * via its buildRunningChange output (and its own server polling) only in this state. Mirrors the template
-   * guards: the ReviewPanel is open and not in focus mode (outer @if) AND we are in Book review mode with a
-   * loaded book (inner @if). In every other state the dashboard is absent and the editor must reconcile the
-   * flag itself.
-   */
-  private get dashboardMounted(): boolean {
-    return this.reviewPanelOpen && !this.focusMode && this.reviewMode === 'review' && !!this.bookId && !!this.book;
-  }
-
-  /**
-   * Start/stop the editor-owned build-status reconcile poll based on whether it is needed RIGHT NOW. It is
-   * needed only while the dashboard is unmounted (otherwise the dashboard owns the flag) and a build is
-   * believed to be running (so we watch for it to finish) — or when `force` requests a one-off check after a
-   * context change (e.g. a book switch) to establish the new book's state. The poll self-stops once it reads
-   * an idle (not-running) server state, so it does not run indefinitely.
-   */
-  private updateReviewBuildReconcile(force = false): void {
-    if (this.dashboardMounted || !this.bookId) {
-      this.stopReviewBuildReconcile();
-      return;
-    }
-    const shouldPoll = this.reviewBuildRunning || force;
-    if (!shouldPoll) {
-      this.stopReviewBuildReconcile();
-      return;
-    }
-    if (force || !this.reviewBuildReconcileSub) {
-      this.startReviewBuildReconcile();
-    }
-  }
-
-  /**
-   * Poll the summary + review status endpoints for the current book and reconcile {@link reviewBuildRunning}:
-   * the affordance is on when EITHER advertises an active build job. Runs an immediate check then repeats on
-   * an interval until the build is observed idle (then stops). A transient status-call error leaves the flag
-   * untouched and lets the next tick retry, so a network blip neither clears a real affordance nor sticks one
-   * on. Stops itself if the context changes mid-flight (book switch) or the dashboard (re)mounts and resumes
-   * ownership.
-   */
-  private startReviewBuildReconcile(): void {
-    const bookId = this.bookId;
-    if (!bookId) return;
-    const lang = this.book?.language ?? 'he';
-    this.stopReviewBuildReconcile();
-    this.reviewBuildReconcileSub = interval(EditorPageComponent.REVIEW_BUILD_RECONCILE_MS)
-      .pipe(
-        startWith(0),
-        switchMap(() =>
-          forkJoin([
-            this.bookSummaryService.getBookSummaryStatus(bookId, lang).pipe(
-              map(s => ({ ok: true, running: s.activeBuildJobId != null })),
-              catchError(() => of({ ok: false, running: false }))
-            ),
-            this.bookReviewService.getReviewStatus(bookId, lang).pipe(
-              map(s => ({ ok: true, running: s.activeBuildJobId != null })),
-              catchError(() => of({ ok: false, running: false }))
-            ),
-          ])
-        ),
-        takeUntil(this.destroy$)
-      )
-      .subscribe(([summary, review]) => {
-        // The dashboard remounted (it owns the flag now) or the user switched books: drop this poll.
-        if (this.dashboardMounted || this.bookId !== bookId) {
-          this.stopReviewBuildReconcile();
-          return;
-        }
-        // Only act on a definitive reading (both calls succeeded); otherwise keep polling and leave the flag.
-        if (!summary.ok || !review.ok) return;
-        this.reviewBuildRunning = summary.running || review.running;
-        if (!this.reviewBuildRunning) {
-          this.stopReviewBuildReconcile();
-        }
+  private subscribeReviewBuildRunning(bookId: string): void {
+    this.reviewBuildRunningSub?.unsubscribe();
+    this.reviewBuildRunningSub = this.jobRegistry
+      .anyRunningForBook$(bookId)
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(running => {
+        // Guard against a late emit after the user switched books: only the current book drives the flag.
+        if (this.bookId !== bookId) return;
+        this.reviewBuildRunning = running;
       });
   }
 
-  /** Tear down the editor-owned reconcile poll if one is running. */
-  private stopReviewBuildReconcile(): void {
-    this.reviewBuildReconcileSub?.unsubscribe();
-    this.reviewBuildReconcileSub = null;
-  }
-
-  /** Close the ReviewPanel (header ✕). Re-evaluate the reconcile poll: closing unmounts the dashboard. */
+  /** Close the ReviewPanel (header ✕). The registry-derived affordance is unaffected by mount state. */
   closeReviewPanel(): void {
     this.reviewPanelOpen = false;
-    this.updateReviewBuildReconcile();
   }
 
-  /** Reopen the ReviewPanel (collapsed reopen button). The dashboard remounts if we are in Book review mode. */
+  /** Reopen the ReviewPanel (collapsed reopen button). The registry-derived affordance is unaffected by mount state. */
   openReviewPanel(): void {
     this.reviewPanelOpen = true;
-    this.updateReviewBuildReconcile();
   }
 
   // ── ds-c05 Focus mode ──────────────────────────────────────────────────────
@@ -395,8 +369,12 @@ export class EditorPageComponent implements OnInit, OnDestroy {
 
   /**
    * Toggle distraction-light focus mode. Entering remembers the ReviewPanel open-state and collapses
-   * both side zones; exiting restores the panel to exactly how it was. Pure component state - no
-   * backend, no editor-logic side effects (the Syncfusion canvas is untouched).
+   * both side zones; exiting restores the panel to exactly how it was.
+   *
+   * Width handling (see {@link applyFocusFit}): entering focus widens the writing frame, so we fit the
+   * page to that width (no horizontal scroll); exiting restores the natural 100% zoom. This is deferred
+   * one macro-task so Angular has applied the `.editor-layout--focus` class and the shell has its new
+   * width before Syncfusion re-measures.
    */
   toggleFocusMode(): void {
     if (!this.focusMode) {
@@ -407,9 +385,39 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       this.focusMode = false;
       this.reviewPanelOpen = this.reviewPanelOpenBeforeFocus;
     }
-    // Entering focus unmounts the dashboard; exiting may remount it. Re-evaluate the editor-owned reconcile
-    // so the "review running" affordance on the focus toggle clears when a build finishes during focus mode.
-    this.updateReviewBuildReconcile();
+    // rf-c02: nothing to reconcile. The "review running" affordance on the focus toggle is derived from the
+    // job registry, which keeps tracking the build independent of whether the dashboard is mounted, so it
+    // clears on its own when the build finishes during focus mode.
+    setTimeout(() => this.applyFocusFit(), 0);
+  }
+
+  /**
+   * Keep the document page fitting the writing frame WITHOUT ever shrinking it to an unreadable size.
+   *
+   * - FOCUS mode: the shell is widened to ~a full page, so `fitPage('FitPageWidth')` zooms the page to
+   *   fill that width and eliminates the horizontal scrollbar (the Syncfusion RTL viewer otherwise lays
+   *   out a much wider content box than the page). We `resize()` FIRST so Syncfusion picks up the new
+   *   container width before computing the fit.
+   * - NORMAL mode: we deliberately DO NOT fit-to-width. With the side panels open the center column can
+   *   be ~460px, and fitting a Letter/A4 page to that zooms it down to ~40% (unreadable). So we keep the
+   *   natural 100% zoom (a narrow pane just scrolls, which is the pre-existing behaviour).
+   *
+   * Called (deferred) on focus toggle, on each document load (open() resets the zoom to 100%), and on
+   * editor creation. No-ops safely when Syncfusion is not ready.
+   */
+  private applyFocusFit(): void {
+    const ed = this.docEditor?.documentEditor;
+    if (!ed) return;
+    try {
+      ed.resize();
+      if (this.focusMode) {
+        ed.fitPage('FitPageWidth');
+      } else if (ed.zoomFactor !== 1) {
+        ed.zoomFactor = 1;
+      }
+    } catch {
+      // Syncfusion not ready (no document open / not created yet) - ignore.
+    }
   }
 
   // ── ReviewPanel resize ──────────────────────────────────────────────────────
@@ -556,36 +564,117 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     private route: ActivatedRoute,
     private router: Router,
     private bookService: BookService,
-    private bookSummaryService: BookSummaryService,
-    private bookReviewService: BookReviewService,
     private chapterService: ChapterService,
     private sceneService: SceneService,
     private syncService: SyncService,
     private documentVersionService: DocumentVersionService,
     private analysisService: AnalysisService,
+    private jobRegistry: JobRegistryService,
     private sfdtService: SfdtManipulationService,
     private editorTextService: EditorTextService,
-    private suggestionAnchorService: SuggestionAnchorService
+    private suggestionAnchorService: SuggestionAnchorService,
+    private reviseContext: ReviseContextService
   ) {}
 
   ngOnInit(): void {
     this.restoreReviewPanelWidth();
+
+    // rf-f04: read the `imported` signal once.
+    //
+    // Two DECOUPLED signals drive the imported-book experience:
+    //   1. Query param `imported=1` — survives a browser refresh (present in the URL). Used ALONE to
+    //      open the ReviewPanel in Review mode, giving imported books a Review-first default on every
+    //      load/refresh.  Existing books (no `imported` param) keep their Edit-help default unchanged.
+    //   2. Router nav state (extras.state) — present ONLY on the initial programmatic navigation FROM
+    //      the import page (not after a refresh). Used to populate and SHOW the ephemeral handoff card
+    //      so the author is greeted the first time they land, but the card does NOT reappear on refresh.
+    //
+    // This split means: refresh of `/books/{id}?imported=1` → Review mode (no card); fresh navigation
+    // from the import page → Review mode + card. (rf-f03 previously required BOTH to open Review mode,
+    // so a refresh dropped the user back to Edit mode — this corrects that.)
+    const nav = this.router.getCurrentNavigation();
+    const routerState = (nav?.extras?.state as Record<string, unknown> | undefined) ?? null;
+    // queryParams snapshot is available synchronously from the snapshot before subscribing.
+    const importedParam = this.route.snapshot.queryParams['imported'];
+    if (importedParam) {
+      // The query param alone is sufficient to default imported books to Review mode (survives refresh).
+      this.reviewMode = 'review';
+      this.reviewPanelOpen = true;
+    }
+    if (importedParam && routerState) {
+      // ADDITIONALLY: this is a fresh navigation from the import page (nav state present). Show the
+      // ephemeral handoff card with the chapter/word/part counts from the router state. The card
+      // does NOT appear on refresh (no nav state after refresh), so it is truly ephemeral.
+      this.showHandoffCard = true;
+      this.importedChapters = (typeof routerState['importedChapters'] === 'number')
+        ? routerState['importedChapters'] as number : null;
+      this.importedWords = (typeof routerState['importedWords'] === 'number')
+        ? routerState['importedWords'] as number : null;
+      this.importedParts = (typeof routerState['importedParts'] === 'number')
+        ? routerState['importedParts'] as number : null;
+    }
+    if (importedParam) {
+      // c02: strip the sticky `imported=1` param NOW that it has been consumed (reviewMode already set to
+      // 'review' above, so the Review-first default on this first load is preserved). Leaving it in the URL
+      // would re-force Review mode on every refresh and, worse, override a later "Just let me edit" choice
+      // (onHandoffEditMode sets reviewMode='edit', but a refresh with ?imported=1 would flip it back). A
+      // replaceUrl merge keeps every other query param and does not add a history entry.
+      this.router.navigate([], {
+        relativeTo: this.route,
+        queryParams: { imported: null },
+        queryParamsHandling: 'merge',
+        replaceUrl: true,
+      });
+    }
+
     this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
+      const previousBookId = this.bookId;
       this.bookId = params['bookId'] ?? null;
-      // A book switch invalidates the previous book's whole-book-build affordance (it is per-book). Clear the
-      // stale flag and stop any reconcile poll for the old book; the new book's state is re-established below
-      // once it loads (editor-owned reconcile), or by the dashboard when it (re)mounts in Book review mode.
+      // Phase 4d-10c: the revise-context ("Addressing: <one-liner>" chip) is a root singleton owned by the
+      // findings->checklist handoff, and the checklist that consumes it lives INSIDE this book's editor view.
+      // A book switch must reset it, else a stale finding from the previous book could re-show its chip after
+      // navigating into an anchored chapter of the new book. Key on the bookId VALUE change (not every params
+      // re-emit) so a same-book re-emit never clears an active in-book context.
+      if (this.bookId !== previousBookId) {
+        this.reviseContext.clear();
+        // c02: the imported/handoff one-shot (showHandoffCard + imported* counts) is read ONCE in ngOnInit
+        // for the FIRST book, from the `imported=1` query param + router nav state. On a SUBSEQUENT in-place
+        // book switch there is no fresh imported nav state, so a stale card + its counts must not carry over
+        // from the previous book. Reset only when previousBookId is non-null: that guarantees this is not the
+        // first load, so the ngOnInit-shown card for the first imported book is preserved. (The `imported=1`
+        // param is also stripped from the URL in ngOnInit right after it is consumed, so a later refresh no
+        // longer re-forces Review mode.) Mirrors the bookId-change guard c01 uses for reviseContext.
+        if (previousBookId !== null) {
+          this.showHandoffCard = false;
+          this.importedChapters = null;
+          this.importedWords = null;
+          this.importedParts = null;
+        }
+      }
+      // rf-c02: a book switch invalidates the previous book's whole-book-build affordance (it is per-book).
+      // Clear the stale flag and tear down the previous book's registry subscription at once, so a job for the
+      // OLD book can never light the new one before the new subscription re-establishes the true state.
       this.reviewBuildRunning = false;
-      this.stopReviewBuildReconcile();
+      this.reviewBuildRunningSub?.unsubscribe();
+      this.reviewBuildRunningSub = null;
       if (this.bookId) {
+        // Derive the "review running" affordance from the single job registry, scoped to THIS book. Book-scoped
+        // (not book+language) so it is set the instant the id is known — the registry survives the dashboard
+        // being unmounted, so no editor-owned poll is needed.
+        this.subscribeReviewBuildRunning(this.bookId);
         this.syncService.connect().then(() => this.syncService.joinBook(this.bookId!));
         this.bookService.getById(this.bookId).subscribe(b => {
           this.book = b;
           this.rebuildReviewModeOptions();
-          // Establish THIS book's build affordance: when the dashboard is not mounted (Edit help / panel
-          // closed / focus mode) it cannot report it, so reconcile once against the server (force) — this
-          // both surfaces a build already running for the new book and avoids a stale carry-over.
-          this.updateReviewBuildReconcile(true);
+          // Re-discover any build already in flight for the freshly-loaded book (started in another tab/session,
+          // or still running after a browser refresh) and re-track it in the registry. THIS is what covers the
+          // unmounted-dashboard case the deleted reconcile poll existed for: reattach re-populates the registry,
+          // and the subscription above lights the affordance. One reattach per book load; no second poller.
+          if (this.bookId === b.id) {
+            // language is a required arg now (reattach normalizes it to a base code); pass a concrete
+            // fallback so an empty/missing book language still keys the app-default 'he' slot.
+            this.jobRegistry.reattach(b.id, b.language?.trim() || 'he');
+          }
           if (b.chapters.length && !this.selectedChapterId) this.selectChapter(b.chapters[0]);
         });
       }
@@ -744,7 +833,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     if (this.bookId) this.syncService.leaveBook(this.bookId);
     if (this._scrollSettleTimer) clearTimeout(this._scrollSettleTimer);
     this.destroyCustomToolbar();
-    this.stopReviewBuildReconcile();
+    this.reviewBuildRunningSub?.unsubscribe();
+    this.reviewBuildRunningSub = null;
     this.destroy$.next();
     this.destroy$.complete();
   }
@@ -924,6 +1014,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
           this.currentDocumentPlainText = this.editorTextService.refreshDocumentPlainText(this.docEditor, this.selectedChapterId);
           this.documentOwnerChapterId = chapterId;
           this.documentOwnerSceneId = null;
+          // open() resets the zoom to 100%; re-fit the page to the frame (focus mode only).
+          this.applyFocusFit();
         } finally {
           this.isOpeningDocument = false;
         }
@@ -946,6 +1038,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
           this.currentDocumentPlainText = this.editorTextService.refreshDocumentPlainText(this.docEditor, this.selectedChapterId);
           this.documentOwnerChapterId = chapterId;
           this.documentOwnerSceneId = sceneId;
+          // open() resets the zoom to 100%; re-fit the page to the frame (focus mode only).
+          this.applyFocusFit();
         } finally {
           this.isOpeningDocument = false;
         }
@@ -1066,7 +1160,7 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /** Called when analysis panel starts a run or stream; shows overlay and freezes UI. */
   onAnalysisStarted(): void {
     this.analysisRunning = true;
-    this.analysisStatusText = 'Running analysis…';
+    this.analysisStatusText = 'מריץ ניתוח…'; // DRAFT he - needs native review
     this.analysisStatusPercent = null;
     this.refreshDocumentPlainText();
   }
@@ -1076,10 +1170,21 @@ export class EditorPageComponent implements OnInit, OnDestroy {
     this.analysisRunning = false;
   }
 
-  /** Receive human-readable status messages from the analysis panel while a run is in progress. */
+  /**
+   * Receive human-readable status messages from the analysis panel while a run is in progress.
+   * The raw `message` is an English string from the orchestration service (e.g. "Proofread chunked · …").
+   * For book-scoped Hebrew books (the default) we ignore the raw string and show a fixed Hebrew label
+   * so the overlay never renders raw English. For English books we pass it through unchanged.
+   */
   onAnalysisStatus(message: string): void {
     if (message && this.analysisRunning) {
-      this.analysisStatusText = message;
+      if (this.reviewPanelIsHebrew) {
+        // Keep the overlay label fixed at "מריץ ניתוח…" (DRAFT he - needs native review).
+        // The progress bar (percent) still updates so the user sees progress.
+        this.analysisStatusText = 'מריץ ניתוח…'; // DRAFT he - needs native review
+      } else {
+        this.analysisStatusText = message;
+      }
     }
   }
 
@@ -1128,6 +1233,8 @@ export class EditorPageComponent implements OnInit, OnDestroy {
       if (target.sceneId) this.loadSceneContent(target.chapterId, target.sceneId);
       else this.loadChapterContent(target.chapterId);
     }
+    // If the editor is (re)created while already in focus mode, fit the page to the frame.
+    setTimeout(() => this.applyFocusFit(), 0);
   }
 
   onApplyCorrection(event: ApplyCorrectionEvent): void {

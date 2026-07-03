@@ -4,7 +4,7 @@ import { CommonModule } from '@angular/common';
 import { By } from '@angular/platform-browser';
 import { ActivatedRoute, Router } from '@angular/router';
 import { BookDetailDto } from '../../core/models/book';
-import { of, EMPTY, throwError, Subject } from 'rxjs';
+import { of, EMPTY, throwError, Subject, BehaviorSubject, Observable } from 'rxjs';
 import { EditorPageComponent } from './editor-page.component';
 import { BookService } from '../../core/services/book.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
@@ -14,9 +14,11 @@ import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisService } from '../../core/services/analysis.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { SfdtManipulationService, SCROLL_TARGET_BOOKMARK } from '../../core/services/sfdt-manipulation.service';
 import { EditorTextService } from '../../core/services/editor-text.service';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
+import { ReviseContextService } from '../../core/services/revise-context.service';
 
 describe('EditorPageComponent (focused logic)', () => {
   let component: EditorPageComponent;
@@ -27,7 +29,7 @@ describe('EditorPageComponent (focused logic)', () => {
   let chapterUpdateSpy: jasmine.Spy;
   let versionCreateSpy: jasmine.Spy;
   let mockDocEditor: {
-    documentEditor: { serialize: jasmine.Spy; open: jasmine.Spy };
+    documentEditor: { serialize: jasmine.Spy; open: jasmine.Spy; fitPage: jasmine.Spy; resize: jasmine.Spy; zoomFactor: number };
   };
 
   const SAMPLE_SFDT =
@@ -64,8 +66,8 @@ describe('EditorPageComponent (focused logic)', () => {
     await TestBed.configureTestingModule({
       imports: [EditorPageComponent],
       providers: [
-        { provide: ActivatedRoute, useValue: { params: of({}) } },
-        { provide: Router, useValue: { navigate: jasmine.createSpy() } },
+        { provide: ActivatedRoute, useValue: { params: of({}), snapshot: { queryParams: {} } } },
+        { provide: Router, useValue: { navigate: jasmine.createSpy(), getCurrentNavigation: () => null } },
         { provide: BookService, useValue: { getById: () => EMPTY } },
         // P2-6: the editor reconciles the whole-book build affordance via these when the dashboard is
         // unmounted. Default to "no active build"; individual tests re-stub as needed.
@@ -114,6 +116,15 @@ describe('EditorPageComponent (focused logic)', () => {
         },
         { provide: DocumentVersionService, useValue: { create: versionCreateSpy, list: () => of([]), get: () => EMPTY } },
         { provide: AnalysisService, useValue: {} },
+        // rf-c02: the editor derives the "review running" affordance from the registry and calls reattach on
+        // book load. Default to "nothing running"; individual tests re-stub anyRunningForBook$ as needed.
+        {
+          provide: JobRegistryService,
+          useValue: {
+            anyRunningForBook$: () => of(false),
+            reattach: jasmine.createSpy('reattach'),
+          },
+        },
         { provide: SfdtManipulationService, useValue: sfdtSpy },
         { provide: EditorTextService, useValue: editorTextSpy },
         { provide: SuggestionAnchorService, useValue: anchorSpy },
@@ -131,6 +142,10 @@ describe('EditorPageComponent (focused logic)', () => {
       documentEditor: {
         serialize: jasmine.createSpy('serialize').and.returnValue(SAMPLE_SFDT),
         open: jasmine.createSpy('open'),
+        // Focus-mode fit: mock fitPage/resize/zoomFactor so applyFocusFit runs without throwing.
+        fitPage: jasmine.createSpy('fitPage'),
+        resize: jasmine.createSpy('resize'),
+        zoomFactor: 1,
       },
     };
     (component as any).docEditor = mockDocEditor;
@@ -726,6 +741,43 @@ describe('EditorPageComponent (focused logic)', () => {
       expect(component.reviewPanelOpen).toBe(false);
     });
 
+    // Focus-mode width: entering focus fits the page to the (widened) frame via fitPage('FitPageWidth');
+    // exiting restores natural 100% and does NOT fit-to-width (which would shrink a narrow column tiny).
+    it('fits the page to width when ENTERING focus mode', fakeAsync(() => {
+      component.focusMode = false;
+      const ed = mockDocEditor.documentEditor as any;
+      ed.fitPage.calls.reset();
+
+      component.toggleFocusMode();
+      tick(0);
+
+      expect(ed.fitPage).toHaveBeenCalledWith('FitPageWidth');
+    }));
+
+    it('restores natural 100% zoom and does NOT fit-to-width when EXITING focus mode', fakeAsync(() => {
+      component.focusMode = true;
+      const ed = mockDocEditor.documentEditor as any;
+      ed.fitPage.calls.reset();
+      ed.zoomFactor = 0.4;
+
+      component.toggleFocusMode();
+      tick(0);
+
+      expect(ed.fitPage).not.toHaveBeenCalled();
+      expect(ed.zoomFactor).toBe(1);
+    }));
+
+    it('does not throw when docEditor is absent during focus toggle (no editor yet)', fakeAsync(() => {
+      component.focusMode = false;
+      // Simulate no editor mounted yet (e.g. no chapter selected, Syncfusion not created).
+      (component as any).docEditor = undefined;
+
+      expect(() => {
+        component.toggleFocusMode();
+        tick(0);
+      }).not.toThrow();
+    }));
+
     it('localizes the focus-mode label for Hebrew and English books', () => {
       component.book = {
         id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', chapters: [],
@@ -855,6 +907,28 @@ describe('EditorPageComponent (focused logic)', () => {
     });
   });
 
+  // ─── rf-f13: onChecklistSwitchToReview selects Findings tab ────────────────
+
+  describe('onChecklistSwitchToReview (rf-f13)', () => {
+    it('switches reviewMode to "review"', () => {
+      component.reviewMode = 'edit';
+      component.onChecklistSwitchToReview();
+      expect(component.reviewMode).toBe('review');
+    });
+
+    it('sets dashboardComp.reviewTab to "findings" when a dashboard is mounted', () => {
+      const fakeDashboard = { reviewTab: 'bible' as 'findings' | 'bible' };
+      (component as any).dashboardComp = fakeDashboard;
+      component.onChecklistSwitchToReview();
+      expect(fakeDashboard.reviewTab).toBe('findings');
+    });
+
+    it('does not throw when dashboardComp is undefined (checklist visible while dashboard is unmounted)', () => {
+      (component as any).dashboardComp = undefined;
+      expect(() => component.onChecklistSwitchToReview()).not.toThrow();
+    });
+  });
+
   // ─── NIT-7: reviewModeOptions memoization ───────────────────────────────────
 
   describe('reviewModeOptions memoization (NIT-7)', () => {
@@ -917,9 +991,46 @@ describe('EditorPageComponent (focused logic)', () => {
 
 @Component({ selector: 'app-book-dashboard', standalone: true, template: '' })
 class StubBookDashboardComponent {
-  // P2-6: mirrors the real dashboard's buildRunningChange output so tests can drive the editor's
-  // "review running" affordance from a held-open stream (the close-during-build window).
-  @Output() buildRunningChange = new EventEmitter<boolean>();
+  // rf-c02: the dashboard no longer drives the editor "review running" affordance (its buildRunningChange
+  // @Output was deleted). The affordance is now derived from the job registry; the dashboard only bubbles
+  // openChapter. Kept as an inert stub so the real template's <app-book-dashboard> resolves.
+  @Output() openChapter = new EventEmitter<unknown>();
+}
+
+/** rf-f03: inert stub for ImportHandoffCardComponent — same selector, emits both outputs. */
+@Component({ selector: 'app-import-handoff-card', standalone: true, template: '' })
+class StubImportHandoffCardComponent {
+  @Output() startReview = new EventEmitter<void>();
+  @Output() editMode = new EventEmitter<void>();
+}
+
+/**
+ * rf-c02: controllable JobRegistryService stub. `anyRunningForBook$(bookId)` returns a per-book
+ * BehaviorSubject so a test can push the running flag for a SPECIFIC book (proving book-scoping: a job for
+ * book A must not light book B). `reattach` is a spy so the "reattach once per book load, no second poller"
+ * contract can be asserted.
+ */
+class RegistryStub {
+  private readonly running = new Map<string, BehaviorSubject<boolean>>();
+  reattach = jasmine.createSpy('reattach');
+
+  private subjectFor(bookId: string): BehaviorSubject<boolean> {
+    let s = this.running.get(bookId);
+    if (!s) {
+      s = new BehaviorSubject<boolean>(false);
+      this.running.set(bookId, s);
+    }
+    return s;
+  }
+
+  anyRunningForBook$(bookId: string): Observable<boolean> {
+    return this.subjectFor(bookId).asObservable();
+  }
+
+  /** Test hook: set the running flag for a specific book. */
+  setRunning(bookId: string, running: boolean): void {
+    this.subjectFor(bookId).next(running);
+  }
 }
 
 @Component({ selector: 'app-analysis-panel', standalone: true, template: '' })
@@ -940,6 +1051,8 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
   /** Held-open book load: nothing emits until the test calls bookLoad$.next(book). */
   let bookLoad$: Subject<BookDetailDto>;
   let routeParams$: Subject<Record<string, string>>;
+  /** rf-c02: controllable registry stub driving the editor's "review running" affordance per book. */
+  let registryStub: RegistryStub;
 
   const BOOK: BookDetailDto = {
     id: 'book-1', title: 'My Book', author: null, language: 'he',
@@ -952,25 +1065,19 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
   beforeEach(async () => {
     bookLoad$ = new Subject<BookDetailDto>();
     routeParams$ = new Subject<Record<string, string>>();
+    registryStub = new RegistryStub();
 
     await TestBed.configureTestingModule({
       imports: [EditorPageComponent],
       providers: [
-        { provide: ActivatedRoute, useValue: { params: routeParams$.asObservable() } },
-        { provide: Router, useValue: { navigate: jasmine.createSpy() } },
+        { provide: ActivatedRoute, useValue: { params: routeParams$.asObservable(), snapshot: { queryParams: {} } } },
+        { provide: Router, useValue: { navigate: jasmine.createSpy(), getCurrentNavigation: () => null } },
         // Held-open book load: the controlled Subject lets us assert the in-between state
         // (bookId set, book not yet resolved) before emitting.
         { provide: BookService, useValue: { getById: () => bookLoad$.asObservable() } },
-        // P2-6: editor-owned reconcile of the build affordance while the dashboard is unmounted. Default to
-        // "no active build"; tests re-stub to simulate a build that is still running / has finished.
-        {
-          provide: BookSummaryService,
-          useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) },
-        },
-        {
-          provide: BookReviewService,
-          useValue: { getReviewStatus: () => of({ activeBuildJobId: null }) },
-        },
+        // rf-c02: the editor derives the "review running" affordance from the job registry (per book) and calls
+        // reattach on book load. The controllable stub lets tests push the running flag for a specific book.
+        { provide: JobRegistryService, useValue: registryStub },
         {
           provide: ChapterService,
           useValue: { update: () => of({}), create: () => EMPTY, delete: () => EMPTY, getById: () => EMPTY, reorder: () => EMPTY },
@@ -1007,6 +1114,7 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
             StubIssuePanelComponent,
             StubBookDashboardComponent,
             StubSegmentedControlComponent,
+            StubImportHandoffCardComponent,
           ],
           schemas: [NO_ERRORS_SCHEMA], // tolerate <ejs-documenteditorcontainer> + its bindings
         },
@@ -1083,6 +1191,70 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
     expect(has('app-book-dashboard')).toBe(false);
   });
 
+  // ── Phase 4d-10c: a book switch clears the revise-context (root singleton) ────────
+  it('clears the revise-context (Addressing chip) when the route bookId changes to a different book', () => {
+    const reviseCtx = TestBed.inject(ReviseContextService);
+    fixture.detectChanges(); // ngOnInit subscribes to route params
+
+    // Land on book-1, then a finding navigation set the addressing context.
+    routeParams$.next({ bookId: 'book-1' });
+    reviseCtx.set({ findingId: 'f-1', oneLiner: 'Midpoint reversal.', chapterId: 'c-3' });
+    expect(reviseCtx.snapshot).not.toBeNull();
+
+    // Switch to a DIFFERENT book: the stale context must be cleared.
+    routeParams$.next({ bookId: 'book-2' });
+    expect(reviseCtx.snapshot).toBeNull();
+  });
+
+  it('does NOT clear the revise-context on a same-book route params re-emit', () => {
+    const reviseCtx = TestBed.inject(ReviseContextService);
+    fixture.detectChanges();
+
+    routeParams$.next({ bookId: 'book-1' });
+    reviseCtx.set({ findingId: 'f-1', oneLiner: 'Midpoint reversal.', chapterId: 'c-3' });
+
+    // Same bookId re-emits (e.g. a benign params refresh): the active in-book context survives.
+    routeParams$.next({ bookId: 'book-1' });
+    expect(reviseCtx.snapshot).not.toBeNull();
+  });
+
+  // ── c02: a book switch resets the imported/handoff one-shot (card + counts) ────────
+  //
+  // The handoff card + imported* counts are read ONCE in ngOnInit for the FIRST book. On a SUBSEQUENT
+  // in-place book switch there is no fresh imported nav state, so a stale card must not carry over.
+  it('clears showHandoffCard and the imported* fields when the route bookId changes to a different book', () => {
+    fixture.detectChanges(); // ngOnInit subscribes to route params
+
+    // Land on book-1, then simulate the imported one-shot having been shown (card + counts up).
+    routeParams$.next({ bookId: 'book-1' });
+    component.showHandoffCard = true;
+    component.importedChapters = 12;
+    component.importedWords = 45000;
+    component.importedParts = 3;
+
+    // Switch to a DIFFERENT book: the stale card + counts must be reset.
+    routeParams$.next({ bookId: 'book-2' });
+
+    expect(component.showHandoffCard).toBe(false);
+    expect(component.importedChapters).toBeNull();
+    expect(component.importedWords).toBeNull();
+    expect(component.importedParts).toBeNull();
+  });
+
+  it('does NOT reset the imported/handoff one-shot on a same-book route params re-emit', () => {
+    fixture.detectChanges();
+
+    routeParams$.next({ bookId: 'book-1' });
+    component.showHandoffCard = true;
+    component.importedChapters = 7;
+
+    // Same bookId re-emits: the freshly-shown card (first load) must NOT be torn down.
+    routeParams$.next({ bookId: 'book-1' });
+
+    expect(component.showHandoffCard).toBe(true);
+    expect(component.importedChapters).toBe(7);
+  });
+
   // ── 3. editHelpView toggles the edit-mode body between analysis and issue panels ──────
 
   it('editHelpView toggles the edit-mode body between app-analysis-panel and app-issue-panel', () => {
@@ -1108,84 +1280,67 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
     expect(has('app-issue-panel')).toBe(false);
   });
 
-  // ── 4. P2-6: "review running" affordance survives close / focus while a build is in flight ──────
+  // ── 4. rf-c02: "review running" affordance derived from the job registry, survives dashboard unmount ──
   //
-  // A whole-book build is started; the dashboard reports it running via buildRunningChange. The user
-  // then CLOSES the panel (or enters focus mode), which @if-destroys the dashboard and its poll. The
-  // affordance must keep showing on the closed-panel reopen button and the focus-mode toggle even though
-  // the dashboard is gone (the editor holds the flag). On REOPEN the dashboard remounts, reattaches to the
-  // server-tracked job, and re-emits the now-finished state, which clears the affordance.
-  //
-  // The build-running stream is a HELD-OPEN Subject standing in for the dashboard's poll-driven output;
-  // the completion emit lands on the REMOUNTED dashboard (never a synchronous of()), proving no progress
-  // is lost across the close-during-build window.
-  describe('P2-6 "review running" affordance (close/focus during build, Subject-driven)', () => {
-    /** Held-open build-running stream; wired to whichever dashboard instance is currently mounted. */
-    let buildRunning$: Subject<boolean>;
-
-    /** Wire the held-open Subject through the CURRENTLY-mounted stub dashboard's real EventEmitter. */
-    function wireDashboardStream(): void {
-      const dash = fixture.debugElement
-        .query(By.css('app-book-dashboard'))
-        ?.componentInstance as { buildRunningChange: EventEmitter<boolean> } | undefined;
-      if (dash) {
-        buildRunning$.subscribe((b) => dash.buildRunningChange.emit(b));
-      }
-    }
-
-    beforeEach(() => {
-      buildRunning$ = new Subject<boolean>();
-      component.bookId = 'book-1';
-      component.book = BOOK;
-      component.reviewMode = 'review';   // dashboard is mounted so we can wire its output
+  // The affordance is NO LONGER emitted by the dashboard. It is derived by the editor from
+  // jobRegistry.anyRunningForBook$(bookId): the status rows publish their build to the registry (track()),
+  // the registry's own reused poll survives the dashboard being @if-destroyed (close panel / focus mode /
+  // Edit help), and reattach (called once on book load) re-discovers a build already in flight. So the
+  // affordance stays correct while the dashboard is unmounted WITHOUT the old editor-owned reconcile poll.
+  // These tests drive the real ngOnInit -> route -> subscribeReviewBuildRunning flow and push the registry
+  // running flag PER BOOK (proving book-scoping), then assert the reopen button / focus toggle affordance.
+  describe('rf-c02 "review running" affordance (registry-derived, survives close/focus/Edit-help)', () => {
+    /** Drive the real book-load flow so the editor subscribes anyRunningForBook$(bookId) + calls reattach. */
+    function loadBook(id = 'book-1'): void {
+      component.reviewMode = 'review';
       component.reviewPanelOpen = true;
       component.focusMode = false;
+      fixture.detectChanges();            // ngOnInit subscribes to route params
+      routeParams$.next({ bookId: id });  // subscribeReviewBuildRunning(id) + getById(id)
+      bookLoad$.next({ ...BOOK, id });    // book resolves -> reattach(id) called once
       fixture.detectChanges();
-      wireDashboardStream();
+    }
+
+    it('reattaches to in-flight jobs exactly ONCE on book load (no second poller)', () => {
+      loadBook('book-1');
+      expect(registryStub.reattach).toHaveBeenCalledTimes(1);
+      expect(registryStub.reattach).toHaveBeenCalledWith('book-1', 'he');
     });
 
-    it('sets reviewBuildRunning on build start, holds it on the reopen button across CLOSE, and clears it on REOPEN when the build finishes', () => {
-      // Build starts (dashboard mounted): the editor flag flips true.
-      buildRunning$.next(true);
+    it('sets reviewBuildRunning while a tracked job runs with the dashboard UNMOUNTED, and holds it on the reopen button', () => {
+      loadBook('book-1');
+
+      // A tracked job for book-1 starts running (published by a status row's track() -> registry).
+      registryStub.setRunning('book-1', true);
+      fixture.detectChanges();
       expect(component.reviewBuildRunning).toBe(true);
 
-      // User closes the panel: the dashboard + its poll are @if-destroyed, but the flag is held HERE.
+      // User closes the panel: the dashboard is @if-destroyed. The registry keeps tracking, so the flag holds.
       component.reviewPanelOpen = false;
       fixture.detectChanges();
       expect(has('app-book-dashboard')).toBe(false);
 
-      // The reopen button is shown and carries the running affordance (dot + accessible label).
+      // The reopen button shows the running affordance (dot + accessible label) even with the dashboard gone.
       const reopen = el().querySelector('.review-reopen') as HTMLElement;
       expect(reopen).not.toBeNull();
       expect(reopen.classList.contains('review-running')).toBe(true);
       expect(reopen.querySelector('.review-running-dot')).not.toBeNull();
-      // Accessible label includes the localized "Review running" (he book -> Hebrew copy).
       expect(reopen.getAttribute('aria-label')).toContain('סקירה רצה');
 
-      // User REOPENS: the dashboard remounts and reattaches to the still-running server job. Re-wire the
-      // stream to the NEW instance and emit completion on the SAME open Subject — proving the build kept
-      // running across the unmount and its terminal is what finally clears the affordance.
-      component.reviewPanelOpen = true;
-      fixture.detectChanges();
-      expect(has('app-book-dashboard')).toBe(true);
-      wireDashboardStream();
-
-      buildRunning$.next(false);
+      // The build finishes (terminal): the registry emits false and the affordance clears - dashboard still
+      // unmounted, proving the registry (not the dashboard) drives it.
+      registryStub.setRunning('book-1', false);
       fixture.detectChanges();
       expect(component.reviewBuildRunning).toBe(false);
     });
 
     it('shows the running affordance on the focus-mode toggle while in focus mode (panel + dashboard unmounted)', () => {
+      loadBook('book-1');
       // A chapter must be selected for the editor toolbar (focus button) to render.
       component.selectedChapterId = 'chap-1';
-      fixture.detectChanges();
 
-      // The build is genuinely in flight server-side. Entering focus unmounts the dashboard, so the editor's
-      // own reconcile is what now confirms the build is still running and HOLDS the affordance on the toggle.
-      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: 'job-1' });
-
-      // Build starts, then the user enters focus mode (which also closes the panel + unmounts the dashboard).
-      buildRunning$.next(true);
+      // A tracked job is in flight; entering focus unmounts the dashboard but the registry keeps driving it.
+      registryStub.setRunning('book-1', true);
       component.toggleFocusMode();
       fixture.detectChanges();
 
@@ -1202,13 +1357,8 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       expect(focusBtn.querySelector('.review-running-dot')).not.toBeNull();
       expect(focusBtn.getAttribute('title')).toContain('סקירה רצה');
 
-      // Exit focus: panel + dashboard remount; the remounted dashboard reports the build finished.
-      component.toggleFocusMode();
-      fixture.detectChanges();
-      expect(has('app-book-dashboard')).toBe(true);
-      wireDashboardStream();
-
-      buildRunning$.next(false);
+      // The build finishes while still in focus mode: the registry clears it (no remount needed).
+      registryStub.setRunning('book-1', false);
       fixture.detectChanges();
       expect(component.reviewBuildRunning).toBe(false);
       const focusBtnAfter = el().querySelector('.focus-btn') as HTMLElement;
@@ -1217,7 +1367,7 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
     });
 
     it('does NOT show the affordance when no build is running', () => {
-      // No emit on the stream: the flag stays false.
+      loadBook('book-1');
       expect(component.reviewBuildRunning).toBe(false);
       component.reviewPanelOpen = false;
       fixture.detectChanges();
@@ -1227,59 +1377,454 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       expect(reopen.querySelector('.review-running-dot')).toBeNull();
     });
 
-    // ── P2-6 Bug: the dashboard is the ONLY poller but mounts solely in Book review mode. A build that
-    //    finishes while in Edit help (or a book switched there) must still clear the affordance — the editor
-    //    reconciles the flag against the status endpoints whenever the dashboard is unmounted. ──
-    it('clears the affordance when a build FINISHES while in Edit help mode (dashboard unmounted, editor reconciles)', () => {
-      // Build starts in Book review mode (dashboard mounted): the editor flag flips true.
-      buildRunning$.next(true);
+    it('clears the affordance when a build FINISHES while in Edit help mode (dashboard unmounted, registry drives it)', () => {
+      loadBook('book-1');
+      registryStub.setRunning('book-1', true);
+      fixture.detectChanges();
       expect(component.reviewBuildRunning).toBe(true);
 
-      // The server now reports both whole-book surfaces idle (the build finished). Default stubs already
-      // return a null activeBuildJobId, but make the "finished" intent explicit.
-      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: null });
-      (TestBed.inject(BookReviewService) as any).getReviewStatus = () => of({ activeBuildJobId: null });
-
-      // User switches to Edit help: the dashboard (the only poller) is @if-destroyed. Pre-fix nothing would
-      // ever emit false again and the affordance would stick on forever; the editor-owned reconcile clears it.
+      // User switches to Edit help: the dashboard is @if-destroyed. The registry (single reused poll) keeps
+      // driving the flag, so when the build finishes the affordance clears with no dashboard mounted.
       component.onReviewModeChange('edit');
       fixture.detectChanges();
       expect(has('app-book-dashboard')).toBe(false);
+
+      registryStub.setRunning('book-1', false);
+      fixture.detectChanges();
       expect(component.reviewBuildRunning).toBe(false);
     });
 
-    it('KEEPS the affordance while in Edit help when the build is still running (reconcile does not over-clear)', () => {
-      // The build is genuinely still in flight server-side (summary surface advertises an active job).
-      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: 'job-1' });
-      (TestBed.inject(BookReviewService) as any).getReviewStatus = () => of({ activeBuildJobId: null });
-
-      buildRunning$.next(true);
+    it('KEEPS the affordance while in Edit help when the build is still running (registry does not over-clear)', () => {
+      loadBook('book-1');
+      registryStub.setRunning('book-1', true);
       component.onReviewModeChange('edit');
       fixture.detectChanges();
 
-      // Dashboard is gone, but the editor reconcile confirms the build is still running, so the flag holds.
+      // Dashboard is gone, but the registry still reports the build running, so the flag holds.
       expect(has('app-book-dashboard')).toBe(false);
       expect(component.reviewBuildRunning).toBe(true);
     });
 
-    it('drops a stale affordance when the user changes books while in Edit help (per-book flag reset)', () => {
-      // A build is running for book-1 and the user is in Edit help (dashboard unmounted); the reconcile keeps
-      // the affordance lit while the job is active.
-      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: 'job-1' });
-      buildRunning$.next(true);
-      component.onReviewModeChange('edit');
+    it('book-switch re-scopes the affordance: a job for book A does not light book B (wrong-book guard)', () => {
+      loadBook('book-A');
+      registryStub.setRunning('book-A', true);
       fixture.detectChanges();
       expect(component.reviewBuildRunning).toBe(true);
 
-      // The user switches to a different book that has no build running. The route emits the new id: the
-      // editor must drop the previous book's affordance at once rather than carry the stale flag over.
-      (TestBed.inject(BookSummaryService) as any).getBookSummaryStatus = () => of({ activeBuildJobId: null });
-      routeParams$.next({ bookId: 'book-2' });
+      // The user switches to book-B, which has NO build running. The route emits the new id: the editor
+      // re-subscribes anyRunningForBook$('book-B') and drops the stale book-A flag at once.
+      routeParams$.next({ bookId: 'book-B' });
       expect(component.reviewBuildRunning).toBe(false);
 
-      // And once the new book loads, the reconcile confirms no build for it.
-      bookLoad$.next({ ...BOOK, id: 'book-2' });
+      // book-A's job is STILL running server-side, but it must not light book-B's affordance.
+      registryStub.setRunning('book-A', true);
+      fixture.detectChanges();
       expect(component.reviewBuildRunning).toBe(false);
+
+      // And book-B's own registry stream drives book-B's affordance.
+      registryStub.setRunning('book-B', true);
+      fixture.detectChanges();
+      expect(component.reviewBuildRunning).toBe(true);
     });
+  });
+
+  // ── rf-f03: import handoff card — DOM rendering ─────────────────────────────────────────────────
+
+  describe('rf-f03 import handoff card (DOM rendering)', () => {
+    it('shows app-import-handoff-card in review mode when showHandoffCard is true', () => {
+      component.bookId = 'book-1';
+      component.book = BOOK;
+      component.showHandoffCard = true;
+      component.reviewMode = 'review';
+      fixture.detectChanges();
+
+      expect(has('app-import-handoff-card')).toBe(true);
+      // The review body should NOT also show app-book-dashboard while the card is up
+      expect(has('app-book-dashboard')).toBe(false);
+    });
+
+    it('hides app-import-handoff-card when showHandoffCard is false', () => {
+      component.bookId = 'book-1';
+      component.book = BOOK;
+      component.showHandoffCard = false;
+      component.reviewMode = 'review';
+      fixture.detectChanges();
+
+      expect(has('app-import-handoff-card')).toBe(false);
+    });
+
+    it('shows app-book-dashboard (not the card) in review mode when showHandoffCard is false', () => {
+      component.bookId = 'book-1';
+      component.book = BOOK;
+      component.showHandoffCard = false;
+      component.reviewMode = 'review';
+      fixture.detectChanges();
+
+      expect(has('app-book-dashboard')).toBe(true);
+      expect(has('app-import-handoff-card')).toBe(false);
+    });
+
+    it('hides app-import-handoff-card when bookId is null even if showHandoffCard is true', () => {
+      component.bookId = null;
+      component.book = BOOK;
+      component.showHandoffCard = true;
+      fixture.detectChanges();
+
+      expect(has('app-import-handoff-card')).toBe(false);
+    });
+  });
+
+  // ── f07: review-reopen button hit area ─────────────────────────────────────────────────────────
+  //
+  // The (click)="openReviewPanel()" must live on the <button> element itself, not on the inner label
+  // span, so that the button's padding area and the running-dot area both reopen the panel and so
+  // that a keyboard Enter/Space on the focused button fires the handler. Clicking the BUTTON HOST
+  // (not the inner span) must invoke openReviewPanel().
+
+  describe('f07 review-reopen button hit area', () => {
+    it('clicking the .review-reopen button host (not the inner span) invokes openReviewPanel()', () => {
+      // Put the component into the state where the reopen button is rendered:
+      // reviewPanelOpen=false and focusMode=false (see template: @else if (!focusMode)).
+      component.reviewPanelOpen = false;
+      component.focusMode = false;
+      fixture.detectChanges();
+
+      const openSpy = spyOn(component, 'openReviewPanel');
+
+      // Query the button host element, NOT the inner .review-reopen-label span.
+      const btn = el().querySelector('button.review-reopen') as HTMLButtonElement;
+      expect(btn).withContext('.review-reopen button must be in the DOM when panel is closed').not.toBeNull();
+
+      btn.click();
+
+      expect(openSpy).withContext('openReviewPanel() must be called when the button HOST is clicked').toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+// ─── rf-f04: imported=1 query param decoupled from the ephemeral handoff card ─────────────────────
+//
+// Acceptance matrix (rf-f04 scope 1):
+//   A. imported=1 query param ALONE (no nav state)  → reviewMode='review', showHandoffCard=false
+//   B. imported=1 query param + nav state            → reviewMode='review', showHandoffCard=true
+//   C. no imported param                             → reviewMode='edit' (unchanged default)
+//
+// Each scenario uses its own isolated TestBed so the Router/ActivatedRoute providers can be
+// tailored per case without the shared beforeEach interfering.
+
+function buildImportTestBed(queryParams: Record<string, string>, navState: Record<string, unknown> | null) {
+  return TestBed.configureTestingModule({
+    imports: [EditorPageComponent],
+    providers: [
+      {
+        provide: ActivatedRoute,
+        useValue: { params: of({}), snapshot: { queryParams } },
+      },
+      {
+        provide: Router,
+        useValue: {
+          navigate: jasmine.createSpy(),
+          getCurrentNavigation: () =>
+            navState !== null
+              ? ({ extras: { state: navState } } as any)
+              : null,
+        },
+      },
+      { provide: BookService, useValue: { getById: () => EMPTY } },
+      {
+        provide: ChapterService,
+        useValue: { update: () => of({}), create: () => EMPTY, delete: () => EMPTY, getById: () => EMPTY, reorder: () => EMPTY },
+      },
+      {
+        provide: SceneService,
+        useValue: { update: () => of({}), getAll: () => of([]), getById: () => EMPTY, splitScenes: () => EMPTY },
+      },
+      {
+        provide: SyncService,
+        useValue: {
+          connect: () => Promise.resolve(), joinBook: () => {}, leaveBook: () => {},
+          chapterUpdated$: EMPTY, chapterCreated$: EMPTY, chapterReordered$: EMPTY,
+          sceneCreated$: EMPTY, sceneUpdated$: EMPTY, sceneDeleted$: EMPTY,
+          scenesCleared$: EMPTY, scenesReordered$: EMPTY,
+        },
+      },
+      { provide: DocumentVersionService, useValue: { create: () => of({}), list: () => of([]), get: () => EMPTY } },
+      { provide: AnalysisService, useValue: {} },
+      {
+        provide: JobRegistryService,
+        useValue: { anyRunningForBook$: () => of(false), reattach: jasmine.createSpy('reattach') },
+      },
+      { provide: SfdtManipulationService, useValue: jasmine.createSpyObj('SfdtManipulationService', ['ensureSfdtRtl', 'stripHighlightFromSfdt', 'replacePlainTextInSfdt', 'buildMinimalSfdt', 'applyHighlightRangesToSfdt', 'plainOffsetToSfdtPosition', 'addBookmarkAtRange']) },
+      { provide: EditorTextService, useValue: jasmine.createSpyObj('EditorTextService', ['getTextFromSfdt', 'getPlainTextFromEditor', 'refreshDocumentPlainText']) },
+      { provide: SuggestionAnchorService, useValue: jasmine.createSpyObj('SuggestionAnchorService', ['relocateAll', 'relocateOne']) },
+    ],
+  })
+    .overrideComponent(EditorPageComponent, { set: { template: '<div></div>', imports: [] } })
+    .compileComponents();
+}
+
+describe('EditorPageComponent rf-f04: imported mode decoupling (query param vs nav state)', () => {
+  afterEach(() => {
+    TestBed.resetTestingModule();
+  });
+
+  // ── A. Refresh scenario: query param present, NO nav state → Review mode, NO card ──
+
+  it('(A) imported param alone (simulate refresh): opens Review mode but does NOT show the handoff card', async () => {
+    await buildImportTestBed({ imported: '1' }, null);
+    const fx = TestBed.createComponent(EditorPageComponent);
+    const cmp = fx.componentInstance;
+    fx.detectChanges(); // triggers ngOnInit
+
+    expect(cmp.reviewMode).toBe('review');
+    expect(cmp.reviewPanelOpen).toBe(true);
+    expect(cmp.showHandoffCard).toBe(false);
+    fx.destroy();
+  });
+
+  // ── B. Fresh navigation: query param + nav state → Review mode + card shown ──
+
+  it('(B) imported param + nav state (fresh navigation): opens Review mode AND shows the handoff card', async () => {
+    const navState = { importedChapters: 12, importedWords: 45000, importedParts: 3 };
+    await buildImportTestBed({ imported: '1' }, navState);
+    const fx = TestBed.createComponent(EditorPageComponent);
+    const cmp = fx.componentInstance;
+    fx.detectChanges();
+
+    expect(cmp.reviewMode).toBe('review');
+    expect(cmp.reviewPanelOpen).toBe(true);
+    expect(cmp.showHandoffCard).toBe(true);
+    expect(cmp.importedChapters).toBe(12);
+    expect(cmp.importedWords).toBe(45000);
+    expect(cmp.importedParts).toBe(3);
+    fx.destroy();
+  });
+
+  // ── C. No imported param → Edit mode (existing books unchanged) ──
+
+  it('(C) no imported param: stays in Edit mode and does not show the handoff card', async () => {
+    await buildImportTestBed({}, null);
+    const fx = TestBed.createComponent(EditorPageComponent);
+    const cmp = fx.componentInstance;
+    fx.detectChanges();
+
+    expect(cmp.reviewMode).toBe('edit');
+    expect(cmp.showHandoffCard).toBe(false);
+    fx.destroy();
+  });
+
+  // ── D. Nav state alone (no imported param) → no change (import-page must send the param) ──
+
+  it('(D) nav state WITHOUT imported param: does not activate Review mode or show the card', async () => {
+    await buildImportTestBed({}, { importedChapters: 5, importedWords: 2000, importedParts: 1 });
+    const fx = TestBed.createComponent(EditorPageComponent);
+    const cmp = fx.componentInstance;
+    fx.detectChanges();
+
+    expect(cmp.reviewMode).toBe('edit');
+    expect(cmp.showHandoffCard).toBe(false);
+    fx.destroy();
+  });
+
+  // ── c02: consuming imported=1 strips it from the URL so a later refresh/escape is honored ──
+
+  it('(c02) strips the imported query param from the URL after consuming it (query param alone)', async () => {
+    await buildImportTestBed({ imported: '1' }, null);
+    const router = TestBed.inject(Router) as any;
+    const fx = TestBed.createComponent(EditorPageComponent);
+    const cmp = fx.componentInstance;
+    fx.detectChanges(); // ngOnInit consumes imported=1, then strips it
+
+    // Review-first default is still honored (strip runs AFTER reviewMode is set).
+    expect(cmp.reviewMode).toBe('review');
+    // The param is removed via a merge navigate (imported: null) with replaceUrl so refresh no longer re-forces review.
+    expect(router.navigate).toHaveBeenCalledWith(
+      [],
+      jasmine.objectContaining({
+        queryParams: jasmine.objectContaining({ imported: null }),
+        queryParamsHandling: 'merge',
+        replaceUrl: true,
+      }),
+    );
+    fx.destroy();
+  });
+
+  it('(c02) strips imported=1 even on the fresh-navigation path AND still shows the card (regression guard)', async () => {
+    const navState = { importedChapters: 12, importedWords: 45000, importedParts: 3 };
+    await buildImportTestBed({ imported: '1' }, navState);
+    const router = TestBed.inject(Router) as any;
+    const fx = TestBed.createComponent(EditorPageComponent);
+    const cmp = fx.componentInstance;
+    fx.detectChanges();
+
+    // The FIRST imported load STILL shows the card and its counts (strip must not clobber them).
+    expect(cmp.showHandoffCard).toBe(true);
+    expect(cmp.importedChapters).toBe(12);
+    expect(cmp.reviewMode).toBe('review');
+    // And the sticky param is stripped so a later refresh / "just let me edit" is honored.
+    expect(router.navigate).toHaveBeenCalledWith(
+      [],
+      jasmine.objectContaining({ queryParams: jasmine.objectContaining({ imported: null }) }),
+    );
+    fx.destroy();
+  });
+
+  it('(c02) does NOT strip / navigate when there is no imported param (normal navigation)', async () => {
+    await buildImportTestBed({}, null);
+    const router = TestBed.inject(Router) as any;
+    const fx = TestBed.createComponent(EditorPageComponent);
+    fx.detectChanges();
+
+    // No imported param → no strip navigate should fire from ngOnInit.
+    expect(router.navigate).not.toHaveBeenCalled();
+    fx.destroy();
+  });
+});
+
+// ── rf-f03: import handoff card handlers (focused logic, no template) ──────────────────────────
+
+describe('EditorPageComponent rf-f03 handoff handlers (focused logic)', () => {
+  let component: EditorPageComponent;
+  let fixture: ComponentFixture<EditorPageComponent>;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [EditorPageComponent],
+      providers: [
+        { provide: ActivatedRoute, useValue: { params: of({}), snapshot: { queryParams: {} } } },
+        { provide: Router, useValue: { navigate: jasmine.createSpy(), getCurrentNavigation: () => null } },
+        { provide: BookService, useValue: { getById: () => EMPTY } },
+        { provide: ChapterService, useValue: { update: () => of({}), create: () => EMPTY, delete: () => EMPTY, getById: () => EMPTY, reorder: () => EMPTY } },
+        { provide: SceneService, useValue: { update: () => of({}), getAll: () => of([]), getById: () => EMPTY, splitScenes: () => EMPTY } },
+        { provide: SyncService, useValue: { connect: () => Promise.resolve(), joinBook: () => {}, leaveBook: () => {}, chapterUpdated$: EMPTY, chapterCreated$: EMPTY, chapterReordered$: EMPTY, sceneCreated$: EMPTY, sceneUpdated$: EMPTY, sceneDeleted$: EMPTY, scenesCleared$: EMPTY, scenesReordered$: EMPTY } },
+        { provide: DocumentVersionService, useValue: { create: () => of({}), list: () => of([]), get: () => EMPTY } },
+        { provide: AnalysisService, useValue: {} },
+        { provide: JobRegistryService, useValue: { anyRunningForBook$: () => of(false), reattach: jasmine.createSpy('reattach') } },
+        { provide: SfdtManipulationService, useValue: jasmine.createSpyObj('SfdtManipulationService', ['stripHighlightFromSfdt', 'replacePlainTextInSfdt', 'buildMinimalSfdt', 'ensureSfdtRtl', 'applyHighlightRangesToSfdt', 'plainOffsetToSfdtPosition', 'addBookmarkAtRange']) },
+        { provide: EditorTextService, useValue: jasmine.createSpyObj('EditorTextService', ['getTextFromSfdt', 'getPlainTextFromEditor', 'refreshDocumentPlainText']) },
+        { provide: SuggestionAnchorService, useValue: jasmine.createSpyObj('SuggestionAnchorService', ['relocateAll', 'relocateOne']) },
+      ],
+    })
+      .overrideComponent(EditorPageComponent, { set: { template: '<div></div>', imports: [] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(EditorPageComponent);
+    component = fixture.componentInstance;
+  });
+
+  afterEach(() => fixture.destroy());
+
+  it('showHandoffCard defaults to false (non-imported path unchanged)', () => {
+    fixture.detectChanges(); // triggers ngOnInit
+    expect(component.showHandoffCard).toBe(false);
+    expect(component.reviewMode).toBe('edit');
+  });
+
+  it('onHandoffStartReview dismisses the card and keeps review mode', () => {
+    component.showHandoffCard = true;
+    component.reviewMode = 'review';
+
+    component.onHandoffStartReview();
+
+    expect(component.showHandoffCard).toBe(false);
+    expect(component.reviewMode).toBe('review');
+  });
+
+  it('onHandoffEditMode dismisses the card and switches to edit mode', () => {
+    component.showHandoffCard = true;
+    component.reviewMode = 'review';
+
+    component.onHandoffEditMode();
+
+    expect(component.showHandoffCard).toBe(false);
+    expect(component.reviewMode).toBe('edit');
+  });
+
+  it('does NOT set showHandoffCard when imported param is absent (normal navigation)', () => {
+    fixture.detectChanges();
+    expect(component.showHandoffCard).toBe(false);
+    expect(component.importedChapters).toBeNull();
+    expect(component.importedWords).toBeNull();
+    expect(component.importedParts).toBeNull();
+  });
+});
+
+// Each router-state variation needs its OWN TestBed so overrideProvider runs before module instantiation.
+
+/** Shared minimal providers for the handoff router-state tests (no Syncfusion, no real template). */
+function sharedHandoffProviders(routerVal: object, routeVal: object) {
+  return [
+    { provide: Router, useValue: routerVal },
+    { provide: ActivatedRoute, useValue: routeVal },
+    { provide: BookService, useValue: { getById: () => EMPTY } },
+    { provide: ChapterService, useValue: { update: () => of({}), create: () => EMPTY, delete: () => EMPTY, getById: () => EMPTY, reorder: () => EMPTY } },
+    { provide: SceneService, useValue: { update: () => of({}), getAll: () => of([]), getById: () => EMPTY, splitScenes: () => EMPTY } },
+    { provide: SyncService, useValue: { connect: () => Promise.resolve(), joinBook: () => {}, leaveBook: () => {}, chapterUpdated$: EMPTY, chapterCreated$: EMPTY, chapterReordered$: EMPTY, sceneCreated$: EMPTY, sceneUpdated$: EMPTY, sceneDeleted$: EMPTY, scenesCleared$: EMPTY, scenesReordered$: EMPTY } },
+    { provide: DocumentVersionService, useValue: { create: () => of({}), list: () => of([]), get: () => EMPTY } },
+    { provide: AnalysisService, useValue: {} },
+    { provide: JobRegistryService, useValue: { anyRunningForBook$: () => of(false), reattach: jasmine.createSpy('reattach') } },
+    { provide: SfdtManipulationService, useValue: jasmine.createSpyObj('SfdtManipulationService', ['stripHighlightFromSfdt', 'replacePlainTextInSfdt', 'buildMinimalSfdt', 'ensureSfdtRtl', 'applyHighlightRangesToSfdt', 'plainOffsetToSfdtPosition', 'addBookmarkAtRange']) },
+    { provide: EditorTextService, useValue: jasmine.createSpyObj('EditorTextService', ['getTextFromSfdt', 'getPlainTextFromEditor', 'refreshDocumentPlainText']) },
+    { provide: SuggestionAnchorService, useValue: jasmine.createSpyObj('SuggestionAnchorService', ['relocateAll', 'relocateOne']) },
+  ];
+}
+
+describe('EditorPageComponent rf-f03 imported signal — fresh router state present', () => {
+  let component: EditorPageComponent;
+  let fixture: ComponentFixture<EditorPageComponent>;
+
+  beforeEach(async () => {
+    const stateData = { importedChapters: 7, importedWords: 15000, importedParts: 3 };
+    const routerWithState = { navigate: jasmine.createSpy(), getCurrentNavigation: () => ({ extras: { state: stateData } }) };
+    const routeWithParam = { params: of({}), snapshot: { queryParams: { imported: '1' } } };
+
+    await TestBed.configureTestingModule({
+      imports: [EditorPageComponent],
+      providers: sharedHandoffProviders(routerWithState, routeWithParam),
+    })
+      .overrideComponent(EditorPageComponent, { set: { template: '<div></div>', imports: [] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(EditorPageComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+  });
+
+  afterEach(() => fixture.destroy());
+
+  it('sets showHandoffCard + reviewMode=review when imported=1 query param AND router state are present', () => {
+    expect(component.showHandoffCard).toBe(true);
+    expect(component.reviewMode).toBe('review');
+    expect(component.reviewPanelOpen).toBe(true);
+    expect(component.importedChapters).toBe(7);
+    expect(component.importedWords).toBe(15000);
+    expect(component.importedParts).toBe(3);
+  });
+});
+
+describe('EditorPageComponent rf-f03 imported signal — refresh (no router state)', () => {
+  let component: EditorPageComponent;
+  let fixture: ComponentFixture<EditorPageComponent>;
+
+  beforeEach(async () => {
+    const routerNoState = { navigate: jasmine.createSpy(), getCurrentNavigation: () => null };
+    const routeWithParam = { params: of({}), snapshot: { queryParams: { imported: '1' } } };
+
+    await TestBed.configureTestingModule({
+      imports: [EditorPageComponent],
+      providers: sharedHandoffProviders(routerNoState, routeWithParam),
+    })
+      .overrideComponent(EditorPageComponent, { set: { template: '<div></div>', imports: [] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(EditorPageComponent);
+    component = fixture.componentInstance;
+    fixture.detectChanges();
+  });
+
+  afterEach(() => fixture.destroy());
+
+  it('does NOT set showHandoffCard when imported param is present but router state is absent (refresh fallback)', () => {
+    expect(component.showHandoffCard).toBe(false);
   });
 });

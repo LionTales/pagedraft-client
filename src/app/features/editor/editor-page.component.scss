@@ -318,7 +318,11 @@
   justify-content: center;
 }
 .editor-layout--focus .editor-shell {
-  max-width: calc(var(--pd-reading-measure) + 12rem);
+  /* Wide enough to hold a full Letter/A4 document page (~816px at 100% zoom) plus the Syncfusion
+     page margins + vertical scrollbar, so focus mode fits the page with NO horizontal scroll and
+     WITHOUT touching the editor zoom (fitting the zoom made normal mode tiny). Still centered +
+     capped so it reads like a single calm page rather than an ultrawide column. */
+  max-width: min(100%, calc(816px + 6rem));
 }
 
 .editor-shell {
