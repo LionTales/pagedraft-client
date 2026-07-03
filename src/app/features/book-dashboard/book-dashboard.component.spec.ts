@@ -19,15 +19,21 @@ import { BookSummaryService } from '../../core/services/book-summary.service';
 import { BookReviewService } from '../../core/services/book-review.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { ChapterSummaryService } from '../../core/services/chapter-summary.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 
 describe('BookDashboardComponent (wb3-c01 host)', () => {
   let component: BookDashboardComponent;
   let fixture: ComponentFixture<BookDashboardComponent>;
+  // rf-c02: the hosted status rows publish their build to the registry. Spy so the real (root) registry is
+  // not pulled in and so we can assert the row->registry publish when a build is driven through the host.
+  let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
 
   beforeEach(async () => {
+    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']);
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
+        { provide: JobRegistryService, useValue: jobRegistrySpy },
         {
           provide: BookService,
           // Spies so individual tests can re-stub getProfile (e.g. to return a loaded profile).
@@ -243,86 +249,49 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     expect(component.reviewTabLabel('bible')).toBe('Story Bible');
   });
 
-  // ── P2-6: buildRunningChange aggregation (drives the editor "review running" affordance) ─────
-  // The dashboard aggregates "any whole-book build running" from the summary row's buildingChange
-  // output AND the review row's reviewStateChange === 'building', and re-emits the in-flight value
-  // at unmount so the host's affordance survives the dashboard being @if-destroyed (close / focus).
-  describe('buildRunningChange aggregation (P2-6)', () => {
-    it('emits true when the review row reports building and false when it leaves building', () => {
-      const events: boolean[] = [];
-      component.buildRunningChange.subscribe((b) => events.push(b));
-
-      // The review row enters BUILDING (e.g. a user-initiated review build started).
-      component.onReviewStateChange('building');
-      expect(component.buildRunning).toBeTrue();
-      expect(events).toEqual([true]);
-
-      // Staying building is de-duped (no redundant emit).
-      component.onReviewStateChange('building');
-      expect(events).toEqual([true]);
-
-      // Build finishes -> ready: aggregate flips false, emitted once.
-      component.onReviewStateChange('ready');
-      expect(component.buildRunning).toBeFalse();
-      expect(events).toEqual([true, false]);
+  // ── rf-c02: registry-derived build state ─────────────────────────────────────
+  // rf-c02: the dashboard NO LONGER owns the host "review running" affordance (the deleted buildRunningChange
+  // @Output). That affordance is now derived by the editor from the job registry, which the status rows publish
+  // to via track(). The dashboard's OWN aggregate `buildRunning` getter is kept (it reflects its internal
+  // review/summary state) and the hosted summary row must publish its build to the registry when it starts.
+  describe('rf-c02: registry-derived build state (buildRunningChange @Output removed)', () => {
+    it('no longer exposes a buildRunningChange @Output', () => {
+      expect((component as any).buildRunningChange).toBeUndefined();
     });
 
-    it('emits true when the SUMMARY row reports building via buildingChange (held-open Subject)', () => {
+    it('buildRunning getter still derives from the review row state (internal aggregate)', () => {
+      component.onReviewStateChange('building');
+      expect(component.buildRunning).toBeTrue();
+
+      component.onReviewStateChange('ready');
+      expect(component.buildRunning).toBeFalse();
+    });
+
+    it('buildRunning getter still derives from the SUMMARY row building flag (internal aggregate)', () => {
+      component.onSummaryBuildingChange(true);
+      expect(component.buildRunning).toBeTrue();
+
+      component.onSummaryBuildingChange(false);
+      expect(component.buildRunning).toBeFalse();
+    });
+
+    it('publishes the summary build to the job registry (track) when a build is driven through the hosted row', () => {
       // Re-stub the summary service so the real hosted summary row drives a Subject-backed build.
       const summarySvc = TestBed.inject(BookSummaryService) as any;
       const progressSvc = TestBed.inject(AnalysisProgressService) as any;
       summarySvc.buildBookSummary = () => of({ jobId: 'job-1', noOp: false } as any);
       summarySvc.getBookSummaryStatus = () => NEVER;
-      const poll$ = new Subject<any>();
-      progressSvc.pollBookSummaryProgress = () => poll$.asObservable();
-
-      const events: boolean[] = [];
-      component.buildRunningChange.subscribe((b) => events.push(b));
+      progressSvc.pollBookSummaryProgress = () => NEVER;
 
       const summaryRow = fixture.debugElement
         .query(By.css('app-book-summary-status-row'))
-        .componentInstance as { bookLanguage: string; onBuildBookSummary: () => void };
+        .componentInstance as { bookId: string; bookLanguage: string; onBuildBookSummary: () => void };
+      summaryRow.bookId = 'book-1';
       summaryRow.bookLanguage = 'he';
       summaryRow.onBuildBookSummary();
 
-      // The summary row emitted buildingChange(true); the dashboard aggregated it and emitted true.
-      expect(component.buildRunning).toBeTrue();
-      expect(events).toEqual([true]);
-
-      // Terminal on the OPEN Subject clears it.
-      poll$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
-      expect(component.buildRunning).toBeFalse();
-      expect(events).toEqual([true, false]);
-    });
-
-    it('keeps the host flag TRUE across unmount: ngOnDestroy does not flip a running build to false', () => {
-      const events: boolean[] = [];
-      component.buildRunningChange.subscribe((b) => events.push(b));
-
-      // A review build is running.
-      component.onReviewStateChange('building');
-      expect(events).toEqual([true]);
-
-      // The dashboard is @if-destroyed (panel closed / focus mode) WHILE the build runs. The
-      // re-emit at unmount must NOT report false — the build is still running server-side.
-      component.ngOnDestroy();
-      expect(events).toEqual([true]); // still true; no false emitted at unmount
-    });
-
-    it('re-syncs the host on REMOUNT: the first reported state being non-building emits false (clears a host '
-      + 'flag left stuck true by a build that finished while the dashboard was unmounted)', () => {
-      // Remount-after-finish: this fresh instance starts buildRunning=false and lastBuildRunning=null. Its
-      // review row reattaches to the now-FINISHED server job and reports a terminal, non-building state as
-      // its FIRST emit. The host (editor) is still showing the "review running" affordance from before the
-      // unmount, so the dashboard MUST emit false to clear it — even though false matches this fresh
-      // instance's own default. Pre-fix, the dedup against a false baseline swallowed this first emit and
-      // the host stayed stuck true forever.
-      const events: boolean[] = [];
-      component.buildRunningChange.subscribe((b) => events.push(b));
-
-      component.onReviewStateChange('ready'); // first signal after reattach: the build is already done
-      expect(component.buildRunning).toBeFalse();
-      expect(events).toEqual([false]);
+      // The row published its build to the single registry so the editor affordance can read it.
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('summary', 'book-1', 'job-1');
     });
   });
 
@@ -476,15 +445,11 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(component.profile?.genre).toBe('NewGenre');
     });
 
-    it('clears buildRunning on book switch so the previous book\'s review-building does not leak into the '
-      + 'new book during the gap before its review status loads', () => {
-      const events: boolean[] = [];
-      component.buildRunningChange.subscribe((b) => events.push(b));
-
-      // Book A's developmental review is running: reviewState='building' and the host affordance is lit.
+    it('resets its internal review/summary state on book switch so book A\'s building does not leak into '
+      + 'book B\'s dashboard aggregate during the gap before its status loads', () => {
+      // Book A's developmental review is running: reviewState='building' and the dashboard aggregate is true.
       component.onReviewStateChange('building');
       expect(component.buildRunning).toBeTrue();
-      expect(events).toEqual([true]);
 
       // The editor switches book in place (non-firstChange). The new book's review status has NOT loaded
       // yet (getReviewStatus is the default NEVER), so the review row will not re-emit for a while.
@@ -492,11 +457,12 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       component.bookId = 'book-2';
       component.ngOnChanges({ bookId: new SimpleChange(previous, 'book-2', false) });
 
-      // The cached review state is reset and the host is told false immediately — the stale 'building' from
-      // book A cannot keep the "review running" affordance lit for book B across the async status-load gap.
+      // rf-c02: the cached review state is reset immediately, so the stale 'building' from book A cannot keep
+      // the dashboard's own aggregate lit for book B across the async status-load gap. (The HOST "review
+      // running" affordance's wrong-book guard now lives in the editor: it re-subscribes anyRunningForBook$ to
+      // the new bookId, so a book-A job can never light book B - covered in the editor spec.)
       expect(component.reviewState).toBe('unknown');
       expect(component.buildRunning).toBeFalse();
-      expect(events).toEqual([true, false]);
     });
 
     it('does NOT reload or reset on the first ngOnChanges (firstChange) so init loads only once', () => {
@@ -513,6 +479,175 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
 
       expect(getProfile.calls.count()).toBe(callsBefore);
       expect(component.reviewTab).toBe('bible'); // untouched on firstChange
+    });
+  });
+
+  // ── rf-f04: staging/prominence: profile readable + review as primary next action ────────────────
+  //
+  // (e) Profile/Story-Bible must stay readable (not blocked by a full-panel spinner) while the
+  //     review is building. The `loading && !profile` guard only shows the "טוען" text when there
+  //     is NO profile at all; once a profile exists it is always shown regardless of loading state.
+  //
+  // (f) When summary is READY but the review is NOT built, the stepper Assess CTA is present and
+  //     represents the primary next action. The review is the leading visible next step.
+
+  describe('rf-f04: staging/prominence', () => {
+    it('(e) profile sections remain rendered during a review build (loading && !profile guard is false when profile exists)', () => {
+      // Simulate a profile already loaded and a review build starting.
+      // component.profile is private — stub it via the bookService returning a profile on init.
+      const bookSvc = TestBed.inject(BookService);
+      (bookSvc.getProfile as jasmine.Spy).and.returnValue(
+        of({ genre: 'Fantasy', synopsis: 'A tale of two cities', charactersJson: null, storyStructureJson: null } as any)
+      );
+
+      // Re-create the component so ngOnInit loads the stubbed profile.
+      fixture = TestBed.createComponent(BookDashboardComponent);
+      component = fixture.componentInstance;
+      component.bookId = 'book-loaded';
+      component.bookLanguage = 'he';
+      fixture.detectChanges();
+
+      // Profile is now loaded: overview-card is rendered.
+      expect(fixture.debugElement.query(By.css('.overview-card'))).not.toBeNull();
+
+      // Now a review build starts (reviewState => 'building'). The review row emits 'building'.
+      component.onReviewStateChange('building');
+      // Also simulate the loading flag being true (e.g. re-fetch triggered elsewhere).
+      // Even with loading=true, because profile is non-null the guard (loading && !profile) is false.
+      (component as any).loading = true;
+      fixture.detectChanges();
+
+      // Profile sections remain visible: no blank panel, no full-page blocking spinner.
+      expect(fixture.debugElement.query(By.css('.overview-card'))).not.toBeNull();
+      // The "טוען" placeholder is NOT shown because profile is non-null.
+      const loadingHint = fixture.debugElement.nativeElement.querySelector('.empty-hint');
+      // .empty-hint may appear as "no profile" hint — it must NOT be the loading text when profile exists.
+      // The loading guard is `@if (loading && !profile)` so with a profile present, no hint is shown.
+      expect(loadingHint).toBeNull();
+    });
+
+    it('(e) no full-panel blank while review builds: buildRunning true but profile stays rendered', () => {
+      // Stub a pre-loaded profile.
+      const bookSvc = TestBed.inject(BookService);
+      (bookSvc.getProfile as jasmine.Spy).and.returnValue(
+        of({ genre: 'Thriller', synopsis: null, charactersJson: null, storyStructureJson: null } as any)
+      );
+      fixture = TestBed.createComponent(BookDashboardComponent);
+      component = fixture.componentInstance;
+      component.bookId = 'book-2';
+      component.bookLanguage = 'he';
+      fixture.detectChanges();
+
+      // Profile loaded.
+      expect(fixture.debugElement.query(By.css('.overview-card'))).not.toBeNull();
+
+      // Review build starts.
+      component.onReviewStateChange('building');
+      expect(component.buildRunning).toBeTrue();
+      fixture.detectChanges();
+
+      // Profile must remain visible, showFindings is false (building state), but profile card is present.
+      expect(component.showFindings).toBeFalse();
+      expect(fixture.debugElement.query(By.css('.overview-card'))).not.toBeNull();
+    });
+
+    it('(f) review CTA is present as the primary next action when summary ready + review not built', () => {
+      // When summary briefs are present (reviewState !== needs-summary) but review is not yet built
+      // (reviewState === 'not-built'), the stepper Assess step should have the CTA button.
+      component.onReviewStateChange('not-built'); // briefs present (not needs-summary)
+      fixture.detectChanges();
+
+      // stepperHasBriefs is true for 'not-built' (it is NOT 'needs-summary' or 'unknown').
+      expect(component.stepperHasBriefs).toBeTrue();
+      // stepperReviewReady is false — review has not been built yet.
+      expect(component.stepperReviewReady).toBeFalse();
+      // stepperSummaryReady is true.
+      expect(component.stepperSummaryReady).toBeTrue();
+      // The stepper Assess CTA button must be rendered as the primary next-step.
+      expect(fixture.debugElement.query(By.css('[data-testid="funnel-cta-assess"]'))).not.toBeNull();
+    });
+
+    it('(f) review is the prominent next action: showFindings is false and the review row Build CTA is the leading action', () => {
+      // When review state is not-built, the findings panel is hidden (owned by the review status row),
+      // so the primary visible action is the Build assessment CTA in the status row.
+      component.onReviewStateChange('not-built');
+      fixture.detectChanges();
+
+      // No findings panel: the review CTA in the status row is the only review-related action.
+      expect(component.showFindings).toBeFalse();
+      expect(fixture.debugElement.query(By.css('app-book-review-findings'))).toBeNull();
+      // The review status row is always present (it owns the Build CTA while not built).
+      expect(fixture.debugElement.query(By.css('app-book-review-status-row'))).not.toBeNull();
+    });
+  });
+
+  // ── rf-f04: Revise CTA behavior — DISTINCT from Assess ──────────────────────
+  // onStepperReviseRequested() must select the Findings sub-tab and scroll to the findings anchor,
+  // NOT just mirror the Assess CTA's status-rows scroll. "Go to findings" / "עבור לממצאים".
+
+  describe('rf-f04: Revise CTA selects Findings tab and scrolls to findings anchor', () => {
+    it('onStepperReviseRequested sets reviewTab to findings and emits switchToReview', () => {
+      // Pre-condition: the review tab is on the bible tab (simulate user browsed away from findings).
+      component.reviewTab = 'bible';
+
+      component.onStepperReviseRequested();
+
+      // Must snap back to the Findings sub-tab.
+      expect(component.reviewTab).toBe('findings');
+    });
+
+    it('onStepperReviseRequested emits switchToReview (same as Assess)', () => {
+      let emitCount = 0;
+      component.switchToReview.subscribe(() => emitCount++);
+
+      component.onStepperReviseRequested();
+
+      expect(emitCount).toBe(1);
+    });
+
+    it('onStepperReviseRequested scrolls to the findingsAnchor, NOT the statusRowsAnchor', () => {
+      // Stub the nativeElement scrollIntoView on both anchors to track which is called.
+      const findingsScrollSpy = jasmine.createSpy('findingsScroll');
+      const statusRowsScrollSpy = jasmine.createSpy('statusRowsScroll');
+
+      (component as any).findingsAnchor = { nativeElement: { scrollIntoView: findingsScrollSpy } };
+      (component as any).statusRowsAnchor = { nativeElement: { scrollIntoView: statusRowsScrollSpy } };
+
+      component.onStepperReviseRequested();
+
+      expect(findingsScrollSpy).toHaveBeenCalledOnceWith({ behavior: 'smooth', block: 'start' });
+      expect(statusRowsScrollSpy).not.toHaveBeenCalled();
+    });
+
+    it('onStepperAssessRequested scrolls to the statusRowsAnchor, NOT the findingsAnchor (Assess unchanged)', () => {
+      const findingsScrollSpy = jasmine.createSpy('findingsScroll');
+      const statusRowsScrollSpy = jasmine.createSpy('statusRowsScroll');
+
+      (component as any).findingsAnchor = { nativeElement: { scrollIntoView: findingsScrollSpy } };
+      (component as any).statusRowsAnchor = { nativeElement: { scrollIntoView: statusRowsScrollSpy } };
+
+      component.onStepperAssessRequested();
+
+      expect(statusRowsScrollSpy).toHaveBeenCalledOnceWith({ behavior: 'smooth', block: 'start' });
+      expect(findingsScrollSpy).not.toHaveBeenCalled();
+    });
+
+    it('Revise and Assess behaviors are DISTINCT: Revise selects findings tab, Assess does not touch reviewTab', () => {
+      // Set reviewTab to 'bible' before each call.
+      component.reviewTab = 'bible';
+      component.onStepperAssessRequested();
+      // Assess must NOT change the active tab.
+      expect(component.reviewTab).toBe('bible');
+
+      component.reviewTab = 'bible';
+      component.onStepperReviseRequested();
+      // Revise MUST reset to findings.
+      expect(component.reviewTab).toBe('findings');
+    });
+
+    it('onStepperReviseRequested is a safe no-op when findingsAnchor is not yet available', () => {
+      (component as any).findingsAnchor = undefined;
+      expect(() => component.onStepperReviseRequested()).not.toThrow();
     });
   });
 });

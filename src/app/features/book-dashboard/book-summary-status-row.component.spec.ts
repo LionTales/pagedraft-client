@@ -18,6 +18,7 @@ import { NEVER, Subject, of } from 'rxjs';
 import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 
 function makeBookSummaryStatus(
@@ -46,8 +47,12 @@ function makeBookSummaryStatus(
 describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
   let component: BookSummaryStatusRowComponent;
   let fixture: ComponentFixture<BookSummaryStatusRowComponent>;
+  // rf-c02: the row publishes its build job to the registry on start. Spy so we can assert track() and so
+  // the real (root) registry (with its transitive deps) is not pulled into this component-focused TestBed.
+  let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
 
   beforeEach(async () => {
+    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']);
     await TestBed.configureTestingModule({
       imports: [BookSummaryStatusRowComponent],
       providers: [
@@ -64,6 +69,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
             pollBookSummaryProgress: () => NEVER,
           },
         },
+        { provide: JobRegistryService, useValue: jobRegistrySpy },
       ],
     }).compileComponents();
 
@@ -426,6 +432,34 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
 
     expect(pollSpy).toHaveBeenCalledWith('book-1', 'job-running', jasmine.anything());
     expect(component.bookSummaryBuilding).toBeTrue();
+    // rf-c02: the reattached build is published to the registry so the editor affordance can read it.
+    expect(jobRegistrySpy.track).toHaveBeenCalledWith('summary', 'book-1', 'job-running');
+  });
+
+  // ── rf-c02: the row PUBLISHES its build job to the registry on start (track), so the editor's single
+  //    "review running" affordance can be derived from jobRegistry.anyRunningForBook$. ─────────────────
+  it('rf-c02: publishes the summary build to the registry once with kind/bookId/jobId on a fresh build', () => {
+    const summarySvc = TestBed.inject(BookSummaryService);
+    const progressSvc = TestBed.inject(AnalysisProgressService);
+    spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+    spyOn(progressSvc, 'pollBookSummaryProgress').and.returnValue(NEVER);
+    spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(NEVER);
+
+    component.bookLanguage = 'he';
+    component.onBuildBookSummary();
+
+    expect(jobRegistrySpy.track).toHaveBeenCalledOnceWith('summary', 'book-1', 'job-1');
+  });
+
+  it('rf-c02: does NOT track a NO-OP build (no jobId)', () => {
+    const summarySvc = TestBed.inject(BookSummaryService);
+    spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: null, noOp: true } as any));
+    spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(NEVER);
+
+    component.bookLanguage = 'he';
+    component.onBuildBookSummary();
+
+    expect(jobRegistrySpy.track).not.toHaveBeenCalled();
   });
 
   // c02: a finished SUMMARY build makes briefs present, so the host must refresh the book-REVIEW row's gate.

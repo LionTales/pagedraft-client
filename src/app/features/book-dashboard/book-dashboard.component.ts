@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { BookService } from '../../core/services/book.service';
 import {
@@ -18,6 +18,7 @@ import { BookReviewState, BookReviewStatusRowComponent } from './book-review-sta
 import { BookReviewFindingsComponent } from './book-review-findings.component';
 import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
+import { FunnelStepperComponent } from './funnel-stepper.component';
 
 /** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
 type ReviewTab = 'findings' | 'bible';
@@ -33,6 +34,7 @@ type ReviewTab = 'findings' | 'bible';
     BookReviewFindingsComponent,
     BookStoryBibleComponent,
     BookChapterSummariesComponent,
+    FunnelStepperComponent,
   ],
   template: `
     <div class="book-dashboard" dir="rtl">
@@ -48,9 +50,26 @@ type ReviewTab = 'findings' | 'bible';
         </button>
       </header>
 
+      <!-- rf-f02: funnel stepper — the visible "editing journey" spine pinned above the status rows.
+           Fully presentational: all inputs derived from existing dashboard state so no new polls.
+           NON-BLOCKING: advisory only; never gates the rest of the UI.
+           The [dir] on the stepper itself follows bookLanguage (book-scoped chrome). -->
+      <app-funnel-stepper
+        [bookLanguage]="bookLanguage"
+        [summaryRunning]="stepperSummaryRunning"
+        [reviewRunning]="stepperReviewRunning"
+        [summaryReady]="stepperSummaryReady"
+        [reviewReady]="stepperReviewReady"
+        [hasBriefs]="stepperHasBriefs"
+        (assessRequested)="onStepperAssessRequested()"
+        (reviseRequested)="onStepperReviseRequested()">
+      </app-funnel-stepper>
+
       <!-- Book-scoped status rows (wb3-c01): summary/briefs + developmental review build + status.
            A finished summary build clears the review's "build briefs first" gate, so its terminal
            event refreshes the review row. -->
+      <!-- rf-f02: anchor for the stepper CTA scroll-to. -->
+      <div #statusRowsAnchor></div>
       <section class="card book-status-card">
         <app-book-summary-status-row
           [bookId]="bookId"
@@ -65,6 +84,8 @@ type ReviewTab = 'findings' | 'bible';
           (reviewStateChange)="onReviewStateChange($event)">
         </app-book-review-status-row>
 
+        <!-- rf-f04: anchor for the Revise CTA scroll-to (always present, outside the showFindings guard). -->
+        <div #findingsAnchor></div>
         <!-- Review surfaces (wb3-c02 Findings ledger + wb3-c03 Story Bible). Mounted only when the review is
              READY/STALE so the not-built / briefs-missing / building states stay owned by the status row
              above. A lightweight tab toggles between the two views of the same review findings. -->
@@ -516,7 +537,7 @@ type ReviewTab = 'findings' | 'bible';
     .citations { font-size: var(--pd-text-caption); color: var(--pd-text-muted); margin-top: var(--pd-space-3); }
   `]
 })
-export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
+export class BookDashboardComponent implements OnInit, OnChanges {
   @Input() bookId!: string;
   @Input() bookTitle: string = '';
   /** Book language (e.g. 'he', 'en'); drives the book-scoped status rows' localization + status key. */
@@ -530,17 +551,30 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   @Output() openChapter = new EventEmitter<ChapterAnchor>();
 
   /**
-   * P2-6: emits whether a whole-book build (summary briefs OR developmental review) is currently running.
-   * The host (editor-page) holds the last-emitted value so it can show a "review running" affordance on the
-   * closed-panel reopen button and the focus-mode toggle EVEN WHILE THIS DASHBOARD IS UNMOUNTED — closing the
-   * panel or entering focus mode @if-destroys the dashboard and its poll subscriptions, but the build keeps
-   * running server-side and reattaches on remount (server-keyed activeBuildJobId). Emitted on every change AND
-   * once in ngOnDestroy so the host captures the in-flight state at the moment of unmount.
+   * rf-f02: emitted when the funnel stepper's Assess (or Revise) CTA is clicked. The host
+   * (editor-page) handles it by switching to Review mode (onReviewModeChange('review')) and
+   * scrolling to the status rows anchor. The dashboard itself does not own the mode-switch —
+   * that lives in the editor's SegmentedControl — so it delegates upward via this output,
+   * reusing the EXISTING onReviewModeChange path with no new coupling.
    */
-  @Output() buildRunningChange = new EventEmitter<boolean>();
+  @Output() switchToReview = new EventEmitter<void>();
+
+  /**
+   * rf-c02: the "review running" affordance is NO LONGER emitted from here. It is now derived by the editor
+   * directly from the single job registry ({@link JobRegistryService.anyRunningForBook$}), which the status
+   * rows publish to via track() on build start and which survives this dashboard being @if-destroyed (close
+   * panel / focus mode). The dashboard keeps tracking reviewState + summaryBuilding below for its OWN concerns
+   * (findings/bible gating + the summary-build-complete fan-out) — it just no longer owns the host affordance.
+   */
 
   /** The hosted review row; refreshed when a summary build finishes (clears its "build briefs first" gate). */
   @ViewChild('reviewRow') reviewRow?: BookReviewStatusRowComponent;
+
+  /** rf-f02: anchor element at the top of the status-rows section; scrolled to when a stepper CTA is clicked. */
+  @ViewChild('statusRowsAnchor') statusRowsAnchor?: ElementRef<HTMLElement>;
+
+  /** rf-f04: anchor element just above the findings/bible tabs; scrolled to when the Revise CTA is clicked. */
+  @ViewChild('findingsAnchor') findingsAnchor?: ElementRef<HTMLElement>;
 
   /** Latest derived review state reported by the hosted review row; gates the scorecard/ledger mount. */
   reviewState: BookReviewState = 'unknown';
@@ -556,16 +590,6 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    * stays mounted (rf-f04 / build-complete fan-out).
    */
   summaryDerivedRefresh = 0;
-  /**
-   * Last buildRunning value emitted to the host; used to dedupe redundant emits. Starts null (NOT false) so
-   * the FIRST emit after any (re)mount always fires and re-syncs the host, even when this fresh instance's
-   * aggregate is already false. Without the null sentinel a build that FINISHES while the dashboard is
-   * unmounted (panel closed / focus mode) would leave the host's flag stuck true forever: the remounted
-   * instance starts at buildRunning=false, the children's reattach-and-report-idle emit is the first
-   * emitBuildRunning() call, and it would be de-duped against a false baseline — so the host never hears
-   * the build ended. null !== false forces that first idle emit through.
-   */
-  private lastBuildRunning: boolean | null = null;
   /** Monotonic token passed to the findings panel; bumped when a build terminal warrants a re-read. */
   findingsRefreshToken = 0;
   /** Active review tab when the review is READY/STALE: the c02 Findings ledger (default) or c03 Story Bible. */
@@ -612,16 +636,6 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   }
 
   /**
-   * P2-6: re-emit the current build-running state at the moment of unmount so the host's affordance flag is
-   * accurate when the dashboard is @if-destroyed mid-build (close panel / focus mode). The host keeps the
-   * flag and shows the affordance until the build is observed to finish — which happens on the NEXT mount,
-   * when the rows reattach to the server-tracked job and emit a terminal/idle state.
-   */
-  ngOnDestroy(): void {
-    this.emitBuildRunning();
-  }
-
-  /**
    * Clear the dashboard-owned transient state that is NOT re-derived from an @Input on its own, so a
    * book switch does not show the previous book's profile/answer/tab. loadProfile() resets profile +
    * parsed structured fields, so this covers the rest: the Ask question/answer, expansion toggles, and
@@ -631,10 +645,9 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    * The cached whole-book-build inputs (reviewState + summaryBuilding) are reset HERE rather than left to
    * self-correct: the child rows reset synchronously, but the review row only RE-EMITS its real state after
    * its status HTTP returns. Until then a stale reviewState==='building' from the previous book would keep
-   * buildRunning true and light the host's "review running" affordance for the WRONG book (and if that
-   * status load errors it never re-emits, leaving the affordance stuck). Reset both to a not-running
-   * baseline and push it to the host now; the rows re-emit the new book's true state when their requests
-   * return.
+   * the dashboard's OWN showFindings gate on the previous book's state. Reset both to a not-running baseline;
+   * the rows re-emit the new book's true state when their requests return. (rf-c02: the host "review running"
+   * affordance no longer flows through here - it is registry-derived and re-scoped per book by the editor.)
    */
   private resetOwnState(): void {
     this.reviewTab = 'findings';
@@ -647,7 +660,6 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
     this.expandedPlotNode = null;
     this.reviewState = 'unknown';
     this.summaryBuilding = false;
-    this.emitBuildRunning();
   }
 
   /**
@@ -681,13 +693,11 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
       // a fresh mount loads on its own ngOnChanges, but a token bump is harmless and covers re-entry).
       this.findingsRefreshToken++;
     }
-    // The review-build component of buildRunning is derived from reviewState === 'building'; re-evaluate.
-    this.emitBuildRunning();
   }
 
   /**
-   * P2-6: the hosted summary row reported whether its briefs build is in flight (its buildingChange output).
-   * Record it and re-evaluate the aggregate build-running flag passed up to the host.
+   * The hosted summary row reported whether its briefs build is in flight (its buildingChange output).
+   * Record it (drives the dashboard's own summary-build-complete fan-out below).
    */
   onSummaryBuildingChange(building: boolean): void {
     const wasBuilding = this.summaryBuilding;
@@ -702,24 +712,102 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
       this.summaryDerivedRefresh++;
       this.loadProfile();
     }
-    this.emitBuildRunning();
   }
 
   /**
-   * True when ANY whole-book build is in flight: the briefs/summary build (tracked via the summary row's
-   * buildingChange output) OR the developmental review build (reviewState === 'building'). Drives the host's
-   * "review running" affordance.
+   * True when ANY whole-book build is in flight: the briefs/summary build (from the summary row's
+   * buildingChange output) OR the developmental review build (reviewState === 'building').
+   *
+   * rf-c02: this is now a dashboard-INTERNAL derived flag only. The host "review running" affordance is
+   * derived by the editor from the job registry ({@link JobRegistryService.anyRunningForBook$}), NOT from
+   * this getter - the status rows publish their build to the registry via track() on start. Kept as a
+   * truthful accessor of the dashboard's own aggregate state and as the assertion target for the
+   * rf-c02 spec suite (book-dashboard.component.spec.ts describe 'rf-c02').
    */
   get buildRunning(): boolean {
     return this.summaryBuilding || this.reviewState === 'building';
   }
 
-  /** Emit buildRunningChange to the host only when the aggregate value actually changed (de-duped). */
-  private emitBuildRunning(): void {
-    const running = this.buildRunning;
-    if (running === this.lastBuildRunning) return;
-    this.lastBuildRunning = running;
-    this.buildRunningChange.emit(running);
+  // ── rf-f02: funnel stepper inputs (derived from existing dashboard state) ─────
+
+  /**
+   * True when the book has usable chapter briefs (hasBriefs). Derived from reviewState:
+   * 'needs-summary' and 'unknown' mean no briefs; all other states mean briefs exist.
+   * The stepper uses this to show the right CTA label on the Assess step.
+   */
+  get stepperHasBriefs(): boolean {
+    return this.reviewState !== 'needs-summary' && this.reviewState !== 'unknown';
+  }
+
+  /**
+   * True when the book summary (briefs) is complete enough for the review to be built.
+   * Derived from reviewState: 'needs-summary' means no summary; 'unknown' = loading.
+   * For the stepper, summaryReady = briefs are present (reviewState not needs-summary or unknown).
+   */
+  get stepperSummaryReady(): boolean {
+    return this.stepperHasBriefs;
+  }
+
+  /**
+   * True when the whole-book review is ready (reviewState === 'ready').
+   * Drives Assess step: done => Revise becomes the lit next-step.
+   */
+  get stepperReviewReady(): boolean {
+    return this.reviewState === 'ready';
+  }
+
+  /**
+   * True while a summary job is running (from the summary row's buildingChange output).
+   * The registry also tracks it but the dashboard already has the flag directly.
+   */
+  get stepperSummaryRunning(): boolean {
+    return this.summaryBuilding;
+  }
+
+  /**
+   * True while a review job is running (reviewState === 'building').
+   */
+  get stepperReviewRunning(): boolean {
+    return this.reviewState === 'building';
+  }
+
+  /**
+   * rf-f02: the funnel stepper's Assess (or Revise) CTA was clicked. Bubble up to the host
+   * (editor-page) via @Output() switchToReview so the editor can call onReviewModeChange('review')
+   * and scroll to the status rows. The dashboard is already in review mode when this component is
+   * mounted, so the primary effect is the scroll; the editor's mode-switch is a no-op if already
+   * in review mode but is safe to re-emit.
+   */
+  onStepperAssessRequested(): void {
+    this.switchToReview.emit();
+    this.scrollToStatusRows();
+  }
+
+  /**
+   * rf-f04: Revise CTA clicked — select the Findings sub-tab and scroll to the findings ledger anchor.
+   * This honors the CTA label ("Go to findings" / "עבור לממצאים") rather than just scrolling to the
+   * status-rows header like the Assess CTA does.
+   */
+  onStepperReviseRequested(): void {
+    this.switchToReview.emit();
+    this.reviewTab = 'findings';
+    this.scrollToFindings();
+  }
+
+  /**
+   * Scroll the status-rows anchor into view so the user sees the summary/review rows after
+   * clicking the stepper CTA. Uses the #statusRowsAnchor template ref.
+   */
+  private scrollToStatusRows(): void {
+    this.statusRowsAnchor?.nativeElement?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /**
+   * rf-f04: Scroll the findings anchor into view so the user lands at the findings/bible tabs section
+   * after clicking the Revise CTA. Uses the #findingsAnchor template ref.
+   */
+  private scrollToFindings(): void {
+    this.findingsAnchor?.nativeElement?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   /**

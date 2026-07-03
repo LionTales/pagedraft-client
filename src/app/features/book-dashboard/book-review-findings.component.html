@@ -177,7 +177,7 @@
           [attr.data-chapter-id]="a.chapterId"
           [attr.title]="a.title"
           [attr.data-testid]="'anchor-chip-' + f.id + '-' + a.chapterId"
-          (click)="onAnchorClick(a)">
+          (click)="onAnchorClick(a, f)">
           <span class="jump-icon" aria-hidden="true">📖</span>
           <span class="jump-label">{{ a.order }}. {{ a.title }}</span>
         </button>

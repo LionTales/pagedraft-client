@@ -43,6 +43,12 @@ interface ChapterSummaryRow {
   /** Terminal re-derive outcome message to surface (localized at render via the response text), or null. */
   rederiveResult: 'done' | 'partial' | 'error' | null;
   /**
+   * When true the row body (summary text + edit area + actions) is hidden; only the header (title + badges)
+   * is visible. Default: true (collapsed) so the list is compact on large books. A row that is mid-edit is
+   * kept expanded regardless of this flag (see template guard).
+   */
+  collapsed: boolean;
+  /**
    * The in-flight summary-GET subscription for THIS row (supersession slot). A fresh load for the same row
    * cancels+replaces it BEFORE issuing the new request, so a slow older response can never land after (and
    * overwrite) a newer one — both pass the same bookId/language stale-guard, so last-write-wins would be
@@ -71,7 +77,18 @@ interface ChapterSummaryRow {
   imports: [CommonModule, FormsModule],
   template: `
     <section class="chapter-summaries" [attr.dir]="dir" data-testid="chapter-summaries">
-      <h4 class="cs-title">{{ label('title') }}</h4>
+      <div class="cs-title-row">
+        <h4 class="cs-title">{{ label('title') }}</h4>
+        @if (rows.length > 0) {
+          <button
+            type="button"
+            class="cs-btn cs-btn-collapse-all"
+            data-testid="cs-collapse-all-toggle"
+            (click)="toggleCollapseAll()">
+            {{ allCollapsed ? label('expandAll') : label('collapseAll') }}
+          </button>
+        }
+      </div>
 
       @if (loadingList) {
         <p class="cs-muted" data-testid="cs-list-loading">{{ label('loading') }}</p>
@@ -83,7 +100,21 @@ interface ChapterSummaryRow {
         <ul class="cs-list">
           @for (row of rows; track row.chapterId) {
             <li class="cs-row" [attr.data-testid]="'cs-row-' + row.chapterId">
+              <!-- Row header: always visible. The chevron button toggles collapse state.
+                   A row that is mid-edit stays expanded regardless (collapsing is disabled while editing). -->
               <div class="cs-row-head">
+                <button
+                  type="button"
+                  class="cs-row-toggle"
+                  [class.cs-row-toggle--expanded]="!isCollapsed(row)"
+                  [attr.aria-expanded]="!isCollapsed(row)"
+                  [attr.aria-label]="label('expandRow') + ' ' + row.title"
+                  [attr.data-testid]="'cs-row-toggle-' + row.chapterId"
+                  (click)="toggleRow(row)">
+                  <svg class="cs-chevron" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </button>
                 <span class="cs-chapter-title">{{ row.title }}</span>
                 <div class="cs-badges">
                   @if (row.view?.summaryUserEdited) {
@@ -104,94 +135,99 @@ interface ChapterSummaryRow {
                 </div>
               </div>
 
-              @if (row.loading) {
-                <p class="cs-muted" data-testid="cs-row-loading">{{ label('loading') }}</p>
-              } @else if (row.loadError) {
-                <p class="cs-error" data-testid="cs-row-error">{{ label('rowError') }}</p>
-              } @else if (row.editing) {
-                <textarea
-                  class="cs-textarea"
-                  rows="4"
-                  [(ngModel)]="row.draft"
-                  [attr.data-testid]="'cs-textarea-' + row.chapterId"
-                  [disabled]="row.saving"
-                  [attr.aria-label]="label('editAria')">
-                </textarea>
-                <div class="cs-actions">
-                  <button
-                    type="button"
-                    class="cs-btn cs-btn-primary"
-                    [disabled]="row.saving || !isDirty(row)"
-                    data-testid="cs-save"
-                    (click)="onSave(row)">
-                    {{ row.saving ? label('saving') : label('save') }}
-                  </button>
-                  <button
-                    type="button"
-                    class="cs-btn"
-                    [disabled]="row.saving"
-                    data-testid="cs-cancel"
-                    (click)="onCancel(row)">
-                    {{ label('cancel') }}
-                  </button>
-                </div>
-                @if (row.saveError) {
-                  <p class="cs-error" data-testid="cs-save-error">{{ label('saveError') }}</p>
-                }
-              } @else {
-                @if (row.view?.hasSummary) {
-                  <p class="cs-summary-text" data-testid="cs-summary-text">{{ row.view?.summaryText }}</p>
-                } @else if (showStructuredFallback(row)) {
-                  <!-- AI structured-brief fallback (READ-only): a human-readable digest of the analysis, NOT
-                       the user's own summary. Clicking Edit pre-fills the editor with this digest. -->
-                  <p class="cs-analysis-note" data-testid="cs-analysis-note">{{ label('analysisNote') }}</p>
-                  <p class="cs-summary-text cs-summary-analysis" data-testid="cs-structured-fallback">{{ structuredDigest(row) }}</p>
-                } @else {
-                  <p class="cs-muted" data-testid="cs-no-summary">{{ label('noSummary') }}</p>
-                }
-                <div class="cs-actions">
-                  <button
-                    type="button"
-                    class="cs-btn"
-                    data-testid="cs-edit"
-                    (click)="onEdit(row)">
-                    {{ editButtonLabel(row) }}
-                  </button>
-                </div>
-              }
+              <!-- Row body: hidden while collapsed (unless mid-edit, which forces the row open). -->
+              @if (!isCollapsed(row)) {
+                <div class="cs-row-body" [attr.data-testid]="'cs-row-body-' + row.chapterId">
+                  @if (row.loading) {
+                    <p class="cs-muted" data-testid="cs-row-loading">{{ label('loading') }}</p>
+                  } @else if (row.loadError) {
+                    <p class="cs-error" data-testid="cs-row-error">{{ label('rowError') }}</p>
+                  } @else if (row.editing) {
+                    <textarea
+                      class="cs-textarea"
+                      rows="4"
+                      [(ngModel)]="row.draft"
+                      [attr.data-testid]="'cs-textarea-' + row.chapterId"
+                      [disabled]="row.saving"
+                      [attr.aria-label]="label('editAria')">
+                    </textarea>
+                    <div class="cs-actions">
+                      <button
+                        type="button"
+                        class="cs-btn cs-btn-primary"
+                        [disabled]="row.saving || !isDirty(row)"
+                        data-testid="cs-save"
+                        (click)="onSave(row)">
+                        {{ row.saving ? label('saving') : label('save') }}
+                      </button>
+                      <button
+                        type="button"
+                        class="cs-btn"
+                        [disabled]="row.saving"
+                        data-testid="cs-cancel"
+                        (click)="onCancel(row)">
+                        {{ label('cancel') }}
+                      </button>
+                    </div>
+                    @if (row.saveError) {
+                      <p class="cs-error" data-testid="cs-save-error">{{ label('saveError') }}</p>
+                    }
+                  } @else {
+                    @if (row.view?.hasSummary) {
+                      <p class="cs-summary-text" data-testid="cs-summary-text">{{ row.view!.summaryText }}</p>
+                    } @else if (showStructuredFallback(row)) {
+                      <!-- AI structured-brief fallback (READ-only): a human-readable digest of the analysis, NOT
+                           the user's own summary. Clicking Edit pre-fills the editor with this digest. -->
+                      <p class="cs-analysis-note" data-testid="cs-analysis-note">{{ label('analysisNote') }}</p>
+                      <p class="cs-summary-text cs-summary-analysis" data-testid="cs-structured-fallback">{{ structuredDigest(row) }}</p>
+                    } @else {
+                      <p class="cs-muted" data-testid="cs-no-summary">{{ label('noSummary') }}</p>
+                    }
+                    <div class="cs-actions">
+                      <button
+                        type="button"
+                        class="cs-btn"
+                        data-testid="cs-edit"
+                        (click)="onEdit(row)">
+                        {{ editButtonLabel(row) }}
+                      </button>
+                    </div>
+                  }
 
-              <!-- Re-derive OFFER: shown after a successful save (asks the user; never silent). -->
-              @if (row.offerRederive && !row.editing) {
-                <div class="cs-rederive-offer" data-testid="cs-rederive-offer">
-                  <p class="cs-rederive-prompt">{{ label('rederivePrompt') }}</p>
-                  <div class="cs-actions">
-                    <button
-                      type="button"
-                      class="cs-btn cs-btn-primary"
-                      [disabled]="row.rederiving"
-                      data-testid="cs-rederive"
-                      (click)="onRederive(row)">
-                      {{ row.rederiving ? label('rederiving') : label('rederive') }}
-                    </button>
-                    <button
-                      type="button"
-                      class="cs-btn"
-                      [disabled]="row.rederiving"
-                      data-testid="cs-rederive-dismiss"
-                      (click)="onDismissRederive(row)">
-                      {{ label('rederiveLater') }}
-                    </button>
-                  </div>
-                </div>
-              }
+                  <!-- Re-derive OFFER: shown after a successful save (asks the user; never silent). -->
+                  @if (row.offerRederive && !row.editing) {
+                    <div class="cs-rederive-offer" data-testid="cs-rederive-offer">
+                      <p class="cs-rederive-prompt">{{ label('rederivePrompt') }}</p>
+                      <div class="cs-actions">
+                        <button
+                          type="button"
+                          class="cs-btn cs-btn-primary"
+                          [disabled]="row.rederiving"
+                          data-testid="cs-rederive"
+                          (click)="onRederive(row)">
+                          {{ row.rederiving ? label('rederiving') : label('rederive') }}
+                        </button>
+                        <button
+                          type="button"
+                          class="cs-btn"
+                          [disabled]="row.rederiving"
+                          data-testid="cs-rederive-dismiss"
+                          (click)="onDismissRederive(row)">
+                          {{ label('rederiveLater') }}
+                        </button>
+                      </div>
+                    </div>
+                  }
 
-              @if (row.rederiveResult) {
-                <p
-                  class="cs-rederive-result"
-                  [class.cs-error]="row.rederiveResult === 'error'"
-                  data-testid="cs-rederive-result">
-                  {{ rederiveResultLabel(row.rederiveResult) }}
-                </p>
+                  @if (row.rederiveResult) {
+                    <p
+                      class="cs-rederive-result"
+                      [class.cs-error]="row.rederiveResult === 'error'"
+                      data-testid="cs-rederive-result">
+                      {{ rederiveResultLabel(row.rederiveResult) }}
+                    </p>
+                  }
+                </div>
               }
             </li>
           }
@@ -206,14 +242,27 @@ interface ChapterSummaryRow {
       gap: var(--pd-space-4);
       font-family: var(--pd-font-ui);
     }
+    .cs-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--pd-space-3);
+      margin-bottom: var(--pd-space-2);
+    }
     .cs-title {
-      margin: 0 0 var(--pd-space-2) 0;
+      margin: 0;
       font-size: var(--pd-text-body-sm);
       line-height: var(--pd-lh-body-sm);
       font-weight: var(--pd-weight-bold);
       color: var(--pd-text-secondary);
       text-transform: uppercase;
       letter-spacing: 0.04em;
+    }
+    .cs-btn-collapse-all {
+      font-size: var(--pd-text-caption);
+      padding: var(--pd-space-1) var(--pd-space-3);
+      color: var(--pd-text-secondary);
+      border-color: var(--pd-border);
     }
     .cs-list {
       list-style: none;
@@ -232,14 +281,51 @@ interface ChapterSummaryRow {
     }
     .cs-row-head {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      gap: var(--pd-space-4);
+      gap: var(--pd-space-3);
     }
+    /* Chevron toggle button: borderless, tight, rotates when expanded. */
+    .cs-row-toggle {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      border-radius: var(--pd-radius-sm);
+      cursor: pointer;
+      color: var(--pd-text-secondary);
+      transition: color var(--pd-dur-fast) var(--pd-ease);
+    }
+    .cs-row-toggle:hover { color: var(--pd-text); }
+    .cs-row-toggle:focus-visible {
+      outline: 2px solid var(--pd-primary-600);
+      outline-offset: 1px;
+    }
+    .cs-chevron {
+      width: 16px;
+      height: 16px;
+      /* Collapsed = chevron points down (path draws down-chevron natively);
+         Expanded  = rotate 180deg so it points up. Physical rotation is the same in RTL. */
+      transform: rotate(0deg);
+      transition: transform var(--pd-dur-fast) var(--pd-ease);
+    }
+    .cs-row-toggle--expanded .cs-chevron {
+      transform: rotate(180deg);
+    }
+    /* The title takes available space; badges stay at the end. */
     .cs-chapter-title {
+      flex: 1 1 auto;
+      min-width: 0;
       font-weight: var(--pd-weight-bold);
       font-size: var(--pd-text-body-sm);
       color: var(--pd-text);
+    }
+    .cs-row-body {
+      margin-top: var(--pd-space-3);
     }
     .cs-badges { display: flex; gap: var(--pd-space-2); flex-wrap: wrap; }
     .cs-badge {
@@ -437,6 +523,7 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
               offerRederive: false,
               rederiving: false,
               rederiveResult: null,
+              collapsed: true,
             }));
           this.loadingList = false;
           this.cdr.detectChanges();
@@ -501,6 +588,7 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
 
   onEdit(row: ChapterSummaryRow): void {
     row.editing = true;
+    row.collapsed = false; // entering edit expands the row so it stays open after save/cancel
     row.saveError = false;
     // Pre-fill from the user's own flat summary when they have one; otherwise, if an AI structured brief
     // exists, seed the editor with its human-readable digest as a STARTING POINT (the user then edits to
@@ -688,6 +776,60 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
     return row.view?.hasSummary ? this.label('edit') : this.label('add');
   }
 
+  // ── Collapse ─────────────────────────────────────────────────────────────────
+
+  /**
+   * True when a row has a live re-derive offer waiting for the user's response, or a terminal
+   * re-derive result that has not yet been dismissed. These are surfaced inside the row body, so
+   * collapsing the row would silently hide them.
+   */
+  hasLiveRederive(row: ChapterSummaryRow): boolean {
+    return row.offerRederive || row.rederiveResult !== null;
+  }
+
+  /**
+   * A row is visually collapsed when its `collapsed` flag is true AND it is NOT currently being
+   * edited AND it does NOT have a live re-derive offer or result. Mid-edit rows and rows with a
+   * pending re-derive interaction are always shown expanded.
+   */
+  isCollapsed(row: ChapterSummaryRow): boolean {
+    return row.collapsed && !row.editing && !this.hasLiveRederive(row);
+  }
+
+  /**
+   * Toggle one row's collapsed state. Does nothing while the row is mid-edit (stays forced-open)
+   * or while a live re-derive offer/result is active (collapsing would hide it silently).
+   */
+  toggleRow(row: ChapterSummaryRow): void {
+    if (row.editing) return; // mid-edit rows must stay expanded
+    if (this.hasLiveRederive(row)) return; // live re-derive offer/result must stay visible
+    row.collapsed = !row.collapsed;
+    this.cdr.detectChanges();
+  }
+
+  /**
+   * True when every row is currently collapsed (or there are no rows).
+   * Drives the collapse-all / expand-all button label.
+   */
+  get allCollapsed(): boolean {
+    return this.rows.length === 0 || this.rows.every((r) => this.isCollapsed(r));
+  }
+
+  /**
+   * If all (non-editing) rows are collapsed, expand them all.
+   * Otherwise collapse all non-editing rows. Rows with a live re-derive offer or result are
+   * skipped on the collapse pass so the active interaction stays visible.
+   */
+  toggleCollapseAll(): void {
+    const expandAll = this.allCollapsed;
+    this.rows.forEach((r) => {
+      if (r.editing) return; // never touch mid-edit rows
+      if (!expandAll && this.hasLiveRederive(r)) return; // skip live re-derive rows on collapse
+      r.collapsed = !expandAll;
+    });
+    this.cdr.detectChanges();
+  }
+
   // ── Localization ─────────────────────────────────────────────────────────────
 
   /** Localized re-derive terminal-result label. */
@@ -734,6 +876,12 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
       rederiving: 'מעדכן...',
       rederiveLater: 'לא עכשיו',
       saveError: 'שמירת התקציר נכשלה. נסו שוב.',
+      // DRAFT he - needs native review
+      collapseAll: 'כווץ הכל',
+      // DRAFT he - needs native review
+      expandAll: 'הרחב הכל',
+      // DRAFT he - needs native review
+      expandRow: 'הצג/הסתר פרק',
     };
     const en: Record<string, string> = {
       title: 'Chapter summaries',
@@ -762,6 +910,9 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
       rederiving: 'Updating...',
       rederiveLater: 'Not now',
       saveError: 'Failed to save the summary. Try again.',
+      collapseAll: 'Collapse all',
+      expandAll: 'Expand all',
+      expandRow: 'Toggle chapter',
     };
     const map = this.langKey === 'he' ? he : en;
     return map[key] ?? key;

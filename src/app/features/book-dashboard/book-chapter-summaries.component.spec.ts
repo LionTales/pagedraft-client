@@ -132,6 +132,19 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     return fixture.debugElement.queryAll(By.css(selector));
   }
 
+  /** Expand a row so its body is visible in the DOM (rows default to collapsed). */
+  function expandRow(chapterId: string): void {
+    const row = component.rows.find((r) => r.chapterId === chapterId);
+    if (row) row.collapsed = false;
+    fixture.detectChanges();
+  }
+
+  /** Expand ALL rows. */
+  function expandAllRows(): void {
+    component.rows.forEach((r) => { r.collapsed = false; });
+    fixture.detectChanges();
+  }
+
   // ── List render ───────────────────────────────────────────────────────────────
 
   it('renders one row per chapter once the chapter list resolves', () => {
@@ -164,6 +177,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
 
     getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'Summary of one.' }));
     fixture.detectChanges();
+    expandRow('ch-1');
 
     const row1 = query('[data-testid="cs-row-ch-1"]');
     const text = row1.query(By.css('[data-testid="cs-summary-text"]'));
@@ -179,6 +193,8 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     fixture.detectChanges();
 
     // Mounted mid-build: this chapter's brief is not built yet -> "no summary yet".
+    // Expand the row so body elements are visible.
+    expandRow('ch-1');
     getSummarySubjects.get('ch-1')!.next(
       makeView({ chapterId: 'ch-1', summaryText: '', hasSummary: false, hasStructuredBrief: false, structuredBrief: null })
     );
@@ -211,6 +227,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
     getByIdSubject.complete();
     fixture.detectChanges();
+    expandRow('ch-1');
 
     // First (initial) load for ch-1 is in flight on the auto-created Subject; DO NOT resolve it yet.
     const firstSubject = getSummarySubjects.get('ch-1')!;
@@ -285,6 +302,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
     getByIdSubject.complete();
     fixture.detectChanges();
+    expandRow('ch-1');
 
     // Initial (non-silent) load resolves with good content.
     getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'Existing summary.' }));
@@ -324,6 +342,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
     getByIdSubject.complete();
     fixture.detectChanges();
+    expandRow('ch-1');
 
     // The initial non-silent fetch errors.
     getSummarySubjects.get('ch-1')!.error(new Error('network error'));
@@ -414,6 +433,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
       })
     );
     fixture.detectChanges();
+    expandRow('ch-1');
 
     const row1 = query('[data-testid="cs-row-ch-1"]');
     // The "from analysis" badge distinguishes this from the user's own summary.
@@ -446,6 +466,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
       })
     );
     fixture.detectChanges();
+    expandRow('ch-1');
 
     const row1 = query('[data-testid="cs-row-ch-1"]');
     // The user's own summary shows; the structured fallback does NOT (no from-analysis badge / digest).
@@ -467,6 +488,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
       makeView({ chapterId: 'ch-1', summaryText: '', hasSummary: false, hasStructuredBrief: false, structuredBrief: null })
     );
     fixture.detectChanges();
+    expandRow('ch-1');
 
     const row1 = query('[data-testid="cs-row-ch-1"]');
     expect(row1.query(By.css('[data-testid="cs-no-summary"]'))).not.toBeNull();
@@ -489,6 +511,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
       })
     );
     fixture.detectChanges();
+    expandRow('ch-1');
 
     // "Add summary" (no user summary yet) opens the editor pre-filled with the digest as a starting point.
     query('[data-testid="cs-edit"]').nativeElement.click();
@@ -510,6 +533,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     fixture.detectChanges();
     getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'Old text.' }));
     fixture.detectChanges();
+    expandRow('ch-1');
 
     // No re-derive offer before any edit.
     expect(query('[data-testid="cs-rederive-offer"]')).toBeNull();
@@ -530,6 +554,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     fixture.detectChanges();
 
     // The saved text is reflected and the re-derive OFFER now appears (asks the user).
+    // The row stayed expanded because onEdit set collapsed=false.
     expect(query('[data-testid="cs-summary-text"]').nativeElement.textContent).toContain('My own understanding.');
     expect(query('[data-testid="cs-rederive-offer"]')).not.toBeNull();
   });
@@ -542,6 +567,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     fixture.detectChanges();
     getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'Old text.' }));
     fixture.detectChanges();
+    expandRow('ch-1');
 
     // Enter edit mode, change the draft.
     query('[data-testid="cs-edit"]').nativeElement.click();
@@ -580,6 +606,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     fixture.detectChanges();
     getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1' }));
     fixture.detectChanges();
+    expandRow('ch-1');
 
     query('[data-testid="cs-edit"]').nativeElement.click();
     fixture.detectChanges();
@@ -600,6 +627,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     fixture.detectChanges();
     getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'Old.' }));
     fixture.detectChanges();
+    expandRow('ch-1');
 
     // Edit + save to surface the offer.
     query('[data-testid="cs-edit"]').nativeElement.click();
@@ -651,6 +679,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
       makeView({ chapterId: 'ch-1', summaryText: 'Old.', hasSummary: true, structuredBrief: makeStructuredBrief() })
     );
     fixture.detectChanges();
+    expandRow('ch-1');
 
     // Edit + save a NON-blank summary to surface the re-derive offer.
     query('[data-testid="cs-edit"]').nativeElement.click();
@@ -716,6 +745,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
       'rederiving', 'rederiveLater', 'saveError',
       'analysisBadge', 'analysisNote', 'digestPlot', 'digestCharacters', 'digestThemes',
       'digestTone', 'digestOpenThreads',
+      'collapseAll', 'expandAll', 'expandRow',
     ];
     for (const key of keys) {
       component.bookLanguage = 'he';
@@ -791,5 +821,283 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     secondSaveSubject.complete();
     fixture.detectChanges();
     expect(component.savingRowId).toBeNull();
+  });
+
+  // ── Collapse feature ─────────────────────────────────────────────────────────
+
+  it('(collapse-default) rows default to collapsed — the row body is absent from the DOM, the header stays', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // Header is always visible (title + toggle chevron).
+    expect(query('[data-testid="cs-row-ch-1"]')).not.toBeNull();
+    expect(query('[data-testid="cs-row-toggle-ch-1"]')).not.toBeNull();
+    expect(query('[data-testid="cs-chapter-title"]') || query('.cs-chapter-title')).toBeTruthy();
+
+    // Body is absent: the row body wrapper and its contents must not be in the DOM.
+    expect(query('[data-testid="cs-row-body-ch-1"]')).toBeNull();
+    expect(component.rows[0].collapsed).toBeTrue();
+  });
+
+  it('(collapse-toggle) clicking the chevron button expands then re-collapses a row', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+    getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'A summary.' }));
+    fixture.detectChanges();
+
+    // Initially collapsed — body absent.
+    expect(query('[data-testid="cs-row-body-ch-1"]')).toBeNull();
+    expect(component.isCollapsed(component.rows[0])).toBeTrue();
+
+    // Click the toggle — body appears.
+    query('[data-testid="cs-row-toggle-ch-1"]').nativeElement.click();
+    fixture.detectChanges();
+    expect(query('[data-testid="cs-row-body-ch-1"]')).not.toBeNull();
+    expect(component.isCollapsed(component.rows[0])).toBeFalse();
+
+    // The title (in the header) is still visible.
+    expect(query('[data-testid="cs-row-ch-1"]').query(By.css('.cs-chapter-title'))).not.toBeNull();
+
+    // Click again — body collapses.
+    query('[data-testid="cs-row-toggle-ch-1"]').nativeElement.click();
+    fixture.detectChanges();
+    expect(query('[data-testid="cs-row-body-ch-1"]')).toBeNull();
+    expect(component.isCollapsed(component.rows[0])).toBeTrue();
+  });
+
+  it('(collapse-all) collapse-all button collapses every row, expand-all expands them', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail());
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // Start expanded so the "collapse all" action is meaningful.
+    expandAllRows();
+    expect(component.allCollapsed).toBeFalse();
+
+    // Collapse all.
+    query('[data-testid="cs-collapse-all-toggle"]').nativeElement.click();
+    fixture.detectChanges();
+    expect(component.rows.every((r) => component.isCollapsed(r))).toBeTrue();
+    expect(component.allCollapsed).toBeTrue();
+
+    // Button label is now "expand all" (he: הרחב הכל / en: Expand all).
+    expect(query('[data-testid="cs-collapse-all-toggle"]').nativeElement.textContent).toContain(
+      component.label('expandAll')
+    );
+
+    // Expand all.
+    query('[data-testid="cs-collapse-all-toggle"]').nativeElement.click();
+    fixture.detectChanges();
+    expect(component.rows.every((r) => !component.isCollapsed(r))).toBeTrue();
+    expect(component.allCollapsed).toBeFalse();
+
+    // Button label is now "collapse all".
+    expect(query('[data-testid="cs-collapse-all-toggle"]').nativeElement.textContent).toContain(
+      component.label('collapseAll')
+    );
+  });
+
+  it('(collapse-mid-edit) a row that is mid-edit stays expanded even if collapsed=true', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+    getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'Text.' }));
+    fixture.detectChanges();
+
+    // Start editing via the direct method (which also sets collapsed=false).
+    component.onEdit(component.rows[0]);
+    fixture.detectChanges();
+
+    // Force collapsed=true while editing to verify the guard overrides it.
+    component.rows[0].collapsed = true;
+    fixture.detectChanges();
+
+    // isCollapsed returns false because editing=true overrides the collapsed flag.
+    expect(component.isCollapsed(component.rows[0])).toBeFalse();
+    // The body is still rendered (textarea visible).
+    expect(query('[data-testid="cs-textarea-ch-1"]')).not.toBeNull();
+  });
+
+  it('(collapse-no-toggle-mid-edit) toggleRow() is a no-op while a row is being edited', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+    getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'Text.' }));
+    fixture.detectChanges();
+
+    component.onEdit(component.rows[0]); // sets editing=true, collapsed=false
+    fixture.detectChanges();
+
+    // Attempt to toggle — must be ignored.
+    component.toggleRow(component.rows[0]);
+    fixture.detectChanges();
+
+    // collapsed is still false (the no-op did NOT change it), and body is still visible.
+    expect(component.rows[0].collapsed).toBeFalse();
+    expect(component.isCollapsed(component.rows[0])).toBeFalse();
+  });
+
+  it('(collapse-after-save) row stays expanded after a successful save (body and rederive offer visible)', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+    getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'Old.' }));
+    fixture.detectChanges();
+    expandRow('ch-1');
+
+    // Enter edit mode (onEdit also sets collapsed=false).
+    query('[data-testid="cs-edit"]').nativeElement.click();
+    fixture.detectChanges();
+    component.rows[0].draft = 'Edited.';
+    fixture.detectChanges();
+    query('[data-testid="cs-save"]').nativeElement.click();
+    updateSubject.next(makeView({ chapterId: 'ch-1', summaryText: 'Edited.', summaryUserEdited: true }));
+    updateSubject.complete();
+    fixture.detectChanges();
+
+    // After save: editing=false but collapsed=false (set by onEdit), so body stays visible.
+    expect(component.rows[0].collapsed).toBeFalse();
+    expect(component.isCollapsed(component.rows[0])).toBeFalse();
+    // Rederive offer is in the body — must be visible.
+    expect(query('[data-testid="cs-rederive-offer"]')).not.toBeNull();
+  });
+
+  it('(collapse-he-en-labels) collapseAll / expandAll / expandRow labels present in both locales + no em-dash', () => {
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+    const heCollapse = component.label('collapseAll');
+    const heExpand = component.label('expandAll');
+    const heRow = component.label('expandRow');
+    expect(heCollapse).not.toBe('collapseAll');
+    expect(heExpand).not.toBe('expandAll');
+    expect(heRow).not.toBe('expandRow');
+    expect(heCollapse.includes('—')).toBeFalse();
+    expect(heExpand.includes('—')).toBeFalse();
+
+    component.bookLanguage = 'en';
+    fixture.detectChanges();
+    const enCollapse = component.label('collapseAll');
+    const enExpand = component.label('expandAll');
+    const enRow = component.label('expandRow');
+    expect(enCollapse).not.toBe('collapseAll');
+    expect(enExpand).not.toBe('expandAll');
+    expect(enRow).not.toBe('expandRow');
+    // he and en genuinely differ
+    expect(heCollapse).not.toBe(enCollapse);
+    expect(heExpand).not.toBe(enExpand);
+  });
+
+  it('(collapse-rtl) chevron toggle button is present for RTL (Hebrew) books', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // RTL book: dir='rtl' on the section.
+    expect(query('[data-testid="chapter-summaries"]').nativeElement.getAttribute('dir')).toBe('rtl');
+    // The toggle button renders in the header regardless of dir.
+    expect(query('[data-testid="cs-row-toggle-ch-1"]')).not.toBeNull();
+    // After expanding: aria-expanded=true.
+    query('[data-testid="cs-row-toggle-ch-1"]').nativeElement.click();
+    fixture.detectChanges();
+    expect(
+      query('[data-testid="cs-row-toggle-ch-1"]').nativeElement.getAttribute('aria-expanded')
+    ).toBe('true');
+  });
+
+  // ── Re-derive offer / result collapse guard ───────────────────────────────
+
+  it('(collapse-rederive-offer) collapseAll() skips a row with an active offerRederive, leaving it expanded', () => {
+    triggerInit();
+    // Two chapters so we can verify one collapses and the other stays expanded.
+    getByIdSubject.next(makeBookDetail());
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // Start all rows expanded.
+    expandAllRows();
+    expect(component.allCollapsed).toBeFalse();
+
+    // Give row 0 a live re-derive offer.
+    component.rows[0].offerRederive = true;
+    fixture.detectChanges();
+
+    // Collapse all.
+    component.toggleCollapseAll();
+    fixture.detectChanges();
+
+    // Row 0 (offer live) must NOT be collapsed.
+    expect(component.isCollapsed(component.rows[0])).toBeFalse();
+    // Row 1 (no offer) must be collapsed.
+    expect(component.isCollapsed(component.rows[1])).toBeTrue();
+  });
+
+  it('(collapse-rederive-result) collapseAll() skips a row with a terminal rederiveResult, leaving it expanded', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail());
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    expandAllRows();
+
+    // Give row 1 a terminal result.
+    component.rows[1].rederiveResult = 'done';
+    fixture.detectChanges();
+
+    component.toggleCollapseAll();
+    fixture.detectChanges();
+
+    // Row 1 (result live) stays expanded.
+    expect(component.isCollapsed(component.rows[1])).toBeFalse();
+    // Row 0 (no offer/result) collapses.
+    expect(component.isCollapsed(component.rows[0])).toBeTrue();
+  });
+
+  it('(collapse-rederive-toggleRow) toggleRow() refuses to collapse a row with a live re-derive offer', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // Start expanded and set a live offer.
+    component.rows[0].collapsed = false;
+    component.rows[0].offerRederive = true;
+    fixture.detectChanges();
+
+    expect(component.isCollapsed(component.rows[0])).toBeFalse();
+
+    // Attempt to collapse via toggleRow — must be refused.
+    component.toggleRow(component.rows[0]);
+    fixture.detectChanges();
+
+    // collapsed flag may have been toggled but isCollapsed must still return false.
+    expect(component.isCollapsed(component.rows[0])).toBeFalse();
+    // Body stays in the DOM (offer is visible).
+    expect(query('[data-testid="cs-row-body-ch-1"]')).not.toBeNull();
+    expect(query('[data-testid="cs-rederive-offer"]')).not.toBeNull();
+  });
+
+  it('(collapse-rederive-allCollapsed) allCollapsed is false while a row has a live re-derive offer even if collapsed=true', () => {
+    triggerInit();
+    getByIdSubject.next(makeBookDetail({ chapters: [makeBookDetail().chapters[0]] }));
+    getByIdSubject.complete();
+    fixture.detectChanges();
+
+    // All rows start collapsed by default.
+    expect(component.allCollapsed).toBeTrue();
+
+    // Activate a live offer — now that row is forced-expanded, so allCollapsed must flip.
+    component.rows[0].offerRederive = true;
+    fixture.detectChanges();
+
+    expect(component.allCollapsed).toBeFalse();
   });
 });

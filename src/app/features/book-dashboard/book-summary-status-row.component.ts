@@ -4,6 +4,7 @@ import { Subject, Subscription } from 'rxjs';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 
 /**
@@ -36,6 +37,12 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
    * (build start, reattach to an in-progress job, terminal/error), so the dashboard host can aggregate a
    * "review running" affordance that stays visible even after the dashboard is unmounted (close panel /
    * focus mode). The host holds the last-emitted value; the row itself is destroyed on unmount.
+   *
+   * Asymmetry note: the review row does NOT have an equivalent `buildingChange` output — the dashboard
+   * derives "review building" from the `reviewStateChange` value ('building' state). The summary row
+   * uses a dedicated boolean output because the dashboard fan-out on summary completion
+   * (`onSummaryBuildingChange` → `summaryDerivedRefresh`) needs a clean boolean edge, independent of
+   * the richer summary-status enum the row does not expose directly.
    */
   @Output() buildingChange = new EventEmitter<boolean>();
 
@@ -75,6 +82,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   constructor(
     private bookSummaryService: BookSummaryService,
     private analysisProgressService: AnalysisProgressService,
+    private jobRegistry: JobRegistryService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -204,6 +212,12 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
 
   /** Poll the book-summary build job and refresh status when it reaches a terminal state. */
   private pollBookSummaryBuild(bookId: string, jobId: string, lang: string): void {
+    // rf-c02: publish this build to the job registry so the editor's "review running" affordance (and the
+    // Activity Center) can read one truth (jobRegistry.anyRunningForBook$). This row keeps its OWN detailed
+    // NOT-BUILT/BUILDING/READY/STALE state + poll below; track() is an ADD, not a replacement. track() is
+    // idempotent per jobId (it runs one reused poll and single-finalizes), so routing BOTH the fresh-build
+    // and reattach paths through this single choke-point cannot double-track.
+    this.jobRegistry.track('summary', bookId, jobId);
     this.stopBookSummaryProgress();
     const stop$ = new Subject<void>();
     this.bookSummaryProgressStop$ = stop$;
