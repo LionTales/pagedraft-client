@@ -410,6 +410,82 @@ describe('FunnelStepperComponent (rf-f02)', () => {
     });
   });
 
+  // ── Polish: coming-soon info affordance ────────────────────────────────────────
+
+  describe('Polish coming-soon info popover', () => {
+    it('renders an info button on the Polish step (not a CTA)', () => {
+      setInputs(component, {});
+      fixture.detectChanges();
+      const infoBtn = fixture.debugElement.query(By.css('[data-testid="funnel-polish-info-btn"]'));
+      expect(infoBtn).toBeTruthy();
+      // It must NOT be the funnel CTA and must not turn Polish into a lit step.
+      const polish = component.resolvedSteps.find(s => s.id === 'polish')!;
+      expect(polish.hasCta).toBeFalse();
+      expect(fixture.debugElement.query(By.css('[data-testid="funnel-cta-polish"]'))).toBeNull();
+    });
+
+    it('the info button toggles the explanation panel and aria-expanded', () => {
+      setInputs(component, {});
+      fixture.detectChanges();
+      const infoBtn = fixture.debugElement.query(By.css('[data-testid="funnel-polish-info-btn"]'));
+      // Closed initially.
+      expect(component.polishInfoOpen).toBeFalse();
+      expect(infoBtn.nativeElement.getAttribute('aria-expanded')).toBe('false');
+      expect(fixture.debugElement.query(By.css('#funnel-polish-info'))).toBeNull();
+      // Open.
+      infoBtn.nativeElement.click();
+      fixture.detectChanges();
+      expect(component.polishInfoOpen).toBeTrue();
+      expect(infoBtn.nativeElement.getAttribute('aria-expanded')).toBe('true');
+      expect(fixture.debugElement.query(By.css('#funnel-polish-info'))).toBeTruthy();
+      // Toggle closed again.
+      infoBtn.nativeElement.click();
+      fixture.detectChanges();
+      expect(component.polishInfoOpen).toBeFalse();
+      expect(fixture.debugElement.query(By.css('#funnel-polish-info'))).toBeNull();
+    });
+
+    it('shows the Hebrew explanation for a Hebrew book', () => {
+      setInputs(component, { bookLanguage: 'he' });
+      component.togglePolishInfo();
+      fixture.detectChanges();
+      const panel = fixture.debugElement.query(By.css('#funnel-polish-info')).nativeElement as HTMLElement;
+      expect(panel.textContent).toContain('ליטוש');
+      expect(panel.textContent).toContain('הגהה');
+    });
+
+    it('shows the English explanation for an English book', () => {
+      setInputs(component, { bookLanguage: 'en' });
+      component.togglePolishInfo();
+      fixture.detectChanges();
+      const panel = fixture.debugElement.query(By.css('#funnel-polish-info')).nativeElement as HTMLElement;
+      expect(panel.textContent).toContain('Polish');
+      expect((panel.textContent ?? '').toLowerCase()).toContain('proofread');
+    });
+
+    it('Escape closes the panel', () => {
+      setInputs(component, {});
+      component.togglePolishInfo();
+      fixture.detectChanges();
+      expect(component.polishInfoOpen).toBeTrue();
+      component.onEscapeKey();
+      fixture.detectChanges();
+      expect(component.polishInfoOpen).toBeFalse();
+      expect(fixture.debugElement.query(By.css('#funnel-polish-info'))).toBeNull();
+    });
+
+    it('the close button dismisses the panel', () => {
+      setInputs(component, {});
+      component.togglePolishInfo();
+      fixture.detectChanges();
+      const closeBtn = fixture.debugElement.query(By.css('[data-testid="funnel-polish-info-close"]'));
+      expect(closeBtn).toBeTruthy();
+      closeBtn.nativeElement.click();
+      fixture.detectChanges();
+      expect(component.polishInfoOpen).toBeFalse();
+    });
+  });
+
   // ── Step count ────────────────────────────────────────────────────────────────
 
   it('always renders exactly 4 steps', () => {

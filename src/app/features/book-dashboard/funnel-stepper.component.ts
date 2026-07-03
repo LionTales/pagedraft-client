@@ -1,6 +1,7 @@
 import {
   Component,
   EventEmitter,
+  HostListener,
   Input,
   OnChanges,
   Output,
@@ -107,6 +108,20 @@ export interface ResolvedStep {
               <span class="funnel-step__label">{{ step.label }}</span>
               <span class="funnel-step__state-label">{{ step.stateLabel }}</span>
             </div>
+            <!-- Coming-soon steps (Polish) get a "what's this?" info affordance rather than a dead
+                 click: it toggles a short explanation of the still-to-come stage. -->
+            @if (step.id === 'polish') {
+              <button
+                type="button"
+                class="funnel-step__info-btn"
+                data-testid="funnel-polish-info-btn"
+                [attr.aria-expanded]="polishInfoOpen"
+                aria-controls="funnel-polish-info"
+                [attr.aria-label]="polishInfoButtonLabel"
+                (click)="togglePolishInfo()">
+                <span aria-hidden="true">i</span>
+              </button>
+            }
             <!-- Connector line between steps (not after the last) -->
             @if (!last) {
               <div class="funnel-step__connector" aria-hidden="true"></div>
@@ -125,6 +140,25 @@ export interface ResolvedStep {
           (click)="onCtaClick(litStep.id)">
           {{ litStep.ctaLabel }}
         </button>
+      }
+
+      <!-- Coming-soon explanation, toggled by the Polish info button. Full-width block below the
+           strip (not an absolutely-positioned popover) so it never clips inside the narrow panel. -->
+      @if (polishInfoOpen) {
+        <div class="funnel-info-panel" id="funnel-polish-info" role="note">
+          <div class="funnel-info-panel__head">
+            <span class="funnel-info-panel__title">{{ polishInfoTitle }}</span>
+            <button
+              type="button"
+              class="funnel-info-panel__close"
+              data-testid="funnel-polish-info-close"
+              [attr.aria-label]="isHebrew ? 'סגירה' : 'Close'"
+              (click)="closePolishInfo()">
+              <span aria-hidden="true">&#10005;</span>
+            </button>
+          </div>
+          <p class="funnel-info-panel__body">{{ polishInfoBody }}</p>
+        </div>
       }
     </nav>
   `,
@@ -326,6 +360,89 @@ export interface ResolvedStep {
       background: var(--pd-primary-600);
       opacity: 0.3;
     }
+
+    /* ── Coming-soon info affordance ── */
+    .funnel-step__info-btn {
+      flex: 0 0 auto;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 1px solid var(--pd-border-strong);
+      background: var(--pd-surface);
+      color: var(--pd-text-secondary);
+      font-size: 11px;
+      font-weight: var(--pd-weight-bold);
+      font-style: italic;
+      font-family: var(--pd-font-ui);
+      line-height: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      transition: border-color var(--pd-dur-fast) var(--pd-ease),
+                  color var(--pd-dur-fast) var(--pd-ease);
+    }
+
+    .funnel-step__info-btn:hover {
+      border-color: var(--pd-primary-600);
+      color: var(--pd-primary-700);
+    }
+
+    .funnel-step__info-btn:focus-visible {
+      outline: none;
+      box-shadow: var(--pd-ring);
+    }
+
+    /* ── Coming-soon explanation panel ── */
+    .funnel-info-panel {
+      background: var(--pd-surface);
+      border: 1px solid var(--pd-divider);
+      border-radius: var(--pd-radius-sm);
+      padding: var(--pd-space-3);
+      display: flex;
+      flex-direction: column;
+      gap: var(--pd-space-1);
+    }
+
+    .funnel-info-panel__head {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--pd-space-2);
+    }
+
+    .funnel-info-panel__title {
+      font-size: var(--pd-text-body-sm);
+      font-weight: var(--pd-weight-bold);
+      color: var(--pd-text);
+      font-family: var(--pd-font-ui);
+    }
+
+    .funnel-info-panel__close {
+      flex: 0 0 auto;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      color: var(--pd-text-muted);
+      font-size: 13px;
+      line-height: 1;
+      padding: var(--pd-space-1);
+    }
+
+    .funnel-info-panel__close:focus-visible {
+      outline: none;
+      box-shadow: var(--pd-ring);
+    }
+
+    .funnel-info-panel__body {
+      margin: 0;
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-secondary);
+      line-height: 1.5;
+      font-family: var(--pd-font-ui);
+    }
   `],
 })
 export class FunnelStepperComponent implements OnChanges {
@@ -384,6 +501,48 @@ export class FunnelStepperComponent implements OnChanges {
 
   /** Resolved steps, recomputed on each input change. */
   resolvedSteps: ResolvedStep[] = [];
+
+  /**
+   * Whether the Polish "coming soon" explanation panel is open. The Polish step itself is never a
+   * CTA (no dead click); this info affordance is the only interactive element on it, so a curious
+   * author can learn what the still-to-come stage does instead of pressing a silent, disabled step.
+   */
+  polishInfoOpen = false;
+
+  /** Toggle the Polish coming-soon explanation panel. */
+  togglePolishInfo(): void {
+    this.polishInfoOpen = !this.polishInfoOpen;
+  }
+
+  /** Close the Polish coming-soon explanation panel. */
+  closePolishInfo(): void {
+    this.polishInfoOpen = false;
+  }
+
+  /** Escape closes the explanation panel (keyboard dismissal). */
+  @HostListener('document:keydown.escape')
+  onEscapeKey(): void {
+    if (this.polishInfoOpen) {
+      this.polishInfoOpen = false;
+    }
+  }
+
+  /** Accessible label for the Polish info button. DRAFT he - needs native review. */
+  get polishInfoButtonLabel(): string {
+    return this.isHebrew ? 'מידע על שלב הליטוש' : 'About the Polish stage';
+  }
+
+  /** Title of the Polish coming-soon explanation. DRAFT he - needs native review. */
+  get polishInfoTitle(): string {
+    return this.isHebrew ? 'ליטוש (בקרוב)' : 'Polish (coming soon)';
+  }
+
+  /** Body of the Polish coming-soon explanation. DRAFT he - needs native review. */
+  get polishInfoBody(): string {
+    return this.isHebrew
+      ? 'מעבר הגהה על הספר כולו בבת אחת: תיקוני כתיב, פיסוק ורווחים נאספים לתור אחד לאישור מהיר. יהיה זמין בהמשך.'
+      : 'A whole-book proofread pass in one go: spelling, punctuation and spacing fixes collected into one queue for quick approval. Coming later.';
+  }
 
   /**
    * The single lit step that owns the CTA, rendered in the full-width action row below the step
