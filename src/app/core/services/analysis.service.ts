@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { AnalysisResultDto, AnalysisChunkThresholdsDto, PromptTemplateDto, RunAnalysisRequest, StartAnalysisJobResponse } from '../models/analysis';
+import { ActiveAnalysisJobDto } from '../models/active-analysis-job';
 
 @Injectable({ providedIn: 'root' })
 export class AnalysisService {
@@ -82,6 +83,17 @@ export class AnalysisService {
       return this.http.post<StartAnalysisJobResponse>(url, body, { params: { sceneId } });
     }
     return this.http.post<StartAnalysisJobResponse>(url, body);
+  }
+
+  /**
+   * List the in-flight (non-terminal) chapter/scene analysis jobs for a book (rf-b01).
+   * Read-only over the backend's in-memory progress tracker; used by JobRegistryService.reattach
+   * to re-track chapter Proofread/LineEdit jobs that were running before a browser refresh.
+   * Book-level builds (summary/review/style-baseline) are NOT in this list - reattach reads those
+   * from their own status endpoints' activeBuildJobId.
+   */
+  getActiveAnalysisJobs(bookId: string): Observable<ActiveAnalysisJobDto[]> {
+    return this.http.get<ActiveAnalysisJobDto[]>(`/api/books/${bookId}/active-analysis-jobs`);
   }
 
   /** Fetch the final AnalysisResult for a completed async job. */

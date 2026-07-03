@@ -20,6 +20,7 @@ import { By } from '@angular/platform-browser';
 import { NEVER, Subject, of, throwError } from 'rxjs';
 import { BookReviewFindingsComponent } from './book-review-findings.component';
 import { BookReviewService } from '../../core/services/book-review.service';
+import { ReviseContextService } from '../../core/services/revise-context.service';
 import {
   BookFinding,
   BookReviewFindingsDto,
@@ -82,6 +83,7 @@ describe('BookReviewFindingsComponent (wb3-c02)', () => {
             patchFindingStatus: () => NEVER,
           },
         },
+        ReviseContextService,
       ],
     }).compileComponents();
 
@@ -499,7 +501,7 @@ describe('BookReviewFindingsComponent (wb3-c02)', () => {
     expect(query('[data-testid="findings-scorecard"]')).toBeNull();
   });
 
-  // ── Navigation seam (wb3-f01) ────────────────────────────────────────────────
+  // ── Navigation seam (wb3-f01 + rf-f05) ─────────────────────────────────────
 
   it('emits openChapter with the anchor when a chapter-anchor chip is clicked (wb3-f01 seam)', () => {
     const reviewSvc = TestBed.inject(BookReviewService);
@@ -515,6 +517,41 @@ describe('BookReviewFindingsComponent (wb3-c02)', () => {
     expect(emitted).not.toBeNull();
     expect(emitted!.chapterId).toBe('c-3');
     expect(emitted!.order).toBe(3);
+  });
+
+  it('rf-f05: clicking a chapter-anchor chip sets the revise context (findingId + oneLiner + chapterId)', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    const reviseCtx = TestBed.inject(ReviseContextService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(of(makeFindingsDto()));
+    triggerInit();
+    fixture.detectChanges();
+
+    expect(reviseCtx.snapshot).toBeNull();
+
+    query('[data-testid="anchor-chip-f-1-c-3"]').nativeElement.click();
+
+    expect(reviseCtx.snapshot).not.toBeNull();
+    expect(reviseCtx.snapshot!.findingId).toBe('f-1');
+    expect(reviseCtx.snapshot!.chapterId).toBe('c-3');
+    // oneLiner should be a non-empty string derived from the rationale.
+    expect(reviseCtx.snapshot!.oneLiner.length).toBeGreaterThan(0);
+    expect(reviseCtx.snapshot!.oneLiner).toContain('midpoint reversal');
+  });
+
+  it('rf-f05: openChapter is STILL emitted after the revise context is set (no regression)', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(of(makeFindingsDto()));
+    triggerInit();
+    fixture.detectChanges();
+
+    let emitted: ChapterAnchor | null = null;
+    component.openChapter.subscribe((a) => (emitted = a));
+
+    query('[data-testid="anchor-chip-f-1-c-3"]').nativeElement.click();
+
+    // openChapter must still be emitted so the editor navigates to the chapter.
+    expect(emitted).not.toBeNull();
+    expect(emitted!.chapterId).toBe('c-3');
   });
 
   // ── he/en parity ─────────────────────────────────────────────────────────────

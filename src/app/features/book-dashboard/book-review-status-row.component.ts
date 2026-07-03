@@ -3,6 +3,7 @@ import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy
 import { Subject, Subscription } from 'rxjs';
 import { BookReviewStatusDto } from '../../core/models/book-review';
 import { BookReviewService } from '../../core/services/book-review.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 
 /** Derived review state for the whole-book developmental review. Single source of truth shared by the
@@ -95,6 +96,7 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
 
   constructor(
     private bookReviewService: BookReviewService,
+    private jobRegistry: JobRegistryService,
     private cdr: ChangeDetectorRef
   ) {}
 
@@ -273,6 +275,12 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
 
   /** Poll the book-review build job and refresh status when it reaches a terminal state. */
   private pollBookReviewBuild(bookId: string, jobId: string, lang: string): void {
+    // rf-c02: publish this build to the job registry so the editor's "review running" affordance (and the
+    // Activity Center) can read one truth (jobRegistry.anyRunningForBook$). This row keeps its OWN detailed
+    // NOT-BUILT/BUILDING/READY/STALE/NEEDS-SUMMARY state + poll below; track() is an ADD, not a replacement.
+    // track() is idempotent per jobId, so routing BOTH the fresh-build and reattach paths through this single
+    // choke-point cannot double-track.
+    this.jobRegistry.track('review', bookId, jobId);
     this.stopBookReviewProgress();
     const stop$ = new Subject<void>();
     this.bookReviewProgressStop$ = stop$;

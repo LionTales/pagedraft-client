@@ -29,7 +29,7 @@
     <!-- BUILDING -->
     <ng-container *ngIf="bookReviewState === 'building'">
       <span class="sb-status sb-building" data-testid="brev-building">
-        {{ bookReviewProgressMessage || bookReviewLabel('building') }}
+        {{ bookReviewLabel('building') }}
         <ng-container *ngIf="bookReviewProgressPercent != null"> ({{ bookReviewProgressPercent }}%)</ng-container>
       </span>
       <span class="sb-spinner" aria-hidden="true"></span>

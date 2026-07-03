@@ -19,6 +19,7 @@ import { By } from '@angular/platform-browser';
 import { NEVER, Subject, of, throwError } from 'rxjs';
 import { BookReviewStatusRowComponent } from './book-review-status-row.component';
 import { BookReviewService } from '../../core/services/book-review.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookReviewStatusDto } from '../../core/models/book-review';
 
 function makeBookReviewStatus(
@@ -51,8 +52,12 @@ function makeBookReviewStatus(
 describe('BookReviewStatusRowComponent (wb3-c01)', () => {
   let component: BookReviewStatusRowComponent;
   let fixture: ComponentFixture<BookReviewStatusRowComponent>;
+  // rf-c02: the row publishes its build job to the registry on start. Spy so we can assert track() and so
+  // the real (root) registry (with its transitive deps) is not pulled into this component-focused TestBed.
+  let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
 
   beforeEach(async () => {
+    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']);
     await TestBed.configureTestingModule({
       imports: [BookReviewStatusRowComponent],
       providers: [
@@ -64,6 +69,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
             getReviewProgress: () => NEVER,
           },
         },
+        { provide: JobRegistryService, useValue: jobRegistrySpy },
       ],
     }).compileComponents();
 
@@ -818,6 +824,35 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
       expect(pollSpy).toHaveBeenCalledWith('book-1', 'job-running', jasmine.anything());
       expect(component.bookReviewBuilding).toBeTrue();
+      // rf-c02: the reattached build is published to the registry so the editor affordance can read it.
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('review', 'book-1', 'job-running');
+    });
+  });
+
+  // ── rf-c02: the row PUBLISHES its build job to the registry on start (track), so the editor's single
+  //    "review running" affordance can be derived from jobRegistry.anyRunningForBook$. ─────────────────
+  describe('rf-c02: publishes review build to the job registry', () => {
+    it('tracks the review build once with kind/bookId/jobId on a fresh build', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      spyOn(reviewSvc, 'getReviewProgress').and.returnValue(NEVER);
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledOnceWith('review', 'book-1', 'job-1');
+    });
+
+    it('does NOT track a NO-OP build (no jobId)', () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview').and.returnValue(of({ jobId: null, noOp: true } as any));
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'he';
+      component.onBuildBookReview();
+
+      expect(jobRegistrySpy.track).not.toHaveBeenCalled();
     });
   });
 

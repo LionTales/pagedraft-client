@@ -2,104 +2,203 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  gap: 0.75rem;
+  gap: var(--pd-space-4);
+  font-family: var(--pd-font-ui);
+  color: var(--pd-text);
 }
 .panel-header {
   display: flex;
   align-items: center;
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--pd-space-1);
 }
 .type-picker-section {
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--pd-space-1);
 }
+
+/* Analysis-type picker: a SELECTION group ("which analysis"). Its active state is a
+   soft brand-tinted chip - deliberately NOT the solid fill of the Run action, so
+   "this type is selected" never reads as "click here to run". */
 .type-picker {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
+  gap: var(--pd-space-2);
   overflow-x: auto;
 }
 .type-picker button {
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  padding: 0.35rem 0.6rem;
-  background: #fafafa;
-  font-size: 0.8rem;
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-sm);
+  padding: var(--pd-space-2) var(--pd-space-4);
+  background: var(--pd-surface);
+  color: var(--pd-text-secondary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+  font-weight: var(--pd-weight-medium);
   cursor: pointer;
   white-space: nowrap;
+  transition: background var(--pd-dur-fast) var(--pd-ease),
+              border-color var(--pd-dur-fast) var(--pd-ease),
+              color var(--pd-dur-fast) var(--pd-ease);
+}
+.type-picker button:hover:not(.active) {
+  background: var(--pd-surface-sunken);
+  border-color: var(--pd-border-strong);
+  color: var(--pd-text);
 }
 .type-picker button.active {
-  background: #0078d4;
-  border-color: #0078d4;
-  color: #fff;
+  background: var(--pd-surface-brand);
+  border-color: var(--pd-primary);
+  color: var(--pd-primary-700);
+  font-weight: var(--pd-weight-bold);
 }
+.type-picker button:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
 .prompt-section {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: var(--pd-space-3);
 }
 .actions-section {
-  margin-bottom: 0.25rem;
+  margin-bottom: var(--pd-space-1);
 }
 .prompt-label {
-  font-size: 0.85rem;
-  color: #555;
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-text-secondary);
 }
 .prompt-input {
   resize: vertical;
   min-height: 4rem;
-  padding: 0.4rem;
-  border-radius: 4px;
-  border: 1px solid #ccc;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  padding: var(--pd-space-3);
+  border-radius: var(--pd-radius-sm);
+  border: 1px solid var(--pd-border-strong);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-text);
+}
+.prompt-input:focus-visible {
+  outline: none;
+  border-color: var(--pd-primary);
+  box-shadow: var(--pd-ring);
 }
 .actions-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: var(--pd-space-3);
 }
+
+/* Run: the ONE primary action. Solid brand fill, larger, full-width and elevated so it
+   is unmistakably the thing to click after choosing a type - the visual opposite of the
+   quiet, tinted "selected" type chip. */
+.run-btn {
+  padding: var(--pd-space-4) var(--pd-space-6);
+  border-radius: var(--pd-radius-md);
+  border: none;
+  background: var(--pd-primary);
+  color: var(--pd-on-primary);
+  cursor: pointer;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body);
+  line-height: var(--pd-lh-body);
+  font-weight: var(--pd-weight-semibold);
+  box-shadow: var(--pd-shadow-1);
+  transition: background var(--pd-dur-fast) var(--pd-ease),
+              box-shadow var(--pd-dur-fast) var(--pd-ease);
+}
+.actions-row .run-btn {
+  width: 100%;
+}
+.run-btn:hover:not(:disabled) {
+  background: var(--pd-primary-hover);
+  box-shadow: var(--pd-shadow-2);
+}
+.run-btn:active:not(:disabled) {
+  background: var(--pd-primary-press);
+}
+.run-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+.run-btn:disabled {
+  background: var(--pd-neutral-200);
+  color: var(--pd-neutral-400);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+/* Secondary (e.g. Save as template): quiet outline action, never competes with Run. */
+.run-btn.secondary {
+  background: var(--pd-surface);
+  color: var(--pd-primary);
+  border: 1px solid var(--pd-primary);
+  box-shadow: none;
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-medium);
+  padding: var(--pd-space-3) var(--pd-space-5);
+}
+.run-btn.secondary:hover:not(:disabled) {
+  background: var(--pd-surface-brand);
+  box-shadow: none;
+}
+.run-btn.secondary:disabled {
+  background: var(--pd-surface);
+  color: var(--pd-neutral-400);
+  border-color: var(--pd-border);
+  cursor: not-allowed;
+}
+
 .highlight-option {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.8rem;
-  color: #555;
+  gap: var(--pd-space-2);
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-text-secondary);
   cursor: pointer;
-  margin-top: 0.35rem;
+  margin-top: var(--pd-space-3);
 }
 .highlight-option input { cursor: pointer; }
-.run-btn {
-  padding: 0.35rem 0.75rem;
-  border-radius: 4px;
-  border: none;
-  background: #0078d4;
-  color: #fff;
-  cursor: pointer;
-  font-size: 0.85rem;
-}
-.run-btn.secondary {
-  background: #fff;
-  color: #0078d4;
-  border: 1px solid #0078d4;
-}
+
 .run-error {
-  color: #a00;
-  font-size: 0.85rem;
-  margin: 0.35rem 0 0 0;
+  color: var(--pd-cut);
+  font-size: var(--pd-text-body-sm);
+  margin: var(--pd-space-3) 0 0 0;
 }
+
+/* Sub-tabs: switch the result VIEW (Run / History / Versions). Pill-shaped and quiet,
+   distinct from both the square-ish type chips and the solid Run action. */
 .sub-tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
+  gap: var(--pd-space-2);
 }
 .sub-tab {
-  border: 1px solid #ddd;
-  border-radius: 999px;
-  padding: 0.2rem 0.6rem;
-  background: #fafafa;
-  font-size: 0.75rem;
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-pill);
+  padding: var(--pd-space-2) var(--pd-space-4);
+  background: var(--pd-surface);
+  color: var(--pd-text-secondary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  font-weight: var(--pd-weight-medium);
   cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease),
+              border-color var(--pd-dur-fast) var(--pd-ease),
+              color var(--pd-dur-fast) var(--pd-ease);
+}
+.sub-tab:hover:not(.active) {
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text);
 }
 .sub-tab.active {
-  background: #e6f0ff;
-  border-color: #0078d4;
+  background: var(--pd-surface-brand);
+  border-color: var(--pd-primary-200);
+  color: var(--pd-primary-700);
+  font-weight: var(--pd-weight-semibold);
+}
+.sub-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
 }

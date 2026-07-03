@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
-import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, isConsistencySuggestion } from '../../core/models/analysis';
+import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { LineEditParserService, ParsedLineEdit } from '../../core/services/line-edit-parser.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
 import { proofreadDiff } from '../../core/utils/proofread-diff';
@@ -112,23 +112,7 @@ export class AnalysisHistoryTabComponent implements OnChanges {
 
   /** Localized label for an analysis-type filter button (he default, en fallback). */
   analysisTypeLabel(value: string): string {
-    const he: Record<string, string> = {
-      Proofread: 'הגהה',
-      LineEdit: 'עריכת שורה',
-      LinguisticAnalysis: 'לשוני',
-      LiteraryAnalysis: 'ספרותי',
-      Summarization: 'סיכום',
-      Custom: 'מותאם',
-    };
-    const en: Record<string, string> = {
-      Proofread: 'Proofread',
-      LineEdit: 'Line Edit',
-      LinguisticAnalysis: 'Linguistic',
-      LiteraryAnalysis: 'Literary',
-      Summarization: 'Summarize',
-      Custom: 'Custom',
-    };
-    const map = this.chromeLang === 'he' ? he : en;
+    const map = ANALYSIS_TYPE_LABELS[this.chromeLang];
     return map[value] ?? value;
   }
 

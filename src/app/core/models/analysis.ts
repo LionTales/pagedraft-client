@@ -41,6 +41,34 @@ export const ANALYSIS_TYPES = [
   { value: 'Custom', label: 'Custom' }
 ] as const;
 
+/**
+ * Shared he/en label maps for analysis types. Used by every surface that shows a
+ * human-readable analysis-type label (analysis-panel, analysis-run-tab,
+ * analysis-history-tab) so all three stay in sync. The canonical Hebrew values are
+ * the SHORT forms ('לשוני', 'ספרותי') used on picker buttons.
+ */
+export const ANALYSIS_TYPE_LABELS: {
+  he: Record<string, string>;
+  en: Record<string, string>;
+} = {
+  he: {
+    Proofread: 'הגהה',
+    LineEdit: 'עריכת שורה',
+    LinguisticAnalysis: 'לשוני',
+    LiteraryAnalysis: 'ספרותי',
+    Summarization: 'סיכום',
+    Custom: 'מותאם',
+  },
+  en: {
+    Proofread: 'Proofread',
+    LineEdit: 'Line Edit',
+    LinguisticAnalysis: 'Linguistic',
+    LiteraryAnalysis: 'Literary',
+    Summarization: 'Summarize',
+    Custom: 'Custom',
+  },
+};
+
 export interface PromptTemplateDto {
   id: string;
   name: string;

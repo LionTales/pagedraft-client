@@ -1,0 +1,44 @@
+<div class="handoff-card" [attr.dir]="dir">
+  <h4 class="handoff-heading">{{ headingLabel }}</h4>
+
+  <!-- Stats: chapter count, words, parts -->
+  <ul class="handoff-stats" *ngIf="chapterCountLabel || wordTotalLabel || partsLabel">
+    <li *ngIf="chapterCountLabel" class="handoff-stat">{{ chapterCountLabel }}</li>
+    <li *ngIf="wordTotalLabel"    class="handoff-stat">{{ wordTotalLabel }}</li>
+    <li *ngIf="partsLabel"        class="handoff-stat">{{ partsLabel }}</li>
+  </ul>
+
+  <!-- Re-split escape link -->
+  <a
+    *ngIf="bookId"
+    class="handoff-resplit"
+    [routerLink]="['/books', bookId, 'import']">
+    {{ reSplitLabel }}
+  </a>
+
+  <!-- Consent / estimate info: only shown when a build is needed -->
+  <p class="handoff-consent-info" *ngIf="consentInfoLabel">
+    {{ consentInfoLabel }}
+    <span class="handoff-estimate" *ngIf="estimateLabel">({{ estimateLabel }})</span>
+  </p>
+
+  <!-- Actions -->
+  <div class="handoff-actions">
+    <!-- PRIMARY CTA: consent action — triggers summary build -->
+    <button
+      type="button"
+      class="pd-btn pd-btn-primary handoff-cta-primary"
+      [disabled]="startReviewDisabled"
+      (click)="onStartReview()">
+      {{ startReviewLabel }}
+    </button>
+
+    <!-- QUIET SECONDARY: escape hatch — never blocks -->
+    <button
+      type="button"
+      class="pd-btn pd-btn-ghost handoff-cta-secondary"
+      (click)="onEditMode()">
+      {{ editModeLabel }}
+    </button>
+  </div>
+</div>

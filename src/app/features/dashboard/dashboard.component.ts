@@ -153,7 +153,7 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
 export class DashboardComponent implements OnInit {
   books: BookDto[] = [];
   showCreateForm = false;
-  newBookTitle = 'Untitled';
+  newBookTitle = '';
   newBookLanguage = 'he';
   creating = false;
   deletingId: string | null = null;
@@ -227,12 +227,12 @@ export class DashboardComponent implements OnInit {
 
   cancelCreate(): void {
     this.showCreateForm = false;
-    this.newBookTitle = 'Untitled';
+    this.newBookTitle = '';
     this.newBookLanguage = 'he';
   }
 
   submitCreate(): void {
-    const title = (this.newBookTitle?.trim()) || 'Untitled';
+    const title = (this.newBookTitle?.trim()) || this.label('untitled');
     this.creating = true;
     this.bookService.create(title, null, this.newBookLanguage).subscribe({
       next: b => {

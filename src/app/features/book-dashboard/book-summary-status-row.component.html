@@ -22,7 +22,7 @@
     <!-- BUILDING -->
     <ng-container *ngIf="bookSummaryState === 'building'">
       <span class="sb-status sb-building" data-testid="bsum-building">
-        {{ bookSummaryProgressMessage || bookSummaryLabel('building') }}
+        {{ bookSummaryLabel('building') }}
         <ng-container *ngIf="bookSummaryProgressPercent != null"> ({{ bookSummaryProgressPercent }}%)</ng-container>
       </span>
       <span class="sb-spinner" aria-hidden="true"></span>

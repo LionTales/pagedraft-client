@@ -21,10 +21,27 @@ import {
   Verdict,
 } from '../../core/models/book-review';
 import { BookReviewService } from '../../core/services/book-review.service';
+import { ReviseContextService } from '../../core/services/revise-context.service';
 import { MarkdownTextComponent } from '../analysis-panel/markdown-text.component';
 
 /** The PATCH verb the lifecycle control runs for a target status (mirrors the service signature). */
 type PatchVerb = 'acknowledge' | 'dismiss' | 'done' | 'open';
+
+/**
+ * rf-f05: Truncate a finding rationale to a display one-liner for the revise-context chip.
+ * Takes the first sentence (up to the first ". " / "." at end) or 120 chars, whichever is shorter.
+ * Exported so it can be unit-tested and reused by ChapterFindingsChecklistComponent.
+ */
+export function truncateOneLiner(rationale: string, maxLen = 120): string {
+  if (!rationale) return '';
+  // Strip markdown bold markers for a clean plain-text chip label.
+  const plain = rationale.replace(/\*\*([^*]+)\*\*/g, '$1').trim();
+  // Try first sentence.
+  const dotIdx = plain.search(/\.\s|\.$/m);
+  const firstSentence = dotIdx > 0 ? plain.slice(0, dotIdx) : plain;
+  const candidate = firstSentence.length <= maxLen ? firstSentence : plain.slice(0, maxLen);
+  return candidate.trim();
+}
 
 /** A finding row enriched with the transient optimistic/error flags the ledger renders. */
 interface LedgerFinding extends BookFinding {
@@ -114,7 +131,8 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
 
   constructor(
     private bookReviewService: BookReviewService,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private reviseContext: ReviseContextService,
   ) {}
 
   /** Effective book language for findings calls (defaults to 'he'). */
@@ -290,8 +308,16 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
     return this.expandedIds.has(findingId);
   }
 
-  /** Emit the navigation seam for wb3-f01 (no navigation invented here). */
-  onAnchorClick(anchor: ChapterAnchor): void {
+  /**
+   * Emit the navigation seam for wb3-f01 (no navigation invented here).
+   * rf-f05: also sets the revise context so the Edit-mode panel can show a "Addressing: <one-liner>"
+   * chip for the current chapter. The rationale (truncated) is the one-liner; the findingId links
+   * the checklist row. Clear occurs in the chip's "back to findings" action.
+   */
+  onAnchorClick(anchor: ChapterAnchor, finding: BookFinding): void {
+    // Truncate the rationale to a one-liner (first sentence or 120 chars, whichever is shorter).
+    const oneLiner = truncateOneLiner(finding.rationale);
+    this.reviseContext.set({ findingId: finding.id, oneLiner, chapterId: anchor.chapterId });
     this.openChapter.emit(anchor);
   }
 

@@ -37,13 +37,6 @@
         (click)="runAnalysis()">
         {{ isRunning ? panelLabel('running') : panelLabel('run') }}
       </button>
-      <button
-        type="button"
-        class="run-btn secondary"
-        [disabled]="!canRun || isRunning"
-        (click)="runStreaming()">
-        {{ isRunning ? panelLabel('streaming') : panelLabel('runStreaming') }}
-      </button>
     </div>
     <p class="run-error" *ngIf="runError">{{ runError }}</p>
     <label class="highlight-option" *ngIf="selectedAnalysisType === 'Proofread'">
@@ -94,7 +87,6 @@
     [styleBaselineStatus]="styleBaselineStatus"
     [styleBaselineBuilding]="styleBaselineBuilding"
     [styleBaselineProgressPercent]="styleBaselineProgressPercent"
-    [styleBaselineProgressMessage]="styleBaselineProgressMessage"
     (buildStyleBaseline)="onBuildStyleBaseline()"
     (proofreadAccept)="onProofreadAccept($event)"
     (proofreadDismiss)="onProofreadDismiss($event)"

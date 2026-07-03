@@ -134,7 +134,20 @@
       </div>
 
       <div class="review-body">
-        @if (reviewMode === 'edit') {
+        <!-- rf-f03: import handoff card — shown instead of the normal review body immediately after
+             a DOCX import. Hides summary-build latency behind the structural decision. Non-blocking:
+             "Just let me edit" always works (escape hatch). -->
+        @if (showHandoffCard && bookId) {
+          <app-import-handoff-card
+            [bookId]="bookId"
+            [bookLanguage]="book?.language ?? 'he'"
+            [importedChapters]="importedChapters"
+            [importedWords]="importedWords"
+            [importedParts]="importedParts"
+            (startReview)="onHandoffStartReview()"
+            (editMode)="onHandoffEditMode()">
+          </app-import-handoff-card>
+        } @else if (reviewMode === 'edit') {
           <!-- Secondary sub-view toggle: per-chapter analysis vs the language engine. Preserves the
                existing Language panel (out of scope for the two-mode spec but a real feature). -->
           <nav class="edit-help-subnav" role="radiogroup" [attr.aria-label]="reviewPanelTitle">
@@ -189,13 +202,25 @@
               (issueHighlighted)="onIssueHighlighted($event)">
             </app-issue-panel>
           }
+
+          <!-- rf-f05: per-chapter findings checklist + addressing context chip.
+               Advisory only (NON-BLOCKING): always visible in Edit mode when a chapter is open,
+               never gates editing. Switches to Review/Findings via (switchToReview). -->
+          @if (bookId && selectedChapterId) {
+            <app-chapter-findings-checklist
+              [bookId]="bookId"
+              [chapterId]="selectedChapterId"
+              [bookLanguage]="book?.language ?? 'he'"
+              (switchToReview)="onChecklistSwitchToReview()">
+            </app-chapter-findings-checklist>
+          }
         } @else if (reviewMode === 'review' && bookId && book) {
           <app-book-dashboard
             [bookId]="bookId"
             [bookTitle]="book.title"
             [bookLanguage]="book.language"
             (openChapter)="onOpenChapterFromDashboard($event)"
-            (buildRunningChange)="onReviewBuildRunningChange($event)">
+            (switchToReview)="onReviewModeChange('review')">
           </app-book-dashboard>
         }
       </div>
@@ -206,8 +231,9 @@
         class="review-reopen"
         [class.review-running]="reviewBuildRunning"
         [attr.aria-label]="reviewBuildRunning ? reviewPanelTitle + ' · ' + reviewRunningLabel : reviewPanelTitle"
-        [title]="reviewBuildRunning ? reviewPanelTitle + ' · ' + reviewRunningLabel : reviewPanelTitle">
-        <span class="review-reopen-label" (click)="openReviewPanel()">{{ reviewPanelTitle }}</span>
+        [title]="reviewBuildRunning ? reviewPanelTitle + ' · ' + reviewRunningLabel : reviewPanelTitle"
+        (click)="openReviewPanel()">
+        <span class="review-reopen-label">{{ reviewPanelTitle }}</span>
         @if (reviewBuildRunning) {
           <span class="review-running-dot" aria-hidden="true"></span>
         }
@@ -215,9 +241,9 @@
     }
   </div>
   @if (analysisRunning) {
-    <div class="analysis-overlay" role="status" aria-live="polite" aria-label="Analysis in progress">
+    <div class="analysis-overlay" role="status" aria-live="polite" [attr.aria-label]="reviewPanelIsHebrew ? 'ניתוח מתבצע' : 'Analysis in progress'">
       <div class="analysis-overlay-card">
-        <h3 class="analysis-overlay-title">Run analysis</h3>
+        <h3 class="analysis-overlay-title">{{ reviewPanelIsHebrew ? 'מריץ ניתוח' : 'Run analysis' }}</h3>
         <div class="analysis-spinner"></div>
         <p class="analysis-overlay-message">{{ analysisStatusText }}</p>
         <div class="analysis-progress-wrapper" *ngIf="analysisStatusPercent !== null">
