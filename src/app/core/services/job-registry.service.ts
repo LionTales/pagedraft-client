@@ -169,10 +169,21 @@ export class JobRegistryService {
     });
   }
 
-  /** True while any tracked job for this book is non-terminal; false once all have finalized. */
+  /**
+   * True while a whole-book BUILD (book summary rollup OR developmental review) is running for this
+   * book; false once all such builds have finalized. This is the single truth the editor's "review
+   * running" affordance reads.
+   *
+   * It counts ONLY the {@link WHOLE_BOOK_BUILD_KINDS} - NOT every tracked job. Chapter `proofread`
+   * runs, `style-baseline` builds, and the reserved `whole-book-analysis` kind are also published to
+   * the registry (for the Activity Center), but they are not a summary/review build and must not light
+   * the review affordance. Without this scoping, starting a chapter proofread or a style-baseline build
+   * would falsely turn "review running" on.
+   */
   anyRunningForBook$(bookId: string): Observable<boolean> {
     return this.jobs$.pipe(
-      map(jobs => jobs.some(j => j.bookId === bookId && !isTerminal(j.status))),
+      map(jobs => jobs.some(j =>
+        j.bookId === bookId && WHOLE_BOOK_BUILD_KINDS.has(j.kind) && !isTerminal(j.status))),
       distinctUntilChanged(),
     );
   }
@@ -369,6 +380,15 @@ export class JobRegistryService {
  * NOT proofread-specific); it shares the chapter/analysis progress shape.
  */
 export type JobKind = 'summary' | 'review' | 'proofread' | 'style-baseline' | 'whole-book-analysis';
+
+/**
+ * The JobKinds that count as a whole-book BUILD for the editor's "review running" affordance: the book
+ * summary rollup and the developmental review. Single source of truth for {@link
+ * JobRegistryService.anyRunningForBook$}. Chapter `proofread` runs, `style-baseline` builds, and the
+ * reserved `whole-book-analysis` kind are tracked for the Activity Center but are NOT a summary/review
+ * build, so they are deliberately excluded here.
+ */
+const WHOLE_BOOK_BUILD_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['summary', 'review']);
 
 /** The registry's lowercase status vocabulary (backend PascalCase enums normalize down to these). */
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled';

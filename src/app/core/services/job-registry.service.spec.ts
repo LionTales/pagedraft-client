@@ -483,6 +483,35 @@ describe('JobRegistryService', () => {
       expect(await firstValueFrom(service.anyRunningForBook$('book-A'))).toBeTrue();
       expect(await firstValueFrom(service.anyRunningForBook$('book-B'))).toBeFalse();
     });
+
+    it('is true for a running developmental review build', async () => {
+      configure();
+      service.track('review', 'book-A', 'REV');
+      expect(await firstValueFrom(service.anyRunningForBook$('book-A'))).toBeTrue();
+    });
+
+    it('a running chapter proofread job does NOT light the review affordance', async () => {
+      // proofread is tracked for the Activity Center but is not a whole-book summary/review build.
+      configure();
+      service.track('proofread', 'book-A', 'PF', { chapterId: 'ch-1' });
+      expect(await firstValueFrom(service.anyRunningForBook$('book-A'))).toBeFalse();
+    });
+
+    it('a running style-baseline build does NOT light the review affordance', async () => {
+      configure();
+      service.track('style-baseline', 'book-A', 'SB');
+      expect(await firstValueFrom(service.anyRunningForBook$('book-A'))).toBeFalse();
+    });
+
+    it('with only proofread + style-baseline running it stays false; a summary build flips it true', async () => {
+      configure();
+      service.track('proofread', 'book-A', 'PF', { chapterId: 'ch-1' });
+      service.track('style-baseline', 'book-A', 'SB');
+      expect(await firstValueFrom(service.anyRunningForBook$('book-A'))).toBeFalse();
+
+      service.track('summary', 'book-A', 'SUM');
+      expect(await firstValueFrom(service.anyRunningForBook$('book-A'))).toBeTrue();
+    });
   });
 
   describe('jobByKindForBook$', () => {
