@@ -497,7 +497,12 @@ function analysisJobToSource(j: ActiveAnalysisJobDto): ReattachSource {
     kind: 'proofread',
     jobId: j.jobId,
     scopeLabel: defaultScopeLabel('proofread'),
-    percent: clampPercent(j.estimatedCompletionPercent),
+    // Unlike the poll DTO, the rf-b01 active-analysis-job carries a NON-NEGATIVE int with no "unknown"
+    // sentinel: its own doc says 0 can mean "not yet chunked", i.e. progress is not yet known - NOT
+    // genuinely 0% done. So treat only a strictly-positive value as a determinate percent and map 0 to
+    // null (indeterminate), matching how progressPercent renders an unknown percent. The job shows the
+    // indeterminate bar until the first poll after reattach reports a real percent.
+    percent: j.estimatedCompletionPercent > 0 ? clampPercent(j.estimatedCompletionPercent) : null,
     message: j.message ?? '',
     analysisType: j.analysisType,
     chapterId: j.chapterId ?? undefined,

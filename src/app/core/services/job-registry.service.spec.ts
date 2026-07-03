@@ -284,6 +284,14 @@ describe('JobRegistryService', () => {
       expect(job?.percent).toBe(25);
     });
 
+    it('maps a reattached estimatedCompletionPercent of 0 to null (indeterminate, not determinate 0%)', () => {
+      // The rf-b01 DTO uses 0 to mean "not yet chunked / unknown" (no negative sentinel), so a just-
+      // reattached job must show the indeterminate bar, not a determinate 0%.
+      configure({ analysis: makeAnalysisStub([activeJob({ jobId: 'chap-0', estimatedCompletionPercent: 0 })]) });
+      service.reattach('book-A', 'he');
+      expect(jobById('chap-0')?.percent).toBeNull();
+    });
+
     it('titles a reattached Proofread job with the proofread labels', () => {
       configure({ analysis: makeAnalysisStub([activeJob({ jobId: 'pf-1', analysisType: 'Proofread' })]) });
       service.reattach('book-A', 'he');
