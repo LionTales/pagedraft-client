@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { AnalysisHistoryTabComponent } from './analysis-history-tab.component';
-import { AnalysisResultDto } from '../../core/models/analysis';
+import { ANALYSIS_TYPE_LABELS, AnalysisResultDto } from '../../core/models/analysis';
 import { LinguisticAnalysis } from '../../core/models/language-engine';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
@@ -788,6 +788,65 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       const rationaleToggle = fixture.debugElement.query(By.css('.suggestions-list .rationale-toggle'));
       expect(rationaleToggle).not.toBeNull();
       expect(rationaleToggle.nativeElement.textContent).toContain('Rationale');
+    });
+  });
+
+  // =========================================================================
+  // 10. c05 he/en parity: the analysis-type LABELS in the History chrome (item
+  //     tab + current-item header) follow the host-threaded bookLanguage. An
+  //     English book must NOT render Hebrew type labels ('הגהה'), it must render
+  //     the English label ('Proofread') from the shared ANALYSIS_TYPE_LABELS map.
+  // =========================================================================
+
+  describe('c05: history type labels follow bookLanguage (he/en parity)', () => {
+    function makeProofreadHistoryItem(language: string): AnalysisResultDto {
+      return {
+        id: 'r-c05',
+        chapterId: 'chap-1',
+        jobId: null,
+        type: 'Proofread',
+        analysisType: 'Proofread',
+        resultText: '',
+        modelName: 'test-model',
+        createdAt: new Date().toISOString(),
+        scope: 'Chapter',
+        structuredResult: null,
+        sceneId: null,
+        bookId: 'book-1',
+        language,
+        status: 'Active',
+        proofreadNoChangesHint: false,
+        suggestions: [],
+      };
+    }
+
+    it('defaults the current-item header to the HEBREW type label when bookLanguage is absent (guard baseline)', () => {
+      component.bookLanguage = null;
+      loadResult(makeProofreadHistoryItem('he'));
+
+      const header = fixture.debugElement.query(By.css('article.result-view > h4'));
+      expect(header).not.toBeNull();
+      expect(header.nativeElement.textContent).toContain(ANALYSIS_TYPE_LABELS['he']['Proofread']); // 'הגהה'
+    });
+
+    it('renders the ENGLISH type label in the current-item header (not Hebrew) for an English book', () => {
+      component.bookLanguage = 'en';
+      loadResult(makeProofreadHistoryItem('en'));
+
+      const header = fixture.debugElement.query(By.css('article.result-view > h4'));
+      expect(header).not.toBeNull();
+      expect(header.nativeElement.textContent).toContain(ANALYSIS_TYPE_LABELS['en']['Proofread']); // 'Proofread'
+      expect(header.nativeElement.textContent).not.toContain(ANALYSIS_TYPE_LABELS['he']['Proofread']); // 'הגהה'
+    });
+
+    it('renders the ENGLISH type label in the history item tab (not Hebrew) for an English book', () => {
+      component.bookLanguage = 'en';
+      loadResult(makeProofreadHistoryItem('en'));
+
+      const tab = fixture.debugElement.query(By.css('nav.tabs button'));
+      expect(tab).not.toBeNull();
+      expect(tab.nativeElement.textContent).toContain(ANALYSIS_TYPE_LABELS['en']['Proofread']); // 'Proofread'
+      expect(tab.nativeElement.textContent).not.toContain(ANALYSIS_TYPE_LABELS['he']['Proofread']); // 'הגהה'
     });
   });
 });

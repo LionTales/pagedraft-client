@@ -9,13 +9,18 @@ import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '..
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
 describe('AnalysisPanelComponent (focused logic)', () => {
   let component: AnalysisPanelComponent;
   let fixture: ComponentFixture<AnalysisPanelComponent>;
+  // rf-c02: the run tab publishes its style-baseline build to the registry on start. Spy so we can assert
+  // track() and so the real (root) registry (with its transitive deps) is not pulled into this TestBed.
+  let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
 
   beforeEach(async () => {
+    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']);
     await TestBed.configureTestingModule({
       imports: [AnalysisPanelComponent],
       providers: [
@@ -88,6 +93,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
             pollStyleBaselineProgress: () => NEVER,
           },
         },
+        { provide: JobRegistryService, useValue: jobRegistrySpy },
       ],
     }).compileComponents();
 
@@ -1489,6 +1495,34 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
       expect(pollSpy).toHaveBeenCalledWith('book-1', 'job-running', jasmine.anything());
       expect(component.styleBaselineBuilding).toBeTrue();
+      // rf-c02: the reattached build is published to the registry so the editor affordance can read it.
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('style-baseline', 'book-1', 'job-running');
+    });
+
+    // rf-c02: the run tab PUBLISHES its style-baseline build to the registry on start (track), so the
+    // editor's single "review running" affordance can read it via jobRegistry.anyRunningForBook$.
+    it('rf-c02: tracks the style-baseline build once with kind/bookId/jobId on a fresh build', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+      spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'he';
+      component.onBuildStyleBaseline();
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledOnceWith('style-baseline', 'book-1', 'job-1');
+    });
+
+    it('rf-c02: does NOT track a NO-OP style-baseline build (no jobId)', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: null, noOp: true } as any));
+      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'he';
+      component.onBuildStyleBaseline();
+
+      expect(jobRegistrySpy.track).not.toHaveBeenCalled();
     });
 
     it('does NOT reattach when activeBuildJobId is null', () => {
@@ -1653,7 +1687,8 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
       // The in-flight poll is still live and still updates progress for the tracked job.
       livePoll$.next({ status: 'running', message: 'tracked job progressing', estimatedCompletionPercent: 60 });
-      expect(component.styleBaselineProgressMessage).toBe('tracked job progressing');
+      // styleBaselineProgressPercent is updated by the live poll — confirms it was not cancelled.
+      expect(component.styleBaselineProgressPercent).toBe(60);
     });
   });
 });

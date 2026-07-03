@@ -17,7 +17,7 @@
     </button>
   </nav>
   <article class="result-view" *ngIf="history.length && currentHistoryItem as current">
-    <h4>{{ current.analysisType || current.type }} ({{ current.modelName }})</h4>
+    <h4>{{ analysisTypeLabel(current.analysisType || current.type) }} ({{ current.modelName }})</h4>
     <!-- Proofread (history): unreliable result shows only the warning (no cards, no raw resultText) -->
     <div class="suggestions-block" *ngIf="(current.analysisType || current.type) === 'Proofread' && current.proofreadResultUnreliable">
       <p class="proofread-length-hint muted">{{ histLabel('unreliableProofread') }}</p>

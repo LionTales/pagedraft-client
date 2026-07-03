@@ -3,7 +3,7 @@ import { SimpleChange } from '@angular/core';
 import { By } from '@angular/platform-browser';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
-import { AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
+import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
 // ---------------------------------------------------------------------------
@@ -593,9 +593,55 @@ describe('AnalysisRunTabComponent', () => {
       expect(query('.proofread-all-good')).toBeNull();
 
       // Model name now shows in the suggestions header (regression for PROBLEM 1).
+      // bookLanguage not set -> chromeLang defaults to 'he', so type label is localized.
       const header = block.nativeElement.querySelector('h4');
-      expect(header.textContent).toContain('Proofread');
+      expect(header.textContent).toContain('הגהה'); // Hebrew localized label for 'Proofread'
       expect(header.textContent).toContain('Ollama:dicta');
+    });
+
+    // ---- c05: an English book renders the ENGLISH analysis-type label in the
+    //          rendered header, NOT the Hebrew label. This is the end-to-end
+    //          guard that the host-threaded bookLanguage='en' reaches the header
+    //          (analysisTypeLabel -> chromeLang). The State 2 test above proves
+    //          the same header defaults to Hebrew ('הגהה') when bookLanguage is
+    //          absent, so together they pin both branches of the language switch.
+    it('c05: RELIABLE proofread header shows the ENGLISH type label (not Hebrew) for an English book', () => {
+      component.bookLanguage = 'en';
+      component.latestResult = makeProofreadResult({
+        proofreadResultUnreliable: false,
+        modelName: 'Ollama:dicta',
+      });
+      component.selectedAnalysisType = 'Proofread';
+      component.proofreadSuggestions = [oneSuggestion];
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      const header = query('.suggestions-block').nativeElement.querySelector('h4');
+      // English label from the shared map, and the Hebrew label must be gone.
+      expect(header.textContent).toContain(ANALYSIS_TYPE_LABELS['en']['Proofread']); // 'Proofread'
+      expect(header.textContent).not.toContain(ANALYSIS_TYPE_LABELS['he']['Proofread']); // 'הגהה'
+    });
+
+    it('c05: LineEdit run header shows the ENGLISH type label ("Line Edit") for an English book', () => {
+      component.bookLanguage = 'en';
+      component.latestResult = makeProofreadResult({
+        // Reuse the proofread factory but flip the type to LineEdit; a single suggestion routes it
+        // through the LineEdit run branch whose header also reads analysisTypeLabel(...).
+        type: 'LineEdit',
+        analysisType: 'LineEdit',
+        modelName: 'Ollama:dicta',
+      });
+      component.selectedAnalysisType = 'LineEdit';
+      component.lineEditRunSuggestions = [{
+        id: 'le-1', original: 'he walked', suggested: 'he strode', category: 'style', startOffset: 0, endOffset: 9,
+      }];
+      component.streamingText = '';
+      fixture.detectChanges();
+
+      const header = query('.result-view h4');
+      expect(header).not.toBeNull();
+      expect(header.nativeElement.textContent).toContain(ANALYSIS_TYPE_LABELS['en']['LineEdit']); // 'Line Edit'
+      expect(header.nativeElement.textContent).not.toContain(ANALYSIS_TYPE_LABELS['he']['LineEdit']); // 'עריכת שורה'
     });
 
     // ---- State 3: RELIABLE + no suggestions ------------------------------
@@ -1023,6 +1069,51 @@ describe('AnalysisRunTabComponent', () => {
       );
       expect(rationaleToggle).not.toBeNull();
       expect(rationaleToggle.nativeElement.textContent).toContain('Rationale');
+    });
+  });
+
+  // =========================================================================
+  // f01 label parity: Run-tab must produce the SAME Hebrew label as the shared
+  // ANALYSIS_TYPE_LABELS map for every analysis type. Regression guard against
+  // a drifted local copy returning 'ניתוח לשוני' / 'ניתוח ספרותי' instead of
+  // the canonical short forms 'לשוני' / 'ספרותי'.
+  // =========================================================================
+
+  describe('f01 label parity: analysisTypeLabel matches ANALYSIS_TYPE_LABELS for he and en', () => {
+    beforeEach(() => {
+      // No result needed; we only exercise the pure helper method.
+      component.latestResult = null;
+      component.streamingText = '';
+      component.proofreadSuggestions = [];
+    });
+
+    it('LinguisticAnalysis he label matches the shared map (not the drifted long form)', () => {
+      component.bookLanguage = 'he';
+      expect(component.analysisTypeLabel('LinguisticAnalysis'))
+        .toBe(ANALYSIS_TYPE_LABELS['he']['LinguisticAnalysis']);
+    });
+
+    it('LiteraryAnalysis he label matches the shared map (not the drifted long form)', () => {
+      component.bookLanguage = 'he';
+      expect(component.analysisTypeLabel('LiteraryAnalysis'))
+        .toBe(ANALYSIS_TYPE_LABELS['he']['LiteraryAnalysis']);
+    });
+
+    it('LinguisticAnalysis en label matches the shared map', () => {
+      component.bookLanguage = 'en';
+      expect(component.analysisTypeLabel('LinguisticAnalysis'))
+        .toBe(ANALYSIS_TYPE_LABELS['en']['LinguisticAnalysis']);
+    });
+
+    it('LiteraryAnalysis en label matches the shared map', () => {
+      component.bookLanguage = 'en';
+      expect(component.analysisTypeLabel('LiteraryAnalysis'))
+        .toBe(ANALYSIS_TYPE_LABELS['en']['LiteraryAnalysis']);
+    });
+
+    it('unknown type falls back to the raw value', () => {
+      component.bookLanguage = 'he';
+      expect(component.analysisTypeLabel('UnknownType')).toBe('UnknownType');
     });
   });
 });

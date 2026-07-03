@@ -1,6 +1,6 @@
 import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
-import { AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
+import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { resolveCardLang } from './card-lang';
@@ -46,8 +46,6 @@ export class AnalysisRunTabComponent implements OnChanges {
   @Input() styleBaselineBuilding = false;
   /** Live build progress 0..100 (null = indeterminate / not started). */
   @Input() styleBaselineProgressPercent: number | null = null;
-  /** Optional human-readable progress message from the build job. */
-  @Input() styleBaselineProgressMessage = '';
 
   /** User confirmed the consent prompt -> parent should start the build and flip to BUILDING. */
   @Output() buildStyleBaseline = new EventEmitter<void>();
@@ -134,6 +132,15 @@ export class AnalysisRunTabComponent implements OnChanges {
     };
     const map = this.chromeLang === 'he' ? he : en;
     return map[key] ?? key;
+  }
+
+  /**
+   * Localized display name for an analysis type value (he default, en for English books).
+   * Reads from the shared ANALYSIS_TYPE_LABELS map so all surfaces stay in sync.
+   */
+  analysisTypeLabel(value: string): string {
+    const map = ANALYSIS_TYPE_LABELS[this.chromeLang];
+    return map[value] ?? value;
   }
 
   // ── Style baseline status row (a3/a4) ──────────────────────────────────────

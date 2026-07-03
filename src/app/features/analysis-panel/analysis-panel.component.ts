@@ -2,11 +2,12 @@ import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnInit, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subject, Subscription, forkJoin } from 'rxjs';
-import { ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, isConsistencySuggestion } from '../../core/models/analysis';
+import { ANALYSIS_TYPE_LABELS, ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
@@ -101,23 +102,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   /** Localized label for an analysis-type picker button (he default, en fallback). */
   analysisTypeLabel(value: string): string {
-    const he: Record<string, string> = {
-      Proofread: 'הגהה',
-      LineEdit: 'עריכת שורה',
-      LinguisticAnalysis: 'לשוני',
-      LiteraryAnalysis: 'ספרותי',
-      Summarization: 'סיכום',
-      Custom: 'מותאם',
-    };
-    const en: Record<string, string> = {
-      Proofread: 'Proofread',
-      LineEdit: 'Line Edit',
-      LinguisticAnalysis: 'Linguistic',
-      LiteraryAnalysis: 'Literary',
-      Summarization: 'Summarize',
-      Custom: 'Custom',
-    };
-    const map = this.panelLang === 'he' ? he : en;
+    const map = ANALYSIS_TYPE_LABELS[this.panelLang];
     return map[value] ?? value;
   }
 
@@ -226,8 +211,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   styleBaselineBuilding = false;
   /** Live baseline build progress 0..100 (null = indeterminate). */
   styleBaselineProgressPercent: number | null = null;
-  /** Human-readable progress message from the build job. */
-  styleBaselineProgressMessage = '';
   /** Stops the active baseline progress poll; nulled when no poll is running. */
   private styleBaselineProgressStop$: Subject<void> | null = null;
   /** Active baseline-related subscriptions (status fetch + build + progress); cleared on context change / destroy. */
@@ -336,7 +319,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         if (status.activeBuildJobId && status.activeBuildJobId !== this.styleBaselineHandledTerminalJobId && !this.styleBaselineBuilding && !this.styleBaselineProgressStop$) {
           this.styleBaselineBuilding = true;
           this.styleBaselineProgressPercent = null;
-          this.styleBaselineProgressMessage = '';
           this.pollStyleBaselineBuild(bookId, status.activeBuildJobId, lang);
         }
         this.cdr.detectChanges();
@@ -367,7 +349,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.styleBaselineStatusSub?.unsubscribe();
     this.styleBaselineBuilding = false;
     this.styleBaselineProgressPercent = null;
-    this.styleBaselineProgressMessage = '';
     this.styleBaselineStatus = null;
     // Forget any handled jobId so a build for the new book/language can reattach.
     this.styleBaselineHandledTerminalJobId = null;
@@ -391,7 +372,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.stopStyleBaselineProgress();
     this.styleBaselineBuilding = true;
     this.styleBaselineProgressPercent = null;
-    this.styleBaselineProgressMessage = '';
     // A new build is being started in this tab: clear the loop guard so its (new) jobId can reattach.
     this.styleBaselineHandledTerminalJobId = null;
     this.cdr.detectChanges();
@@ -413,7 +393,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       error: () => {
         if (this.bookId !== bookId || this.baselineLanguage !== language) return;
         this.styleBaselineBuilding = false;
-        this.styleBaselineProgressMessage = '';
         this.cdr.detectChanges();
       },
     });
@@ -421,6 +400,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   /** Poll the baseline build job and refresh status when it reaches a terminal state. */
   private pollStyleBaselineBuild(bookId: string, jobId: string, lang: string): void {
+    // rf-c02: publish this build to the job registry so the editor's "review running" affordance (and the
+    // Activity Center) can read one truth (jobRegistry.anyRunningForBook$). The run tab keeps its OWN detailed
+    // state + poll below; track() is an ADD, not a replacement. track() is idempotent per jobId, so routing
+    // BOTH the fresh-build and DEF-2 reattach paths through this single choke-point cannot double-track.
+    this.jobRegistry.track('style-baseline', bookId, jobId);
     this.stopStyleBaselineProgress();
     const stop$ = new Subject<void>();
     this.styleBaselineProgressStop$ = stop$;
@@ -429,7 +413,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         // Ignore a stale poll emit after the user switched books OR languages (baseline is per (book, language)).
         if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
         const status = (p.status ?? '').toLowerCase();
-        this.styleBaselineProgressMessage = p.message ?? '';
         this.styleBaselineProgressPercent =
           status === 'succeeded'
             ? 100
@@ -474,7 +457,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     private suggestionKeyService: SuggestionKeyService,
     private suggestionAnchorService: SuggestionAnchorService,
     private styleBaselineService: StyleBaselineService,
-    private analysisProgressService: AnalysisProgressService
+    private analysisProgressService: AnalysisProgressService,
+    private jobRegistry: JobRegistryService
   ) {}
 
 
