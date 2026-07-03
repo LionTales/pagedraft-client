@@ -191,6 +191,20 @@ describe('JobRegistryService', () => {
       expect(jobById('J1')?.updatedAt).toBe(finalizedAt);
     });
 
+    it('titles a chapter analysis job from its analysisType (LineEdit -> line-edit labels)', () => {
+      // The fresh-start path (analysis panel job-started) tracks kind `proofread` + analysisType. A
+      // LineEdit run must title as line-edit, not the proofread kind default.
+      service.track('proofread', 'book-A', 'LE', { analysisType: 'LineEdit', chapterId: 'ch-1' });
+      expect(jobById('LE')?.titleHe).toBe('עריכת שורה');
+      expect(jobById('LE')?.titleEn).toBe('Line Edit');
+    });
+
+    it('falls back to the kind default title when no analysisType is supplied', () => {
+      service.track('proofread', 'book-A', 'PF');
+      expect(jobById('PF')?.titleHe).toBe('הגהה');
+      expect(jobById('PF')?.titleEn).toBe('Proofreading');
+    });
+
     it('does NOT start a second poll when track is called again for a live job (metadata merge only)', () => {
       const spy = spyOn(progressStub, 'pollBookSummaryProgress').and.callThrough();
       service.track('summary', 'book-A', 'J1');
@@ -268,6 +282,27 @@ describe('JobRegistryService', () => {
       expect(job?.kind).toBe('proofread');
       expect(job?.chapterId).toBe('ch-9');
       expect(job?.percent).toBe(25);
+    });
+
+    it('titles a reattached Proofread job with the proofread labels', () => {
+      configure({ analysis: makeAnalysisStub([activeJob({ jobId: 'pf-1', analysisType: 'Proofread' })]) });
+      service.reattach('book-A', 'he');
+      const job = jobById('pf-1');
+      expect(job?.analysisType).toBe('Proofread');
+      expect(job?.titleHe).toBe('הגהה');
+      expect(job?.titleEn).toBe('Proofread');
+    });
+
+    it('titles a reattached LineEdit job with the line-edit labels, not the proofread default', () => {
+      // rf-c01: LineEdit and Proofread share the one `proofread` kind, so the title must come from the
+      // job's analysisType. A LineEdit job must NOT read as proofreading.
+      configure({ analysis: makeAnalysisStub([activeJob({ jobId: 'le-1', analysisType: 'LineEdit' })]) });
+      service.reattach('book-A', 'he');
+      const job = jobById('le-1');
+      expect(job?.kind).toBe('proofread');
+      expect(job?.analysisType).toBe('LineEdit');
+      expect(job?.titleHe).toBe('עריכת שורה');
+      expect(job?.titleEn).toBe('Line Edit');
     });
 
     it('re-tracks BOTH a book-level build and a chapter job in one reattach', () => {

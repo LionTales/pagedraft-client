@@ -1661,6 +1661,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.onRunResultReceived(event.result);
         break;
       case 'job-started':
+        // rf-c01: publish this freshly-started chapter analysis job to the registry so the Activity
+        // Center and anyRunningForBook$ pick it up for THIS run - not only after a reload reattaches to
+        // it. The async-job path runs only for Proofread/LineEdit (shouldUseAsyncJob), which share the
+        // one `proofread` kind; analysisType carries the distinction so the row titles correctly.
+        // track() is idempotent per jobId, so a later reattach that re-discovers this job cannot
+        // double-track it.
+        if (this.bookId) {
+          this.jobRegistry.track('proofread', this.bookId, event.jobId, {
+            analysisType: this.selectedAnalysisType,
+            chapterId: this.chapterId ?? undefined,
+          });
+        }
         break;
       case 'streaming-token':
         this.streamingText += event.token;

@@ -1691,5 +1691,46 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(component.styleBaselineProgressPercent).toBe(60);
     });
   });
+
+  // Bug 1 (rf-c01): starting an async chapter Proofread/Line Edit run must publish the job to the
+  // registry on job-started, so the Activity Center + anyRunningForBook$ pick it up for THIS run and
+  // not only after a reload reattaches to it.
+  describe('job-started publishes the chapter analysis job to the registry', () => {
+    it('tracks a fresh Proofread async job with kind proofread + analysisType + chapterId', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'Proofread';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-1' });
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-1', {
+        analysisType: 'Proofread',
+        chapterId: 'chap-1',
+      });
+    });
+
+    it('carries analysisType LineEdit so an in-flight Line Edit does not title as proofreading', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'LineEdit';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-le' });
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-le', {
+        analysisType: 'LineEdit',
+        chapterId: 'chap-1',
+      });
+    });
+
+    it('does NOT track when there is no bookId (guard)', () => {
+      component.bookId = null;
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'Proofread';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-x' });
+
+      expect(jobRegistrySpy.track).not.toHaveBeenCalled();
+    });
+  });
 });
 

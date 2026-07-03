@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { BehaviorSubject, Observable, Subject, Subscription, forkJoin, of } from 'rxjs';
 import { catchError, distinctUntilChanged, map } from 'rxjs/operators';
 
-import { AnalysisProgressDto } from '../models/analysis';
+import { AnalysisProgressDto, ANALYSIS_TYPE_LABELS } from '../models/analysis';
 import { ActiveAnalysisJobDto } from '../models/active-analysis-job';
 import { AnalysisProgressService } from './analysis-progress.service';
 import { AnalysisService } from './analysis.service';
@@ -110,13 +110,14 @@ export class JobRegistryService {
     }
 
     const startedAt = nowIso();
+    const titles = titleForJob(kind, meta.analysisType);
     const job: TrackedJob = {
       id: jobId,
       kind,
       bookId,
       scopeLabel: meta.scopeLabel ?? defaultScopeLabel(kind),
-      titleHe: meta.titleHe ?? DEFAULT_TITLES[kind].he,
-      titleEn: meta.titleEn ?? DEFAULT_TITLES[kind].en,
+      titleHe: meta.titleHe ?? titles.he,
+      titleEn: meta.titleEn ?? titles.en,
       status: 'running',
       percent: clampPercent(meta.initialPercent ?? null),
       message: meta.message ?? '',
@@ -531,6 +532,23 @@ const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
   'style-baseline': { he: 'בניית קו סגנון', en: 'Building style baseline' },
   'whole-book-analysis': { he: 'ניתוח הספר כולו', en: 'Analyzing whole book' },
 };
+
+/**
+ * Title (he/en) for a NEW tracked job. Chapter async analysis rides ONE JobKind (`proofread`) for BOTH
+ * Proofread and LineEdit, so the kind alone cannot name the row - only the `analysisType` distinguishes
+ * them. When a chapter analysis job carries an analysisType, resolve its title from the shared
+ * ANALYSIS_TYPE_LABELS source (kept in sync with every other analysis-type surface) so an in-flight
+ * LineEdit reads "Line Edit" / "עריכת שורה" instead of the proofread default. Any other kind, or an
+ * absent/unknown analysisType, falls back to the per-kind default.
+ */
+function titleForJob(kind: JobKind, analysisType: string | undefined): { he: string; en: string } {
+  if (kind === 'proofread' && analysisType) {
+    const he = ANALYSIS_TYPE_LABELS.he[analysisType];
+    const en = ANALYSIS_TYPE_LABELS.en[analysisType];
+    if (he && en) return { he, en };
+  }
+  return DEFAULT_TITLES[kind];
+}
 
 /** Default scope label per kind. DRAFT Hebrew where user-facing; the FE resolves richer labels later. */
 // DRAFT he - needs native review
