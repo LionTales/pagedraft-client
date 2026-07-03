@@ -1,0 +1,372 @@
+/*
+ * Activity Center overlay styles.
+ * Uses --pd-* design tokens throughout. No em-dash in user-facing strings.
+ * Physical layout (not content-dir) for RTL: inset-inline-start/end logical props + dir-sensitive
+ * transform via the host [dir] attribute.
+ *
+ * Bell sits in the top inline-start corner (inline-start = right in RTL, left in LTR).
+ * Panel slides in from inline-start (right edge in RTL, left edge in LTR).
+ */
+
+:host {
+  /* The host is a non-layout container; children are fixed/absolute-positioned. */
+  display: contents;
+}
+
+/* ── Bell button ──────────────────────────────────────────────────────────── */
+
+.ac-bell {
+  position: fixed;
+  /* Top inline-start corner: physical right in RTL, physical left in LTR */
+  top: var(--pd-space-5);
+  inset-inline-start: var(--pd-space-5);
+  z-index: calc(var(--pd-z-overlay) + 10);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-surface);
+  box-shadow: var(--pd-shadow-2);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background var(--pd-dur-fast) var(--pd-ease),
+    box-shadow var(--pd-dur-fast) var(--pd-ease);
+}
+
+/* Hidden while the panel is open so the fixed bell does not overlap the panel header title. */
+.ac-bell--is-hidden {
+  display: none;
+}
+
+.ac-bell:hover {
+  background: var(--pd-surface-sunken);
+  box-shadow: var(--pd-shadow-3);
+}
+
+.ac-bell:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.ac-bell-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* ── Badge ────────────────────────────────────────────────────────────────── */
+
+.ac-badge {
+  position: absolute;
+  top: -4px;
+  inset-inline-end: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--pd-space-2);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-cut);
+  color: var(--pd-neutral-0);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-bold);
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* ── Backdrop ─────────────────────────────────────────────────────────────── */
+
+.ac-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--pd-z-overlay);
+  background: transparent;
+}
+
+/* ── Slide-over panel ─────────────────────────────────────────────────────── */
+
+.ac-panel {
+  position: fixed;
+  top: 0;
+  /* Panel attaches to the inline-start edge (right side in RTL) */
+  inset-inline-start: 0;
+  width: min(360px, 92vw);
+  height: 100dvh;
+  z-index: calc(var(--pd-z-overlay) + 5);
+
+  display: flex;
+  flex-direction: column;
+  background: var(--pd-surface);
+  border-inline-end: 1px solid var(--pd-border);
+  box-shadow: var(--pd-shadow-4);
+
+  /* Slide in from inline-start */
+  animation: ac-slide-in var(--pd-dur-base) var(--pd-ease) both;
+}
+
+@keyframes ac-slide-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* In RTL the panel slides in from the right; flip the animation direction */
+:host([dir='rtl']) .ac-panel {
+  animation-name: ac-slide-in-rtl;
+}
+
+@keyframes ac-slide-in-rtl {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* ── Panel header ─────────────────────────────────────────────────────────── */
+
+.ac-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--pd-space-5) var(--pd-space-6);
+  border-block-end: 1px solid var(--pd-divider);
+  flex-shrink: 0;
+}
+
+.ac-panel-title {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-h5);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text);
+  line-height: var(--pd-lh-h5);
+}
+
+.ac-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--pd-radius-sm);
+  background: none;
+  cursor: pointer;
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-body);
+  line-height: 1;
+  transition: background var(--pd-dur-fast) var(--pd-ease), color var(--pd-dur-fast) var(--pd-ease);
+}
+
+.ac-close:hover {
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text);
+}
+
+.ac-close:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+/* ── Panel body ───────────────────────────────────────────────────────────── */
+
+.ac-panel-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--pd-space-3) 0;
+}
+
+/* ── Empty state ──────────────────────────────────────────────────────────── */
+
+.ac-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-text-muted);
+}
+
+/* ── Job row ──────────────────────────────────────────────────────────────── */
+
+.ac-row {
+  padding: var(--pd-space-4) var(--pd-space-6);
+  border-block-end: 1px solid var(--pd-divider);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-2);
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+
+.ac-row:last-child {
+  border-block-end: none;
+}
+
+.ac-row:hover {
+  background: var(--pd-surface-sunken);
+}
+
+.ac-row-top {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  flex-wrap: wrap;
+}
+
+.ac-kind-icon {
+  font-size: 15px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.ac-scope {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+  flex-shrink: 0;
+}
+
+.ac-title {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text);
+  /* Allow the title to grow but truncate gracefully */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Progress bar ─────────────────────────────────────────────────────────── */
+
+.ac-progress-track {
+  width: 100%;
+  height: 4px;
+  background: var(--pd-neutral-100);
+  border-radius: var(--pd-radius-pill);
+  overflow: hidden;
+}
+
+/* Determinate fill: width is set via [style.width.%] binding.
+   No min-width: a true 0% should look empty, not show a sliver. */
+.ac-progress-fill--det {
+  height: 100%;
+  background: var(--pd-primary-600);
+  border-radius: var(--pd-radius-pill);
+  transition: width var(--pd-dur-base) var(--pd-ease);
+}
+
+/* Indeterminate animation */
+.ac-progress-fill--indet {
+  height: 100%;
+  width: 40%;
+  background: var(--pd-primary-600);
+  border-radius: var(--pd-radius-pill);
+  animation: ac-indeterminate 1.4s var(--pd-ease) infinite;
+}
+
+@keyframes ac-indeterminate {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(150%); }
+  100% { transform: translateX(150%); }
+}
+
+/* Respect user's reduced-motion preference: disable all keyframe animations. */
+@media (prefers-reduced-motion: reduce) {
+  .ac-progress-fill--indet {
+    animation: none;
+  }
+
+  .ac-panel {
+    animation: none;
+  }
+}
+
+/* ── Meta row ─────────────────────────────────────────────────────────────── */
+
+.ac-row-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-3);
+  flex-wrap: wrap;
+}
+
+.ac-time {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+  flex-shrink: 0;
+}
+
+/* ── Status pill ──────────────────────────────────────────────────────────── */
+
+.ac-status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--pd-space-3);
+  border-radius: var(--pd-radius-pill);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.status-running {
+  background: var(--pd-info-bg);
+  color: var(--pd-primary-700);
+}
+
+.status-pending {
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-secondary);
+}
+
+.status-done {
+  background: var(--pd-keep-bg);
+  color: var(--pd-keep);
+}
+
+.status-failed {
+  background: var(--pd-cut-bg);
+  color: var(--pd-cut);
+}
+
+.status-canceled {
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-muted);
+}
+
+/* ── View link ────────────────────────────────────────────────────────────── */
+
+.ac-view-link {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text-link);
+  text-decoration: none;
+  margin-inline-start: auto;
+  white-space: nowrap;
+}
+
+.ac-view-link:hover {
+  text-decoration: underline;
+}
+
+.ac-view-link:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+  border-radius: var(--pd-radius-sm);
+}
