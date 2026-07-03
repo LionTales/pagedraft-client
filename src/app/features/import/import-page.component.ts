@@ -8,23 +8,90 @@ import {
   ImportConfirmationRequest,
 } from '../../core/models/book';
 import { ImportService } from '../../core/services/import.service';
+import { BookService } from '../../core/services/book.service';
 
 interface ImportChapterView extends ImportPreviewChapterDto {
   include: boolean;
 }
+
+// ── i18n label maps (book-scoped chrome: follows the book language, Hebrew-default). ──
+// DRAFT he - needs native-speaker review before sign-off.
+const LABELS_HE: Record<string, string> = {
+  title:            'ייבוא DOCX',
+  subtitle:         'העלו קובץ DOCX וסקרו את הפרקים שזוהו לפני הייבוא.',
+  backToBook:       'חזרה לספר',
+  dropHere:         'גררו לכאן את קובץ ה-DOCX',
+  or:               'או',
+  browse:           'עיון',
+  selectedFile:     'קובץ נבחר:',
+  bytes:            'בייטים',
+  change:           'שינוי',
+  uploading:        'מעלה ומנתח...',
+  hint:             'נתמכים קבצי DOCX בלבד. קבצים גדולים עשויים לקחת מספר שניות לניתוח.',
+  modeAppend:       'הוספה לפרקים הקיימים',
+  modeOverwrite:    'החלפת כל הפרקים הקיימים',
+  selectAll:        'בחירת הכול',
+  clearAll:         'ניקוי הכול',
+  overwriteWarning: 'פעולה זו תחליף את כל הפרקים הקיימים בספר. ודאו שיש לכם גיבוי לפני שתמשיכו.',
+  thInclude:        'כלול',
+  thNum:            '#',
+  thTitle:          'כותרת',
+  thPart:           'חלק',
+  thWords:          'מילים',
+  thSnippet:        'קטע',
+  importChapters:   'ייבוא פרקים',
+  importing:        'מייבא...',
+  cancel:           'ביטול',
+  errDocxOnly:      'נתמכים קבצי DOCX בלבד.',
+  errMissingBook:   'מזהה ספר חסר.',
+  errAnalyzeFailed: 'ניתוח המסמך נכשל.',
+  errImportFailed:  'ייבוא הפרקים נכשל.',
+};
+
+const LABELS_EN: Record<string, string> = {
+  title:            'Import DOCX',
+  subtitle:         'Upload a DOCX file and review detected chapters before importing.',
+  backToBook:       'Back to book',
+  dropHere:         'Drop your DOCX here',
+  or:               'or',
+  browse:           'browse',
+  selectedFile:     'Selected file:',
+  bytes:            'bytes',
+  change:           'change',
+  uploading:        'Uploading and analyzing...',
+  hint:             'Only .docx files are supported. Large files may take a few seconds to analyze.',
+  modeAppend:       'Append to existing chapters',
+  modeOverwrite:    'Overwrite all existing chapters',
+  selectAll:        'Select all',
+  clearAll:         'Clear all',
+  overwriteWarning: 'This will replace all existing chapters of this book. Make sure you have a backup before proceeding.',
+  thInclude:        'Include',
+  thNum:            '#',
+  thTitle:          'Title',
+  thPart:           'Part',
+  thWords:          'Words',
+  thSnippet:        'Snippet',
+  importChapters:   'Import chapters',
+  importing:        'Importing...',
+  cancel:           'Cancel',
+  errDocxOnly:      'Only .docx files are supported.',
+  errMissingBook:   'Missing book id.',
+  errAnalyzeFailed: 'Failed to analyze document.',
+  errImportFailed:  'Failed to import chapters.',
+};
 
 @Component({
   selector: 'app-import-page',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
   template: `
-    <div class="import-page">
+    <div class="import-page" [attr.dir]="dir">
       <header class="import-header">
         <div>
-          <h2>Import DOCX</h2>
-          <p class="subtitle">Upload a DOCX file and review detected chapters before importing.</p>
+          <h2>{{ t('title') }}</h2>
+          <p class="subtitle">{{ t('subtitle') }}</p>
         </div>
-        <a class="pd-btn pd-btn-ghost" [routerLink]="['/books', bookId]">Back to book</a>
+        <a class="pd-btn pd-btn-ghost" [routerLink]="['/books', bookId]">{{ t('backToBook') }}</a>
       </header>
 
       <section class="dropzone-section">
@@ -36,12 +103,12 @@ interface ImportChapterView extends ImportPreviewChapterDto {
           (drop)="onDrop($event)">
           <ng-container *ngIf="!isUploading; else uploadingTpl">
             <p *ngIf="!preview">
-              <strong>Drop your DOCX here</strong> or
-              <button type="button" class="pd-btn pd-btn-link" (click)="fileInput.click()">browse</button>
+              <strong>{{ t('dropHere') }}</strong> {{ t('or') }}
+              <button type="button" class="pd-btn pd-btn-link" (click)="fileInput.click()">{{ t('browse') }}</button>
             </p>
             <p *ngIf="preview">
-              Selected file: <strong>{{ preview.fileName }}</strong> ({{ preview.fileSize | number }} bytes)
-              <button type="button" class="pd-btn pd-btn-link" (click)="fileInput.click()">change</button>
+              {{ t('selectedFile') }} <strong>{{ preview.fileName }}</strong> ({{ preview.fileSize | number }} {{ t('bytes') }})
+              <button type="button" class="pd-btn pd-btn-link" (click)="fileInput.click()">{{ t('change') }}</button>
             </p>
             <input
               type="file"
@@ -51,10 +118,10 @@ interface ImportChapterView extends ImportPreviewChapterDto {
               (change)="onFileSelected($event)" />
           </ng-container>
           <ng-template #uploadingTpl>
-            <p class="pd-loading">Uploading and analyzing...</p>
+            <p class="pd-loading">{{ t('uploading') }}</p>
           </ng-template>
         </div>
-        <p class="hint">Only .docx files are supported. Large files may take a few seconds to analyze.</p>
+        <p class="hint">{{ t('hint') }}</p>
         <p *ngIf="error" class="import-error">{{ error }}</p>
       </section>
 
@@ -63,32 +130,32 @@ interface ImportChapterView extends ImportPreviewChapterDto {
           <div class="mode-toggle">
             <label>
               <input type="radio" name="mode" value="append" [(ngModel)]="mode" />
-              Append to existing chapters
+              {{ t('modeAppend') }}
             </label>
             <label>
               <input type="radio" name="mode" value="overwrite" [(ngModel)]="mode" />
-              Overwrite all existing chapters
+              {{ t('modeOverwrite') }}
             </label>
           </div>
           <div class="actions">
-            <button type="button" class="pd-btn pd-btn-ghost" (click)="setAll(true)">Select all</button>
-            <button type="button" class="pd-btn pd-btn-ghost" (click)="setAll(false)">Clear all</button>
+            <button type="button" class="pd-btn pd-btn-ghost" (click)="setAll(true)">{{ t('selectAll') }}</button>
+            <button type="button" class="pd-btn pd-btn-ghost" (click)="setAll(false)">{{ t('clearAll') }}</button>
           </div>
         </div>
 
         <div *ngIf="mode === 'overwrite'" class="overwrite-warning">
-          This will replace all existing chapters of this book. Make sure you have a backup before proceeding.
+          {{ t('overwriteWarning') }}
         </div>
 
         <table class="preview-table">
           <thead>
             <tr>
-              <th>Include</th>
-              <th>#</th>
-              <th>Title</th>
-              <th>Part</th>
-              <th>Words</th>
-              <th>Snippet</th>
+              <th>{{ t('thInclude') }}</th>
+              <th>{{ t('thNum') }}</th>
+              <th>{{ t('thTitle') }}</th>
+              <th>{{ t('thPart') }}</th>
+              <th>{{ t('thWords') }}</th>
+              <th>{{ t('thSnippet') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -112,16 +179,14 @@ interface ImportChapterView extends ImportPreviewChapterDto {
         </table>
 
         <div class="summary">
-          Detected {{ chapters.length }} chapters,
-          {{ totalWords }} words total,
-          {{ selectedCount }} selected to import.
+          {{ summaryText }}
         </div>
 
         <div class="footer-actions">
           <button type="button" class="pd-btn pd-btn-primary" [disabled]="isImporting || !hasSelection()" (click)="confirm()">
-            {{ isImporting ? 'Importing...' : 'Import chapters' }}
+            {{ isImporting ? t('importing') : t('importChapters') }}
           </button>
-          <button type="button" class="pd-btn pd-btn-ghost" (click)="cancel()">Cancel</button>
+          <button type="button" class="pd-btn pd-btn-ghost" (click)="cancel()">{{ t('cancel') }}</button>
         </div>
       </section>
     </div>
@@ -276,14 +341,61 @@ export class ImportPageComponent implements OnInit {
   isImporting = false;
   error: string | null = null;
 
+  /** Book language ('he' | 'en' | ...). Book-scoped chrome follows it; Hebrew-default until loaded. */
+  bookLanguage: string | null = null;
+
   constructor(
     private route: ActivatedRoute,
     private router: Router,
-    private importService: ImportService
+    private importService: ImportService,
+    private bookService: BookService
   ) {}
 
   ngOnInit(): void {
     this.bookId = this.route.snapshot.params['bookId'] ?? null;
+    // Load the book language so this page follows it (Hebrew-default). Failure is non-fatal:
+    // the labels stay at the Hebrew default and the import flow is unaffected.
+    if (this.bookId) {
+      this.bookService.getById(this.bookId).subscribe({
+        next: (book) => (this.bookLanguage = book.language ?? 'he'),
+        error: () => (this.bookLanguage = 'he'),
+      });
+    }
+  }
+
+  /** Whether to use Hebrew labels (RTL). Default Hebrew unless the book language is English. */
+  get isHebrew(): boolean {
+    return !(this.bookLanguage ?? '').toLowerCase().startsWith('en');
+  }
+
+  /** Content direction following the book language. */
+  get dir(): 'rtl' | 'ltr' {
+    return this.isHebrew ? 'rtl' : 'ltr';
+  }
+
+  /** Resolve a localized label from the book-language map. */
+  t(key: string): string {
+    const map = this.isHebrew ? LABELS_HE : LABELS_EN;
+    return map[key] ?? key;
+  }
+
+  /** Localized summary line with the detected/selected counts interpolated. */
+  get summaryText(): string {
+    const ch = this.chapters.length;
+    const w = this.totalWords;
+    const sel = this.selectedCount;
+    const chFormatted = ch.toLocaleString();
+    const wFormatted = w.toLocaleString();
+    const selFormatted = sel.toLocaleString();
+    if (this.isHebrew) {
+      // DRAFT he - needs native review
+      const chNoun = ch === 1 ? 'פרק' : 'פרקים'; // DRAFT he
+      const wNoun = w === 1 ? 'מילה' : 'מילים'; // DRAFT he
+      return `זוהו ${chFormatted} ${chNoun}, ${wFormatted} ${wNoun} בסך הכול, ${selFormatted} נבחרו לייבוא.`;
+    }
+    const chNoun = ch === 1 ? 'chapter' : 'chapters';
+    const wNoun = w === 1 ? 'word' : 'words';
+    return `Detected ${chFormatted} ${chNoun}, ${wFormatted} ${wNoun} total, ${selFormatted} selected to import.`;
   }
 
   onDragOver(event: DragEvent): void {
@@ -319,11 +431,11 @@ export class ImportPageComponent implements OnInit {
   private startUpload(file: File): void {
     this.error = null;
     if (!file.name.toLowerCase().endsWith('.docx')) {
-      this.error = 'Only .docx files are supported.';
+      this.error = this.t('errDocxOnly');
       return;
     }
     if (!this.bookId) {
-      this.error = 'Missing book id.';
+      this.error = this.t('errMissingBook');
       return;
     }
 
@@ -341,7 +453,7 @@ export class ImportPageComponent implements OnInit {
         this.isUploading = false;
         this.preview = null;
         this.chapters = [];
-        this.error = this.extractErrorMessage(err) ?? 'Failed to analyze document.';
+        this.error = this.extractErrorMessage(err) ?? this.t('errAnalyzeFailed');
       },
     });
   }
@@ -379,16 +491,28 @@ export class ImportPageComponent implements OnInit {
       })),
     };
 
+    // Capture stats before the import so we can pass them as router state.
+    const importedChapters = this.chapters.filter(c => c.include).length;
+    const importedWords = this.chapters.filter(c => c.include).reduce((sum, c) => sum + c.wordCount, 0);
+    const partNames = new Set(this.chapters.filter(c => c.include).map(c => c.partName ?? '').filter(p => p));
+    const importedParts = partNames.size;
+
     this.isImporting = true;
     this.importService.confirmImport(this.bookId, request).subscribe({
       next: () => {
         this.isImporting = false;
-        // After successful import, return to editor for this book.
-        this.router.navigate(['/books', this.bookId]);
+        // After successful import, return to editor with an `imported` signal so the editor
+        // can show the guided handoff card (hides summary-build latency behind the structural decision).
+        // Router state carries the chapter/word/parts counts; if lost on refresh, the editor falls back
+        // to book-loaded data gracefully.
+        this.router.navigate(['/books', this.bookId], {
+          queryParams: { imported: 1 },
+          state: { importedChapters, importedWords, importedParts },
+        });
       },
       error: (err) => {
         this.isImporting = false;
-        this.error = this.extractErrorMessage(err) ?? 'Failed to import chapters.';
+        this.error = this.extractErrorMessage(err) ?? this.t('errImportFailed');
       },
     });
   }
