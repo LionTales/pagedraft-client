@@ -294,7 +294,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    this.analysisService.getChunkThresholds().subscribe({
+    this.loadChunkThresholds();
+  }
+
+  /**
+   * Fetch the server chunk thresholds for the CURRENT book language and cache them for the async-vs-sync
+   * decision. The server sizes chunks per language (a dense script like Hebrew/Arabic chunks at a lower word
+   * count than the Latin ceiling), so this must send this.language and re-run on a language change — otherwise
+   * the client would pick sync /analyze while the server chunks. On error the orchestration falls back to its
+   * built-in defaults.
+   */
+  private loadChunkThresholds(): void {
+    this.analysisService.getChunkThresholds(this.language).subscribe({
       next: (t) => { this.chunkThresholds = t; this.cdr.detectChanges(); },
       error: () => { /* use defaults in orchestration */ }
     });
@@ -1159,6 +1170,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     }
     if (changes['bookLanguage'] && this.bookId && this.chapterId) {
       this.loadTemplates();
+    }
+    // Chunk thresholds are language-dependent (dense scripts chunk at a lower word count than the Latin
+    // ceiling), so re-fetch them when the language switches so the async-vs-sync decision keeps matching the
+    // server. ngOnInit does the initial load, so skip the first change to avoid a duplicate request.
+    if (changes['bookLanguage'] && !changes['bookLanguage'].isFirstChange()) {
+      this.loadChunkThresholds();
     }
     // The style baseline status is per-language; re-read it when the book language changes (independent of
     // chapter). Tear down the OLD-language build/poll/guard FIRST so a late response for the superseded
