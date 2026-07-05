@@ -43,6 +43,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   @Input() saveBeforeRun?: () => Promise<void>;
   @Output() analysisStarted = new EventEmitter<void>();
   @Output() analysisCompleted = new EventEmitter<void>();
+  /**
+   * Emitted when an async (long) job has been registered and the blocking overlay can be
+   * dismissed. The editor hides its full-screen overlay; the panel keeps `isRunning = true`
+   * and shows a compact dismissible banner until the job finishes.
+   */
+  @Output() asyncJobStarted = new EventEmitter<void>();
   /** Optional human-readable status for the global analysis spinner (e.g. estimated chunks). */
   @Output() analysisStatus = new EventEmitter<string>();
   /** Optional numeric progress (0–100) for the global analysis spinner. */
@@ -81,6 +87,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       tabRun: 'ריצה',
       tabHistory: 'היסטוריה',
       tabVersions: 'גרסאות',
+      // DRAFT he - needs native review
+      asyncBannerMsg: 'ניתוח רץ ברקע - עקוב אחר ההתקדמות בעמוד הפעילות',
+      asyncBannerDismiss: 'סגור',
     };
     const en: Record<string, string> = {
       title: 'Analysis',
@@ -95,6 +104,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       tabRun: 'Run',
       tabHistory: 'History',
       tabVersions: 'Versions',
+      asyncBannerMsg: 'Analysis running in the background - track progress in the Activity Center',
+      asyncBannerDismiss: 'Dismiss',
     };
     const map = this.panelLang === 'he' ? he : en;
     return map[key] ?? key;
@@ -111,6 +122,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   selectedTemplateId: string | null = null;
   isRunning = false;
   streamingText = '';
+  /**
+   * True while an async (long) chapter job is in flight after the overlay has been dismissed.
+   * Set on `job-started`; cleared when the run finishes (success, error, or cancel).
+   * Drives the compact in-panel progress banner so the user can dismiss it without losing
+   * the editor. The Activity Center is the canonical progress home for the duration.
+   */
+  asyncJobInFlight = false;
 
   templates: PromptTemplateDto[] = [];
   history: AnalysisResultDto[] = [];
@@ -170,6 +188,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   versions: DocumentVersionDto[] = [];
   /** Timestamp when the current run started (for duration display). */
   private runStartedAt: number | null = null;
+  /**
+   * Chapter/scene the CURRENT run was started against (captured in prepareForRun). pf-f01 made long runs
+   * non-blocking and the panel instance is reused across navigation, so an async terminal can arrive after
+   * the user switched chapters. onRunResultReceived compares this origin against the live this.chapterId/
+   * this.sceneId (mirroring the loadHistory guard) and DROPS a result whose origin no longer matches, so a
+   * prior chapter's result never injects into - or is accepted into - the new chapter's document.
+   */
+  private runOriginChapterId: string | null = null;
+  private runOriginSceneId: string | null = null;
   /**
    * Persisted analysis-result ids known BEFORE the current run started (captured in prepareForRun).
    * A streaming run's persisted row is the one whose id is NOT in this set, which is how we tell the
@@ -267,7 +294,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    this.analysisService.getChunkThresholds().subscribe({
+    this.loadChunkThresholds();
+  }
+
+  /**
+   * Fetch the server chunk thresholds for the CURRENT book language and cache them for the async-vs-sync
+   * decision. The server sizes chunks per language (a dense script like Hebrew/Arabic chunks at a lower word
+   * count than the Latin ceiling), so this must send this.language and re-run on a language change — otherwise
+   * the client would pick sync /analyze while the server chunks. On error the orchestration falls back to its
+   * built-in defaults.
+   */
+  private loadChunkThresholds(): void {
+    this.analysisService.getChunkThresholds(this.language).subscribe({
       next: (t) => { this.chunkThresholds = t; this.cdr.detectChanges(); },
       error: () => { /* use defaults in orchestration */ }
     });
@@ -1078,6 +1116,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     if (changes['bookId'] || changes['chapterId'] || changes['sceneId']) {
       // Clear run state so we don't show another chapter's suggestions; history load will restore if available
       this.latestResult = null;
+      // pf-f01 made long runs non-blocking: the panel instance is REUSED across navigation, so a switch
+      // mid-run must not leave the PRIOR chapter's "running in background" banner lingering on the NEW
+      // chapter. The background job keeps running (it is tracked by the JobRegistry / Activity Center and
+      // its result persists server-side); we only reset this panel's transient banner flag here. When the
+      // user returns to the original chapter, the guarded loadHistory below re-surfaces the persisted row.
+      this.asyncJobInFlight = false;
       this.proofreadSuggestions = [];
       this.lineEditRunSuggestions = [];
       this.consistencyRunSuggestions = [];
@@ -1126,6 +1170,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     }
     if (changes['bookLanguage'] && this.bookId && this.chapterId) {
       this.loadTemplates();
+    }
+    // Chunk thresholds are language-dependent (dense scripts chunk at a lower word count than the Latin
+    // ceiling), so re-fetch them when the language switches so the async-vs-sync decision keeps matching the
+    // server. ngOnInit does the initial load, so skip the first change to avoid a duplicate request.
+    if (changes['bookLanguage'] && !changes['bookLanguage'].isFirstChange()) {
+      this.loadChunkThresholds();
     }
     // The style baseline status is per-language; re-read it when the book language changes (independent of
     // chapter). Tear down the OLD-language build/poll/guard FIRST so a late response for the superseded
@@ -1591,6 +1641,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   private prepareForRun(): void {
     this.isRunning = true;
+    this.asyncJobInFlight = false;
+    // Capture the origin chapter/scene of THIS run so a late async terminal that arrives after a context
+    // switch can be recognized and dropped (see onRunResultReceived). Snapshotting at run start mirrors the
+    // loadHistory pattern of capturing loadingChapterId/loadingSceneId from the request.
+    this.runOriginChapterId = this.chapterId;
+    this.runOriginSceneId = this.sceneId ?? null;
     this.runError = null;
     this.streamingText = '';
     this.proofreadSuggestions = [];
@@ -1647,11 +1703,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         }
         if (event.rawStatus === 'failed') {
           this.isRunning = false;
+          this.asyncJobInFlight = false;
           this.runError = `${this.selectedAnalysisType || 'Analysis'} failed – see error message.`;
           this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
           this.analysisCompleted.emit();
         } else if (event.rawStatus === 'canceled') {
           this.isRunning = false;
+          this.asyncJobInFlight = false;
           this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
           this.analysisCompleted.emit();
         }
@@ -1667,11 +1725,17 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         // one `proofread` kind; analysisType carries the distinction so the row titles correctly.
         // track() is idempotent per jobId, so a later reattach that re-discovers this job cannot
         // double-track it.
+        // scopeLabel 'פרק' matches defaultScopeLabel('proofread') in the registry so live-tracked and
+        // reattached jobs render identically. DRAFT he - needs native review.
         if (this.bookId) {
           this.jobRegistry.track('proofread', this.bookId, event.jobId, {
             analysisType: this.selectedAnalysisType,
             chapterId: this.chapterId ?? undefined,
+            scopeLabel: 'פרק', // DRAFT he - needs native review
           });
+          // Dismiss the full-screen blocking overlay; the compact in-panel banner takes over.
+          this.asyncJobInFlight = true;
+          this.asyncJobStarted.emit();
         }
         break;
       case 'streaming-token':
@@ -1682,6 +1746,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         break;
       case 'error':
         this.isRunning = false;
+        this.asyncJobInFlight = false;
         this.runError = event.message;
         this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
         this.analysisCompleted.emit();
@@ -1691,7 +1756,28 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   private onRunResultReceived(result: AnalysisResultDto): void {
+    // Always clear the transient run flags so nothing sticks on the current chapter, even for a result we
+    // are about to drop. The background job itself keeps its persisted result server-side.
     this.isRunning = false;
+    this.asyncJobInFlight = false;
+
+    // pf-f01 made long runs non-blocking, and this panel instance is REUSED across navigation, so a
+    // terminal result can arrive after the user switched chapters/scenes. Injecting the PRIOR chapter's
+    // result into the NEW chapter would show a wrong-context result AND map the prior chapter's offsets
+    // into the new document (a corruption risk on accept). So DROP a result whose origin does not match
+    // the current context, mirroring the loadHistory guard. Prefer the origin captured at run start; fall
+    // back to the result DTO's own chapterId/sceneId when no origin was captured (e.g. a reattached job).
+    // The result stays safe: when the user returns to the original chapter the guarded loadHistory (and
+    // the JobRegistry reattach) re-surface the persisted row.
+    const originChapterId = this.runOriginChapterId ?? result.chapterId ?? null;
+    const originSceneId = this.runOriginChapterId != null
+      ? this.runOriginSceneId
+      : (result.sceneId ?? null);
+    if (originChapterId !== this.chapterId || originSceneId !== (this.sceneId ?? null)) {
+      this.analysisCompleted.emit();
+      return;
+    }
+
     this.runError = null;
     this.allAnalyses = [result, ...this.allAnalyses];
     this.rebuildHistoryFromAllAnalyses();
@@ -1704,6 +1790,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   private onStreamingCompleted(latestResult: AnalysisResultDto): void {
     this.isRunning = false;
+    // Defensive symmetry: streaming and async-job paths are mutually exclusive today, so this is unreachable for async jobs.
+    this.asyncJobInFlight = false;
     // LinguisticAnalysis streams its structured JSON object, but the synthetic streaming result carries
     // it only as raw resultText. Surface it as structuredResult so the dedicated linguistic view renders
     // deviations/consistency instead of falling back to the "could not parse" raw view.
@@ -1759,9 +1847,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.analysisCompleted.emit();
   }
 
+  /** Dismiss the compact async-job banner without cancelling the job (it keeps running in the background). */
+  dismissAsyncBanner(): void {
+    this.asyncJobInFlight = false;
+  }
+
   private onRunFinished(): void {
     if (!this.isRunning) return;
     this.isRunning = false;
+    this.asyncJobInFlight = false;
     this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
     this.analysisCompleted.emit();
     this.cdr.detectChanges();

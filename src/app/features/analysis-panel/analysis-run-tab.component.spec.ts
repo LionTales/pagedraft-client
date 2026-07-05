@@ -1116,4 +1116,43 @@ describe('AnalysisRunTabComponent', () => {
       expect(component.analysisTypeLabel('UnknownType')).toBe('UnknownType');
     });
   });
+
+  describe('visibleModelName: suppress the internal "chunked" sentinel in the result heading', () => {
+    it('returns null for the "chunked" sentinel so the (chunked) parenthetical is omitted', () => {
+      expect(component.visibleModelName('chunked')).toBeNull();
+    });
+
+    it('returns null for blank/whitespace/absent model names', () => {
+      expect(component.visibleModelName('')).toBeNull();
+      expect(component.visibleModelName('   ')).toBeNull();
+      expect(component.visibleModelName(null)).toBeNull();
+      expect(component.visibleModelName(undefined)).toBeNull();
+    });
+
+    it('returns a real model name unchanged (trimmed)', () => {
+      expect(component.visibleModelName('gemma4:12b')).toBe('gemma4:12b');
+      expect(component.visibleModelName('  gemma4:12b  ')).toBe('gemma4:12b');
+    });
+
+    it('does NOT render "(chunked)" in the proofread result heading', () => {
+      component.bookLanguage = 'he';
+      component.selectedAnalysisType = 'Proofread';
+      component.latestResult = {
+        analysisType: 'Proofread',
+        type: 'Proofread',
+        modelName: 'chunked',
+        language: 'he',
+        proofreadResultUnreliable: false,
+      } as any;
+      component.proofreadSuggestions = [
+        { id: 's1', originalText: 'a', suggestedText: 'b', startOffset: 0, endOffset: 1 } as any,
+      ];
+      fixture.detectChanges();
+
+      const heading = fixture.nativeElement.querySelector('.suggestions-block h4') as HTMLElement;
+      expect(heading).not.toBeNull();
+      expect(heading.textContent).not.toContain('chunked');
+      expect(heading.textContent).not.toContain('(');
+    });
+  });
 });

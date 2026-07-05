@@ -14,6 +14,18 @@ export const SUGGESTION_BOOKMARK_PREFIX = 'sg_';
 export const SCROLL_TARGET_BOOKMARK = '_scroll_target';
 
 /**
+ * Length of the block (paragraph) separator IN NORMALIZED offset space. getTextFromSfdt joins
+ * blocks with BLOCK_SEPARATOR ('\n'), and normalizeTextForAnalysis now replaces each '\n' with a
+ * single space (1:1) instead of dropping it. So the normalized document is
+ * norm(block0) + <sep> + norm(block1) + ... where <sep> is one character. Deriving the length
+ * from the actual separator keeps this in lockstep with normalize-text-for-analysis and the
+ * backend TextNormalization.NormalizeTextForAnalysis (which likewise maps each line break to a
+ * space). Historically this was 0 (line breaks were dropped); the offset math below adds this
+ * between consecutive blocks so FE offsets match the backend-computed suggestion offsets.
+ */
+export const BLOCK_SEPARATOR_NORM_LEN = normalizeTextForAnalysis(BLOCK_SEPARATOR).length;
+
+/**
  * Stateless service for all SFDT (Syncfusion Document Text) JSON parsing and
  * manipulation: highlight application/stripping, plain-text extraction, offset
  * mapping, RTL enforcement, and bookmark management.
@@ -67,10 +79,15 @@ export class SfdtManipulationService {
       const doc = JSON.parse(sfdtString) as Record<string, unknown>;
       const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
       let running = 0;
+      let blockSeen = false;
 
       for (const section of sections) {
         const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
         for (const block of blocks) {
+          // Account for the block separator BETWEEN this block and the previous one
+          // (getTextFromSfdt joins blocks with BLOCK_SEPARATOR, which normalizes to one space).
+          if (blockSeen) running += BLOCK_SEPARATOR_NORM_LEN;
+          blockSeen = true;
           const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
           const newInlines: Record<string, unknown>[] = [];
           const inlinesKey = block['inlines'] != null ? 'inlines' : 'i';
@@ -125,8 +142,9 @@ export class SfdtManipulationService {
               newInlines.push(this.createInlineForHighlight(text.slice(posRaw), inline, false, textKey, cfKey));
             }
           }
-          // Do not add BLOCK_SEPARATOR.length: ranges are in normalizeTextForAnalysis(documentText),
-          // which strips \n, so the normalized offset space has no separator between blocks.
+          // The block separator is accounted for at the TOP of the block loop (running +=
+          // BLOCK_SEPARATOR_NORM_LEN before the block), matching normalizeTextForAnalysis mapping
+          // each inter-block \n to a single space. Do not add it again here.
           block[inlinesKey] = newInlines;
         }
       }
@@ -154,10 +172,15 @@ export class SfdtManipulationService {
       const doc = JSON.parse(sfdtString) as Record<string, unknown>;
       const sections = (doc['sections'] ?? doc['sec'] ?? []) as Array<Record<string, unknown>>;
       let running = 0;
+      let blockSeen = false;
 
       for (const section of sections) {
         const blocks = (section['blocks'] ?? section['b'] ?? []) as Array<Record<string, unknown>>;
         for (const block of blocks) {
+          // Account for the block separator BETWEEN this block and the previous one
+          // (getTextFromSfdt joins blocks with BLOCK_SEPARATOR, which normalizes to one space).
+          if (blockSeen) running += BLOCK_SEPARATOR_NORM_LEN;
+          blockSeen = true;
           const inlines = (block['inlines'] ?? block['i'] ?? []) as Array<Record<string, unknown>>;
           const newInlines: Record<string, unknown>[] = [];
           const inlinesKey = block['inlines'] != null ? 'inlines' : 'i';
@@ -308,15 +331,20 @@ export class SfdtManipulationService {
         replaceStartOffset != null && replaceEndOffset != null && replaceTextLength != null;
 
       if (hasReplaceRange && blockLengths.length > 0) {
-        // Offsets and newPlainText are in normalized space (normalizeTextForAnalysis strips \n).
+        // Offsets and newPlainText are in normalized space. normalizeTextForAnalysis now maps each
+        // inter-block \n (BLOCK_SEPARATOR) to a single space, so consecutive blocks are separated by
+        // BLOCK_SEPARATOR_NORM_LEN characters in the offset space (historically 0 when \n was dropped).
         const offsetDelta = replaceTextLength - (replaceEndOffset - replaceStartOffset);
         let running = 0;
         const newEnds: number[] = [];
         let lastEnd = 0;
-        for (const len of blockLengths) {
+        for (let bi = 0; bi < blockLengths.length; bi++) {
+          const len = blockLengths[bi];
+          // Advance past the separator that sits BEFORE this block (between it and the previous one).
+          if (bi > 0) running += BLOCK_SEPARATOR_NORM_LEN;
           const blockStart = running;
           const blockEnd = running + len;
-          running = blockEnd; // no separator: normalized text has no \n between blocks
+          running = blockEnd;
 
           let candidateEnd: number;
           if (blockEnd <= replaceStartOffset) {
@@ -342,7 +370,8 @@ export class SfdtManipulationService {
             segments.push(newPlainText.slice(prev));
           } else {
             segments.push(newPlainText.slice(prev, end));
-            prev = end; // normalized text has no separator between blocks
+            // Skip the separator character(s) between blocks so they are not written into any block.
+            prev = end + BLOCK_SEPARATOR_NORM_LEN;
           }
         }
       } else {
@@ -351,14 +380,16 @@ export class SfdtManipulationService {
         if (blockLengths.length === 0) {
           segments.push(newPlainText);
         } else {
-          // newPlainText is normalized (no \n between blocks).
+          // newPlainText is normalized; consecutive blocks are separated by BLOCK_SEPARATOR_NORM_LEN
+          // characters (the normalized BLOCK_SEPARATOR), which must be skipped between segments.
           for (let i = 0; i < blockLengths.length; i++) {
             const len = blockLengths[i];
             if (i === blockLengths.length - 1) {
               segments.push(newPlainText.slice(pos));
             } else {
               segments.push(newPlainText.slice(pos, pos + len));
-              pos += len; // no separator in normalized text
+              // Advance past this block AND the separator that follows it in normalized space.
+              pos += len + BLOCK_SEPARATOR_NORM_LEN;
             }
           }
         }
@@ -407,7 +438,8 @@ export class SfdtManipulationService {
   /**
    * Convert a plain-text character offset to a Syncfusion hierarchical position string
    * ("sectionIndex;bodyIndex;blockIndex;offset"). Expects plainOffset in normalized space
-   * (normalizeTextForAnalysis(documentText), which strips \n between blocks).
+   * (normalizeTextForAnalysis(documentText), where each inter-block BLOCK_SEPARATOR '\n' becomes
+   * one space — BLOCK_SEPARATOR_NORM_LEN characters between consecutive blocks).
    */
   plainOffsetToSfdtPosition(sfdtString: string, plainOffset: number): string | null {
     try {
@@ -431,6 +463,10 @@ export class SfdtManipulationService {
             }
           }
           if (plainOffset < running + blockNormLen) {
+            // Clamp offsets that land in the separator gap BEFORE this block (plainOffset < running)
+            // to the block start, so a position on the inter-paragraph separator maps to offset 0 of
+            // the following block rather than producing a negative in-inline offset.
+            const offsetInBlockNorm = Math.max(0, plainOffset - running);
             let blockRunningNorm = running;
             let blockRunningRaw = 0;
             for (const inline of inlines) {
@@ -439,8 +475,8 @@ export class SfdtManipulationService {
               const normLen = normalizeTextForAnalysis(text).length;
               const startNorm = blockRunningNorm;
               const endNorm = blockRunningNorm + normLen;
-              if (plainOffset < endNorm) {
-                const offsetInInlineNorm = plainOffset - startNorm;
+              if (running + offsetInBlockNorm < endNorm) {
+                const offsetInInlineNorm = (running + offsetInBlockNorm) - startNorm;
                 const rawOffsetInInline = normalizedOffsetToRawOffset(text, offsetInInlineNorm);
                 const rawOffsetInBlock = blockRunningRaw + rawOffsetInInline;
                 return `${si};0;${bi};${rawOffsetInBlock}`;
@@ -450,7 +486,8 @@ export class SfdtManipulationService {
             }
             return `${si};0;${bi};${blockRawLen}`;
           }
-          running += blockNormLen; // no separator: plainOffset is in normalized space
+          // Advance past this block AND the separator that follows it (the normalized BLOCK_SEPARATOR).
+          running += blockNormLen + BLOCK_SEPARATOR_NORM_LEN;
           lastPos = `${si};0;${bi};${blockRawLen}`;
         }
       }

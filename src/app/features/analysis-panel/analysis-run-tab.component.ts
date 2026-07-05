@@ -3,6 +3,7 @@ import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from
 import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { visibleModelName } from '../../core/utils/visible-model-name';
 import { resolveCardLang } from './card-lang';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { SuggestionCardComponent } from './suggestion-card.component';
@@ -141,6 +142,11 @@ export class AnalysisRunTabComponent implements OnChanges {
   analysisTypeLabel(value: string): string {
     const map = ANALYSIS_TYPE_LABELS[this.chromeLang];
     return map[value] ?? value;
+  }
+
+  /** Delegates to the shared util; kept as an instance method so templates call it unchanged. */
+  visibleModelName(modelName: string | null | undefined): string | null {
+    return visibleModelName(modelName);
   }
 
   // ── Style baseline status row (a3/a4) ──────────────────────────────────────

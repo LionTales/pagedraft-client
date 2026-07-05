@@ -45,6 +45,16 @@
     </label>
   </section>
 
+  @if (asyncJobInFlight) {
+    <div class="async-job-banner" role="status" aria-live="polite">
+      <span class="async-job-banner-spinner" aria-hidden="true"></span>
+      <span class="async-job-banner-msg">{{ panelLabel('asyncBannerMsg') }}</span>
+      <button type="button" class="async-job-banner-dismiss" (click)="dismissAsyncBanner()" [attr.aria-label]="panelLabel('asyncBannerDismiss')">
+        {{ panelLabel('asyncBannerDismiss') }}
+      </button>
+    </div>
+  }
+
   <nav class="sub-tabs" [attr.aria-label]="panelLabel('title')">
     <button
       type="button"

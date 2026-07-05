@@ -12,9 +12,20 @@ export class AnalysisService {
     return this.http.get<PromptTemplateDto[]>(`/api/templates`);
   }
 
-  /** Chunk thresholds from server (Proofread/LineEdit). Use to decide analysis-jobs vs sync /analyze. */
-  getChunkThresholds(): Observable<AnalysisChunkThresholdsDto> {
-    return this.http.get<AnalysisChunkThresholdsDto>('/api/config/analysis-chunk-thresholds');
+  /**
+   * Chunk thresholds from server (Proofread/LineEdit) for the given book language. Use to decide
+   * analysis-jobs (async) vs sync /analyze. The server sizes chunks per language (a dense script like
+   * Hebrew/Arabic chunks at a lower word count than the Latin ceiling), so the language must be sent for the
+   * returned thresholds to match when the server actually chunks. Omitting it yields the conservative dense
+   * sizing server-side.
+   */
+  getChunkThresholds(language?: string): Observable<AnalysisChunkThresholdsDto> {
+    const url = '/api/config/analysis-chunk-thresholds';
+    const lang = language?.trim();
+    if (lang) {
+      return this.http.get<AnalysisChunkThresholdsDto>(url, { params: { language: lang } });
+    }
+    return this.http.get<AnalysisChunkThresholdsDto>(url);
   }
 
   getHistory(

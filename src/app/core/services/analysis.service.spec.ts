@@ -107,6 +107,19 @@ describe('AnalysisService', () => {
 
     const req = http.expectOne('/api/config/analysis-chunk-thresholds');
     expect(req.request.method).toBe('GET');
+    expect(req.request.params.has('language')).toBeFalse();
+    req.flush(expected);
+    expect(result).toEqual(expected);
+  });
+
+  it('should send the book language so the thresholds match the server chunk sizing', () => {
+    const expected = { proofreadChunkTargetWords: 250, lineEditChunkTargetWords: 250 };
+    let result: any;
+    service.getChunkThresholds('he').subscribe(r => result = r);
+
+    const req = http.expectOne(r => r.url === '/api/config/analysis-chunk-thresholds');
+    expect(req.request.method).toBe('GET');
+    expect(req.request.params.get('language')).toBe('he');
     req.flush(expected);
     expect(result).toEqual(expected);
   });

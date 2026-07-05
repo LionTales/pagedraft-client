@@ -849,4 +849,15 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       expect(tab.nativeElement.textContent).not.toContain(ANALYSIS_TYPE_LABELS['he']['Proofread']); // 'הגהה'
     });
   });
+
+  describe('visibleModelName: suppress the internal "chunked" sentinel in the history heading', () => {
+    it('returns null for "chunked" and blank/absent names, real name unchanged', () => {
+      expect(component.visibleModelName('chunked')).toBeNull();
+      expect(component.visibleModelName('')).toBeNull();
+      expect(component.visibleModelName('   ')).toBeNull();
+      expect(component.visibleModelName(null)).toBeNull();
+      expect(component.visibleModelName(undefined)).toBeNull();
+      expect(component.visibleModelName('  gemma4:12b ')).toBe('gemma4:12b');
+    });
+  });
 });

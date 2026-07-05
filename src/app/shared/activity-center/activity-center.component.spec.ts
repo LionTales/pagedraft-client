@@ -203,6 +203,32 @@ describe('ActivityCenterComponent (rf-f01)', () => {
       expect((det.nativeElement as HTMLElement).style.width).toBe('60%');
     });
 
+    it('should show a numeric percent readout on a determinate row (progress stats, not just a bar)', () => {
+      stub.setJobs([makeJob({ id: 'j1', status: 'running', percent: 60 })]);
+      fixture.detectChanges();
+
+      const pct = fixture.debugElement.query(By.css('.ac-progress-percent'));
+      expect(pct).not.toBeNull();
+      expect((pct.nativeElement as HTMLElement).textContent?.trim()).toBe('60%');
+    });
+
+    it('should show a 0% readout (determinate at zero), never hide the number for a live job', () => {
+      stub.setJobs([makeJob({ id: 'j1', status: 'running', percent: 0 })]);
+      fixture.detectChanges();
+
+      const pct = fixture.debugElement.query(By.css('.ac-progress-percent'));
+      expect(pct).not.toBeNull();
+      expect((pct.nativeElement as HTMLElement).textContent?.trim()).toBe('0%');
+    });
+
+    it('should NOT show a percent readout on an indeterminate row (no reliable number yet)', () => {
+      stub.setJobs([makeJob({ id: 'j1', status: 'running', percent: null })]);
+      fixture.detectChanges();
+
+      const pct = fixture.debugElement.query(By.css('.ac-progress-percent'));
+      expect(pct).toBeNull();
+    });
+
     it('should render a completed (succeeded) row', () => {
       stub.setJobs([makeJob({ id: 'j1', status: 'succeeded', percent: 100 })]);
       stub.setActive([]);

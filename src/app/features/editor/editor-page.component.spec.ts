@@ -975,6 +975,48 @@ describe('EditorPageComponent (focused logic)', () => {
       expect(component.reviewModeOptions).not.toBe(ref); // Each rebuild creates a new array
     });
   });
+
+  // ── pf-f01: analysis overlay blocking / non-blocking behaviour ────────────────────────
+  //
+  // The blocking full-screen overlay is shown for synchronous (short) runs. For async (long) runs,
+  // the panel emits asyncJobStarted after registering the job; the editor handles it by calling
+  // onAnalysisCompleted() to dismiss the overlay. This keeps the editor usable while the job runs.
+  describe('pf-f01 analysis overlay blocking/non-blocking', () => {
+    it('onAnalysisStarted sets analysisRunning true (sync path: overlay appears)', () => {
+      expect(component.analysisRunning).toBe(false);
+      component.onAnalysisStarted();
+      expect(component.analysisRunning).toBe(true);
+    });
+
+    it('onAnalysisCompleted clears analysisRunning (overlay is hidden)', () => {
+      component.onAnalysisStarted();
+      expect(component.analysisRunning).toBe(true);
+
+      component.onAnalysisCompleted();
+      expect(component.analysisRunning).toBe(false);
+    });
+
+    it('editor is NOT blocked during async run: onAnalysisCompleted() when asyncJobStarted fires clears the overlay', () => {
+      // Simulate: analysis started (overlay shown), then async job registered (overlay dismissed).
+      component.onAnalysisStarted();
+      expect(component.analysisRunning).toBe(true);
+
+      // asyncJobStarted maps to onAnalysisCompleted() in the template — call it directly.
+      component.onAnalysisCompleted();
+      expect(component.analysisRunning).toBe(false);
+    });
+
+    it('short sync /analyze path is unchanged: analysisRunning stays true until onAnalysisCompleted fires', () => {
+      // Simulate a sync run: only start + complete, no asyncJobStarted.
+      component.onAnalysisStarted();
+      expect(component.analysisRunning).toBe(true);
+
+      // No asyncJobStarted emitted (sync path does not emit it).
+      // Overlay stays until the analysis actually completes.
+      component.onAnalysisCompleted();
+      expect(component.analysisRunning).toBe(false);
+    });
+  });
 });
 
 // ─── c04 / P2-5: ReviewPanel IA — real-template DOM rendering ────────────────────────
@@ -1034,7 +1076,11 @@ class RegistryStub {
 }
 
 @Component({ selector: 'app-analysis-panel', standalone: true, template: '' })
-class StubAnalysisPanelComponent {}
+class StubAnalysisPanelComponent {
+  // pf-f01: the real template binds (asyncJobStarted); the stub must declare it so the
+  // binding compiles in the real-template DOM test suite.
+  @Output() asyncJobStarted = new EventEmitter<void>();
+}
 
 @Component({ selector: 'app-issue-panel', standalone: true, template: '' })
 class StubIssuePanelComponent {}

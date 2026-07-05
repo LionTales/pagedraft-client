@@ -259,6 +259,27 @@
   overflow: hidden;
 }
 
+/* Determinate row: the bar shares the line with a numeric percent readout. Uses logical flex
+   (no physical pinning) so it mirrors correctly in RTL - the percent sits at the inline-end. */
+.ac-progress-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+}
+
+.ac-progress-row .ac-progress-track {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.ac-progress-percent {
+  flex: 0 0 auto;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--pd-neutral-600);
+}
+
 /* Determinate fill: width is set via [style.width.%] binding.
    No min-width: a true 0% should look empty, not show a sliver. */
 .ac-progress-fill--det {
