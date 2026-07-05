@@ -155,16 +155,20 @@ const STATUS_CLASS: Record<JobStatus, string> = {
                   <span class="ac-title">{{ rowTitle(job) }}</span>
                 </div>
 
-                <!-- Progress bar: determinate rows carry aria value attrs; indeterminate rows omit
-                     them so no ambiguous aria-valuenow="null" is emitted. -->
+                <!-- Progress bar: determinate rows carry aria value attrs AND a numeric percent
+                     readout (so progress is legible, not just a bar); indeterminate rows omit both
+                     (no reliable number yet) so no ambiguous aria-valuenow="null" is emitted. -->
                 @if (job.percent !== null) {
-                  <div class="ac-progress-track" role="progressbar"
-                    [attr.aria-valuenow]="job.percent"
-                    aria-valuemin="0"
-                    aria-valuemax="100">
-                    <!-- Determinate -->
-                    <div class="ac-progress-fill ac-progress-fill--det"
-                      [style.width.%]="job.percent"></div>
+                  <div class="ac-progress-row">
+                    <div class="ac-progress-track" role="progressbar"
+                      [attr.aria-valuenow]="job.percent"
+                      aria-valuemin="0"
+                      aria-valuemax="100">
+                      <!-- Determinate -->
+                      <div class="ac-progress-fill ac-progress-fill--det"
+                        [style.width.%]="job.percent"></div>
+                    </div>
+                    <span class="ac-progress-percent" aria-hidden="true">{{ job.percent }}%</span>
                   </div>
                 } @else {
                   <div class="ac-progress-track" role="progressbar">
