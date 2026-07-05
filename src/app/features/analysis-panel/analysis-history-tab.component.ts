@@ -5,6 +5,7 @@ import { LineEditParserService, ParsedLineEdit } from '../../core/services/line-
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
 import { proofreadDiff } from '../../core/utils/proofread-diff';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { visibleModelName } from '../../core/utils/visible-model-name';
 import { SuggestionCardComponent } from './suggestion-card.component';
 import { LinguisticResultComponent } from './linguistic-result.component';
 import { LiteraryResultComponent } from './literary-result.component';
@@ -114,6 +115,11 @@ export class AnalysisHistoryTabComponent implements OnChanges {
   analysisTypeLabel(value: string): string {
     const map = ANALYSIS_TYPE_LABELS[this.chromeLang];
     return map[value] ?? value;
+  }
+
+  /** Delegates to the shared util; kept as an instance method so templates call it unchanged. */
+  visibleModelName(modelName: string | null | undefined): string | null {
+    return visibleModelName(modelName);
   }
 
   ngOnChanges(changes: SimpleChanges): void {
