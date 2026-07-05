@@ -1696,7 +1696,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
   // registry on job-started, so the Activity Center + anyRunningForBook$ pick it up for THIS run and
   // not only after a reload reattaches to it.
   describe('job-started publishes the chapter analysis job to the registry', () => {
-    it('tracks a fresh Proofread async job with kind proofread + analysisType + chapterId', () => {
+    it('tracks a fresh Proofread async job with kind proofread + analysisType + chapterId + scopeLabel', () => {
       component.bookId = 'book-1';
       component.chapterId = 'chap-1';
       component.selectedAnalysisType = 'Proofread';
@@ -1706,6 +1706,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-1', {
         analysisType: 'Proofread',
         chapterId: 'chap-1',
+        scopeLabel: 'פרק',
       });
     });
 
@@ -1719,6 +1720,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-le', {
         analysisType: 'LineEdit',
         chapterId: 'chap-1',
+        scopeLabel: 'פרק',
       });
     });
 
@@ -1730,6 +1732,224 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-x' });
 
       expect(jobRegistrySpy.track).not.toHaveBeenCalled();
+    });
+  });
+
+  // pf-f01: async non-blocking overlay and in-panel compact banner.
+  describe('pf-f01 async job non-blocking overlay', () => {
+    it('emits asyncJobStarted exactly once on job-started so the editor can dismiss its blocking overlay', () => {
+      let emitCount = 0;
+      component.asyncJobStarted.subscribe(() => { emitCount++; });
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'Proofread';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-1' });
+
+      expect(emitCount).toBe(1);
+    });
+
+    it('does NOT emit asyncJobStarted when there is no bookId (guard path skips track and emit)', () => {
+      let emitCount = 0;
+      component.asyncJobStarted.subscribe(() => { emitCount++; });
+      component.bookId = null;
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'Proofread';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-x' });
+
+      // The guard short-circuits: no bookId, so track is skipped AND asyncJobStarted is NOT emitted.
+      expect(emitCount).toBe(0);
+    });
+
+    it('sets asyncJobInFlight true on job-started and clears it when the job result arrives', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'Proofread';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-2' });
+      expect(component.asyncJobInFlight).toBe(true);
+
+      // Result arrives: asyncJobInFlight clears.
+      (component as any).handleRunEvent({ kind: 'job-result', result: {} as any });
+      expect(component.asyncJobInFlight).toBe(false);
+    });
+
+    it('clears asyncJobInFlight on error so the banner is not stuck', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'Proofread';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-3' });
+      expect(component.asyncJobInFlight).toBe(true);
+
+      (component as any).handleRunEvent({ kind: 'error', message: 'network error' });
+      expect(component.asyncJobInFlight).toBe(false);
+    });
+
+    it('dismissAsyncBanner clears asyncJobInFlight without affecting isRunning', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      (component as any).isRunning = true;
+      component.asyncJobInFlight = true;
+
+      component.dismissAsyncBanner();
+
+      expect(component.asyncJobInFlight).toBe(false);
+      // isRunning is not affected: the job keeps running in the background.
+      expect((component as any).isRunning).toBe(true);
+    });
+
+    it('prepareForRun resets a lingering asyncJobInFlight to false at run start', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.asyncJobInFlight = true;
+
+      (component as any).prepareForRun();
+
+      expect(component.asyncJobInFlight).toBe(false);
+    });
+
+    it('track fires ONCE on async start (no double-poll: handleRunEvent is not a loop)', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'Proofread';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-1' });
+
+      // track must be called exactly once: the orchestration poll is reused, not forked.
+      expect(jobRegistrySpy.track).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // c01: pf-f01 made long runs non-blocking, and the panel instance is REUSED across navigation. A run
+  // started on chapter A whose terminal arrives AFTER the user switched to chapter B must NOT inject A's
+  // result over B (and must not leave A's "running" banner lingering on B). Drive the run through a
+  // controllable Subject so the async window stays OPEN across the context switch - of()/throwError would
+  // collapse it synchronously and never reproduce the mid-run switch.
+  describe('c01 stale-context async result is dropped, not injected', () => {
+    // Build an AnalysisResultDto whose origin context is chapter A. It carries proofread suggestions so an
+    // injection would be observable (latestResult + allAnalyses + activeSubTab='run' + restored cards).
+    function makeChapterAResult(): AnalysisResultDto {
+      return makeResultWithSuggestions({
+        id: 'r-A',
+        chapterId: 'chap-A',
+        sceneId: null,
+        bookId: 'book-1',
+      });
+    }
+
+    /** Wire the orchestration run stream to a Subject we control, and start a run on chapter A. */
+    function startRunOnChapterA(): Subject<any> {
+      const runStream$ = new Subject<any>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStream$.asObservable();
+
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-A';
+      component.sceneId = null;
+      component.selectedAnalysisType = 'Proofread';
+      component.documentText = 'Hello world';
+
+      component.runAnalysis(); // prepareForRun captures runOrigin = chap-A
+      // Simulate the async job starting: the overlay is dismissed and the banner takes over.
+      runStream$.next({ kind: 'job-started', jobId: 'job-A' });
+      expect(component.asyncJobInFlight).toBeTrue();
+      return runStream$;
+    }
+
+    it('drops the prior chapter result after a chapterId switch: no injection, banner cleared', () => {
+      const runStream$ = startRunOnChapterA();
+
+      // Snapshot chapter B state before the terminal lands.
+      component.chapterId = 'chap-B';
+      component.sceneId = null;
+      component.ngOnChanges({
+        chapterId: new SimpleChange('chap-A', 'chap-B', false),
+      });
+      // ngOnChanges clears the lingering banner from chapter A immediately.
+      expect(component.asyncJobInFlight).toBeFalse();
+
+      const latestBefore = component['latestResult'];
+      const allBefore = component.allAnalyses;
+      component.activeSubTab = 'history';
+
+      let completedEmitted = 0;
+      component.analysisCompleted.subscribe(() => { completedEmitted++; });
+
+      // Chapter A's terminal arrives while the user is on chapter B.
+      runStream$.next({ kind: 'job-result', result: makeChapterAResult() });
+
+      // Not injected: latestResult/allAnalyses unchanged, sub-tab NOT forced to 'run'.
+      expect(component['latestResult']).toBe(latestBefore as any);
+      expect(component.allAnalyses).toBe(allBefore);
+      expect(component.activeSubTab).toBe('history');
+      expect(component.proofreadSuggestions.length).toBe(0);
+      // Transient flags stay clear so nothing sticks on chapter B.
+      expect(component.asyncJobInFlight).toBeFalse();
+      expect((component as any).isRunning).toBeFalse();
+      // The run still resolved (completed emitted) so the caller's spinner clears.
+      expect(completedEmitted).toBe(1);
+    });
+
+    it('drops the prior scene result after a sceneId switch within the same chapter', () => {
+      const runStream$ = new Subject<any>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStream$.asObservable();
+
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-A';
+      component.sceneId = 'scene-1';
+      component.selectedAnalysisType = 'Proofread';
+      component.documentText = 'Hello world';
+      component.runAnalysis(); // runOrigin = (chap-A, scene-1)
+      runStream$.next({ kind: 'job-started', jobId: 'job-A' });
+
+      // Switch to a DIFFERENT scene in the same chapter.
+      component.sceneId = 'scene-2';
+      component.ngOnChanges({
+        sceneId: new SimpleChange('scene-1', 'scene-2', false),
+      });
+      const latestBefore = component['latestResult'];
+      component.activeSubTab = 'history';
+
+      runStream$.next({
+        kind: 'job-result',
+        result: makeResultWithSuggestions({ id: 'r-A', chapterId: 'chap-A', sceneId: 'scene-1' }),
+      });
+
+      expect(component['latestResult']).toBe(latestBefore as any);
+      expect(component.activeSubTab).toBe('history');
+      expect(component.asyncJobInFlight).toBeFalse();
+    });
+
+    it('control: a matching-context result still applies normally (no drop when the user stayed put)', () => {
+      const runStream$ = new Subject<any>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStream$.asObservable();
+
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-A';
+      component.sceneId = null;
+      component.selectedAnalysisType = 'Proofread';
+      component.documentText = 'Hello world';
+      component.documentChapterId = 'chap-A';
+      component.documentSceneId = null;
+      component.activeSubTab = 'history';
+
+      component.runAnalysis(); // runOrigin = chap-A
+      runStream$.next({ kind: 'job-started', jobId: 'job-A' });
+
+      // User stays on chapter A; the terminal for chapter A arrives.
+      const result = makeResultWithSuggestions({ id: 'r-A', chapterId: 'chap-A', sceneId: null });
+      runStream$.next({ kind: 'job-result', result });
+
+      // Applied exactly as before: latestResult adopted, sub-tab forced to 'run', history rebuilt, cards shown.
+      expect(component['latestResult']).toBe(result);
+      expect(component.activeSubTab).toBe('run');
+      expect(component.allAnalyses.some(r => r.id === 'r-A')).toBeTrue();
+      expect(component.proofreadSuggestions.length).toBeGreaterThan(0);
+      expect(component.asyncJobInFlight).toBeFalse();
     });
   });
 });

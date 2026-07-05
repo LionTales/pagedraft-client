@@ -202,3 +202,53 @@
   outline: none;
   box-shadow: var(--pd-ring);
 }
+
+/* Async-job compact banner: shown while a long job runs in the background after the
+   blocking overlay is dismissed. Physical layout (not content-direction): the spinner
+   sits at the inline-start edge regardless of book dir; the dismiss button at inline-end. */
+.async-job-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-3);
+  padding: var(--pd-space-3) var(--pd-space-4);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface-brand);
+  border: 1px solid var(--pd-primary-200);
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-primary-700);
+}
+.async-job-banner-spinner {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--pd-primary-200);
+  border-top-color: var(--pd-primary);
+  border-radius: 50%;
+  animation: async-banner-spin 0.8s linear infinite;
+}
+@keyframes async-banner-spin {
+  to { transform: rotate(360deg); }
+}
+.async-job-banner-msg {
+  flex: 1;
+  min-width: 0;
+}
+.async-job-banner-dismiss {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--pd-primary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-medium);
+  cursor: pointer;
+  padding: var(--pd-space-1) var(--pd-space-2);
+  border-radius: var(--pd-radius-sm);
+}
+.async-job-banner-dismiss:hover {
+  background: var(--pd-surface);
+}
+.async-job-banner-dismiss:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
