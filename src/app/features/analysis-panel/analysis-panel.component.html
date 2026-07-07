@@ -33,9 +33,9 @@
       <button
         type="button"
         class="run-btn"
-        [disabled]="!canRun || isRunning"
+        [disabled]="!canRun || isRunningForCurrentContext"
         (click)="runAnalysis()">
-        {{ isRunning ? panelLabel('running') : panelLabel('run') }}
+        {{ isRunningForCurrentContext ? panelLabel('running') : panelLabel('run') }}
       </button>
     </div>
     <p class="run-error" *ngIf="runError">{{ runError }}</p>
