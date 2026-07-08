@@ -7,7 +7,7 @@ import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
-import { JobRegistryService } from '../../core/services/job-registry.service';
+import { JobRegistryService, normalizeLang } from '../../core/services/job-registry.service';
 import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
@@ -129,6 +129,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    * the editor. The Activity Center is the canonical progress home for the duration.
    */
   asyncJobInFlight = false;
+  /**
+   * Persistent companion to the transient {@link asyncJobInFlight}. True once the CURRENT in-flight run
+   * has gone async (a `job-started` fired) and its banner has NOT been dismissed; cleared at run start,
+   * on dismiss, and on every run terminal. Unlike `asyncJobInFlight` (which `ngOnChanges` zeroes on a
+   * context switch so the banner does not linger on the wrong chapter), this survives navigation, so
+   * `ngOnChanges` can RECONSTRUCT the banner (`asyncJobInFlight = asyncBannerActiveForRun &&
+   * isRunningForCurrentContext`) when the user returns to the still-running origin context.
+   */
+  private asyncBannerActiveForRun = false;
 
   templates: PromptTemplateDto[] = [];
   history: AnalysisResultDto[] = [];
@@ -504,6 +513,22 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     if (!this.bookId || !this.chapterId) return false;
     if (this.selectedAnalysisType === 'Custom') return !!this.prompt?.trim();
     return true;
+  }
+
+  /**
+   * True only when this panel's own in-flight run belongs to the CURRENTLY displayed context. pf-f01
+   * made long runs non-blocking and the panel instance is REUSED across navigation, so `isRunning`
+   * alone is not context-scoped: after a mid-run switch it would keep the Run button disabled/"Running…"
+   * on a DIFFERENT chapter that has no live run of its own. Gating the button label/disabled state and
+   * the run guards on this getter instead lets a new context start its own run while the origin's
+   * background job keeps running (tracked by the JobRegistry, recovered by loadHistory on return), and
+   * restores the "Running…" state when the user navigates back to the origin. Scene-precise, mirroring
+   * the onRunResultReceived origin drop-guard.
+   */
+  get isRunningForCurrentContext(): boolean {
+    return this.isRunning
+      && this.runOriginChapterId === this.chapterId
+      && this.runOriginSceneId === (this.sceneId ?? null);
   }
 
   onSelectAnalysisType(type: string): void {
@@ -1119,9 +1144,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       // pf-f01 made long runs non-blocking: the panel instance is REUSED across navigation, so a switch
       // mid-run must not leave the PRIOR chapter's "running in background" banner lingering on the NEW
       // chapter. The background job keeps running (it is tracked by the JobRegistry / Activity Center and
-      // its result persists server-side); we only reset this panel's transient banner flag here. When the
-      // user returns to the original chapter, the guarded loadHistory below re-surfaces the persisted row.
-      this.asyncJobInFlight = false;
+      // its result persists server-side); we only reconcile this panel's transient banner flag here.
+      // Reconcile the banner to the CURRENT context: switching AWAY from the running origin hides it
+      // (isRunningForCurrentContext is false there), while returning to the still-running origin restores
+      // it (asyncBannerActiveForRun persists across the switch, unless the run terminated or the user
+      // dismissed it). When the user returns to the original chapter, the guarded loadHistory below also
+      // re-surfaces the persisted row.
+      this.asyncJobInFlight = this.asyncBannerActiveForRun && this.isRunningForCurrentContext;
       this.proofreadSuggestions = [];
       this.lineEditRunSuggestions = [];
       this.consistencyRunSuggestions = [];
@@ -1365,8 +1394,14 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     return (this.documentSceneId ?? null) === (this.sceneId ?? null);
   }
 
+  /**
+   * Canonical language code (lowercase base code, e.g. `en-US` -> `en`) sent to every server call that
+   * is language-keyed (chunk thresholds, run context, template lookups/creation) - reuses the same
+   * base-split rule as the reattach seam (job-registry's normalizeLang) so a locale-tagged bookLanguage
+   * (e.g. `He`/`en-US`) can't diverge the chunk-threshold fetch from the run context language.
+   */
   private get language(): string {
-    return (this.bookLanguage?.trim()) || 'he';
+    return normalizeLang(this.bookLanguage);
   }
 
   private loadTemplates(): void {
@@ -1589,7 +1624,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
 
   runAnalysis(): void {
-    if (!this.bookId || !this.chapterId || !this.canRun || this.isRunning) return;
+    if (!this.bookId || !this.chapterId || !this.canRun || this.isRunningForCurrentContext) return;
     const pending = this.getPendingSuggestionCountForActive();
     const scopeLabel = this.sceneId ? 'scene' : 'chapter';
     if (!this.orchestrationService.confirmReanalysisIfPendingSuggestions(pending, scopeLabel)) return;
@@ -1607,7 +1642,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   runStreaming(): void {
-    if (!this.bookId || !this.chapterId || !this.canRun || this.isRunning) return;
+    if (!this.bookId || !this.chapterId || !this.canRun || this.isRunningForCurrentContext) return;
     const pending = this.getPendingSuggestionCountForActive();
     const scopeLabel = this.sceneId ? 'scene' : 'chapter';
     if (!this.orchestrationService.confirmReanalysisIfPendingSuggestions(pending, scopeLabel)) return;
@@ -1642,6 +1677,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private prepareForRun(): void {
     this.isRunning = true;
     this.asyncJobInFlight = false;
+    this.asyncBannerActiveForRun = false;
     // Capture the origin chapter/scene of THIS run so a late async terminal that arrives after a context
     // switch can be recognized and dropped (see onRunResultReceived). Snapshotting at run start mirrors the
     // loadHistory pattern of capturing loadingChapterId/loadingSceneId from the request.
@@ -1704,12 +1740,14 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         if (event.rawStatus === 'failed') {
           this.isRunning = false;
           this.asyncJobInFlight = false;
+          this.asyncBannerActiveForRun = false;
           this.runError = `${this.selectedAnalysisType || 'Analysis'} failed – see error message.`;
           this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
           this.analysisCompleted.emit();
         } else if (event.rawStatus === 'canceled') {
           this.isRunning = false;
           this.asyncJobInFlight = false;
+          this.asyncBannerActiveForRun = false;
           this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
           this.analysisCompleted.emit();
         }
@@ -1735,6 +1773,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           });
           // Dismiss the full-screen blocking overlay; the compact in-panel banner takes over.
           this.asyncJobInFlight = true;
+          // Persist that this run is an async job with an active banner so returning to the origin
+          // context after a mid-run navigation reconstructs the banner (see ngOnChanges reconcile).
+          this.asyncBannerActiveForRun = true;
           this.asyncJobStarted.emit();
         }
         break;
@@ -1747,6 +1788,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       case 'error':
         this.isRunning = false;
         this.asyncJobInFlight = false;
+        this.asyncBannerActiveForRun = false;
         this.runError = event.message;
         this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
         this.analysisCompleted.emit();
@@ -1760,6 +1802,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     // are about to drop. The background job itself keeps its persisted result server-side.
     this.isRunning = false;
     this.asyncJobInFlight = false;
+    this.asyncBannerActiveForRun = false;
 
     // pf-f01 made long runs non-blocking, and this panel instance is REUSED across navigation, so a
     // terminal result can arrive after the user switched chapters/scenes. Injecting the PRIOR chapter's
@@ -1792,6 +1835,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.isRunning = false;
     // Defensive symmetry: streaming and async-job paths are mutually exclusive today, so this is unreachable for async jobs.
     this.asyncJobInFlight = false;
+    this.asyncBannerActiveForRun = false;
     // LinguisticAnalysis streams its structured JSON object, but the synthetic streaming result carries
     // it only as raw resultText. Surface it as structuredResult so the dedicated linguistic view renders
     // deviations/consistency instead of falling back to the "could not parse" raw view.
@@ -1850,12 +1894,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   /** Dismiss the compact async-job banner without cancelling the job (it keeps running in the background). */
   dismissAsyncBanner(): void {
     this.asyncJobInFlight = false;
+    // A dismiss is sticky for the rest of this run: clearing the persistent flag stops ngOnChanges from
+    // reconstructing the banner if the user navigates away and back while the job is still running.
+    this.asyncBannerActiveForRun = false;
   }
 
   private onRunFinished(): void {
     if (!this.isRunning) return;
     this.isRunning = false;
     this.asyncJobInFlight = false;
+    this.asyncBannerActiveForRun = false;
     this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
     this.analysisCompleted.emit();
     this.cdr.detectChanges();

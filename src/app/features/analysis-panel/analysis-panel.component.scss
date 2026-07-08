@@ -204,8 +204,9 @@
 }
 
 /* Async-job compact banner: shown while a long job runs in the background after the
-   blocking overlay is dismissed. Physical layout (not content-direction): the spinner
-   sits at the inline-start edge regardless of book dir; the dismiss button at inline-end. */
+   blocking overlay is dismissed. Logical, direction-aware layout: flex + gap follow the
+   inline axis, so the spinner sits at inline-start and the dismiss button at inline-end
+   regardless of book dir (no physical left/right pinning). */
 .async-job-banner {
   display: flex;
   align-items: center;

@@ -1952,5 +1952,223 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(component.asyncJobInFlight).toBeFalse();
     });
   });
+
+  // c01 (P2-1): pf-f01 made long runs non-blocking and the panel instance is REUSED across navigation.
+  // `isRunning` is a single panel-instance flag, so before the fix a mid-run switch left the NEW chapter
+  // with a disabled "Running…" Run button and no banner, and returning to the origin never restored the
+  // banner. The fix gates the button label/disabled state + the run guards on `isRunningForCurrentContext`
+  // (origin-scoped) and reconstructs the transient banner from a persistent `asyncBannerActiveForRun` flag.
+  // Drive the run through a Subject held OPEN across the switch so the async window survives the navigation
+  // (of()/throwError would collapse it synchronously and never reproduce the mid-run switch).
+  describe('c01 mid-run navigation reconciles the Run button + banner to the current context', () => {
+    function runButton(): HTMLButtonElement {
+      return fixture.nativeElement.querySelector('.actions-row .run-btn') as HTMLButtonElement;
+    }
+    function bannerEl(): Element | null {
+      return fixture.nativeElement.querySelector('.async-job-banner');
+    }
+
+    /** Start a Proofread async run on chapter A wired to a Subject we hold OPEN across the switch. */
+    function startAsyncRunOnChapterA(): Subject<any> {
+      const runStream$ = new Subject<any>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStream$.asObservable();
+
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-A';
+      component.sceneId = null;
+      component.selectedAnalysisType = 'Proofread';
+      component.documentText = 'Hello world';
+      fixture.detectChanges();
+
+      component.runAnalysis(); // prepareForRun captures runOrigin = chap-A, isRunning = true
+      runStream$.next({ kind: 'job-started', jobId: 'job-A' }); // async banner takes over
+      fixture.detectChanges();
+      return runStream$;
+    }
+
+    it('gives a DIFFERENT chapter a usable Run button mid-run, then reconstructs the origin banner on return', () => {
+      const runStream$ = startAsyncRunOnChapterA();
+
+      // On the origin (chapter A) the button is the running affordance and the banner shows.
+      expect(component.isRunningForCurrentContext).toBeTrue();
+      expect(component.asyncJobInFlight).toBeTrue();
+      expect(runButton().disabled).toBeTrue();
+      expect(runButton().textContent!.trim()).toBe(component.panelLabel('running'));
+      expect(bannerEl()).not.toBeNull();
+
+      // Switch to a DIFFERENT chapter WHILE the run is still in flight (Subject still open).
+      component.chapterId = 'chap-B';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-A', 'chap-B', false) });
+      fixture.detectChanges();
+
+      // The background job is NOT abandoned: still running, and its client stream is still subscribed.
+      expect((component as any).isRunning).toBeTrue();
+      expect(runStream$.observed).toBeTrue();
+      // But chapter B has no live run of its own: button usable ("Run", enabled), no banner.
+      expect(component.isRunningForCurrentContext).toBeFalse();
+      expect(component.asyncJobInFlight).toBeFalse();
+      expect(runButton().disabled).toBeFalse();
+      expect(runButton().textContent!.trim()).toBe(component.panelLabel('run'));
+      expect(bannerEl()).toBeNull();
+
+      // Return to the still-running origin: the running affordance + banner reconstruct.
+      component.chapterId = 'chap-A';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-B', 'chap-A', false) });
+      fixture.detectChanges();
+
+      expect(component.isRunningForCurrentContext).toBeTrue();
+      expect(component.asyncJobInFlight).toBeTrue();
+      expect(runButton().disabled).toBeTrue();
+      expect(runButton().textContent!.trim()).toBe(component.panelLabel('running'));
+      expect(bannerEl()).not.toBeNull();
+    });
+
+    it('reconciles on a scene switch within the same chapter (scene-precise), restoring on return', () => {
+      const runStream$ = new Subject<any>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStream$.asObservable();
+
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-A';
+      component.sceneId = 'scene-1';
+      component.selectedAnalysisType = 'Proofread';
+      component.documentText = 'Hello world';
+      fixture.detectChanges();
+
+      component.runAnalysis(); // runOrigin = (chap-A, scene-1)
+      runStream$.next({ kind: 'job-started', jobId: 'job-A' });
+      fixture.detectChanges();
+      expect(component.isRunningForCurrentContext).toBeTrue();
+
+      // Switch to a DIFFERENT scene in the same chapter mid-run.
+      component.sceneId = 'scene-2';
+      component.ngOnChanges({ sceneId: new SimpleChange('scene-1', 'scene-2', false) });
+      fixture.detectChanges();
+
+      expect((component as any).isRunning).toBeTrue();
+      expect(runStream$.observed).toBeTrue();
+      expect(component.isRunningForCurrentContext).toBeFalse();
+      expect(component.asyncJobInFlight).toBeFalse();
+      expect(runButton().disabled).toBeFalse();
+
+      // Return to the running scene: state reconstructs.
+      component.sceneId = 'scene-1';
+      component.ngOnChanges({ sceneId: new SimpleChange('scene-2', 'scene-1', false) });
+      fixture.detectChanges();
+
+      expect(component.isRunningForCurrentContext).toBeTrue();
+      expect(component.asyncJobInFlight).toBeTrue();
+      expect(runButton().disabled).toBeTrue();
+    });
+
+    it('lets the user START a new run on a different context mid-run, without cancelling the origin job', () => {
+      const runStreamA$ = startAsyncRunOnChapterA();
+      // The origin job was published to the registry, so it survives via the Activity Center even after
+      // its client stream is torn down by the next run.
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith(
+        'proofread', 'book-1', 'job-A', jasmine.objectContaining({ analysisType: 'Proofread' })
+      );
+
+      // Switch to chapter B mid-run.
+      component.chapterId = 'chap-B';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-A', 'chap-B', false) });
+      fixture.detectChanges();
+
+      // Rewire the orchestration to a fresh Subject for chapter B's run so we can confirm the run starts.
+      const runStreamB$ = new Subject<any>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStreamB$.asObservable();
+
+      component.runAnalysis(); // the guard must NOT short-circuit on chapter B
+
+      // A new run really started for chapter B: origin re-captured to B, still running, subscribed.
+      expect((component as any).runOriginChapterId).toBe('chap-B');
+      expect((component as any).isRunning).toBeTrue();
+      expect(runStreamB$.observed).toBeTrue();
+      // Starting B's run tore down A's client stream (single runSubscription) but did not cancel A's job:
+      // A stays tracked in the registry (asserted above), recoverable via loadHistory on return.
+      expect(runStreamA$.observed).toBeFalse();
+    });
+
+    it('keeps a dismissed banner dismissed across a navigation round-trip (dismiss is sticky for the run)', () => {
+      startAsyncRunOnChapterA();
+      expect(component.asyncJobInFlight).toBeTrue();
+
+      // User dismisses the banner while on the origin.
+      component.dismissAsyncBanner();
+      fixture.detectChanges();
+      expect(component.asyncJobInFlight).toBeFalse();
+      expect(bannerEl()).toBeNull();
+
+      // Navigate away and back to the still-running origin: the banner must NOT reappear.
+      component.chapterId = 'chap-B';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-A', 'chap-B', false) });
+      fixture.detectChanges();
+      component.chapterId = 'chap-A';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-B', 'chap-A', false) });
+      fixture.detectChanges();
+
+      // Still running (button shows the running affordance) but the dismissed banner stays hidden.
+      expect(component.isRunningForCurrentContext).toBeTrue();
+      expect(component.asyncJobInFlight).toBeFalse();
+      expect(bannerEl()).toBeNull();
+    });
+  });
+
+  // P3-5/P3-7: chunk thresholds are language-keyed server-side, so a bookLanguage change must re-fetch them
+  // with the NEW (canonicalized) language - but the ngOnInit load already covers the FIRST change, so that
+  // one must be suppressed to avoid a duplicate request. The language sent must be canonicalized (lowercase,
+  // base code before any '-'/'_') so a locale-tagged value like `en-US` still matches the server's dense-vs-
+  // Latin chunking bucket, and buildRunContext must send the SAME canonical value (the run must use the
+  // language the server actually chunks with).
+  describe('chunk-threshold language canonicalization + refetch (P3-5/P3-7)', () => {
+    it('re-fires loadChunkThresholds with the NEW language on a bookLanguage change', () => {
+      const svc = TestBed.inject(AnalysisService);
+      const spy = spyOn(svc, 'getChunkThresholds').and.returnValue(
+        of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 })
+      );
+
+      component.bookLanguage = 'en';
+      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith('en');
+    });
+
+    it('suppresses the FIRST bookLanguage change so it does not double-fetch alongside the ngOnInit load', () => {
+      const svc = TestBed.inject(AnalysisService);
+      const spy = spyOn(svc, 'getChunkThresholds').and.returnValue(
+        of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 })
+      );
+
+      component.bookLanguage = 'he';
+      component.ngOnChanges({ bookLanguage: new SimpleChange(undefined, 'he', true) });
+
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('canonicalizes a locale-tagged bookLanguage to its base code before sending it to getChunkThresholds', () => {
+      const svc = TestBed.inject(AnalysisService);
+      const spy = spyOn(svc, 'getChunkThresholds').and.returnValue(
+        of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 })
+      );
+
+      component.bookLanguage = 'en-US';
+      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en-US', false) });
+
+      expect(spy).toHaveBeenCalledWith('en');
+    });
+
+    it('keeps buildRunContext language IN SYNC with the canonicalized chunk-threshold language', () => {
+      component.bookLanguage = 'He'; // mixed case, no locale suffix
+      component.chapterId = 'chap-1';
+      component.documentText = 'Hello world';
+
+      const ctx = (component as any).buildRunContext();
+
+      expect(ctx.language).toBe('he');
+    });
+  });
 });
 

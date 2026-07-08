@@ -11,6 +11,6 @@
  * sentinel is ever renamed on the backend, this filter must be updated to match.
  */
 export function visibleModelName(modelName: string | null | undefined): string | null {
-  const m = (modelName ?? '').trim();
+  const m = String(modelName ?? '').trim();
   return !m || m === 'chunked' ? null : m;
 }
