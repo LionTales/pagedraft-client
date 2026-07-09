@@ -207,6 +207,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private runOriginChapterId: string | null = null;
   private runOriginSceneId: string | null = null;
   /**
+   * Analysis type the CURRENT run was started against (captured in prepareForRun, same source as the
+   * run context sent to the API). The panel instance is reused across navigation, so the `job-started`
+   * publish must key the tracked job off THIS snapshot - not live panel state - or a mid-run
+   * chapter/scene/type switch would mislabel the job relative to what the API actually ran.
+   */
+  private runOriginAnalysisType: string = 'Proofread';
+  /**
    * Persisted analysis-result ids known BEFORE the current run started (captured in prepareForRun).
    * A streaming run's persisted row is the one whose id is NOT in this set, which is how we tell the
    * just-completed run apart from a pre-existing analysis when deciding whether to swap a synthetic
@@ -1683,6 +1690,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     // loadHistory pattern of capturing loadingChapterId/loadingSceneId from the request.
     this.runOriginChapterId = this.chapterId;
     this.runOriginSceneId = this.sceneId ?? null;
+    this.runOriginAnalysisType = this.selectedAnalysisType;
     this.runError = null;
     this.streamingText = '';
     this.proofreadSuggestions = [];
@@ -1759,17 +1767,22 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       case 'job-started':
         // rf-c01: publish this freshly-started chapter analysis job to the registry so the Activity
         // Center and anyRunningForBook$ pick it up for THIS run - not only after a reload reattaches to
-        // it. The async-job path runs only for Proofread/LineEdit (shouldUseAsyncJob), which share the
-        // one `proofread` kind; analysisType carries the distinction so the row titles correctly.
-        // track() is idempotent per jobId, so a later reattach that re-discovers this job cannot
-        // double-track it.
+        // it. The async-job path now covers every single-shot whole-chapter analysis type (Proofread,
+        // LineEdit, Linguistic, Literary, Summarization, Custom), all of which share the one `proofread`
+        // JobKind; analysisType carries the distinction so the row titles correctly (via
+        // ANALYSIS_TYPE_LABELS). track() is idempotent per jobId, so a later reattach that re-discovers
+        // this job cannot double-track it.
         // scopeLabel 'פרק' matches defaultScopeLabel('proofread') in the registry so live-tracked and
         // reattached jobs render identically. DRAFT he - needs native review.
+        // Key the tracked job off the run's CAPTURED origin (prepareForRun), NOT live panel state: this
+        // panel instance is reused across navigation, and the async start response can land after the
+        // user switched chapter/scene/type. Using live state here would mislabel the job (e.g. a
+        // scene-scoped run shown as a chapter) even though the API ran against the original scope.
         if (this.bookId) {
           this.jobRegistry.track('proofread', this.bookId, event.jobId, {
-            analysisType: this.selectedAnalysisType,
-            chapterId: this.chapterId ?? undefined,
-            scopeLabel: 'פרק', // DRAFT he - needs native review
+            analysisType: this.runOriginAnalysisType,
+            chapterId: this.runOriginChapterId ?? undefined,
+            scopeLabel: this.runOriginSceneId ? 'סצנה' : 'פרק', // DRAFT he - needs native review
           });
           // Dismiss the full-screen blocking overlay; the compact in-panel banner takes over.
           this.asyncJobInFlight = true;

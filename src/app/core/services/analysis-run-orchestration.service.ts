@@ -77,9 +77,29 @@ export class AnalysisRunOrchestrationService {
   // Pure / computational helpers
   // ---------------------------------------------------------------------------
 
-  /** Use async job flow (analysis-jobs + analysis-progress) when document exceeds server chunk threshold. */
+  /**
+   * Decide whether a run uses the async job flow (analysis-jobs + analysis-progress poll) instead of a
+   * blocking synchronous /analyze request.
+   *
+   * Two families qualify:
+   *  - Single-shot whole-chapter LLM analyses (Linguistic/Literary/Summarization/Custom): ALWAYS async.
+   *    Each sends the whole chapter to the model and can run for tens of seconds to minutes (Linguistic was
+   *    measured at ~3 min), so a synchronous request risks a proxy/browser timeout that loses the result
+   *    even though the server persisted it. The backend reads the chapter from the DB, so no documentText is
+   *    required here to make the decision.
+   *  - Chunked Proofread/LineEdit: async only once the document exceeds the server chunk threshold; short
+   *    documents finish fast enough to run inline.
+   */
   shouldUseAsyncJob(ctx: AnalysisRunContext): boolean {
     const { selectedAnalysisType: analysisType, documentText, proofreadChunkTargetWords, lineEditChunkTargetWords } = ctx;
+    if (
+      analysisType === 'LinguisticAnalysis'
+      || analysisType === 'LiteraryAnalysis'
+      || analysisType === 'Summarization'
+      || analysisType === 'Custom'
+    ) {
+      return true;
+    }
     if (analysisType !== 'Proofread' && analysisType !== 'LineEdit') return false;
     if (!documentText?.trim()) return false;
     const words = documentText.trim().split(/\s+/).filter(Boolean).length;

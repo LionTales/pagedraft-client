@@ -56,6 +56,93 @@ describe('LinguisticResultComponent', () => {
   }
 
   // =========================================================================
+  // Computed metrics section (previously computed + persisted but never shown)
+  // =========================================================================
+  describe('computed metrics section', () => {
+    const METRICS_JSON = JSON.stringify({
+      syntaxMetrics: { sentenceCount: 104, averageSentenceLength: 8.2, complexSentences: 32 },
+      morphologyMetrics: { wordCount: 951, uniqueWords: 402, averageWordLength: 3.8, lexicalDensity: 0.42 },
+      styleMetrics: { formality: 'literary', readability: 0.78, voiceBalance: 'mixed' },
+      grammaticalityScore: 0.98,
+      summary: 'תקציר',
+      deviations: [],
+      consistencyIssues: [],
+    });
+
+    it('flattens metrics to labelled rows: counts, percentages (0..1 -> %), and localized descriptors', () => {
+      setResult(makeLinguisticResult(METRICS_JSON));
+      const byLabel = new Map(component.view!.metrics.map(m => [m.label, m.value]));
+      expect(byLabel.get('מספר משפטים')).toBe('104');
+      expect(byLabel.get('אורך משפט ממוצע')).toBe('8.20');
+      expect(byLabel.get('עושר אוצר המילים')).toBe('42%');
+      expect(byLabel.get('קריאוּת')).toBe('78%');
+      expect(byLabel.get('תקינות דקדוקית')).toBe('98%');
+      expect(byLabel.get('משלב')).toBe('ספרותי');
+      expect(byLabel.get('איזון קול פעיל/סביל')).toBe('מעורב');
+    });
+
+    it('renders one DOM row per metric', () => {
+      setResult(makeLinguisticResult(METRICS_JSON));
+      const rows = fixture.debugElement.queryAll(By.css('[data-testid="metric-row"]'));
+      expect(rows.length).toBe(component.view!.metrics.length);
+      expect(rows.length).toBeGreaterThanOrEqual(7);
+    });
+
+    it('skips missing / non-finite metric fields (no NaN or dash rows)', () => {
+      const partial = JSON.stringify({ syntaxMetrics: { sentenceCount: 5 }, summary: 's', deviations: [], consistencyIssues: [] });
+      setResult(makeLinguisticResult(partial));
+      const view = component.view!;
+      expect(view.metrics.every(m => m.value && m.value !== 'NaN' && m.value !== '-')).toBeTrue();
+      expect(view.metrics.some(m => m.label === 'מספר משפטים' && m.value === '5')).toBeTrue();
+    });
+
+    it('localizes metric labels and descriptors for English results', () => {
+      setResult(makeLinguisticResult(METRICS_JSON, { language: 'en' }));
+      const byLabel = new Map(component.view!.metrics.map(m => [m.label, m.value]));
+      expect(byLabel.get('Sentence count')).toBe('104');
+      expect(byLabel.get('Register')).toBe('Literary');
+      expect(byLabel.get('Grammaticality')).toBe('98%');
+    });
+
+    it('clamps an out-of-contract readability value (>1) to 100% instead of an absurd percent', () => {
+      const outOfRange = JSON.stringify({
+        styleMetrics: { readability: 1.5 },
+        summary: 'תקציר',
+        deviations: [],
+        consistencyIssues: [],
+      });
+      setResult(makeLinguisticResult(outOfRange));
+      const byLabel = new Map(component.view!.metrics.map(m => [m.label, m.value]));
+      expect(byLabel.get('קריאוּת')).toBe('100%');
+    });
+
+    it('still renders an in-range readability value normally', () => {
+      const inRange = JSON.stringify({
+        styleMetrics: { readability: 0.85 },
+        summary: 'תקציר',
+        deviations: [],
+        consistencyIssues: [],
+      });
+      setResult(makeLinguisticResult(inRange));
+      const byLabel = new Map(component.view!.metrics.map(m => [m.label, m.value]));
+      expect(byLabel.get('קריאוּת')).toBe('85%');
+    });
+
+    it('localizes a "conversational" formality value instead of falling back to the raw English word', () => {
+      const conversational = JSON.stringify({
+        styleMetrics: { formality: 'conversational' },
+        summary: 'תקציר',
+        deviations: [],
+        consistencyIssues: [],
+      });
+      setResult(makeLinguisticResult(conversational));
+      const byLabel = new Map(component.view!.metrics.map(m => [m.label, m.value]));
+      expect(byLabel.get('משלב')).toBe('שיחתי');
+      expect(byLabel.get('משלב')).not.toBe('conversational');
+    });
+  });
+
+  // =========================================================================
   // 1. parseFailed: invalid JSON
   // =========================================================================
 

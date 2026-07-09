@@ -1700,6 +1700,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       component.bookId = 'book-1';
       component.chapterId = 'chap-1';
       component.selectedAnalysisType = 'Proofread';
+      (component as any).prepareForRun(); // capture the run origin, as the real run path does
 
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-1' });
 
@@ -1714,11 +1715,27 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       component.bookId = 'book-1';
       component.chapterId = 'chap-1';
       component.selectedAnalysisType = 'LineEdit';
+      (component as any).prepareForRun();
 
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-le' });
 
       expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-le', {
         analysisType: 'LineEdit',
+        chapterId: 'chap-1',
+        scopeLabel: 'פרק',
+      });
+    });
+
+    it('carries analysisType LinguisticAnalysis so an in-flight linguistic run does not title as proofreading', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+      (component as any).prepareForRun();
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-la' });
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-la', {
+        analysisType: 'LinguisticAnalysis',
         chapterId: 'chap-1',
         scopeLabel: 'פרק',
       });
@@ -1732,6 +1749,45 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-x' });
 
       expect(jobRegistrySpy.track).not.toHaveBeenCalled();
+    });
+
+    it('tracks a fresh Linguistic async job with scopeLabel scene when sceneId is set', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.sceneId = 'scene-1';
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+      (component as any).prepareForRun();
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-scene' });
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-scene', {
+        analysisType: 'LinguisticAnalysis',
+        chapterId: 'chap-1',
+        scopeLabel: 'סצנה',
+      });
+    });
+
+    it('keys the tracked job off the run ORIGIN, not live panel state, when the user switches context before the async start response', () => {
+      // The panel instance is reused across navigation and the async start response can arrive after a
+      // context switch. The tracked job must reflect the scope/chapter/type the run (and API) began with.
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-scene-origin';
+      component.sceneId = 'scene-origin';
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+      (component as any).prepareForRun(); // origin captured: scene scope, chap-scene-origin, LinguisticAnalysis
+
+      // User navigates to a different, non-scene chapter and flips the analysis type BEFORE job-started.
+      component.chapterId = 'chap-other';
+      component.sceneId = null;
+      component.selectedAnalysisType = 'Proofread';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-race' });
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-race', {
+        analysisType: 'LinguisticAnalysis',
+        chapterId: 'chap-scene-origin',
+        scopeLabel: 'סצנה',
+      });
     });
   });
 

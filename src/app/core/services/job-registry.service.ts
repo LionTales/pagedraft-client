@@ -512,11 +512,18 @@ export function normalizeLang(language: string | null | undefined): string {
 /** Map an rf-b01 active-analysis-job DTO to a normalized reattach source. */
 function analysisJobToSource(j: ActiveAnalysisJobDto): ReattachSource {
   return {
-    // Chapter/scene async analysis is the `proofread` kind today (Proofread + LineEdit share this
-    // async path). Phase 2's `whole-book-analysis` is book-scoped and does not arrive here.
+    // Chapter/scene async analysis is the `proofread` kind today: Proofread, LineEdit, and the
+    // single-shot whole-chapter types (Linguistic, Literary, Summarization, Custom) all share this
+    // async path, distinguished by `analysisType`. Phase 2's `whole-book-analysis` is book-scoped and
+    // does not arrive here.
     kind: 'proofread',
     jobId: j.jobId,
-    scopeLabel: defaultScopeLabel('proofread'),
+    // Scope label must match what the live `job-started` path sets in AnalysisPanelComponent: a
+    // scene-scoped job reattaches as 'סצנה', not the chapter default 'פרק'. Otherwise `track`'s
+    // idempotent metadata merge overwrites a live scene job's label with the chapter default after a
+    // refresh or book reload (and a freshly reattached scene job would render as a chapter). Any
+    // non-scene job keeps the proofread default. DRAFT he - needs native review.
+    scopeLabel: j.sceneId ? 'סצנה' : defaultScopeLabel('proofread'),
     // Unlike the poll DTO, the rf-b01 active-analysis-job carries a NON-NEGATIVE int with no "unknown"
     // sentinel: its own doc says 0 can mean "not yet chunked", i.e. progress is not yet known - NOT
     // genuinely 0% done. So treat only a strictly-positive value as a determinate percent and map 0 to
@@ -559,12 +566,13 @@ const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
 };
 
 /**
- * Title (he/en) for a NEW tracked job. Chapter async analysis rides ONE JobKind (`proofread`) for BOTH
- * Proofread and LineEdit, so the kind alone cannot name the row - only the `analysisType` distinguishes
- * them. When a chapter analysis job carries an analysisType, resolve its title from the shared
- * ANALYSIS_TYPE_LABELS source (kept in sync with every other analysis-type surface) so an in-flight
- * LineEdit reads "Line Edit" / "עריכת שורה" instead of the proofread default. Any other kind, or an
- * absent/unknown analysisType, falls back to the per-kind default.
+ * Title (he/en) for a NEW tracked job. Chapter/scene async analysis rides ONE JobKind (`proofread`) for
+ * ALL analysis types (Proofread, LineEdit, Linguistic, Literary, Summarization, Custom), so the kind
+ * alone cannot name the row - only the `analysisType` distinguishes them. When a chapter analysis job
+ * carries an analysisType, resolve its title from the shared ANALYSIS_TYPE_LABELS source (kept in sync
+ * with every other analysis-type surface) so an in-flight LineEdit reads "Line Edit" / "עריכת שורה"
+ * instead of the proofread default. Any other kind, or an absent/unknown analysisType, falls back to
+ * the per-kind default.
  */
 function titleForJob(kind: JobKind, analysisType: string | undefined): { he: string; en: string } {
   if (kind === 'proofread' && analysisType) {

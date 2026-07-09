@@ -284,6 +284,42 @@ describe('JobRegistryService', () => {
       expect(job?.percent).toBe(25);
     });
 
+    it('reattaches a scene-scoped job with the scene label, not the chapter default', () => {
+      // Bug: analysisJobToSource ignored scope and always used defaultScopeLabel('proofread') ('פרק'),
+      // so a scene job reattached (or refreshed) as a chapter. It must mirror the live job-started label.
+      configure({
+        analysis: makeAnalysisStub([
+          activeJob({ jobId: 'scene-1', scope: 'Scene', chapterId: 'ch-1', sceneId: 'sc-1' }),
+        ]),
+      });
+      service.reattach('book-A', 'he');
+      expect(jobById('scene-1')?.scopeLabel).toBe('סצנה');
+    });
+
+    it('reattaches a chapter-scoped job with the chapter label', () => {
+      configure({ analysis: makeAnalysisStub([activeJob({ jobId: 'chap-lbl', sceneId: null })]) });
+      service.reattach('book-A', 'he');
+      expect(jobById('chap-lbl')?.scopeLabel).toBe('פרק');
+    });
+
+    it('does NOT overwrite a live scene label with the chapter default when reattach re-discovers the job', () => {
+      // The live job-started path tracks a scene job as 'סצנה'; a subsequent reattach (refresh / book
+      // reload) re-discovers the same jobId and merges metadata idempotently. Its scopeLabel must stay
+      // 'סצנה', not be clobbered back to the chapter default.
+      configure({
+        analysis: makeAnalysisStub([
+          activeJob({ jobId: 'scene-live', scope: 'Scene', chapterId: 'ch-1', sceneId: 'sc-1' }),
+        ]),
+      });
+      // Simulate the live start.
+      service.track('proofread', 'book-A', 'scene-live', { scopeLabel: 'סצנה', chapterId: 'ch-1' });
+      expect(jobById('scene-live')?.scopeLabel).toBe('סצנה');
+
+      // A reattach re-discovers the same in-flight job and merges its metadata.
+      service.reattach('book-A', 'he');
+      expect(jobById('scene-live')?.scopeLabel).toBe('סצנה');
+    });
+
     it('maps a reattached estimatedCompletionPercent of 0 to null (indeterminate, not determinate 0%)', () => {
       // The rf-b01 DTO uses 0 to mean "not yet chunked / unknown" (no negative sentinel), so a just-
       // reattached job must show the indeterminate bar, not a determinate 0%.
