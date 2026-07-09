@@ -14,10 +14,28 @@ export interface LinguisticDeviationRow {
   comparison: string;
 }
 
+/** A single computed linguistic metric shown as a label + formatted value. */
+export interface LinguisticMetricRow {
+  /** Localized, human-readable metric name (falls back to the raw key). */
+  label: string;
+  /** Pre-formatted display value (number formatted, percentage, or a localized descriptor). */
+  value: string;
+}
+
 /** Localized strings + parsed fields for the linguistic view of a result. */
 export interface LinguisticViewModel {
   /** Optional model-provided overview sentence(s). Empty string when absent. */
   summary: string;
+  /**
+   * Computed syntax/morphology/style metrics + grammaticality, flattened to labelled rows. These are the
+   * substantive numbers the model produces on EVERY successful run (sentence/word counts, lexical density,
+   * readability, formality, grammaticality) - shown so an analyzed chapter never reads as "nothing happened"
+   * even when it has no baseline deviations and no consistency issues. Empty only when the JSON carried no
+   * recognizable metric fields.
+   */
+  metrics: LinguisticMetricRow[];
+  /** Localized title for the metrics section. */
+  metricsTitle: string;
   deviations: LinguisticDeviationRow[];
   /**
    * Reference-aware deviations section title. Scene-scope results compare each metric against the
@@ -97,6 +115,18 @@ export interface LinguisticViewModel {
       <ng-template #structured>
         <p class="linguistic-summary" data-testid="linguistic-summary" *ngIf="ling.summary">{{ ling.summary }}</p>
 
+        <!-- Computed metrics (always present on a successful run) so the chapter reads as analyzed even
+             with no baseline deviations / no consistency issues. -->
+        <div class="linguistic-block" data-testid="linguistic-metrics" *ngIf="ling.metrics.length">
+          <h4 class="linguistic-block-title">{{ ling.metricsTitle }}</h4>
+          <ul class="metric-list">
+            <li class="metric-row" *ngFor="let m of ling.metrics" data-testid="metric-row">
+              <span class="metric-label">{{ m.label }}</span>
+              <span class="metric-value">{{ m.value }}</span>
+            </li>
+          </ul>
+        </div>
+
         <!-- Style deviations (scene metric vs chapter baseline) -->
         <div class="linguistic-block" data-testid="linguistic-deviations">
           <h4 class="linguistic-block-title">{{ ling.deviationsTitle }}</h4>
@@ -167,6 +197,28 @@ export interface LinguisticViewModel {
       margin: 0;
       font-size: 0.9rem;
       font-weight: 600;
+    }
+    .metric-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.15rem 0.75rem;
+    }
+    .metric-row {
+      display: contents;
+    }
+    .metric-label {
+      font-size: 0.83rem;
+      color: #555;
+    }
+    .metric-value {
+      font-size: 0.83rem;
+      font-weight: 600;
+      color: #074799;
+      text-align: end;
+      font-variant-numeric: tabular-nums;
     }
     .deviation-list {
       list-style: none;
@@ -291,6 +343,7 @@ export class LinguisticResultComponent implements OnChanges {
       (result.sceneId || (result.scope ?? '').toLowerCase() === 'scene') ? 'chapter' : 'book';
     // Title must match the reference so the header does not contradict the per-row wording.
     const deviationsTitle = DEVIATIONS_TITLE[reference][lang];
+    const metricsTitle = METRICS_TITLE[lang];
 
     // Prefer structuredResult, but fall back to resultText: some LinguisticAnalysis results store the
     // JSON only in resultText (as LineEditParserService also handles), and the History tab no longer
@@ -299,7 +352,7 @@ export class LinguisticResultComponent implements OnChanges {
     const rawJson = result.structuredResult?.trim()
       ? result.structuredResult
       : (result.resultText?.trim() ? result.resultText : '');
-    const parseFailed_early = { summary: '', deviations: [], deviationsTitle, labels, dir, parseFailed: true as const, emptyStructured: false, noConsistencyIssues: false, consistencyUndetectable: false };
+    const parseFailed_early = { summary: '', metrics: [], metricsTitle, deviations: [], deviationsTitle, labels, dir, parseFailed: true as const, emptyStructured: false, noConsistencyIssues: false, consistencyUndetectable: false };
     if (!rawJson) {
       return parseFailed_early;
     }
@@ -319,6 +372,8 @@ export class LinguisticResultComponent implements OnChanges {
     const obj = parsed as Partial<LinguisticAnalysis> & { summary?: string };
 
     const summary = typeof obj.summary === 'string' ? obj.summary.trim() : '';
+
+    const metrics = this.buildMetricRows(obj, lang);
 
     const rawDeviations = Array.isArray(obj.deviations) ? obj.deviations : [];
     const deviations: LinguisticDeviationRow[] = rawDeviations
@@ -350,7 +405,7 @@ export class LinguisticResultComponent implements OnChanges {
     // is not empty - it drives the consistencyUndetectable message - so leaving modelDetectedIssues out
     // would let the contradictory "no structured content" empty-note render alongside that message
     // whenever resultText is long enough to satisfy hasRawText.
-    const emptyStructured = !summary && deviations.length === 0 && !hasConsistency && !modelDetectedIssues;
+    const emptyStructured = !summary && metrics.length === 0 && deviations.length === 0 && !hasConsistency && !modelDetectedIssues;
 
     // Parse succeeded and there are zero anchored consistency suggestion cards.
     // Two distinct states, mutually exclusive:
@@ -358,7 +413,52 @@ export class LinguisticResultComponent implements OnChanges {
     //   consistencyUndetectable: model returned issues in JSON but ALL were dropped during anchoring
     const noConsistencyIssues = !hasConsistency && !modelDetectedIssues;
     const consistencyUndetectable = !hasConsistency && modelDetectedIssues;
-    return { summary, deviations, deviationsTitle, labels, dir, parseFailed: false, emptyStructured, noConsistencyIssues, consistencyUndetectable };
+    return { summary, metrics, metricsTitle, deviations, deviationsTitle, labels, dir, parseFailed: false, emptyStructured, noConsistencyIssues, consistencyUndetectable };
+  }
+
+  /**
+   * Flatten the model's syntax/morphology/style metric objects + grammaticalityScore into labelled,
+   * pre-formatted rows in a stable, curated order. Only recognized keys with finite numeric values (or
+   * known style descriptors) are shown; unknown/blank fields are skipped so a partial/garbled result never
+   * renders "NaN" or a raw key. Percentage-style 0..1 scores (lexicalDensity, readability,
+   * grammaticalityScore) are shown as percentages; descriptors (formality, voiceBalance) are localized.
+   */
+  private buildMetricRows(obj: Partial<LinguisticAnalysis>, lang: 'he' | 'en'): LinguisticMetricRow[] {
+    const rows: LinguisticMetricRow[] = [];
+    const push = (key: string, value: string) => {
+      if (value) rows.push({ label: METRIC_LABELS[lang][key] ?? key, value });
+    };
+    const num = (v: unknown): string => {
+      const n = Number(v);
+      return Number.isFinite(n) ? this.formatNum(n) : '';
+    };
+    const pct = (v: unknown): string => {
+      const n = Number(v);
+      return Number.isFinite(n) ? `${Math.min(100, Math.max(0, Math.round(n * 100)))}%` : '';
+    };
+    const descriptor = (v: unknown): string => {
+      if (typeof v !== 'string' || !v.trim()) return '';
+      const key = v.trim().toLowerCase();
+      return STYLE_VALUE_LABELS[lang][key] ?? v.trim();
+    };
+
+    const syntax = (obj.syntaxMetrics ?? {}) as Record<string, unknown>;
+    const morph = (obj.morphologyMetrics ?? {}) as Record<string, unknown>;
+    const style = (obj.styleMetrics ?? {}) as Record<string, unknown>;
+
+    push('sentenceCount', num(syntax['sentenceCount']));
+    push('averageSentenceLength', num(syntax['averageSentenceLength']));
+    push('complexSentences', num(syntax['complexSentences']));
+    push('wordCount', num(morph['wordCount']));
+    push('uniqueWords', num(morph['uniqueWords']));
+    push('averageWordLength', num(morph['averageWordLength']));
+    push('lexicalDensity', pct(morph['lexicalDensity']));
+    push('formality', descriptor(style['formality']));
+    push('readability', pct(style['readability']));
+    push('voiceBalance', descriptor(style['voiceBalance']));
+    push('grammaticalityScore', pct(obj.grammaticalityScore));
+
+    return rows;
   }
 
   /** Format a number for display: integers as-is, floats to 2 dp (trailing ".00" stripped). */
@@ -435,6 +535,12 @@ const DEVIATIONS_TITLE: Record<'chapter' | 'book', Record<'he' | 'en', string>> 
   },
 };
 
+/** Localized title for the computed-metrics section. he/en parity. No em-dash. */
+const METRICS_TITLE: Record<'he' | 'en', string> = {
+  he: 'מדדים לשוניים',
+  en: 'Linguistic metrics',
+};
+
 /** Localized, human-readable names for the metric keys emitted by the backend. he/en parity. */
 const METRIC_LABELS: Record<'he' | 'en', Record<string, string>> = {
   he: {
@@ -447,7 +553,10 @@ const METRIC_LABELS: Record<'he' | 'en', Record<string, string>> = {
     uniqueWords: 'מילים ייחודיות',
     averageWordLength: 'אורך מילה ממוצע',
     lexicalDensity: 'עושר אוצר המילים',
-    readability: 'קריאוּת'
+    readability: 'קריאוּת',
+    formality: 'משלב',
+    voiceBalance: 'איזון קול פעיל/סביל',
+    grammaticalityScore: 'תקינות דקדוקית'
   },
   en: {
     averageSentenceLength: 'Average sentence length',
@@ -459,7 +568,42 @@ const METRIC_LABELS: Record<'he' | 'en', Record<string, string>> = {
     uniqueWords: 'Unique words',
     averageWordLength: 'Average word length',
     lexicalDensity: 'Vocabulary richness',
-    readability: 'Readability'
+    readability: 'Readability',
+    formality: 'Register',
+    voiceBalance: 'Active/passive voice balance',
+    grammaticalityScore: 'Grammaticality'
+  }
+};
+
+/**
+ * Localized display values for the descriptor-style metrics (formality, voiceBalance), keyed by the raw
+ * lowercased model value. Unknown values fall back to the raw string, so a new descriptor the model invents
+ * is shown verbatim rather than dropped. he/en parity. No em-dash.
+ */
+const STYLE_VALUE_LABELS: Record<'he' | 'en', Record<string, string>> = {
+  he: {
+    literary: 'ספרותי',
+    formal: 'רשמי',
+    neutral: 'ניטרלי',
+    informal: 'לא רשמי',
+    casual: 'יומיומי',
+    conversational: 'שיחתי', // DRAFT he - needs native review
+    mixed: 'מעורב',
+    active: 'פעיל',
+    passive: 'סביל',
+    balanced: 'מאוזן',
+  },
+  en: {
+    literary: 'Literary',
+    formal: 'Formal',
+    neutral: 'Neutral',
+    informal: 'Informal',
+    casual: 'Casual',
+    conversational: 'Conversational',
+    mixed: 'Mixed',
+    active: 'Active',
+    passive: 'Passive',
+    balanced: 'Balanced',
   }
 };
 
