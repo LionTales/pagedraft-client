@@ -1759,17 +1759,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       case 'job-started':
         // rf-c01: publish this freshly-started chapter analysis job to the registry so the Activity
         // Center and anyRunningForBook$ pick it up for THIS run - not only after a reload reattaches to
-        // it. The async-job path runs only for Proofread/LineEdit (shouldUseAsyncJob), which share the
-        // one `proofread` kind; analysisType carries the distinction so the row titles correctly.
-        // track() is idempotent per jobId, so a later reattach that re-discovers this job cannot
-        // double-track it.
+        // it. The async-job path now covers every single-shot whole-chapter analysis type (Proofread,
+        // LineEdit, Linguistic, Literary, Summarization, Custom), all of which share the one `proofread`
+        // JobKind; analysisType carries the distinction so the row titles correctly (via
+        // ANALYSIS_TYPE_LABELS). track() is idempotent per jobId, so a later reattach that re-discovers
+        // this job cannot double-track it.
         // scopeLabel 'פרק' matches defaultScopeLabel('proofread') in the registry so live-tracked and
         // reattached jobs render identically. DRAFT he - needs native review.
         if (this.bookId) {
           this.jobRegistry.track('proofread', this.bookId, event.jobId, {
             analysisType: this.selectedAnalysisType,
             chapterId: this.chapterId ?? undefined,
-            scopeLabel: 'פרק', // DRAFT he - needs native review
+            scopeLabel: this.sceneId ? 'סצנה' : 'פרק', // DRAFT he - needs native review
           });
           // Dismiss the full-screen blocking overlay; the compact in-panel banner takes over.
           this.asyncJobInFlight = true;

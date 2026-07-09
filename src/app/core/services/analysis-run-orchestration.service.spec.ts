@@ -49,8 +49,13 @@ describe('AnalysisRunOrchestrationService', () => {
   });
 
   describe('shouldUseAsyncJob', () => {
-    it('returns false for non-Proofread/LineEdit types', () => {
-      expect(service.shouldUseAsyncJob(ctx({ selectedAnalysisType: 'Custom', documentText: 'a '.repeat(1000) }))).toBeFalse();
+    it('returns true (always) for single-shot whole-chapter types, even with no documentText', () => {
+      for (const t of ['LinguisticAnalysis', 'LiteraryAnalysis', 'Summarization', 'Custom']) {
+        expect(service.shouldUseAsyncJob(ctx({ selectedAnalysisType: t, documentText: '' }))).toBeTrue();
+      }
+    });
+
+    it('returns false for an unrecognized/inline type', () => {
       expect(service.shouldUseAsyncJob(ctx({ selectedAnalysisType: 'General', documentText: 'a '.repeat(1000) }))).toBeFalse();
     });
 

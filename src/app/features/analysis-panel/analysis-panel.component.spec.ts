@@ -1724,6 +1724,20 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       });
     });
 
+    it('carries analysisType LinguisticAnalysis so an in-flight linguistic run does not title as proofreading', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-la' });
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-la', {
+        analysisType: 'LinguisticAnalysis',
+        chapterId: 'chap-1',
+        scopeLabel: 'פרק',
+      });
+    });
+
     it('does NOT track when there is no bookId (guard)', () => {
       component.bookId = null;
       component.chapterId = 'chap-1';
@@ -1732,6 +1746,21 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-x' });
 
       expect(jobRegistrySpy.track).not.toHaveBeenCalled();
+    });
+
+    it('tracks a fresh Linguistic async job with scopeLabel scene when sceneId is set', () => {
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.sceneId = 'scene-1';
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-scene' });
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-scene', {
+        analysisType: 'LinguisticAnalysis',
+        chapterId: 'chap-1',
+        scopeLabel: 'סצנה',
+      });
     });
   });
 
