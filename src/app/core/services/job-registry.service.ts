@@ -518,7 +518,12 @@ function analysisJobToSource(j: ActiveAnalysisJobDto): ReattachSource {
     // does not arrive here.
     kind: 'proofread',
     jobId: j.jobId,
-    scopeLabel: defaultScopeLabel('proofread'),
+    // Scope label must match what the live `job-started` path sets in AnalysisPanelComponent: a
+    // scene-scoped job reattaches as 'סצנה', not the chapter default 'פרק'. Otherwise `track`'s
+    // idempotent metadata merge overwrites a live scene job's label with the chapter default after a
+    // refresh or book reload (and a freshly reattached scene job would render as a chapter). Any
+    // non-scene job keeps the proofread default. DRAFT he - needs native review.
+    scopeLabel: j.sceneId ? 'סצנה' : defaultScopeLabel('proofread'),
     // Unlike the poll DTO, the rf-b01 active-analysis-job carries a NON-NEGATIVE int with no "unknown"
     // sentinel: its own doc says 0 can mean "not yet chunked", i.e. progress is not yet known - NOT
     // genuinely 0% done. So treat only a strictly-positive value as a determinate percent and map 0 to
