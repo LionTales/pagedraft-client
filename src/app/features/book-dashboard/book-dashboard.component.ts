@@ -256,7 +256,11 @@ type ReviewTab = 'findings' | 'bible';
               <div class="conflicts">
                 <span class="label">קונפליקטים:</span>
                 <ul>
-                  @for (c of storyParsed.conflicts; track c.type + (c.description ?? '')) {
+                  <!-- track by $index intentionally: a content track using ?? (e.g. c.type + (c.description ?? ''))
+                       hits an Angular control-flow compiler bug that emits an undeclared temp (tmp_N_0) in the
+                       generated @for track fn, throwing "tmp_N_0 is not defined" on every CD tick and aborting the
+                       whole dashboard's change detection. Do NOT reintroduce ?? into this (or any) track expression. -->
+                  @for (c of storyParsed.conflicts; track $index) {
                     <li><span class="conflict-type">{{ c.type }}</span>: {{ c.description ?? '' }} ({{ c.status ?? 'ongoing' }})</li>
                   }
                 </ul>
