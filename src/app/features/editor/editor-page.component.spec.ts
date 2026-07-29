@@ -621,6 +621,7 @@ describe('EditorPageComponent (focused logic)', () => {
     beforeEach(() => {
       component.book = {
         id: 'book-1', title: 'My Book', author: null, language: 'he', createdAt: '', updatedAt: '',
+        aiTier: 'fast',
         chapters: [CHAPTER_A, CHAPTER_B],
       };
       // Stub loadChapterContent (calls chapterService.getById internally).
@@ -780,7 +781,7 @@ describe('EditorPageComponent (focused logic)', () => {
 
     it('localizes the focus-mode label for Hebrew and English books', () => {
       component.book = {
-        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', chapters: [],
+        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', aiTier: 'fast', chapters: [],
       };
       expect(component.focusModeLabel).toBe('מיקוד');
       component.focusMode = true;
@@ -834,7 +835,7 @@ describe('EditorPageComponent (focused logic)', () => {
       // The handle is on the panel's PHYSICAL LEFT edge regardless of content direction, so dragging
       // the pointer LEFT (clientX decreasing) widens the panel even for a Hebrew (rtl content) book.
       component.book = {
-        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', chapters: [],
+        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', aiTier: 'fast', chapters: [],
       };
       const handle = document.createElement('div');
       spyOn(handle, 'setPointerCapture');
@@ -855,7 +856,7 @@ describe('EditorPageComponent (focused logic)', () => {
 
     it('narrows the panel when dragging the pointer RIGHT (physical edge, rtl content)', () => {
       component.book = {
-        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', chapters: [],
+        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', aiTier: 'fast', chapters: [],
       };
       const handle = document.createElement('div');
       spyOn(handle, 'setPointerCapture');
@@ -873,7 +874,7 @@ describe('EditorPageComponent (focused logic)', () => {
 
     it('ArrowLeft widens and ArrowRight narrows the panel (physical-left handle)', () => {
       component.book = {
-        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', chapters: [],
+        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', aiTier: 'fast', chapters: [],
       };
       component.reviewPanelWidth = 400;
 
@@ -934,7 +935,7 @@ describe('EditorPageComponent (focused logic)', () => {
   describe('reviewModeOptions memoization (NIT-7)', () => {
     it('starts with English labels when book language is en', () => {
       component.book = {
-        id: 'b', title: 't', author: null, language: 'en', createdAt: '', updatedAt: '', chapters: [],
+        id: 'b', title: 't', author: null, language: 'en', createdAt: '', updatedAt: '', aiTier: 'fast', chapters: [],
       };
       (component as any).rebuildReviewModeOptions();
       expect(component.reviewModeOptions[0].label).toBe('Edit help');
@@ -943,7 +944,7 @@ describe('EditorPageComponent (focused logic)', () => {
 
     it('uses Hebrew labels when book language is he', () => {
       component.book = {
-        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', chapters: [],
+        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', aiTier: 'fast', chapters: [],
       };
       (component as any).rebuildReviewModeOptions();
       expect(component.reviewModeOptions[0].label).toBe('עזרת עריכה');
@@ -952,7 +953,7 @@ describe('EditorPageComponent (focused logic)', () => {
 
     it('updates labels when language flips from he to en', () => {
       component.book = {
-        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', chapters: [],
+        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', aiTier: 'fast', chapters: [],
       };
       (component as any).rebuildReviewModeOptions();
       expect(component.reviewModeOptions[0].label).toBe('עזרת עריכה');
@@ -964,7 +965,7 @@ describe('EditorPageComponent (focused logic)', () => {
 
     it('returns the same array reference when called again with no language change (identity check)', () => {
       component.book = {
-        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', chapters: [],
+        id: 'b', title: 't', author: null, language: 'he', createdAt: '', updatedAt: '', aiTier: 'fast', chapters: [],
       };
       (component as any).rebuildReviewModeOptions();
       const ref = component.reviewModeOptions;
@@ -1102,7 +1103,7 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
 
   const BOOK: BookDetailDto = {
     id: 'book-1', title: 'My Book', author: null, language: 'he',
-    createdAt: '', updatedAt: '', chapters: [],
+    createdAt: '', updatedAt: '', aiTier: 'fast', chapters: [],
   };
 
   const el = () => fixture.nativeElement as HTMLElement;

@@ -62,6 +62,7 @@ function makeBook(language: string): BookDetailDto {
     language,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    aiTier: 'fast',
     chapters: [],
   };
 }

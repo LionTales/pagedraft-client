@@ -42,6 +42,7 @@ function makeBookDetail(overrides: Partial<BookDetailDto> = {}): BookDetailDto {
     language: 'he',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    aiTier: 'fast',
     chapters: [
       { id: 'ch-1', title: 'Chapter One', partName: null, order: 0, wordCount: 100, updatedAt: new Date().toISOString() },
       { id: 'ch-2', title: 'Chapter Two', partName: null, order: 1, wordCount: 200, updatedAt: new Date().toISOString() },
