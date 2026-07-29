@@ -538,6 +538,59 @@ describe('BookAiTierComponent (p3-4)', () => {
   });
 
   /**
+   * Bugbot round 2. `loading` is raised only by reload() and lowered only by that read's own handlers, so
+   * cancelRead() destroys the only path that can lower it. Both write() handlers cancel the read, so a PUT
+   * landing while a reload() was open left the spinner up forever on top of a good answer. Fixed inside
+   * cancelRead() so all four call sites are covered, hence BOTH write paths are asserted here.
+   */
+  it('lowers the loading spinner when a successful write supersedes an open read', () => {
+    const pendingRead = new Subject<BookAiTierDto>();
+    const pendingWrite = new Subject<BookAiTierDto>();
+    mount(makeTier({ tier: 'thinking' }));
+    service.set.and.returnValue(pendingWrite);
+
+    component.chooseFast();
+
+    // A language change re-enters reload() while the PUT is still open: spinner up, GET open.
+    service.get.and.returnValue(pendingRead);
+    component.bookLanguage = 'en';
+    component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+    expect(component.loading).withContext('read in flight').toBeTrue();
+
+    // The write answers first and supersedes that read.
+    pendingWrite.next(makeTier({ tier: 'fast' }));
+    pendingWrite.complete();
+
+    expect(component.loading).withContext('spinner lowered with the superseded read').toBeFalse();
+    expect(component.status?.tier).toBe('fast');
+    fixture.detectChanges();
+    expect(exists('ai-tier-loading')).toBeFalse();
+  });
+
+  it('lowers the loading spinner when a FAILED write cancels an open read before re-reading', () => {
+    const pendingRead = new Subject<BookAiTierDto>();
+    const pendingWrite = new Subject<BookAiTierDto>();
+    mount(makeTier({ tier: 'thinking' }));
+    service.set.and.returnValue(pendingWrite);
+
+    component.chooseFast();
+
+    service.get.and.returnValue(pendingRead);
+    component.bookLanguage = 'en';
+    component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+    expect(component.loading).toBeTrue();
+
+    // The re-read the error path issues must not resolve, so the only thing that could lower the spinner
+    // is cancelRead() itself.
+    service.get.and.returnValue(NEVER);
+    pendingWrite.error({ status: 500 });
+
+    expect(component.loading).withContext('spinner lowered by the cancel').toBeFalse();
+    expect(component.saving).toBeFalse();
+    expect(component.saveError).toBeTruthy();
+  });
+
+  /**
    * The mirror case, and the reason the reset is scoped to a bookId change: on a LANGUAGE-only change the
    * book is the same, so the write's own handler still passes its guard and clears the latch itself.
    * Clearing it in ngOnChanges would unlock the buttons mid-flight and admit a second overlapping PUT.

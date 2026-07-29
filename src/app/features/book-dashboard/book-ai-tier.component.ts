@@ -130,10 +130,27 @@ export class BookAiTierComponent implements OnChanges, OnDestroy {
     });
   }
 
-  /** Drops the in-flight read, if any. Safe to call when there is none or when it already completed. */
+  /**
+   * Drops the in-flight read, if any. Safe to call when there is none or when it already completed.
+   *
+   * IT ALSO CLEARS `loading`, and that belongs here rather than at each call site (Bugbot round 2, PR #28).
+   * `loading` is raised in exactly ONE place, `reload()`, immediately after starting a read, and it is
+   * lowered only by that read's own next/error handlers. So unsubscribing the read destroys the only code
+   * path that could ever lower it: `write()`'s success handler supersedes the read (final-r02) and its
+   * failure handler cancels before re-reading, and BOTH left the spinner up forever whenever a `reload()`
+   * was open at the time - a bookLanguage change or the retry button during a PUT. The control then rendered
+   * the loading label on top of a perfectly good tier it had just received.
+   *
+   * Clearing it at the two write sites instead would be two hand-copied lines that the next caller of
+   * cancelRead() would not know to copy. Putting it here makes it an INVARIANT: `loading` means "a read is
+   * in flight", so dropping the read makes it false by definition. `reload()` re-raises it right after, and
+   * the post-failure re-read deliberately leaves it down (it keeps rendering the last good answer while it
+   * re-fetches, per its own note), so all four call sites are correct without one of them naming the latch.
+   */
   private cancelRead(): void {
     this.readSub?.unsubscribe();
     this.readSub = null;
+    this.loading = false;
   }
 
   // ── Localization (book-scoped chrome: follows bookLanguage, Hebrew default) ──
