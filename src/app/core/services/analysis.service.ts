@@ -18,12 +18,25 @@ export class AnalysisService {
    * Hebrew/Arabic chunks at a lower word count than the Latin ceiling), so the language must be sent for the
    * returned thresholds to match when the server actually chunks. Omitting it yields the conservative dense
    * sizing server-side.
+   *
+   * `tier` ('fast' | 'thinking') is OPTIONAL and currently not sent by the analysis panel. The threshold
+   * depends on the num_ctx of the model each task is ROUTED to, so a tier that changed that window would move
+   * both the server's chunking and this endpoint together. At the SHIPPED values it does not: both tiers
+   * resolve Proofread at num_ctx 4096, and the server pins that no-movement result with a test rather than
+   * assuming it (`ChunkThresholdTierParityTests`). The parameter exists so that wiring becomes one argument,
+   * not a refactor, the day a tier entry's window drops below the 3548 crossover where the window bound
+   * starts binding. If that ever changes, the panel MUST start passing the book's tier or long Hebrew
+   * chapters will be routed sync while the server chunks them.
    */
-  getChunkThresholds(language?: string): Observable<AnalysisChunkThresholdsDto> {
+  getChunkThresholds(language?: string, tier?: string): Observable<AnalysisChunkThresholdsDto> {
     const url = '/api/config/analysis-chunk-thresholds';
+    const params: Record<string, string> = {};
     const lang = language?.trim();
-    if (lang) {
-      return this.http.get<AnalysisChunkThresholdsDto>(url, { params: { language: lang } });
+    if (lang) params['language'] = lang;
+    const resolvedTier = tier?.trim();
+    if (resolvedTier) params['tier'] = resolvedTier;
+    if (Object.keys(params).length) {
+      return this.http.get<AnalysisChunkThresholdsDto>(url, { params });
     }
     return this.http.get<AnalysisChunkThresholdsDto>(url);
   }
