@@ -1,0 +1,119 @@
+<div class="ai-tier-row" [attr.dir]="dir" data-testid="ai-tier-row">
+  <div class="at-line">
+    <span class="at-title">{{ label('title') }}</span>
+    @if (loading) {
+      <span class="at-status" data-testid="ai-tier-loading">{{ label('loading') }}</span>
+    } @else if (status) {
+      <span class="at-status" [class.at-cloud]="anyRouteUsesTier" data-testid="ai-tier-current">
+        {{ status.tier === 'thinking' ? label('tierThinking') : label('tierFast') }}
+      </span>
+    }
+  </div>
+
+  @if (loadError) {
+    <p class="at-error" data-testid="ai-tier-load-error">
+      {{ label('loadError') }}
+      <button type="button" class="pd-btn pd-btn-ghost at-action" data-testid="ai-tier-retry" (click)="reload()">
+        {{ label('retry') }}
+      </button>
+    </p>
+  }
+
+  @if (status) {
+    <!-- The choice itself. Two radios, never a silent default: 'fast' is what a book has until somebody
+         deliberately picks 'thinking', and picking 'thinking' goes through the consent step below. -->
+    <div class="at-options" role="radiogroup" [attr.aria-label]="label('title')">
+      <button
+        type="button"
+        role="radio"
+        class="at-option"
+        [class.selected]="status.tier === 'fast'"
+        [attr.aria-checked]="status.tier === 'fast'"
+        [attr.aria-disabled]="saving || status.tier === 'fast'"
+        data-testid="ai-tier-option-fast"
+        (click)="chooseFast()">
+        <span class="at-option-name">{{ label('tierFast') }}</span>
+        <span class="at-option-desc">{{ label('fastDesc') }}</span>
+      </button>
+      <button
+        type="button"
+        role="radio"
+        class="at-option"
+        [class.selected]="status.tier === 'thinking'"
+        [attr.aria-checked]="status.tier === 'thinking'"
+        [attr.aria-disabled]="saving || status.tier === 'thinking' || !canChooseThinking"
+        [attr.title]="canChooseThinking ? null : unavailableReasonText"
+        data-testid="ai-tier-option-thinking"
+        (click)="requestThinking()">
+        <span class="at-option-name">{{ label('tierThinking') }}</span>
+        <span class="at-option-desc">{{ label('thinkingDesc') }}</span>
+      </button>
+      @if (saving) {
+        <span class="at-status" data-testid="ai-tier-saving">{{ label('saving') }}</span>
+      }
+    </div>
+
+    <!-- Explicit opt-in. The privacy sentence is restated HERE, at the moment of the decision, rather than
+         relying on the user having read the paragraph below before clicking. -->
+    @if (showConsent) {
+      <div class="at-consent" data-testid="ai-tier-consent">
+        <p class="at-consent-title">{{ label('consentTitle') }}</p>
+        <p class="at-consent-body">{{ label('privacy') }}</p>
+        <p class="at-consent-body">{{ label('appliesTo') }}</p>
+        <p class="at-consent-body">{{ label('doesNotApplyTo') }}</p>
+        <div class="at-consent-actions">
+          <button
+            type="button"
+            class="pd-btn pd-btn-primary"
+            [disabled]="saving"
+            data-testid="ai-tier-consent-confirm"
+            (click)="confirmThinking()">
+            {{ saving ? label('saving') : label('consentConfirm') }}
+          </button>
+          <button
+            type="button"
+            class="pd-btn pd-btn-ghost"
+            [disabled]="saving"
+            data-testid="ai-tier-consent-cancel"
+            (click)="cancelConsent()">
+            {{ label('cancel') }}
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- The always-visible scope statement. It names the excluded tasks one by one on purpose: a user who
+         believed the thinking tier improved their whole-book review would be misled by "some features". -->
+    <p class="at-note" data-testid="ai-tier-applies">{{ label('appliesTo') }}</p>
+    <p class="at-note" data-testid="ai-tier-excludes">{{ label('doesNotApplyTo') }}</p>
+    <p class="at-note at-privacy" data-testid="ai-tier-privacy">{{ label('privacy') }}</p>
+
+    <!-- Fall back VISIBLY, never silently. -->
+    @if (status.fallbackActive) {
+      <p class="at-warn" data-testid="ai-tier-fallback">{{ label('fallbackWarning') }}</p>
+    } @else if (status.tier === 'thinking' && status.thinkingReadiness !== 'ready') {
+      <p class="at-warn" data-testid="ai-tier-will-fail">{{ unavailableReasonText }}</p>
+    } @else if (status.tier === 'fast' && status.thinkingReadiness !== 'ready') {
+      <p class="at-note at-muted" data-testid="ai-tier-unavailable">{{ unavailableReasonText }}</p>
+    }
+
+    @if (saveError) {
+      <p class="at-error" data-testid="ai-tier-save-error">{{ saveError }}</p>
+    }
+
+    <!-- What will ACTUALLY run, per task. This is the honest counterpart to the tier label: on an English
+         book the proofreading row stays local even on the thinking tier, and this list says so. -->
+    <p class="at-routes-title">{{ label('routesTitle') }}</p>
+    <ul class="at-routes" data-testid="ai-tier-routes">
+      @for (route of status.routes; track route.task) {
+        <li class="at-route">
+          <span class="at-route-task">{{ taskLabel(route.task) }}</span>
+          <span class="at-route-model" dir="ltr">{{ route.provider }} / {{ route.model }}</span>
+          <span class="at-route-tag" [class.at-cloud]="route.usesTier">
+            {{ route.usesTier ? label('routeCloud') : label('routeLocal') }}
+          </span>
+        </li>
+      }
+    </ul>
+  }
+</div>
