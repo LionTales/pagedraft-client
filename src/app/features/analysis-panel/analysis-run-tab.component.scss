@@ -203,6 +203,14 @@
   font-weight: 600;
   color: #074799;
 }
+// p3-4: why the estimate above carries a price at all, and what that costs in privacy. Same muted
+// treatment as .sb-consent-body so it reads as explanation rather than as a second call to action.
+.sb-consent-paid-note {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #555;
+}
 .sb-consent-actions {
   display: flex;
   gap: 0.4rem;

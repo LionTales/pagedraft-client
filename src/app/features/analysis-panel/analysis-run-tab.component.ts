@@ -202,6 +202,8 @@ export class AnalysisRunTabComponent implements OnChanges {
       stalePrefix: 'פרקים שהשתנו:',
       consentTitle: 'בניית קו בסיס סגנוני',
       consentBody: 'פעולה זו תנתח את פרקי הספר כדי לבנות קו בסיס סגנוני לזיהוי חריגות.',
+      // DRAFT (Hebrew): verify wording/word-order with the user before sign-off.
+      consentPaidNote: 'הסכום מוצג משום שהספר מוגדר לשכבת חשיבה, שרצה על מודל בענן. טקסט הפרקים יישלח לספק צד שלישי ויוצא מהמחשב הזה. אפשר לשנות זאת בהגדרת שכבת המודל בלוח הספר.',
       confirm: 'אישור',
       cancel: 'ביטול',
       hintBuild: 'כדי לזהות חריגות סגנון, בנו תחילה קו בסיס סגנוני לספר.',
@@ -223,6 +225,7 @@ export class AnalysisRunTabComponent implements OnChanges {
       stalePrefix: 'Chapters changed:',
       consentTitle: 'Build style baseline',
       consentBody: 'This will analyze the book chapters to build a style baseline for deviation detection.',
+      consentPaidNote: 'The amount is shown because this book is set to the thinking tier, which runs on a cloud model. The chapter text is sent to a third-party provider and leaves this machine. You can change this in the model tier setting on the book dashboard.',
       confirm: 'Confirm',
       cancel: 'Cancel',
       hintBuild: 'To detect style deviations, build a style baseline for the book first.',
@@ -269,6 +272,16 @@ export class AnalysisRunTabComponent implements OnChanges {
       phrase += `, ~$${this.formatUsd(s.estimatedUsd)}`;
     }
     return phrase;
+  }
+
+  /**
+   * True when the estimate carries a real price, i.e. the build would run on a PAID provider. Server-side
+   * that is exactly the thinking tier today (p3-4): a fast-tier book runs locally and reports a null cost,
+   * so this stays false and the note does not render. Keyed on the same `estimatedUsd != null` predicate the
+   * estimate string uses, so the figure and its explanation can never appear apart.
+   */
+  get baselineConsentIsPaid(): boolean {
+    return this.styleBaselineStatus?.estimatedUsd != null;
   }
 
   private formatUsd(usd: number): string {

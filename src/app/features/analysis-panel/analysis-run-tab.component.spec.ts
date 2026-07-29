@@ -859,6 +859,48 @@ describe('AnalysisRunTabComponent', () => {
       expect(estimate).toContain('$0.12');
     });
 
+    /**
+     * p3-4: a book on the thinking tier is the reason estimatedUsd stops being null, so the paid figure now
+     * arrives with an explanation of WHERE the money and the text go. A price with no explanation is not
+     * consent. The note is keyed on the SAME predicate as the figure, so the two cannot appear apart.
+     */
+    it('CONSENT paid note: explains the cost and the privacy cost only when there IS a figure', () => {
+      component.styleBaselineStatus = makeBaselineStatus({
+        hasBaseline: false, ready: false, builtChapters: 0,
+        chaptersToBuild: 10, estimatedSeconds: 600, estimatedUsd: 0.12,
+      });
+      fixture.detectChanges();
+      query('[data-testid="sb-build-now"]').nativeElement.click();
+      fixture.detectChanges();
+
+      const note = query('[data-testid="sb-consent-paid-note"]').nativeElement.textContent as string;
+      expect(note).toContain('שכבת חשיבה');
+      expect(note).toContain('צד שלישי');
+
+      // A free (local) build quotes no price, so it must not show the paid explanation either.
+      query('[data-testid="sb-consent-cancel"]').nativeElement.click();
+      component.styleBaselineStatus = makeBaselineStatus({
+        hasBaseline: false, ready: false, builtChapters: 0,
+        chaptersToBuild: 10, estimatedSeconds: 600, estimatedUsd: null,
+      });
+      fixture.detectChanges();
+      query('[data-testid="sb-build-now"]').nativeElement.click();
+      fixture.detectChanges();
+
+      expect(query('[data-testid="sb-consent-estimate"]').nativeElement.textContent).not.toContain('$');
+      expect(query('[data-testid="sb-consent-paid-note"]')).toBeNull();
+    });
+
+    it('CONSENT paid note: has he/en parity and no em-dash', () => {
+      for (const [lang, needle] of [['he', 'שכבת חשיבה'], ['en', 'thinking tier']] as const) {
+        component.bookLanguage = lang;
+        const note = component.baselineLabel('consentPaidNote');
+        expect(note).withContext(`${lang} note`).not.toBe('consentPaidNote');
+        expect(note).withContext(`${lang} note`).toContain(needle);
+        expect(note).withContext(`${lang} note`).not.toContain('—');
+      }
+    });
+
     it('deviations empty-state hint shows when the baseline is missing/insufficient', () => {
       component.styleBaselineStatus = makeBaselineStatus({
         hasBaseline: false, ready: false, builtChapters: 0,
