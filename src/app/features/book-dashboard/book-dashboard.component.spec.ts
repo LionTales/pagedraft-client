@@ -20,6 +20,7 @@ import { BookReviewService } from '../../core/services/book-review.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { ChapterSummaryService } from '../../core/services/chapter-summary.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
+import { AiTierService } from '../../core/services/ai-tier.service';
 
 describe('BookDashboardComponent (wb3-c01 host)', () => {
   let component: BookDashboardComponent;
@@ -79,6 +80,16 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
             getChapterSummary: () => NEVER,
             updateChapterSummary: () => NEVER,
             rederiveChapterSummary: () => NEVER,
+          },
+        },
+        // Transitive dep of the hosted model-tier control (p3-4) (NullInjector guard). Without this every
+        // test in this suite fails with "No provider for HttpClient", naming the transitive dep rather than
+        // the component that introduced it.
+        {
+          provide: AiTierService,
+          useValue: {
+            get: () => NEVER,
+            set: () => NEVER,
           },
         },
       ],
