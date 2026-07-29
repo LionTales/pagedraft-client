@@ -73,6 +73,21 @@ export class BookAiTierComponent implements OnChanges, OnDestroy {
     if (changes['bookId'] || changes['bookLanguage']) {
       this.showConsent = false;
       this.saveError = null;
+      // A BOOK switch abandons the previous book's in-flight write, and both of `write()`'s handlers
+      // early-return on the book-id guard BEFORE clearing this latch. Every other piece of state already
+      // re-initializes on a book switch (`reload()` below resets status, loading and loadError, exactly as
+      // the sibling summaries control resets its own row latches on reload), so `saving` was simply missing
+      // from that list: a PUT resolving after the switch left the newly shown book locked forever, showing
+      // the saving spinner with both tier options aria-disabled.
+      //
+      // Scoped to a bookId change deliberately. On a LANGUAGE-only change the book id is unchanged, so the
+      // write's own handler still passes its guard and clears the latch itself; clearing it here would
+      // instead unlock the buttons while that same book's PUT is still in flight and admit a second
+      // overlapping write.
+      //
+      // Also deliberately NOT fixed by clearing `saving` before the guard inside the handlers: a late
+      // response for book A would then clear the latch out from under book B's own in-flight write.
+      if (changes['bookId']) this.saving = false;
       this.reload();
     }
   }

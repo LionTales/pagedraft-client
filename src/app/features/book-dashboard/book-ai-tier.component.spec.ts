@@ -503,4 +503,63 @@ describe('BookAiTierComponent (p3-4)', () => {
     component.ngOnChanges({ bookId: new SimpleChange('book-1', null, false) });
     expect(service.get).not.toHaveBeenCalled();
   });
+
+  // ── The `saving` latch across a context change (Bugbot, PR #28) ──────────────
+
+  /**
+   * Both of write()'s handlers early-return on the book-id guard BEFORE clearing `saving`, so a PUT that
+   * resolved after the host switched books used to leave the NEWLY shown book locked forever: spinner up,
+   * both tier options aria-disabled, no way back. Unlike status/loading/loadError, which reload() re-inits
+   * on every book change, `saving` had no re-initialization anywhere.
+   */
+  it('clears the saving latch on a book switch, so a late write cannot lock the next book', () => {
+    const pendingWrite = new Subject<BookAiTierDto>();
+    mount(makeTier());
+    service.set.and.returnValue(pendingWrite);
+
+    // Put the control on the thinking tier so opting back out issues a real write.
+    component.status = makeTier({ tier: 'thinking' });
+    component.chooseFast();
+    expect(component.saving).withContext('write in flight').toBeTrue();
+
+    // Host switches to another book while the PUT is still open.
+    service.get.and.returnValue(of(makeTier({ bookId: 'book-2' })));
+    component.bookId = 'book-2';
+    component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
+
+    expect(component.saving).withContext('latch cleared by the switch').toBeFalse();
+
+    // The abandoned write now resolves for the OLD book: it must neither repaint nor re-lock book-2.
+    pendingWrite.next(makeTier({ bookId: 'book-1', tier: 'fast' }));
+    pendingWrite.complete();
+
+    expect(component.saving).withContext('stale response must not re-lock').toBeFalse();
+    expect(component.status?.bookId).toBe('book-2');
+  });
+
+  /**
+   * The mirror case, and the reason the reset is scoped to a bookId change: on a LANGUAGE-only change the
+   * book is the same, so the write's own handler still passes its guard and clears the latch itself.
+   * Clearing it in ngOnChanges would unlock the buttons mid-flight and admit a second overlapping PUT.
+   */
+  it('keeps the saving latch through a language-only change, and the write itself clears it', () => {
+    const pendingWrite = new Subject<BookAiTierDto>();
+    mount(makeTier({ tier: 'thinking' }));
+    service.set.and.returnValue(pendingWrite);
+
+    component.chooseFast();
+    expect(component.saving).toBeTrue();
+
+    service.get.and.returnValue(of(makeTier({ tier: 'thinking' })));
+    component.bookLanguage = 'en';
+    component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+
+    expect(component.saving).withContext('same book, write still in flight').toBeTrue();
+
+    pendingWrite.next(makeTier({ tier: 'fast' }));
+    pendingWrite.complete();
+
+    expect(component.saving).withContext('cleared by its own handler').toBeFalse();
+    expect(component.status?.tier).toBe('fast');
+  });
 });
