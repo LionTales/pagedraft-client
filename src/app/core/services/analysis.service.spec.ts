@@ -123,5 +123,25 @@ describe('AnalysisService', () => {
     req.flush(expected);
     expect(result).toEqual(expected);
   });
+
+  /**
+   * p3-4: the threshold is a function of (language, TIER), because the tier can change which provider a task
+   * routes to and therefore which window sizes the chunker. At the shipped values the two tiers return the
+   * same numbers, so the analysis panel does not send the tier yet; the parameter exists so wiring it is one
+   * argument rather than a refactor the day a tier entry's window drops below the crossover.
+   */
+  it('sends the tier when one is supplied, and omits both params when neither is', () => {
+    service.getChunkThresholds('he', 'thinking').subscribe();
+    const withTier = http.expectOne(r => r.url === '/api/config/analysis-chunk-thresholds');
+    expect(withTier.request.params.get('language')).toBe('he');
+    expect(withTier.request.params.get('tier')).toBe('thinking');
+    withTier.flush({ proofreadChunkTargetWords: 250, lineEditChunkTargetWords: 250 });
+
+    service.getChunkThresholds(undefined, '  ').subscribe();
+    const bare = http.expectOne('/api/config/analysis-chunk-thresholds');
+    expect(bare.request.params.has('tier')).toBeFalse();
+    expect(bare.request.params.has('language')).toBeFalse();
+    bare.flush({ proofreadChunkTargetWords: 250, lineEditChunkTargetWords: 250 });
+  });
 });
 

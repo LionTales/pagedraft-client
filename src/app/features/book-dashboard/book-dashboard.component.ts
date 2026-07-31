@@ -19,6 +19,7 @@ import { BookReviewFindingsComponent } from './book-review-findings.component';
 import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
 import { FunnelStepperComponent } from './funnel-stepper.component';
+import { BookAiTierComponent } from './book-ai-tier.component';
 
 /** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
 type ReviewTab = 'findings' | 'bible';
@@ -35,6 +36,7 @@ type ReviewTab = 'findings' | 'bible';
     BookStoryBibleComponent,
     BookChapterSummariesComponent,
     FunnelStepperComponent,
+    BookAiTierComponent,
   ],
   template: `
     <div class="book-dashboard" dir="rtl">
@@ -64,6 +66,16 @@ type ReviewTab = 'findings' | 'bible';
         (assessRequested)="onStepperAssessRequested()"
         (reviseRequested)="onStepperReviseRequested()">
       </app-funnel-stepper>
+
+      <!-- p3-4: the book's model tier. It sits ABOVE the status rows because it governs which model the
+           analysis below actually runs on, and it is a privacy and money decision rather than a step in the
+           workflow. Book-scoped chrome, so its own [dir] follows bookLanguage like the stepper's. -->
+      <section class="card book-ai-tier-card">
+        <app-book-ai-tier
+          [bookId]="bookId"
+          [bookLanguage]="bookLanguage">
+        </app-book-ai-tier>
+      </section>
 
       <!-- Book-scoped status rows (wb3-c01): summary/briefs + developmental review build + status.
            A finished summary build clears the review's "build briefs first" gate, so its terminal

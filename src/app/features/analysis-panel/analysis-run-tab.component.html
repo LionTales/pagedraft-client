@@ -71,6 +71,12 @@
       <p class="sb-consent-title">{{ baselineLabel('consentTitle') }}</p>
       <p class="sb-consent-body">{{ baselineLabel('consentBody') }}</p>
       <p class="sb-consent-estimate" data-testid="sb-consent-estimate">{{ baselineConsentEstimate }}</p>
+      <!-- p3-4: a book on the thinking tier makes estimatedUsd non-null, so this prompt starts quoting a
+           real price. A number with no explanation is not consent, so the paid case says WHY there is a
+           cost and that the text leaves the machine. Rendered only when there is actually a figure. -->
+      <p class="sb-consent-paid-note" data-testid="sb-consent-paid-note" *ngIf="baselineConsentIsPaid">
+        {{ baselineLabel('consentPaidNote') }}
+      </p>
       <div class="sb-consent-actions">
         <button
           type="button"
