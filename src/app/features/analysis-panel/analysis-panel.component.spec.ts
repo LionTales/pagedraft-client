@@ -139,16 +139,23 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     };
   }
 
-  it('mapDtoSuggestions respects heuristic filter', () => {
+  it('mapDtoSuggestions passes large-span server suggestions through unfiltered', () => {
+    // Regression: this used to drop any suggestion where original > 60 chars and suggested <= 5,
+    // mirroring a server guard that no longer exists in that form. Removing an accidentally
+    // duplicated sentence produces exactly that shape - measured live as a 64-char original
+    // collapsing to a 5-char remainder - so a correct, server-verified correction was silently
+    // discarded. The server owns suggestion validity now (it verifies every split against resultText
+    // and only guards the spans that can actually be misaligned); the client must not second-guess it.
+    const duplicated = 'לשאול. נעמי הביטה החוצה, אל הרחוב הרטוב, וחשבה על כל מה שלא נאמר';
     const result = makeResultWithSuggestions({
       suggestions: [
         {
           id: 's-1',
           analysisResultId: 'r-1',
-          originalText: 'a'.repeat(80),
-          suggestedText: 'x',
+          originalText: duplicated,
+          suggestedText: 'לשאול',
           startOffset: 0,
-          endOffset: 80,
+          endOffset: duplicated.length,
           reason: 'Proofread',
           category: null,
           explanation: null,
@@ -158,11 +165,11 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       ],
     });
 
-    const withoutFilter = (component as any).mapDtoSuggestions(result, false) as any[];
-    const withFilter = (component as any).mapDtoSuggestions(result, true) as any[];
+    expect(duplicated.length).toBeGreaterThan(60);
+    const mapped = (component as any).mapDtoSuggestions(result) as any[];
 
-    expect(withoutFilter.length).toBe(1);
-    expect(withFilter.length).toBe(0);
+    expect(mapped.length).toBe(1);
+    expect(mapped[0].suggested).toBe('לשאול');
   });
 
   it('applyProofreadOrLineEditResultToRunTab suppresses cards AND highlights for an unreliable proofread', () => {
