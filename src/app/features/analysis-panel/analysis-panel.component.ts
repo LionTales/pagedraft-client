@@ -274,11 +274,24 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    * build is started in this tab or the book switches, so a genuine future build can reattach normally.
    */
   private styleBaselineHandledTerminalJobId: string | null = null;
-  /** Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI.
-   *  Offset relocation is handled separately by SuggestionAnchorService in emitSuggestionRanges / onShowInDocument. */
+  /**
+   * Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI.
+   * Offset relocation is handled separately by SuggestionAnchorService in emitSuggestionRanges / onShowInDocument.
+   *
+   * There is deliberately NO length heuristic here. This used to drop any suggestion where
+   * `originalText.length > 60 && suggestedText.length <= 5`, mirroring a server-side guard against
+   * diff misalignment. That guard no longer exists in that form: SuggestionDiffService now applies it
+   * only to spans produced by SPLITTING a merged range - the case where the mapping can actually be
+   * misaligned - and verifies each of those splits against resultText before emitting it. Whole ranges
+   * are exempt because their mapping is provably exact, so a big-original/tiny-suggestion shape there
+   * is a real large deletion, not a misalignment. The server is the single source of truth for
+   * suggestion validity. The client copy had become a silent data-loss bug - removing an
+   * accidentally duplicated sentence produces exactly that shape (measured live: a 64-char original
+   * collapsing to a 5-char remainder), so a correct, verified correction was discarded before it
+   * ever reached the panel. If a malformed suggestion ever appears, fix it at the source.
+   */
   private mapDtoSuggestions(
-    result: AnalysisResultDto | null | undefined,
-    applyHeuristicFilter: boolean = true
+    result: AnalysisResultDto | null | undefined
   ): AnalysisSuggestion[] {
     const list: AnalysisSuggestionDto[] = (result?.suggestions ?? [])
       .slice()
@@ -297,16 +310,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       contextAfter: dto.contextAfter ?? undefined
     }));
 
-    if (!applyHeuristicFilter) {
-      return mapped;
-    }
-
-    return mapped.filter(s => {
-      const origLen = (s.original ?? '').length;
-      const sugLen = (s.suggested ?? '').length;
-      if (origLen > 60 && sugLen <= 5) return false;
-      return true;
-    });
+    return mapped;
   }
 
   ngOnInit(): void {
@@ -1376,8 +1380,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private restoreConsistencyStateFromResult(result: AnalysisResultDto): void {
     if ((result.analysisType || result.type) !== 'LinguisticAnalysis') return;
 
-    // No heuristic length filter: a consistency span can be long but is still a real signal.
-    const mapped = this.mapDtoSuggestions(result, false).filter(s => isConsistencySuggestion(s));
+    // mapDtoSuggestions never filters by length, so a long consistency span still comes through as a real signal.
+    const mapped = this.mapDtoSuggestions(result).filter(s => isConsistencySuggestion(s));
 
     this.consistencyRunSuggestions = mapped.filter(s => {
       const outcome = (s.outcome || '').toLowerCase();
@@ -1943,10 +1947,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         return;
       }
       let all: AnalysisSuggestion[] = [];
-      let mapped = this.mapDtoSuggestions(result);
-      if (!mapped.length && (result.suggestions?.length ?? 0) > 0) {
-        mapped = this.mapDtoSuggestions(result, false);
-      }
+      const mapped = this.mapDtoSuggestions(result);
       if (mapped.length) {
         all = mapped;
       } else if (this.documentText && result.resultText) {
@@ -1974,8 +1975,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     for (const analysis of this.activeAnalyses) {
       const analysisType = analysis.analysisType || analysis.type;
       if (analysisType !== type) continue;
-      // For pending-count calculations, keep all suggestions (no heuristic length-based filtering).
-      const suggestions = this.mapDtoSuggestions(analysis, false);
+      // mapDtoSuggestions never filters, so every suggestion here is a candidate for the pending count.
+      const suggestions = this.mapDtoSuggestions(analysis);
       total += suggestions.filter(s => {
         const outcome = (s.outcome || '').toLowerCase();
         return !outcome || outcome === 'pending';
