@@ -1037,6 +1037,41 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   }
 
   /**
+   * c03: the user-facing message for a failed request, and the single place the three handlers derive it.
+   *
+   * The message is ALWAYS the localized label, in whichever language the book is in. It deliberately does
+   * NOT consult `err.message`.
+   * BookService wraps nothing in catchError and the app registers no HttpInterceptor (provideHttpClient() is
+   * called bare in app.config.ts), so every error that reaches these handlers is an HttpErrorResponse whose
+   * `message` Angular ALWAYS generates non-empty: "Http failure response for <url>: 500 Internal Server
+   * Error". The old `err.message || this.label(...)` therefore never reached its right operand, which made
+   * all three localized labels unreachable in BOTH maps and painted that raw English transport string into a
+   * Hebrew right-to-left card.
+   *
+   * It does NOT consult the response body either, and that is deliberate rather than an oversight. This API
+   * has no error body a user may be shown. Its deliberate error bodies are all shaped `{ error: "..." }`
+   * (BooksController 152/410/569/728/1134, AnalysisController 71/75/79/273/280, LanguageEngine 34/56/95/135)
+   * or a bare string (`BadRequest("Question is required.")`, BooksController:997); nothing anywhere writes a
+   * `message` field, so the `err.error?.message` term the ask handler used to carry never once matched. An
+   * unhandled 500 has no mapped body at all: the only exception middleware registered is
+   * `app.UseDeveloperExceptionPage()` (Program.cs), so outside Development the body is empty and inside it is
+   * an HTML stack-trace page that Angular hands over as a parse-failure wrapper. And every one of those
+   * server strings is English-only internal text (`ex.Message`, "Server is shutting down; cannot start new
+   * build.") written without reference to the request language, so painting one into this card would
+   * reintroduce, from the other side, the exact untranslated-string-in-a-Hebrew-card defect this method
+   * exists to remove. A server-sourced user-facing message becomes possible only once the API emits a
+   * localized one; until then the label is the whole contract.
+   *
+   * The raw error is not dropped: it is logged here with the caller's context, body included. That string was
+   * the only place the failed call's status and URL were visible to anyone, and it belongs on the developer
+   * surface rather than in the card.
+   */
+  private failureMessage(err: any, key: DashboardLabelKey, context: string): string {
+    console.error(`[book-dashboard] ${context} failed`, err);
+    return this.label(key);
+  }
+
+  /**
    * Localized label for a review tab. Follows bookLanguage, the same source that drives the dashboard's
    * own direction, so the review tabs and the dashboard chrome share one derivation and he/en parity is
    * preserved. DRAFT Hebrew - flag for native-speaker review before sign-off.
@@ -1088,7 +1123,7 @@ export class BookDashboardComponent implements OnInit, OnChanges {
           this.profile = null;
           this.error = null;
         } else {
-          this.error = err.message || this.label('profileLoadError');
+          this.error = this.failureMessage(err, 'profileLoadError', 'profile load');
         }
         this.loading = false;
       }
@@ -1141,7 +1176,7 @@ export class BookDashboardComponent implements OnInit, OnChanges {
       },
       error: (err) => {
         if (this.bookId !== bookId || this.language !== lang) return;
-        this.error = err.message || this.label('profileRefreshError');
+        this.error = this.failureMessage(err, 'profileRefreshError', 'profile refresh');
         this.refreshing = false;
       }
     });
@@ -1164,7 +1199,7 @@ export class BookDashboardComponent implements OnInit, OnChanges {
       },
       error: (err) => {
         if (this.bookId !== bookId || this.language !== lang) return;
-        this.askError = err.error?.message || err.message || this.label('askFailed');
+        this.askError = this.failureMessage(err, 'askFailed', 'ask');
         this.asking = false;
       }
     });
