@@ -8,11 +8,17 @@
  * children fail to construct with a NullInjectorError (the "new constructor dep breaks the TestBed" trap).
  */
 import { SimpleChange } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { NEVER, Observable, Subject, of } from 'rxjs';
 import { BookProfileDto } from '../../core/models/book';
-import { BookDashboardComponent } from './book-dashboard.component';
+import {
+  BookDashboardComponent,
+  DASHBOARD_LABELS_EN,
+  DASHBOARD_LABELS_HE,
+  DashboardLabelKey,
+} from './book-dashboard.component';
 import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
 import { BookService } from '../../core/services/book.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
@@ -880,5 +886,801 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
     (component as any).summaryRow = undefined;
     (component as any).reviewRow = undefined;
     expect(() => component.onTierChanged()).not.toThrow();
+  });
+});
+
+/**
+ * Book-scoped chrome i18n parity. The dashboard's own profile card was originally Hebrew-only: the root
+ * container was hardcoded dir="rtl" and roughly 30 strings were inline literals, so an English book rendered
+ * a half-Hebrew, right-to-left page while every CHILD component on the same page correctly followed
+ * [bookLanguage]. Found by loading an English book in a real browser; no spec covered it because the
+ * existing suite only ever set bookLanguage = 'he'. These lock the rule in both directions.
+ */
+describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', {
+            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+          }),
+        },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+  });
+
+  /**
+   * Derived from the real Hebrew map, so a key added to the maps is covered by the per-key suites below
+   * without anyone editing this file. The list is only as complete as DASHBOARD_LABELS_HE itself; the
+   * set-equality suite below is what ties the English map to it at runtime.
+   */
+  const ALL_KEYS = Object.keys(DASHBOARD_LABELS_HE) as DashboardLabelKey[];
+
+  const HEBREW = /[\u0590-\u05FF]/;
+
+  it('derives a non-empty key list (an empty derivation would pass every per-key loop vacuously)', () => {
+    expect(ALL_KEYS.length).withContext('Object.keys(DASHBOARD_LABELS_HE) must not be empty').toBeGreaterThan(0);
+  });
+
+  it('holds the same key set in both language maps, in both directions', () => {
+    const heKeys = Object.keys(DASHBOARD_LABELS_HE);
+    const enKeys = Object.keys(DASHBOARD_LABELS_EN);
+    const missingFromEn = heKeys.filter((k) => !enKeys.includes(k));
+    const missingFromHe = enKeys.filter((k) => !heKeys.includes(k));
+
+    expect(missingFromEn)
+      .withContext(`keys in the Hebrew map with no English counterpart: ${missingFromEn.join(', ')}`)
+      .toEqual([]);
+    expect(missingFromHe)
+      .withContext(`keys in the English map with no Hebrew counterpart: ${missingFromHe.join(', ')}`)
+      .toEqual([]);
+  });
+
+  it('resolves every label in both languages, with no key falling back to the other language', () => {
+    component.bookLanguage = 'he';
+    const he = ALL_KEYS.map((k) => component.label(k));
+    component.bookLanguage = 'en';
+    const en = ALL_KEYS.map((k) => component.label(k));
+
+    he.forEach((v, i) => {
+      expect(v).withContext(`he label for "${ALL_KEYS[i]}" must be non-empty`).toBeTruthy();
+      expect(HEBREW.test(v)).withContext(`he label for "${ALL_KEYS[i]}" must be Hebrew`).toBeTrue();
+    });
+    en.forEach((v, i) => {
+      expect(v).withContext(`en label for "${ALL_KEYS[i]}" must be non-empty`).toBeTruthy();
+      expect(HEBREW.test(v)).withContext(`en label for "${ALL_KEYS[i]}" must NOT contain Hebrew`).toBeFalse();
+    });
+  });
+
+  it('carries no em-dash or en-dash in any user-facing string (project text rule)', () => {
+    (['he', 'en'] as const).forEach((lang) => {
+      component.bookLanguage = lang;
+      ALL_KEYS.forEach((k) => {
+        const v = component.label(k);
+        expect(v.includes('\u2014')).withContext(`${lang}/${k} must not contain an em-dash`).toBeFalse();
+        expect(v.includes('\u2013')).withContext(`${lang}/${k} must not contain an en-dash`).toBeFalse();
+      });
+    });
+  });
+
+  it('follows the BOOK language for direction, not a hardcoded rtl (the shipped defect)', () => {
+    component.bookLanguage = 'en';
+    expect(component.bookDir).toBe('ltr');
+    component.bookLanguage = 'he';
+    expect(component.bookDir).toBe('rtl');
+    // An unset/unknown language stays Hebrew-default, matching the rest of the app.
+    component.bookLanguage = null;
+    expect(component.bookDir).toBe('rtl');
+  });
+
+  it('keeps reviewDir consistent with the dashboard direction', () => {
+    component.bookLanguage = 'en';
+    expect(component.reviewDir).toBe(component.bookDir);
+    component.bookLanguage = 'he';
+    expect(component.reviewDir).toBe(component.bookDir);
+  });
+
+  it('renders an English book with an ltr container and English chrome (no Hebrew in the DOM)', () => {
+    component.bookLanguage = 'en';
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement.querySelector('.book-dashboard') as HTMLElement;
+    expect(root.getAttribute('dir')).toBe('ltr');
+
+    const title = fixture.nativeElement.querySelector('.dashboard-title') as HTMLElement;
+    expect(title.textContent).toContain('Book dashboard');
+    expect(HEBREW.test(title.textContent ?? '')).withContext('English book must not render Hebrew chrome').toBeFalse();
+
+    const refresh = fixture.nativeElement.querySelector('.refresh-btn') as HTMLElement;
+    expect(refresh.getAttribute('title')).toBe('Refresh profile');
+  });
+
+  it('renders a Hebrew book with an rtl container and Hebrew chrome', () => {
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement.querySelector('.book-dashboard') as HTMLElement;
+    expect(root.getAttribute('dir')).toBe('rtl');
+
+    const title = fixture.nativeElement.querySelector('.dashboard-title') as HTMLElement;
+    expect(HEBREW.test(title.textContent ?? '')).toBeTrue();
+  });
+});
+
+/**
+ * c01: the dashboard's own SERVER calls must carry the book language, not just its chrome.
+ *
+ * The chrome was made book-scoped (the suite above) while onRefresh/onAsk still called the service with no
+ * language argument, so both fell through to the service default of 'he' and then the controller default of
+ * "he". That is not display-only: RefreshProfileAsync threads the language into the chapter summarize and
+ * profile build, which STAMP it onto ChunkSummary.Language and BookProfile.Language. An English book
+ * therefore spent a whole-book AI run producing Hebrew briefs AND mislabelled the language-keyed cache rows
+ * that the briefs and style-baseline paths read back.
+ *
+ * These drive the REAL onRefresh/onAsk (nothing on the component is stubbed) with BookService mocked, and
+ * assert on the argument that reaches the service. The service/controller defaults are left alone on
+ * purpose: they are a correct backstop, the caller was the defect.
+ */
+describe('BookDashboardComponent threads the book language into its server calls (c01)', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  let bookService: jasmine.SpyObj<BookService>;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', {
+            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+          }),
+        },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    bookService = TestBed.inject(BookService) as jasmine.SpyObj<BookService>;
+    component.bookId = 'book-1';
+  });
+
+  /** Drive the two real server-calling handlers once each, with a question set so onAsk does not bail. */
+  function driveBothCalls(): void {
+    component.onRefresh();
+    component.askQuestion = 'who is the protagonist?';
+    component.onAsk();
+  }
+
+  it('sends the English language on BOTH refreshProfile and ask for an English book', () => {
+    component.bookLanguage = 'en';
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'en');
+    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'en');
+  });
+
+  it('sends the Hebrew language on BOTH calls for a Hebrew book', () => {
+    component.bookLanguage = 'he';
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
+  });
+
+  it('falls back to Hebrew on BOTH calls when the book language is null', () => {
+    component.bookLanguage = null;
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
+  });
+
+  it('falls back to Hebrew on BOTH calls when the book language is blank or whitespace', () => {
+    component.bookLanguage = '   ';
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
+  });
+
+  it('passes a language argument explicitly rather than relying on the service default', () => {
+    component.bookLanguage = 'en';
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile.calls.mostRecent().args.length)
+      .withContext('refreshProfile must receive the language argument, not fall through to its default')
+      .toBe(2);
+    expect(bookService.ask.calls.mostRecent().args.length)
+      .withContext('ask must receive the language argument, not fall through to its default')
+      .toBe(3);
+  });
+});
+
+/**
+ * c02: the dashboard must watch bookLanguage, not just bookId, and must drop responses from the language it
+ * has left behind.
+ *
+ * The book language is mutable in-session (BookService.update writes it; the editor binds
+ * [bookLanguage]="book.language" off that same record), and ngOnChanges only keyed on bookId. So on a
+ * language switch the chrome flipped (pure getters) while the profile card kept content generated in the
+ * PREVIOUS language and no reload was issued. There was also no language in the in-flight guard, so a load
+ * started under one language was accepted after the switch.
+ *
+ * Every request here is driven through an rxjs Subject held OPEN across the assertions. of()/throwError()
+ * resolve synchronously, which closes the in-flight window before the context can change, and would pass
+ * against the unfixed code.
+ */
+describe('BookDashboardComponent watches bookLanguage and drops stale responses (c02)', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  let bookService: jasmine.SpyObj<BookService>;
+  /** One entry per getProfile / refreshProfile / ask call, in issue order, each answerable on demand. */
+  let profileLoads: Subject<BookProfileDto>[];
+  let refreshes: Subject<BookProfileDto>[];
+  let asks: Subject<any>[];
+
+  function queued<T>(log: Subject<T>[]): Observable<T> {
+    const subject = new Subject<T>();
+    log.push(subject);
+    return subject.asObservable();
+  }
+
+  function profileFor(genre: string): BookProfileDto {
+    return { genre, synopsis: null, charactersJson: null, storyStructureJson: null } as unknown as BookProfileDto;
+  }
+
+  /** Rebind [bookLanguage] the way the host does: set the input, then run ngOnChanges (non-firstChange). */
+  function switchLanguageTo(next: string): void {
+    const previous = component.bookLanguage;
+    component.bookLanguage = next;
+    component.ngOnChanges({ bookLanguage: new SimpleChange(previous, next, false) });
+  }
+
+  beforeEach(async () => {
+    profileLoads = [];
+    refreshes = [];
+    asks = [];
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', {
+            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+          }),
+        },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    bookService = TestBed.inject(BookService) as jasmine.SpyObj<BookService>;
+    bookService.getProfile.and.callFake(() => queued(profileLoads));
+    bookService.refreshProfile.and.callFake(() => queued(refreshes));
+    bookService.ask.and.callFake(() => queued(asks));
+
+    component.bookId = 'book-1';
+    component.bookLanguage = 'he';
+    // ngOnInit issues the first profile load under 'he'; it is left OPEN (the Subject never completes).
+    fixture.detectChanges();
+    expect(profileLoads.length).withContext('precondition: one profile load in flight under he').toBe(1);
+  });
+
+  it('treats a bookLanguage change like a book switch: resets own state and reloads the profile', () => {
+    // Own state the user built up under the Hebrew book.
+    component.reviewTab = 'bible';
+    component.askQuestion = 'who is the villain?';
+    component.lastAnswer = { resultText: 'old Hebrew answer' } as any;
+    component.citationChapterIds = ['Ch 1'];
+    component.synopsisExpanded = true;
+    component.expandedPlotNode = 'climax';
+
+    switchLanguageTo('en');
+
+    expect(component.reviewTab).withContext('a language switch must reset the dashboard-owned tab').toBe('findings');
+    expect(component.askQuestion).toBe('');
+    expect(component.lastAnswer).withContext('the answer was produced in the previous language').toBeNull();
+    expect(component.citationChapterIds).toEqual([]);
+    expect(component.synopsisExpanded).toBeFalse();
+    expect(component.expandedPlotNode).toBeNull();
+    expect(profileLoads.length)
+      .withContext('the profile is language-keyed server content, so a language switch must reload it')
+      .toBe(2);
+  });
+
+  it('does NOT reload on the FIRST bookLanguage binding (ngOnInit owns the one init load)', () => {
+    component.ngOnChanges({ bookLanguage: new SimpleChange(undefined, 'he', true) });
+    expect(profileLoads.length).toBe(1);
+  });
+
+  it('IGNORES a profile load response that resolves after the language switched (next handler)', () => {
+    const staleLoad = profileLoads[0]; // issued under 'he'
+
+    switchLanguageTo('en'); // resets, and issues the 'en' load which is still in flight
+    expect(profileLoads.length).toBe(2);
+
+    // The abandoned 'he' request finally answers.
+    staleLoad.next(profileFor('HebrewGenre'));
+
+    expect(component.profile)
+      .withContext('a profile generated in the PREVIOUS language must never populate the card')
+      .toBeNull();
+    expect(component.loading)
+      .withContext('the stale response cleared the CURRENT load latch: guard must run before the latch clear')
+      .toBeTrue();
+
+    // The guard is not over-broad: the load for the current language is still accepted.
+    profileLoads[1].next(profileFor('EnglishGenre'));
+    expect(component.profile?.genre).toBe('EnglishGenre');
+    expect(component.loading).toBeFalse();
+  });
+
+  it('IGNORES a profile load ERROR that arrives after the language switched (error handler)', () => {
+    const staleLoad = profileLoads[0];
+
+    switchLanguageTo('en');
+
+    staleLoad.error({ status: 500, message: 'he-side failure' });
+
+    expect(component.error)
+      .withContext('a failure from the abandoned language must not surface as the current error')
+      .toBeNull();
+    expect(component.loading)
+      .withContext('the stale error cleared the CURRENT load latch: guard must run before the latch clear')
+      .toBeTrue();
+  });
+
+  it('leaves no refreshing latch raised for a refresh abandoned by the switch (the reset settles it)', () => {
+    component.onRefresh();
+    expect(component.refreshing).withContext('precondition: a he refresh is in flight').toBeTrue();
+
+    switchLanguageTo('en');
+
+    expect(component.refreshing)
+      .withContext('the switch abandons the refresh, so the switch must settle its latch')
+      .toBeFalse();
+    // Proof the button is usable again: a new refresh can start under the new language.
+    component.onRefresh();
+    expect(refreshes.length).toBe(2);
+    expect(bookService.refreshProfile.calls.mostRecent().args).toEqual(['book-1', 'en']);
+  });
+
+  it('a stale refresh response must not settle the CURRENT refresh (next handler ordering)', () => {
+    component.onRefresh();
+    const staleRefresh = refreshes[0]; // issued under 'he'
+
+    switchLanguageTo('en');
+    component.onRefresh(); // a fresh refresh under 'en' is now the one in flight
+    expect(component.refreshing).withContext('precondition: an en refresh is in flight').toBeTrue();
+    expect(refreshes.length).toBe(2);
+
+    staleRefresh.next(profileFor('HebrewGenre'));
+
+    expect(component.profile)
+      .withContext('a profile refreshed in the PREVIOUS language must never populate the card')
+      .toBeNull();
+    expect(component.refreshing)
+      .withContext('the stale response cleared the CURRENT refresh latch: guard must run first')
+      .toBeTrue();
+  });
+
+  it('a stale refresh ERROR must not settle or fail the CURRENT refresh (error handler ordering)', () => {
+    component.onRefresh();
+    const staleRefresh = refreshes[0];
+
+    switchLanguageTo('en');
+    component.onRefresh();
+
+    staleRefresh.error({ message: 'he-side refresh failure' });
+
+    expect(component.error)
+      .withContext('a failure from the abandoned language must not surface as the current error')
+      .toBeNull();
+    expect(component.refreshing)
+      .withContext('the stale error cleared the CURRENT refresh latch: guard must run first')
+      .toBeTrue();
+  });
+
+  it('leaves no asking latch raised for an ask abandoned by the switch, and drops its answer', () => {
+    component.askQuestion = 'who is the villain?';
+    component.onAsk();
+    expect(component.asking).withContext('precondition: a he ask is in flight').toBeTrue();
+    const staleAsk = asks[0];
+
+    switchLanguageTo('en');
+
+    expect(component.asking)
+      .withContext('the switch abandons the ask, so the switch must settle its latch')
+      .toBeFalse();
+
+    staleAsk.next({ resultText: 'Hebrew answer', structuredResult: null } as any);
+
+    expect(component.lastAnswer)
+      .withContext('an answer produced in the PREVIOUS language must not be shown')
+      .toBeNull();
+    expect(component.asking).toBeFalse();
+  });
+
+  it('a stale ask response must not settle the CURRENT ask (next handler ordering)', () => {
+    component.askQuestion = 'who is the villain?';
+    component.onAsk();
+    const staleAsk = asks[0]; // issued under 'he'
+
+    switchLanguageTo('en');
+    component.askQuestion = 'who is the protagonist?';
+    component.onAsk(); // a fresh ask under 'en' is now the one in flight
+    expect(component.asking).withContext('precondition: an en ask is in flight').toBeTrue();
+    expect(asks.length).toBe(2);
+
+    staleAsk.next({ resultText: 'Hebrew answer', structuredResult: null } as any);
+
+    expect(component.lastAnswer)
+      .withContext('an answer produced in the PREVIOUS language must not be shown')
+      .toBeNull();
+    expect(component.asking)
+      .withContext('the stale answer cleared the CURRENT ask latch: guard must run first')
+      .toBeTrue();
+  });
+
+  it('a stale ask ERROR must not settle or fail the CURRENT ask (error handler ordering)', () => {
+    component.askQuestion = 'who is the villain?';
+    component.onAsk();
+    const staleAsk = asks[0];
+
+    switchLanguageTo('en');
+    component.askQuestion = 'who is the protagonist?';
+    component.onAsk();
+
+    staleAsk.error({ message: 'he-side ask failure' });
+
+    expect(component.askError)
+      .withContext('a failure from the abandoned language must not surface as the current ask error')
+      .toBeNull();
+    expect(component.asking)
+      .withContext('the stale error cleared the CURRENT ask latch: guard must run first')
+      .toBeTrue();
+  });
+
+  it('still drops a response abandoned by a bookId switch (the pre-existing axis stays guarded)', () => {
+    const staleLoad = profileLoads[0];
+
+    const previous = component.bookId;
+    component.bookId = 'book-2';
+    component.ngOnChanges({ bookId: new SimpleChange(previous, 'book-2', false) });
+
+    staleLoad.next(profileFor('BookOneGenre'));
+
+    expect(component.profile).withContext('book-1 content must not paint book-2').toBeNull();
+    expect(component.loading).toBeTrue();
+  });
+});
+
+/**
+ * c03: the three localized error labels must actually render.
+ *
+ * All three handlers used to read `err.message || this.label(...)`. BookService wraps nothing in catchError
+ * and the app registers no HttpInterceptor (app.config.ts calls provideHttpClient() bare), so every error
+ * reaching these handlers is an HttpErrorResponse whose `message` Angular ALWAYS generates non-empty. The
+ * left operand was therefore always truthy: the labels were unreachable in BOTH maps, and the user was shown
+ * a raw English transport string inside a Hebrew right-to-left card.
+ *
+ * These specs use a REAL HttpErrorResponse rather than a hand-rolled object, so the `message` under test is
+ * the one Angular actually produces; a precondition on every case asserts it is populated, which is what
+ * keeps the whole block from passing vacuously against a hypothetical empty-message error.
+ *
+ * Every request is answered through a Subject held open, and no bookId/language change happens between the
+ * request and the error, so the c02 stale guard at the top of each handler PASSES and the assertions really
+ * reach the message line.
+ *
+ * final-r02: the body cases assert the label wins over the SERVER STRING too, not just over the transport
+ * string. This API has no user-presentable error body: every deliberate one is `{ error: "..." }` or a bare
+ * string, none carries a `message` field, and all of them are English-only internal text written without
+ * reference to the request language. Letting one through would reintroduce the same defect from the other
+ * side, so the card shows the label whatever the body is and the body stays in the console.
+ */
+describe('BookDashboardComponent surfaces localized error messages, not transport text (c03)', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  let bookService: jasmine.SpyObj<BookService>;
+  let profileLoads: Subject<BookProfileDto>[];
+  let refreshes: Subject<BookProfileDto>[];
+  let asks: Subject<any>[];
+
+  const PROFILE_URL = 'http://localhost:5114/api/books/book-1/profile';
+
+  function queued<T>(log: Subject<T>[]): Observable<T> {
+    const subject = new Subject<T>();
+    log.push(subject);
+    return subject.asObservable();
+  }
+
+  /**
+   * The error Angular really delivers for a 500: `message` is generated by the HttpErrorResponse
+   * constructor as "Http failure response for <url>: 500 Internal Server Error".
+   */
+  function transportFailure(url: string, body: unknown = null): HttpErrorResponse {
+    const err = new HttpErrorResponse({ status: 500, statusText: 'Internal Server Error', url, error: body });
+    expect(err.message)
+      .withContext('precondition: Angular populates message, so the old left operand was always truthy')
+      .toContain('Http failure response');
+    return err;
+  }
+
+  /** Bring the component up in the given language with its init profile load in flight. */
+  function startIn(language: string): void {
+    component.bookId = 'book-1';
+    component.bookLanguage = language;
+    fixture.detectChanges();
+    expect(profileLoads.length).withContext('precondition: one profile load in flight').toBe(1);
+  }
+
+  beforeEach(async () => {
+    profileLoads = [];
+    refreshes = [];
+    asks = [];
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', {
+            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+          }),
+        },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    bookService = TestBed.inject(BookService) as jasmine.SpyObj<BookService>;
+    bookService.getProfile.and.callFake(() => queued(profileLoads));
+    bookService.refreshProfile.and.callFake(() => queued(refreshes));
+    bookService.ask.and.callFake(() => queued(asks));
+    // The handlers log the raw error for the developer surface; keep the Karma output readable and let the
+    // diagnostic-preserved spec below assert on it.
+    spyOn(console, 'error');
+  });
+
+  describe('loadProfile', () => {
+    it('shows the Hebrew label, never the transport string, on a 500', () => {
+      startIn('he');
+
+      profileLoads[0].error(transportFailure(PROFILE_URL));
+
+      expect(component.error).toBe('שגיאה בטעינת הפרופיל');
+      expect(component.error).not.toContain('Http failure');
+      expect(component.error).not.toContain('500');
+    });
+
+    it('shows the English label, never the transport string, on a 500', () => {
+      startIn('en');
+
+      profileLoads[0].error(transportFailure(PROFILE_URL));
+
+      expect(component.error).toBe('Could not load the profile');
+      expect(component.error).not.toContain('Http failure');
+    });
+
+    it('keeps the label even when the body carries the API error shape, which is English-only', () => {
+      startIn('he');
+
+      profileLoads[0].error(transportFailure(PROFILE_URL, { error: 'Server is shutting down; cannot start new build.' }));
+
+      expect(component.error)
+        .withContext('the API writes error bodies in English regardless of the request language')
+        .toBe('שגיאה בטעינת הפרופיל');
+    });
+
+    it('falls back to the label when the body is a non-JSON string', () => {
+      startIn('en');
+
+      profileLoads[0].error(transportFailure(PROFILE_URL, 'Internal Server Error'));
+
+      expect(component.error).toBe('Could not load the profile');
+    });
+
+    it('still renders the no-profile empty state on a 404 (the untouched branch)', () => {
+      startIn('he');
+
+      profileLoads[0].error(new HttpErrorResponse({ status: 404, statusText: 'Not Found', url: PROFILE_URL }));
+
+      expect(component.profile).withContext('404 means no profile yet, not a failure').toBeNull();
+      expect(component.error).withContext('the empty state must not render an error card').toBeNull();
+      expect(component.loading).toBeFalse();
+    });
+  });
+
+  describe('onRefresh', () => {
+    it('shows the Hebrew label, never the transport string, on a 500', () => {
+      startIn('he');
+      component.onRefresh();
+
+      refreshes[0].error(transportFailure(`${PROFILE_URL}/refresh`));
+
+      expect(component.error).toBe('שגיאה ברענון הפרופיל');
+      expect(component.error).not.toContain('Http failure');
+      expect(component.refreshing).toBeFalse();
+    });
+
+    it('shows the English label, never the transport string, on a 500', () => {
+      startIn('en');
+      component.onRefresh();
+
+      refreshes[0].error(transportFailure(`${PROFILE_URL}/refresh`));
+
+      expect(component.error).toBe('Could not refresh the profile');
+      expect(component.error).not.toContain('Http failure');
+    });
+
+    it('keeps the label even when the body carries the API error shape', () => {
+      startIn('he');
+      component.onRefresh();
+
+      refreshes[0].error(transportFailure(`${PROFILE_URL}/refresh`, { error: 'No chapters to summarize' }));
+
+      expect(component.error)
+        .withContext('an English server string must not land in a Hebrew card')
+        .toBe('שגיאה ברענון הפרופיל');
+    });
+  });
+
+  describe('onAsk', () => {
+    function ask(): void {
+      component.askQuestion = 'who is the protagonist?';
+      component.onAsk();
+    }
+
+    it('shows the Hebrew label, never the transport string, on a 500', () => {
+      startIn('he');
+      ask();
+
+      asks[0].error(transportFailure('http://localhost:5114/api/books/book-1/ask'));
+
+      expect(component.askError).toBe('שגיאה בשאלה');
+      expect(component.askError).not.toContain('Http failure');
+      expect(component.asking).toBeFalse();
+    });
+
+    it('shows the English label, never the transport string, on a 500', () => {
+      startIn('en');
+      ask();
+
+      asks[0].error(transportFailure('http://localhost:5114/api/books/book-1/ask'));
+
+      expect(component.askError).toBe('Could not answer the question');
+      expect(component.askError).not.toContain('Http failure');
+    });
+
+    it('keeps the label even when the body carries the API error shape', () => {
+      startIn('he');
+      ask();
+
+      asks[0].error(transportFailure('http://localhost:5114/api/books/book-1/ask', { error: 'Question is required.' }));
+
+      expect(component.askError)
+        .withContext('no error body this API writes is localized, so none of them may reach the card')
+        .toBe('שגיאה בשאלה');
+    });
+
+    it('shows the label rather than a body that happens to carry a message field', () => {
+      startIn('en');
+      ask();
+
+      // Nothing in the API writes this shape; the assertion pins that the card ignores it if anything ever does.
+      asks[0].error(transportFailure('http://localhost:5114/api/books/book-1/ask', { message: 'Ollama connection refused' }));
+
+      expect(component.askError).toBe('Could not answer the question');
+    });
+  });
+
+  it('keeps the diagnostic on the developer surface: the raw error is logged, not shown', () => {
+    startIn('he');
+    const raw = transportFailure(PROFILE_URL);
+
+    profileLoads[0].error(raw);
+
+    expect(console.error)
+      .withContext('the transport string is the only place the failed call status and URL are visible')
+      .toHaveBeenCalledWith(jasmine.any(String), raw);
+    expect(component.error).not.toContain(PROFILE_URL);
   });
 });

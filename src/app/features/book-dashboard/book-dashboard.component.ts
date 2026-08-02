@@ -24,6 +24,108 @@ import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.compon
 /** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
 type ReviewTab = 'findings' | 'bible';
 
+/**
+ * Dashboard chrome strings, keyed for label(). This card region was originally Hebrew-only (the container
+ * was hardcoded dir="rtl" and every string was a literal), which broke the book-scoped chrome rule: chrome
+ * inside a book follows the BOOK language, so an English book must render English chrome. The child
+ * components on this page (funnel stepper, status rows, chapter summaries, Story Bible) always honored that
+ * via [bookLanguage]; only this component's own profile card did not, so an English book rendered a
+ * half-Hebrew page. Hoisted to module scope rather than rebuilt per call because the template resolves
+ * roughly 30 labels on every change-detection tick.
+ *
+ * DRAFT Hebrew is inherited verbatim from the previous literals, so this carries no new translation risk.
+ *
+ * The type and both maps are exported so the spec can derive its key list from the real Hebrew map instead
+ * of restating it, and can assert at runtime that the two maps hold the same key set.
+ */
+export type DashboardLabelKey =
+  | 'title' | 'refresh' | 'loading' | 'emptyHint'
+  | 'overview' | 'genre' | 'subGenre' | 'targetAudience' | 'literatureLevel' | 'languageRegister'
+  | 'synopsis' | 'less' | 'more' | 'noSynopsis'
+  | 'characters' | 'relationships' | 'charactersUnparseable' | 'noCharacters'
+  | 'plotStructure' | 'setup' | 'risingAction' | 'climax' | 'fallingAction' | 'resolution'
+  | 'pacing' | 'conflicts' | 'storyUnparseable' | 'noStory'
+  | 'ask' | 'askPlaceholder' | 'asking' | 'citations'
+  | 'profileLoadError' | 'profileRefreshError' | 'askFailed' | 'chapter';
+
+export const DASHBOARD_LABELS_HE: Record<DashboardLabelKey, string> = {
+  title: 'לוח ספר',
+  refresh: 'רענן פרופיל',
+  loading: 'טוען…',
+  emptyHint: 'לחץ על ⟳ כדי לנתח את הספר (סיכום פרקים ובניית פרופיל).',
+  overview: 'סקירה',
+  genre: 'ז\'אנר',
+  subGenre: 'תת-ז\'אנר',
+  targetAudience: 'קהל יעד',
+  literatureLevel: 'רמת ספרות',
+  languageRegister: 'רישום שפה',
+  synopsis: 'תקציר',
+  less: 'פחות',
+  more: 'עוד',
+  noSynopsis: 'אין תקציר.',
+  characters: 'דמויות',
+  relationships: 'יחסים:',
+  charactersUnparseable: 'לא ניתן לפרש נתוני דמויות.',
+  noCharacters: 'אין נתוני דמויות.',
+  plotStructure: 'מבנה עלילה',
+  setup: 'הכנה',
+  risingAction: 'עליה',
+  climax: 'שיא',
+  fallingAction: 'נפילה',
+  resolution: 'התרה',
+  pacing: 'קצב:',
+  conflicts: 'קונפליקטים:',
+  storyUnparseable: 'לא ניתן לפרש מבנה עלילה.',
+  noStory: 'אין נתוני מבנה עלילה.',
+  ask: 'שאל על הספר',
+  askPlaceholder: 'שאל שאלה על הספר…',
+  asking: 'מחפש תשובה…',
+  citations: 'ציטוט מפרקים:',
+  profileLoadError: 'שגיאה בטעינת הפרופיל',
+  profileRefreshError: 'שגיאה ברענון הפרופיל',
+  askFailed: 'שגיאה בשאלה',
+  chapter: 'פרק',
+};
+
+export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
+  title: 'Book dashboard',
+  refresh: 'Refresh profile',
+  loading: 'Loading…',
+  emptyHint: 'Click ⟳ to analyze the book (chapter summaries and profile build).',
+  overview: 'Overview',
+  genre: 'Genre',
+  subGenre: 'Sub-genre',
+  targetAudience: 'Target audience',
+  literatureLevel: 'Literature level',
+  languageRegister: 'Language register',
+  synopsis: 'Synopsis',
+  less: 'Less',
+  more: 'More',
+  noSynopsis: 'No synopsis.',
+  characters: 'Characters',
+  relationships: 'Relationships:',
+  charactersUnparseable: 'Character data could not be read.',
+  noCharacters: 'No character data.',
+  plotStructure: 'Plot structure',
+  setup: 'Setup',
+  risingAction: 'Rising action',
+  climax: 'Climax',
+  fallingAction: 'Falling action',
+  resolution: 'Resolution',
+  pacing: 'Pacing:',
+  conflicts: 'Conflicts:',
+  storyUnparseable: 'Plot structure could not be read.',
+  noStory: 'No plot structure data.',
+  ask: 'Ask about the book',
+  askPlaceholder: 'Ask a question about the book…',
+  asking: 'Looking for an answer…',
+  citations: 'Cited from chapters:',
+  profileLoadError: 'Could not load the profile',
+  profileRefreshError: 'Could not refresh the profile',
+  askFailed: 'Could not answer the question',
+  chapter: 'Chapter',
+};
+
 @Component({
   selector: 'app-book-dashboard',
   standalone: true,
@@ -39,15 +141,15 @@ type ReviewTab = 'findings' | 'bible';
     TierToggleComponent,
   ],
   template: `
-    <div class="book-dashboard" dir="rtl">
+    <div class="book-dashboard" [attr.dir]="bookDir">
       <header class="dashboard-header">
-        <h3 class="dashboard-title">לוח ספר: {{ bookTitle }}</h3>
+        <h3 class="dashboard-title">{{ label('title') }}: {{ bookTitle }}</h3>
         <button
           type="button"
           class="refresh-btn"
           [disabled]="refreshing"
           (click)="onRefresh()"
-          title="רענן פרופיל">
+          [title]="label('refresh')">
           {{ refreshing ? '…' : '⟳' }}
         </button>
       </header>
@@ -148,49 +250,49 @@ type ReviewTab = 'findings' | 'bible';
       </section>
 
       @if (loading && !profile) {
-        <p class="empty-hint">טוען…</p>
+        <p class="empty-hint">{{ label('loading') }}</p>
       } @else if (error) {
         <p class="error-hint">{{ error }}</p>
       } @else if (!profile) {
-        <p class="empty-hint">לחץ על ⟳ כדי לנתח את הספר (סיכום פרקים ובניית פרופיל).</p>
+        <p class="empty-hint">{{ label('emptyHint') }}</p>
       } @else {
         <section class="card overview-card">
-          <h4>סקירה</h4>
+          <h4>{{ label('overview') }}</h4>
           <div class="overview-grid">
-            <div class="overview-item"><span class="label">ז'אנר</span><span class="value">{{ profile.genre ?? '-' }}</span></div>
-            <div class="overview-item"><span class="label">תת-ז'אנר</span><span class="value">{{ profile.subGenre ?? '-' }}</span></div>
-            <div class="overview-item"><span class="label">קהל יעד</span><span class="value">{{ profile.targetAudience ?? '-' }}</span></div>
-            <div class="overview-item"><span class="label">רמת ספרות</span>
+            <div class="overview-item"><span class="label">{{ label('genre') }}</span><span class="value">{{ profile.genre ?? '-' }}</span></div>
+            <div class="overview-item"><span class="label">{{ label('subGenre') }}</span><span class="value">{{ profile.subGenre ?? '-' }}</span></div>
+            <div class="overview-item"><span class="label">{{ label('targetAudience') }}</span><span class="value">{{ profile.targetAudience ?? '-' }}</span></div>
+            <div class="overview-item"><span class="label">{{ label('literatureLevel') }}</span>
               <span class="value level-bar">
                 <span class="level-fill" [style.width.%]="(profile.literatureLevel ?? 0) * 10"></span>
                 {{ profile.literatureLevel ?? 0 }}/10
               </span>
             </div>
-            <div class="overview-item"><span class="label">רישום שפה</span><span class="value">{{ profile.languageRegister ?? '-' }}</span></div>
+            <div class="overview-item"><span class="label">{{ label('languageRegister') }}</span><span class="value">{{ profile.languageRegister ?? '-' }}</span></div>
           </div>
         </section>
 
         <section class="card synopsis-card">
-          <h4>תקציר</h4>
+          <h4>{{ label('synopsis') }}</h4>
           @if (profile.synopsis) {
             <div class="synopsis-text">
               @if (synopsisExpanded) {
                 <span class="synopsis-full">{{ profile.synopsis }}</span>
-                <button type="button" class="link-btn" (click)="synopsisExpanded = false">▲ פחות</button>
+                <button type="button" class="link-btn" (click)="synopsisExpanded = false">▲ {{ label('less') }}</button>
               } @else {
                 <span class="synopsis-preview">{{ synopsisPreview }}</span>
                 @if (profile.synopsis.length > 200) {
-                  <button type="button" class="link-btn" (click)="synopsisExpanded = true">▼ עוד</button>
+                  <button type="button" class="link-btn" (click)="synopsisExpanded = true">▼ {{ label('more') }}</button>
                 }
               }
             </div>
           } @else {
-            <p class="muted">אין תקציר.</p>
+            <p class="muted">{{ label('noSynopsis') }}</p>
           }
         </section>
 
         <section class="card characters-card">
-          <h4>דמויות</h4>
+          <h4>{{ label('characters') }}</h4>
           @if (charactersParsed) {
             <div class="characters-scroll">
               @for (c of charactersParsed.characters; track c.name) {
@@ -203,50 +305,50 @@ type ReviewTab = 'findings' | 'bible';
             </div>
             @if (charactersParsed.relationships && charactersParsed.relationships.length) {
               <div class="relationships">
-                <span class="label">יחסים:</span>
+                <span class="label">{{ label('relationships') }}</span>
                 @for (r of charactersParsed.relationships; track r.character1 + r.character2 + r.relationship) {
                   <div class="rel-line">{{ r.character1 }} ←{{ r.relationship }}→ {{ r.character2 }}</div>
                 }
               </div>
             }
           } @else if (profile.charactersJson) {
-            <p class="muted">לא ניתן לפרש נתוני דמויות.</p>
+            <p class="muted">{{ label('charactersUnparseable') }}</p>
           } @else {
-            <p class="muted">אין נתוני דמויות.</p>
+            <p class="muted">{{ label('noCharacters') }}</p>
           }
         </section>
 
         <section class="card story-card">
-          <h4>מבנה עלילה</h4>
+          <h4>{{ label('plotStructure') }}</h4>
           @if (storyParsed) {
             <div class="plot-timeline">
               @if (storyParsed.plotStructure) {
                 <div class="plot-node" [class.expanded]="expandedPlotNode === 'setup'">
-                  <button type="button" class="plot-label" (click)="togglePlotNode('setup')">הכנה</button>
+                  <button type="button" class="plot-label" (click)="togglePlotNode('setup')">{{ label('setup') }}</button>
                   @if (expandedPlotNode === 'setup' && storyParsed.plotStructure.setup) {
                     <p class="plot-detail">{{ storyParsed.plotStructure.setup }}</p>
                   }
                 </div>
                 <div class="plot-node" [class.expanded]="expandedPlotNode === 'risingAction'">
-                  <button type="button" class="plot-label" (click)="togglePlotNode('risingAction')">עליה</button>
+                  <button type="button" class="plot-label" (click)="togglePlotNode('risingAction')">{{ label('risingAction') }}</button>
                   @if (expandedPlotNode === 'risingAction' && storyParsed.plotStructure.risingAction) {
                     <p class="plot-detail">{{ storyParsed.plotStructure.risingAction }}</p>
                   }
                 </div>
                 <div class="plot-node" [class.expanded]="expandedPlotNode === 'climax'">
-                  <button type="button" class="plot-label" (click)="togglePlotNode('climax')">שיא</button>
+                  <button type="button" class="plot-label" (click)="togglePlotNode('climax')">{{ label('climax') }}</button>
                   @if (expandedPlotNode === 'climax' && storyParsed.plotStructure.climax) {
                     <p class="plot-detail">{{ storyParsed.plotStructure.climax }}</p>
                   }
                 </div>
                 <div class="plot-node" [class.expanded]="expandedPlotNode === 'fallingAction'">
-                  <button type="button" class="plot-label" (click)="togglePlotNode('fallingAction')">נפילה</button>
+                  <button type="button" class="plot-label" (click)="togglePlotNode('fallingAction')">{{ label('fallingAction') }}</button>
                   @if (expandedPlotNode === 'fallingAction' && storyParsed.plotStructure.fallingAction) {
                     <p class="plot-detail">{{ storyParsed.plotStructure.fallingAction }}</p>
                   }
                 </div>
                 <div class="plot-node" [class.expanded]="expandedPlotNode === 'resolution'">
-                  <button type="button" class="plot-label" (click)="togglePlotNode('resolution')">התרה</button>
+                  <button type="button" class="plot-label" (click)="togglePlotNode('resolution')">{{ label('resolution') }}</button>
                   @if (expandedPlotNode === 'resolution' && storyParsed.plotStructure.resolution) {
                     <p class="plot-detail">{{ storyParsed.plotStructure.resolution }}</p>
                   }
@@ -254,11 +356,11 @@ type ReviewTab = 'findings' | 'bible';
               }
             </div>
             @if (storyParsed.pacing) {
-              <p class="pacing"><span class="label">קצב:</span> {{ storyParsed.pacing }}</p>
+              <p class="pacing"><span class="label">{{ label('pacing') }}</span> {{ storyParsed.pacing }}</p>
             }
             @if (storyParsed.conflicts && storyParsed.conflicts.length) {
               <div class="conflicts">
-                <span class="label">קונפליקטים:</span>
+                <span class="label">{{ label('conflicts') }}</span>
                 <ul>
                   <!-- track by $index intentionally: a content track using ?? (e.g. c.type + (c.description ?? ''))
                        hits an Angular control-flow compiler bug that emits an undeclared temp (tmp_N_0) in the
@@ -271,32 +373,32 @@ type ReviewTab = 'findings' | 'bible';
               </div>
             }
           } @else if (profile.storyStructureJson) {
-            <p class="muted">לא ניתן לפרש מבנה עלילה.</p>
+            <p class="muted">{{ label('storyUnparseable') }}</p>
           } @else {
-            <p class="muted">אין נתוני מבנה עלילה.</p>
+            <p class="muted">{{ label('noStory') }}</p>
           }
         </section>
 
         <section class="card ask-card">
-          <h4>שאל על הספר</h4>
+          <h4>{{ label('ask') }}</h4>
           <div class="ask-input-row">
             <input
               type="text"
               class="ask-input"
-              placeholder="שאל שאלה על הספר..."
+              [placeholder]="label('askPlaceholder')"
               [(ngModel)]="askQuestion"
               (keydown.enter)="onAsk()">
             <button type="button" class="ask-btn" [disabled]="asking || !(askQuestion && askQuestion.trim())" (click)="onAsk()">▶</button>
           </div>
           @if (asking) {
-            <p class="muted">מחפש תשובה…</p>
+            <p class="muted">{{ label('asking') }}</p>
           } @else if (askError) {
             <p class="error-hint">{{ askError }}</p>
           } @else if (lastAnswer) {
             <div class="answer-block">
               <div class="answer-text">{{ lastAnswer.resultText }}</div>
               @if (citationChapterIds.length) {
-                <div class="citations">📖 ציטוט מפרקים: {{ citationChapterIds.join(', ') }}</div>
+                <div class="citations">📖 {{ label('citations') }} {{ citationChapterIds.join(', ') }}</div>
               }
             </div>
           }
@@ -655,10 +757,24 @@ export class BookDashboardComponent implements OnInit, OnChanges {
    * otherwise carry over from the previous book. On a real bookId change (not the first binding, which
    * ngOnInit already loads), reset that own state and reload the profile so nothing leaks across books.
    * Skipped on firstChange so the initial load runs once via ngOnInit, not twice.
+   *
+   * c02: a bookLanguage change is the SAME kind of context switch and is handled identically, matching the
+   * sibling chapter-summaries component (which already keys on bookId || bookLanguage). The book language is
+   * mutable in-session: BookService.update() writes it and the editor binds [bookLanguage]="book.language"
+   * off that same record, so this input really does change under a live dashboard. Everything this component
+   * renders from the language is either a pure getter (labels, direction, which re-render on their own) or
+   * SERVER content that was generated in the previous language: the profile card is built by a language-keyed
+   * refresh, and the Ask answer was answered in the old language. Without this branch the chrome flipped to
+   * the new language while the profile card kept the old language's content and no reload was ever issued.
    */
   ngOnChanges(changes: SimpleChanges): void {
     const bookIdChange = changes['bookId'];
-    if (bookIdChange && !bookIdChange.firstChange) {
+    const languageChange = changes['bookLanguage'];
+    const contextChanged =
+      (!!bookIdChange && !bookIdChange.firstChange) ||
+      (!!languageChange && !languageChange.firstChange);
+    // One reset + one reload even when both inputs change in the same tick (the editor can rebind both).
+    if (contextChanged) {
       this.resetOwnState();
       this.loadProfile();
     }
@@ -677,6 +793,14 @@ export class BookDashboardComponent implements OnInit, OnChanges {
    * the dashboard's OWN showFindings gate on the previous book's state. Reset both to a not-running baseline;
    * the rows re-emit the new book's true state when their requests return. (rf-c02: the host "review running"
    * affordance no longer flows through here - it is registry-derived and re-scoped per book by the editor.)
+   *
+   * c02: THIS is where the three request latches (loading / refreshing / asking) are settled for a context
+   * switch, and it is the only place that may settle them on behalf of a request that is being abandoned. A
+   * request in flight when the switch happens belongs to the OLD context, so its handlers bail without
+   * touching any latch (see the guards below); if this reset did not clear them, an abandoned refresh or ask
+   * would leave its button permanently disabled. loading is cleared here for the same reason and is then
+   * re-raised immediately by the loadProfile() that every switch issues, so the card never flickers; clearing
+   * it also leaves a correct idle state in the one path where no reload follows (no bookId).
    */
   private resetOwnState(): void {
     this.reviewTab = 'findings';
@@ -689,6 +813,8 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     this.expandedPlotNode = null;
     this.reviewState = 'unknown';
     this.summaryBuilding = false;
+    this.loading = false;
+    this.refreshing = false;
   }
 
   /**
@@ -869,22 +995,91 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   }
 
   /**
-   * Direction for the review-tab bar and review surfaces: follows bookLanguage so an English book renders
-   * ltr tabs while the Hebrew-only dashboard chrome stays rtl. Drives [attr.dir] on review-tabs.
+   * The effective book language for BOTH the server calls and the chrome, matching the contract the sibling
+   * chapter-summaries component already uses: the bound bookLanguage when it carries a value, otherwise the
+   * app-wide Hebrew default. This is not display-only: refreshProfile/ask stamp it onto the language-keyed
+   * ChunkSummary and BookProfile rows, so an unthreaded call makes an English book build Hebrew briefs and
+   * mislabels the cache the briefs and style-baseline paths later read.
    */
-  get reviewDir(): 'rtl' | 'ltr' {
-    return (this.bookLanguage ?? '').toLowerCase().startsWith('en') ? 'ltr' : 'rtl';
+  private get language(): string {
+    return (this.bookLanguage?.trim()) || 'he';
+  }
+
+  /** True when the book language is English. Single source for every language branch on this component. */
+  private get isEn(): boolean {
+    return this.language.toLowerCase().startsWith('en');
   }
 
   /**
-   * Localized label for a review tab. Follows bookLanguage (not the RTL dashboard chrome) so he/en parity
-   * is preserved. DRAFT Hebrew - flag for native-speaker review before sign-off.
+   * Direction for the whole dashboard, driving [attr.dir] on the root container. Follows bookLanguage
+   * because this is book-scoped chrome: an English book renders an ltr dashboard, a Hebrew book rtl.
+   * Previously the root was hardcoded dir="rtl" and reviewDir carved out the review tabs as the lone
+   * exception, which left an English book with an rtl page full of Hebrew literals.
+   */
+  get bookDir(): 'rtl' | 'ltr' {
+    return this.isEn ? 'ltr' : 'rtl';
+  }
+
+  /**
+   * Direction for the review-tab bar and review surfaces. Same derivation as bookDir; kept as its own
+   * member because the review-tabs template binds it by name and specs assert on it.
+   */
+  get reviewDir(): 'rtl' | 'ltr' {
+    return this.bookDir;
+  }
+
+  /**
+   * Localized dashboard chrome string. Follows bookLanguage (book-scoped chrome), matching the
+   * he/en Record idiom the sibling status rows use. DRAFT Hebrew - flag for native-speaker review.
+   */
+  label(key: DashboardLabelKey): string {
+    return (this.isEn ? DASHBOARD_LABELS_EN : DASHBOARD_LABELS_HE)[key];
+  }
+
+  /**
+   * c03: the user-facing message for a failed request, and the single place the three handlers derive it.
+   *
+   * The message is ALWAYS the localized label, in whichever language the book is in. It deliberately does
+   * NOT consult `err.message`.
+   * BookService wraps nothing in catchError and the app registers no HttpInterceptor (provideHttpClient() is
+   * called bare in app.config.ts), so every error that reaches these handlers is an HttpErrorResponse whose
+   * `message` Angular ALWAYS generates non-empty: "Http failure response for <url>: 500 Internal Server
+   * Error". The old `err.message || this.label(...)` therefore never reached its right operand, which made
+   * all three localized labels unreachable in BOTH maps and painted that raw English transport string into a
+   * Hebrew right-to-left card.
+   *
+   * It does NOT consult the response body either, and that is deliberate rather than an oversight. This API
+   * has no error body a user may be shown. Its deliberate error bodies are all shaped `{ error: "..." }`
+   * (BooksController 152/410/569/728/1134, AnalysisController 71/75/79/273/280, LanguageEngine 34/56/95/135)
+   * or a bare string (`BadRequest("Question is required.")`, BooksController:997); nothing anywhere writes a
+   * `message` field, so the `err.error?.message` term the ask handler used to carry never once matched. An
+   * unhandled 500 has no mapped body at all: the only exception middleware registered is
+   * `app.UseDeveloperExceptionPage()` (Program.cs), so outside Development the body is empty and inside it is
+   * an HTML stack-trace page that Angular hands over as a parse-failure wrapper. And every one of those
+   * server strings is English-only internal text (`ex.Message`, "Server is shutting down; cannot start new
+   * build.") written without reference to the request language, so painting one into this card would
+   * reintroduce, from the other side, the exact untranslated-string-in-a-Hebrew-card defect this method
+   * exists to remove. A server-sourced user-facing message becomes possible only once the API emits a
+   * localized one; until then the label is the whole contract.
+   *
+   * The raw error is not dropped: it is logged here with the caller's context, body included. That string was
+   * the only place the failed call's status and URL were visible to anyone, and it belongs on the developer
+   * surface rather than in the card.
+   */
+  private failureMessage(err: any, key: DashboardLabelKey, context: string): string {
+    console.error(`[book-dashboard] ${context} failed`, err);
+    return this.label(key);
+  }
+
+  /**
+   * Localized label for a review tab. Follows bookLanguage, the same source that drives the dashboard's
+   * own direction, so the review tabs and the dashboard chrome share one derivation and he/en parity is
+   * preserved. DRAFT Hebrew - flag for native-speaker review before sign-off.
    */
   reviewTabLabel(tab: ReviewTab): string {
-    const isEn = (this.bookLanguage ?? '').toLowerCase().startsWith('en');
     const he: Record<ReviewTab, string> = { findings: 'ממצאים', bible: 'ספר הסיפור' };
     const en: Record<ReviewTab, string> = { findings: 'Findings', bible: 'Story Bible' };
-    return (isEn ? en : he)[tab];
+    return (this.isEn ? en : he)[tab];
   }
 
   get synopsisPreview(): string {
@@ -894,22 +1089,41 @@ export class BookDashboardComponent implements OnInit, OnChanges {
       : this.profile.synopsis.slice(0, 200) + '…';
   }
 
+  /**
+   * c02 stale-response contract, shared by this method, onRefresh and onAsk.
+   *
+   * Each capture the (bookId, language) they were issued under and re-check BOTH in the next AND the error
+   * handler, the same guard the sibling chapter-summaries component applies to every one of its requests.
+   * The language belongs in the key because the profile is language-keyed server content: a load issued for
+   * a Hebrew book must not paint a dashboard that has since switched to English.
+   *
+   * ORDERING INVARIANT, in the direction that actually holds: the guard runs before EVERY write in the
+   * handler, latch clears included, so a response from a superseded context writes nothing at all. It does
+   * not need to write anything: the latch it would have cleared was already settled for it by the
+   * resetOwnState() that ran on the switch. The reverse order (clear the latch, then bail) is the live bug,
+   * because by the time a stale response lands the latch it clears is no longer its own: it belongs to the
+   * request the NEW context started, which would then be left with its spinner off while still in flight.
+   */
   private loadProfile(): void {
     if (!this.bookId) return;
+    const bookId = this.bookId;
+    const lang = this.language;
     this.loading = true;
     this.error = null;
-    this.bookService.getProfile(this.bookId).subscribe({
+    this.bookService.getProfile(bookId).subscribe({
       next: (p) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         this.profile = p;
         this.parseStructured();
         this.loading = false;
       },
       error: (err) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         if (err.status === 404) {
           this.profile = null;
           this.error = null;
         } else {
-          this.error = err.message || 'שגיאה בטעינת הפרופיל';
+          this.error = this.failureMessage(err, 'profileLoadError', 'profile load');
         }
         this.loading = false;
       }
@@ -946,36 +1160,46 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     this.expandedPlotNode = this.expandedPlotNode === node ? null : node;
   }
 
+  /** Rebuild the profile in the CURRENT language. Guarded per the stale-response contract on loadProfile. */
   onRefresh(): void {
     if (!this.bookId || this.refreshing) return;
+    const bookId = this.bookId;
+    const lang = this.language;
     this.refreshing = true;
     this.error = null;
-    this.bookService.refreshProfile(this.bookId).subscribe({
+    this.bookService.refreshProfile(bookId, lang).subscribe({
       next: (p) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         this.profile = p;
         this.parseStructured();
         this.refreshing = false;
       },
       error: (err) => {
-        this.error = err.message || 'שגיאה ברענון הפרופיל';
+        if (this.bookId !== bookId || this.language !== lang) return;
+        this.error = this.failureMessage(err, 'profileRefreshError', 'profile refresh');
         this.refreshing = false;
       }
     });
   }
 
+  /** Ask the book a question in the CURRENT language. Guarded per the stale-response contract on loadProfile. */
   onAsk(): void {
     const q = this.askQuestion.trim();
     if (!this.bookId || !q || this.asking) return;
+    const bookId = this.bookId;
+    const lang = this.language;
     this.asking = true;
     this.askError = null;
-    this.bookService.ask(this.bookId, q).subscribe({
+    this.bookService.ask(bookId, q, lang).subscribe({
       next: (result) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         this.lastAnswer = result;
         this.citationChapterIds = this.tryParseCitations(result.structuredResult);
         this.asking = false;
       },
       error: (err) => {
-        this.askError = err.error?.message || err.message || 'שגיאה בשאלה';
+        if (this.bookId !== bookId || this.language !== lang) return;
+        this.askError = this.failureMessage(err, 'askFailed', 'ask');
         this.asking = false;
       }
     });
@@ -987,7 +1211,7 @@ export class BookDashboardComponent implements OnInit, OnChanges {
       const obj = JSON.parse(structuredResult);
       const citations = obj?.citations as Array<{ chapterNumber?: number; chapterTitle?: string }> | undefined;
       if (Array.isArray(citations)) {
-        return citations.map(c => c.chapterTitle ?? `פרק ${c.chapterNumber ?? '?'}`).filter(Boolean);
+        return citations.map(c => c.chapterTitle ?? `${this.label('chapter')} ${c.chapterNumber ?? '?'}`).filter(Boolean);
       }
       return [];
     } catch {
