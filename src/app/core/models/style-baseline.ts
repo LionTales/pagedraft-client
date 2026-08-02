@@ -19,14 +19,14 @@ export interface BookStyleBaselineStatusDto {
   ready: boolean;
   /** UTC ISO timestamp of the last baseline update, or null if never built. */
   lastUpdatedAt: string | null;
-  /** Model the baseline was built with (empty/absent until first build). */
-  builtWithModel: string | null;
-  /** Currently-active LinguisticAnalysis model id (for display); null when unknown. */
-  activeModel: string | null;
   /**
    * True when a baseline exists but was built with a DIFFERENT model than the currently-active one
    * (cross-model staleness). When true, staleCount already includes the affected chapters, but the
    * REASON is a model change rather than chapter edits - surface a distinct "refresh" warning.
+   *
+   * This boolean is the ONLY cross-model signal on the wire. The server used to send the two model names
+   * (builtWithModel / activeModel) and let the client see them; model identity is internal IP, so it now
+   * sends the verdict alone. The warning copy never named a model, so nothing user-facing changed.
    */
   builtWithDifferentModel: boolean;
   /**

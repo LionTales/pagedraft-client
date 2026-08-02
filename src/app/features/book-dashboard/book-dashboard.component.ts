@@ -19,7 +19,7 @@ import { BookReviewFindingsComponent } from './book-review-findings.component';
 import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
 import { FunnelStepperComponent } from './funnel-stepper.component';
-import { BookAiTierComponent } from './book-ai-tier.component';
+import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 
 /** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
 type ReviewTab = 'findings' | 'bible';
@@ -36,7 +36,7 @@ type ReviewTab = 'findings' | 'bible';
     BookStoryBibleComponent,
     BookChapterSummariesComponent,
     FunnelStepperComponent,
-    BookAiTierComponent,
+    TierToggleComponent,
   ],
   template: `
     <div class="book-dashboard" dir="rtl">
@@ -67,16 +67,6 @@ type ReviewTab = 'findings' | 'bible';
         (reviseRequested)="onStepperReviseRequested()">
       </app-funnel-stepper>
 
-      <!-- p3-4: the book's model tier. It sits ABOVE the status rows because it governs which model the
-           analysis below actually runs on, and it is a privacy and money decision rather than a step in the
-           workflow. Book-scoped chrome, so its own [dir] follows bookLanguage like the stepper's. -->
-      <section class="card book-ai-tier-card">
-        <app-book-ai-tier
-          [bookId]="bookId"
-          [bookLanguage]="bookLanguage">
-        </app-book-ai-tier>
-      </section>
-
       <!-- Book-scoped status rows (wb3-c01): summary/briefs + developmental review build + status.
            A finished summary build clears the review's "build briefs first" gate, so its terminal
            event refreshes the review row. -->
@@ -84,6 +74,7 @@ type ReviewTab = 'findings' | 'bible';
       <div #statusRowsAnchor></div>
       <section class="card book-status-card">
         <app-book-summary-status-row
+          #summaryRow
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
           (summaryTerminal)="onSummaryTerminal()"
@@ -93,7 +84,8 @@ type ReviewTab = 'findings' | 'bible';
           #reviewRow
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
-          (reviewStateChange)="onReviewStateChange($event)">
+          (reviewStateChange)="onReviewStateChange($event)"
+          (tierChanged)="onTierChanged()">
         </app-book-review-status-row>
 
         <!-- rf-f04: anchor for the Revise CTA scroll-to (always present, outside the showFindings guard). -->
@@ -310,6 +302,24 @@ type ReviewTab = 'findings' | 'bible';
           }
         </section>
       }
+
+      <!-- tier-ux-rework c3: the BOOK DEFAULT tier, demoted from the dashboard hero position to a small
+           settings row at the foot of the page. The decision that matters is now per edit type, made on the
+           run surface that spends the tokens; this only seeds the types nobody has decided individually, so
+           it must not be the first thing the page says. It writes the book default and deliberately does NOT
+           clear per-task overrides (the toggle's own "follow the book default" link does that, per task).
+           There is no book-settings page in this client yet; when one lands this row moves there unchanged.
+           book-tier-default-card carries no CSS of its own (.card alone styles it, same as the predecessor
+           .book-ai-tier-card) - it exists as a spec selector hook to identify this section as the foot-of-page
+           tier row, so keep it even though it looks unstyled. -->
+      <section class="card book-tier-default-card">
+        <app-tier-toggle
+          scope="book"
+          [bookId]="bookId"
+          [bookLanguage]="bookLanguage"
+          (tierChanged)="onTierChanged()">
+        </app-tier-toggle>
+      </section>
     </div>
   `,
   styles: [`
@@ -586,6 +596,9 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   /** The hosted review row; refreshed when a summary build finishes (clears its "build briefs first" gate). */
   @ViewChild('reviewRow') reviewRow?: BookReviewStatusRowComponent;
 
+  /** The hosted summary row; refreshed when a tier change moves the active model (tier-ux-rework fixes c04). */
+  @ViewChild('summaryRow') summaryRow?: BookSummaryStatusRowComponent;
+
   /** rf-f02: anchor element at the top of the status-rows section; scrolled to when a stepper CTA is clicked. */
   @ViewChild('statusRowsAnchor') statusRowsAnchor?: ElementRef<HTMLElement>;
 
@@ -685,6 +698,26 @@ export class BookDashboardComponent implements OnInit, OnChanges {
    * refreshes review status" behavior across the wb3-c01 component split.
    */
   onSummaryTerminal(): void {
+    this.reviewRow?.loadBookReviewStatus();
+  }
+
+  /**
+   * A tier toggle on this page committed a tier change (tier-ux-rework fixes c04). Changing a tier changes
+   * the ACTIVE MODEL, and `builtWithDifferentModel` on BOTH book-scoped statuses is computed against it - so
+   * the summary row's and the review row's cross-model staleness warnings are stale the moment the write
+   * lands, and used to stay stale until the page was reloaded.
+   *
+   * ONE handler for BOTH toggles on the page: the book-default row at the foot and the BookReview row's own
+   * (which reaches here through that row's pass-through `tierChanged`). Either can move the active model for
+   * a task the other's status depends on, so a per-toggle branch would have to duplicate this fan-out - and a
+   * dispatch whose branches diverge is how this codebase already shipped one refresh twice.
+   *
+   * Both re-reads go through the rows' OWN public loaders, which each cancel their previous in-flight status
+   * GET and re-check (book, language) before applying an answer. That is the same seam `onSummaryTerminal`
+   * uses; adding a fetch of our own beside it would race the row's rather than supersede it.
+   */
+  onTierChanged(): void {
+    this.summaryRow?.loadBookSummaryStatus();
     this.reviewRow?.loadBookReviewStatus();
   }
 

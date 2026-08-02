@@ -10,10 +10,10 @@
 import { SimpleChange } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
-import { NEVER, Subject, of } from 'rxjs';
+import { NEVER, Observable, Subject, of } from 'rxjs';
 import { BookProfileDto } from '../../core/models/book';
 import { BookDashboardComponent } from './book-dashboard.component';
-import { ChapterAnchor } from '../../core/models/book-review';
+import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
 import { BookService } from '../../core/services/book.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { BookReviewService } from '../../core/services/book-review.service';
@@ -21,6 +21,7 @@ import { AnalysisProgressService } from '../../core/services/analysis-progress.s
 import { ChapterSummaryService } from '../../core/services/chapter-summary.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { AiTierService } from '../../core/services/ai-tier.service';
+import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 
 describe('BookDashboardComponent (wb3-c01 host)', () => {
   let component: BookDashboardComponent;
@@ -70,7 +71,7 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
         {
           provide: AnalysisProgressService,
           useValue: {
-            pollBookSummaryProgress: () => NEVER,
+          pollBookSummaryProgress: () => NEVER,
           },
         },
         // Transitive dep of the hosted chapter-summaries child (wb3-c04) (NullInjector guard).
@@ -82,14 +83,21 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
             rederiveChapterSummary: () => NEVER,
           },
         },
-        // Transitive dep of the hosted model-tier control (p3-4) (NullInjector guard). Without this every
-        // test in this suite fails with "No provider for HttpClient", naming the transitive dep rather than
-        // the component that introduced it.
+        // Transitive dep of the hosted tier toggles (tier-ux-rework c3): the book-default row at the foot of
+        // the dashboard AND the one inside the hosted review status row (NullInjector guard). Without this
+        // every test in this suite fails with "No provider for HttpClient", naming the transitive dep rather
+        // than the component that introduced it.
         {
           provide: AiTierService,
           useValue: {
+            // `watch` is the shared per-book answer channel (tier-ux-rework fixes c02): the toggle subscribes
+            // to it on every mount, so a stub without it fails this suite with a TypeError from a grandchild.
+            watch: () => NEVER,
+            refresh: () => NEVER,
             get: () => NEVER,
-            set: () => NEVER,
+            setTask: () => NEVER,
+            setBookDefault: () => NEVER,
+            clearTask: () => NEVER,
           },
         },
       ],
@@ -106,6 +114,30 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     expect(component).toBeTruthy();
     expect(fixture.debugElement.query(By.css('app-book-summary-status-row'))).not.toBeNull();
     expect(fixture.debugElement.query(By.css('app-book-review-status-row'))).not.toBeNull();
+  });
+
+  /**
+   * tier-ux-rework c3. The verbose per-book tier card is GONE from the dashboard hero position: the decision
+   * that matters is per edit type and now lives on each run surface. What remains here is one compact
+   * book-DEFAULT toggle at the FOOT of the page, which only seeds the types nobody has decided individually.
+   */
+  it('no longer renders the old central model-tier control', () => {
+    expect(fixture.debugElement.query(By.css('app-book-ai-tier'))).toBeNull();
+    expect(fixture.debugElement.query(By.css('.book-ai-tier-card'))).toBeNull();
+  });
+
+  it('renders exactly one book-default tier toggle, in book scope, at the foot of the page', () => {
+    const toggles = fixture.debugElement.queryAll(By.css('.book-dashboard > .book-tier-default-card app-tier-toggle'));
+    expect(toggles.length).toBe(1);
+    expect(toggles[0].componentInstance.scope).toBe('book');
+    expect(toggles[0].componentInstance.bookId).toBe('book-1');
+    expect(toggles[0].componentInstance.bookLanguage).toBe('he');
+
+    // Foot of the page, not the hero position: the status rows come first.
+    const sections = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('.book-dashboard > section')
+    );
+    expect(sections[sections.length - 1].classList).toContain('book-tier-default-card');
   });
 
   it('forwards bookId + bookLanguage to both hosted status rows', () => {
@@ -436,7 +468,7 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       const previous = component.bookId;
       component.bookId = 'book-2';
       component.ngOnChanges({
-        bookId: new SimpleChange(previous, 'book-2', false),
+      bookId: new SimpleChange(previous, 'book-2', false),
       });
 
       // Transient own-state cleared immediately on the switch (before the new profile resolves).
@@ -485,7 +517,7 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       // The very first @Input binding fires ngOnChanges with firstChange=true; it must be a no-op
       // here (ngOnInit already owns the one init load).
       component.ngOnChanges({
-        bookId: new SimpleChange(undefined, component.bookId, true),
+      bookId: new SimpleChange(undefined, component.bookId, true),
       });
 
       expect(getProfile.calls.count()).toBe(callsBefore);
@@ -660,5 +692,193 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       (component as any).findingsAnchor = undefined;
       expect(() => component.onStepperReviseRequested()).not.toThrow();
     });
+  });
+});
+
+/**
+ * tier-ux-rework fixes c04: a tier change on the dashboard re-reads BOTH model-dependent statuses.
+ *
+ * The dashboard mounts TWO tier toggles against one book - the book-default row at the foot and the one
+ * inside the review status row - and both the summary status and the review status carry a
+ * `builtWithDifferentModel` flag computed against the ACTIVE MODEL. So whichever toggle is used, both rows'
+ * cross-model staleness verdicts are stale the instant the write lands, and used to stay stale until reload.
+ *
+ * The two things this suite is really for:
+ *  - BOTH dispatch branches inherit the SAME guarded loaders. A branch that refreshed only one row, or that
+ *    issued a fetch of its own beside the row's, is the shape this codebase has already shipped once.
+ *  - the re-read SUPERSEDES an in-flight status read rather than racing it, asserted on the older request
+ *    being cancelled - which needs the request held OPEN across assertions, not an `of()` that has already
+ *    closed the window by the time the assertion runs.
+ */
+describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)', () => {
+  interface OpenRequest<T> {
+    /** Held OPEN across assertions: the caller decides when (and whether) this request ever answers. */
+    subject: Subject<T>;
+    /** True once the caller detached from this request, i.e. it was superseded/cancelled. */
+    cancelled: boolean;
+  }
+
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  let summaryReads: OpenRequest<unknown>[];
+  let reviewReads: OpenRequest<BookReviewStatusDto>[];
+
+  /** A status GET that answers only on demand and records when the caller detaches from it. */
+  function trackedRead<T>(log: OpenRequest<T>[]): Observable<T> {
+    const entry: OpenRequest<T> = { subject: new Subject<T>(), cancelled: false };
+    log.push(entry);
+    return new Observable<T>((sub) => {
+      const inner = entry.subject.subscribe(sub);
+      return () => {
+        entry.cancelled = true;
+        inner.unsubscribe();
+      };
+    });
+  }
+
+  /** A NOT-BUILT review status: enough for the row (and therefore its tier toggle) to render at all. */
+  function notBuiltReview(): BookReviewStatusDto {
+    return {
+      bookId: 'book-1',
+      language: 'he',
+      hasReview: false,
+      findingCount: 0,
+      lastUpdatedAt: null,
+      builtWithDifferentModel: false,
+      staleVsBriefs: false,
+      hasBriefs: true,
+      activeBuildJobId: null,
+      ready: false,
+      chaptersReviewed: 0,
+      chaptersTotal: 0,
+      windowCount: 0,
+      ranSynthesis: false,
+      ranContinuityReduce: false,
+      failedWindows: 0,
+    };
+  }
+
+  beforeEach(async () => {
+    summaryReads = [];
+    reviewReads = [];
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', {
+            getProfile: NEVER,
+            refreshProfile: NEVER,
+            ask: NEVER,
+            getById: NEVER,
+          }),
+        },
+        {
+          provide: BookSummaryService,
+          useValue: {
+            getBookSummaryStatus: () => trackedRead(summaryReads),
+            buildBookSummary: () => NEVER,
+          },
+        },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => trackedRead(reviewReads),
+            buildReview: () => NEVER,
+            getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER,
+            patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: {
+            getChapterSummary: () => NEVER,
+            updateChapterSummary: () => NEVER,
+            rederiveChapterSummary: () => NEVER,
+          },
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER,
+            refresh: () => NEVER,
+            get: () => NEVER,
+            setTask: () => NEVER,
+            setBookDefault: () => NEVER,
+            clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+    // The review row (and with it the BookReview tier toggle) is hidden until a status arrives, so answer
+    // the mount read. The summary read is deliberately left unanswered: this suite only counts and cancels it.
+    reviewReads[reviewReads.length - 1].subject.next(notBuiltReview());
+    fixture.detectChanges();
+  });
+
+  /** The book-DEFAULT toggle at the foot of the page. */
+  function footToggle(): TierToggleComponent {
+    const found = fixture.debugElement.query(By.css('.book-tier-default-card app-tier-toggle'));
+    expect(found).withContext('the foot-of-page book default toggle').not.toBeNull();
+    return found.componentInstance as TierToggleComponent;
+  }
+
+  /** The BookReview toggle mounted inside the review status row. */
+  function reviewRowToggle(): TierToggleComponent {
+    const found = fixture.debugElement.query(By.css('app-book-review-status-row app-tier-toggle'));
+    expect(found).withContext('the BookReview toggle on the review row').not.toBeNull();
+    return found.componentInstance as TierToggleComponent;
+  }
+
+  it('the FOOT (book default) toggle refreshes BOTH the summary and the review status', () => {
+    const summaryBefore = summaryReads.length;
+    const reviewBefore = reviewReads.length;
+
+    footToggle().tierChanged.emit();
+
+    expect(summaryReads.length).withContext('summary re-read exactly once').toBe(summaryBefore + 1);
+    expect(reviewReads.length).withContext('review re-read exactly once').toBe(reviewBefore + 1);
+  });
+
+  it('the REVIEW ROW toggle refreshes BOTH statuses too, through the same handler', () => {
+    const summaryBefore = summaryReads.length;
+    const reviewBefore = reviewReads.length;
+
+    reviewRowToggle().tierChanged.emit();
+
+    expect(summaryReads.length)
+      .withContext('the sibling row goes stale too: both flags read the same active model')
+      .toBe(summaryBefore + 1);
+    expect(reviewReads.length).toBe(reviewBefore + 1);
+  });
+
+  it('the tier-change re-read SUPERSEDES the in-flight status reads instead of racing them', () => {
+    // The rows each have a read open from their own mount; that is the window under test.
+    const openSummary = summaryReads[summaryReads.length - 1];
+    const openReview = reviewReads[reviewReads.length - 1];
+    expect(openSummary.cancelled).withContext('precondition').toBeFalse();
+    expect(openReview.cancelled).withContext('precondition').toBeFalse();
+
+    footToggle().tierChanged.emit();
+
+    expect(openSummary.cancelled).withContext('the older summary read must be cancelled').toBeTrue();
+    expect(openReview.cancelled).withContext('the older review read must be cancelled').toBeTrue();
+    expect(summaryReads[summaryReads.length - 1]).not.toBe(openSummary);
+    expect(reviewReads[reviewReads.length - 1]).not.toBe(openReview);
+  });
+
+  it('does not throw when a row is not mounted yet (the handler is view-child optional)', () => {
+    (component as any).summaryRow = undefined;
+    (component as any).reviewRow = undefined;
+    expect(() => component.onTierChanged()).not.toThrow();
   });
 });

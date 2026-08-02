@@ -1,7 +1,9 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { SimpleChange } from '@angular/core';
-import { EMPTY, NEVER, Subject, of, throwError, takeUntil } from 'rxjs';
+import { By } from '@angular/platform-browser';
+import { EMPTY, NEVER, Observable, Subject, of, throwError, takeUntil } from 'rxjs';
 import { AnalysisPanelComponent } from './analysis-panel.component';
+import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisRunOrchestrationService } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
@@ -10,6 +12,7 @@ import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.s
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
+import { AiTierService } from '../../core/services/ai-tier.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
 describe('AnalysisPanelComponent (focused logic)', () => {
@@ -94,6 +97,22 @@ describe('AnalysisPanelComponent (focused logic)', () => {
           },
         },
         { provide: JobRegistryService, useValue: jobRegistrySpy },
+        // tier-ux-rework c3: the hosted run tab renders the per-edit-type tier toggle, which injects
+        // AiTierService (-> HttpClient). Stubbed so this suite does not fail with a NullInjector error
+        // naming HttpClient rather than the grandchild that introduced it.
+        {
+          provide: AiTierService,
+          useValue: {
+            // `watch` is the shared per-book answer channel (tier-ux-rework fixes c02): the toggle subscribes
+            // to it on every mount, so a stub without it fails this suite with a TypeError from a grandchild.
+            watch: () => NEVER,
+            refresh: () => NEVER,
+            get: () => NEVER,
+            setTask: () => NEVER,
+            setBookDefault: () => NEVER,
+            clearTask: () => NEVER,
+          },
+        },
       ],
     }).compileComponents();
 
@@ -124,7 +143,6 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       jobId: null,
       type: 'Proofread',
       resultText: 'Hello friend',
-      modelName: 'test-model',
       createdAt: new Date().toISOString(),
       scope: 'Chapter',
       analysisType: 'Proofread',
@@ -332,7 +350,6 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       jobId: null,
       type: 'LineEdit',
       resultText: '',
-      modelName: 'test-model',
       createdAt: new Date().toISOString(),
       scope: 'Chapter',
       analysisType: 'LineEdit',
@@ -508,7 +525,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
     const raw = JSON.stringify(badJsonObject);
     const result = makeLineEditResult({
-      structuredResult: raw,
+    structuredResult: raw,
     });
 
     const parsed = component.getLineEdit(result);
@@ -752,7 +769,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
   it('emitSuggestionRanges calls SuggestionAnchorService.relocateAll when offsetsDirty is true', () => {
     const anchorSpy = TestBed.inject(SuggestionAnchorService) as jasmine.SpyObj<SuggestionAnchorService>;
     const sug: AnalysisSuggestion = {
-      id: 's-1', original: 'world', suggested: 'friend', startOffset: 6, endOffset: 11,
+    id: 's-1', original: 'world', suggested: 'friend', startOffset: 6, endOffset: 11,
     };
 
     component.latestResult = makeResultWithSuggestions();
@@ -773,10 +790,10 @@ describe('AnalysisPanelComponent (focused logic)', () => {
   it('stale suggestions are excluded from emitted highlight ranges', () => {
     const anchorSpy = TestBed.inject(SuggestionAnchorService) as jasmine.SpyObj<SuggestionAnchorService>;
     const good: AnalysisSuggestion = {
-      id: 's-good', original: 'hello', suggested: 'hi', startOffset: 0, endOffset: 5,
+    id: 's-good', original: 'hello', suggested: 'hi', startOffset: 0, endOffset: 5,
     };
     const stale: AnalysisSuggestion = {
-      id: 's-stale', original: 'removed', suggested: 'gone', startOffset: 10, endOffset: 17, outcome: 'Reverted',
+    id: 's-stale', original: 'removed', suggested: 'gone', startOffset: 10, endOffset: 17, outcome: 'Reverted',
     };
 
     component.latestResult = makeResultWithSuggestions();
@@ -804,7 +821,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     component.applyCorrection.subscribe((v: any) => emitted.push(v));
 
     const staleSug: AnalysisSuggestion = {
-      id: 's-stale', original: 'old', suggested: 'new', startOffset: 0, endOffset: 3, stale: true,
+    id: 's-stale', original: 'old', suggested: 'new', startOffset: 0, endOffset: 3, stale: true,
     };
     component.staleSuggestionIds = new Set(['s-stale']);
     component.latestResult = makeResultWithSuggestions();
@@ -842,7 +859,6 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       type: 'LinguisticAnalysis',
       analysisType: 'LinguisticAnalysis',
       resultText: '',
-      modelName: '',
       createdAt: new Date().toISOString(),
       ...overrides,
     } as AnalysisResultDto;
@@ -899,7 +915,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
     // Synthetic streaming result: no id, no suggestions, client timestamp NEWER than the server row.
     component['latestResult'] = makeStreamingResult({
-      createdAt: new Date(Date.now() + 60_000).toISOString(),
+    createdAt: new Date(Date.now() + 60_000).toISOString(),
     });
 
     const consistencyDto: AnalysisSuggestionDto = {
@@ -1435,13 +1451,13 @@ describe('AnalysisPanelComponent (focused logic)', () => {
   it('auto-dismiss fires for stale Pending suggestions only, not for Accepted or Reverted', () => {
     const anchorSpy = TestBed.inject(SuggestionAnchorService) as jasmine.SpyObj<SuggestionAnchorService>;
     const pending: AnalysisSuggestion = {
-      id: 's-pending', original: 'pending text', suggested: 'new1', startOffset: 0, endOffset: 12,
+    id: 's-pending', original: 'pending text', suggested: 'new1', startOffset: 0, endOffset: 12,
     };
     const reverted: AnalysisSuggestion = {
-      id: 's-reverted', original: 'reverted text', suggested: 'new2', startOffset: 20, endOffset: 33, outcome: 'Reverted',
+    id: 's-reverted', original: 'reverted text', suggested: 'new2', startOffset: 20, endOffset: 33, outcome: 'Reverted',
     };
     const accepted: AnalysisSuggestion = {
-      id: 's-accepted', original: 'accepted text', suggested: 'new3', startOffset: 40, endOffset: 53, outcome: 'Accepted',
+    id: 's-accepted', original: 'accepted text', suggested: 'new3', startOffset: 40, endOffset: 53, outcome: 'Accepted',
     };
 
     component.latestResult = makeResultWithSuggestions();
@@ -1478,8 +1494,6 @@ describe('AnalysisPanelComponent (focused logic)', () => {
         hasBaseline: false,
         ready: false,
         lastUpdatedAt: null,
-        builtWithModel: null,
-        activeModel: 'gemma4:12b',
         builtWithDifferentModel: false,
         activeBuildJobId: null,
         chaptersToBuild: 5,
@@ -1928,7 +1942,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       component.chapterId = 'chap-B';
       component.sceneId = null;
       component.ngOnChanges({
-        chapterId: new SimpleChange('chap-A', 'chap-B', false),
+      chapterId: new SimpleChange('chap-A', 'chap-B', false),
       });
       // ngOnChanges clears the lingering banner from chapter A immediately.
       expect(component.asyncJobInFlight).toBeFalse();
@@ -1971,7 +1985,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       // Switch to a DIFFERENT scene in the same chapter.
       component.sceneId = 'scene-2';
       component.ngOnChanges({
-        sceneId: new SimpleChange('scene-1', 'scene-2', false),
+      sceneId: new SimpleChange('scene-1', 'scene-2', false),
       });
       const latestBefore = component['latestResult'];
       component.activeSubTab = 'history';
@@ -2232,6 +2246,195 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
       expect(ctx.language).toBe('he');
     });
+  });
+});
+
+/**
+ * tier-ux-rework fixes c04: the panel re-reads the STYLE BASELINE status when the run tab's tier toggle
+ * commits a change.
+ *
+ * WHY THIS IS A DEFECT AND NOT A NICETY. The toggle mounts DIRECTLY ABOVE the style-baseline status row, and
+ * that row's `builtWithDifferentModel` flag is computed server-side against the ACTIVE MODEL - which is
+ * exactly what changing the LinguisticAnalysis tier changes. Before this wiring the cross-model staleness
+ * warning (and the STALE state that carries the Refresh affordance) appeared only after a manual page reload,
+ * so the user was told the baseline was fine by a row sitting under the control that had just invalidated it.
+ *
+ * The status GET is held OPEN across assertions rather than resolved with `of()`: the point is not merely
+ * that a second fetch happens, but that it SUPERSEDES an overlapping first one instead of racing it, and a
+ * synchronous stub closes the very window that ordering lives in.
+ */
+describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)', () => {
+  interface OpenStatusRequest {
+    subject: Subject<BookStyleBaselineStatusDto>;
+    /** True once the panel unsubscribed from this request, i.e. it was superseded/cancelled. */
+    cancelled: boolean;
+  }
+
+  let component: AnalysisPanelComponent;
+  let fixture: ComponentFixture<AnalysisPanelComponent>;
+  let opened: OpenStatusRequest[];
+
+  function makeBaselineStatus(overrides: Partial<BookStyleBaselineStatusDto> = {}): BookStyleBaselineStatusDto {
+    return {
+      bookId: 'book-1',
+      language: 'he',
+      totalChapters: 5,
+      builtChapters: 5,
+      staleCount: 0,
+      hasBaseline: true,
+      ready: true,
+      lastUpdatedAt: new Date().toISOString(),
+      builtWithDifferentModel: false,
+      activeBuildJobId: null,
+      chaptersToBuild: 0,
+      estimatedSeconds: 0,
+      estimatedUsd: null,
+      ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    opened = [];
+    await TestBed.configureTestingModule({
+      imports: [AnalysisPanelComponent],
+      providers: [
+        {
+          provide: AnalysisService,
+          useValue: {
+            getTemplates: () => of([]),
+            getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
+            getHistory: () => of([]),
+            updateSuggestionOutcome: () => of(void 0),
+            explainSuggestion: () => NEVER,
+            run: () => NEVER,
+            startAsync: () => NEVER,
+            getByJob: () => NEVER,
+            runStream: () => NEVER,
+            createTemplate: () => NEVER,
+          },
+        },
+        { provide: DocumentVersionService, useValue: { list: () => of([]), create: () => NEVER, get: () => NEVER } },
+        {
+          provide: AnalysisRunOrchestrationService,
+          useValue: {
+            stopProgressPolling: () => {},
+            confirmReanalysisIfPendingSuggestions: () => true,
+            emitInitialStatusForRun: () => 'Running',
+            formatRunDuration: () => null,
+            runAnalysisAfterSave: () => EMPTY,
+            doRunStreaming: () => EMPTY,
+          },
+        },
+        {
+          provide: SuggestionAnchorService,
+          useValue: jasmine.createSpyObj('SuggestionAnchorService', { relocateAll: [], relocateOne: null }),
+        },
+        {
+          provide: StyleBaselineService,
+          useValue: {
+            // Each call hands back its OWN long-lived stream, so "which request is still subscribed" is an
+            // observable fact rather than something inferred from a call count.
+            getStyleBaselineStatus: () => {
+              const entry: OpenStatusRequest = {
+                subject: new Subject<BookStyleBaselineStatusDto>(),
+                cancelled: false,
+              };
+              opened.push(entry);
+              return new Observable<BookStyleBaselineStatusDto>((sub) => {
+                const inner = entry.subject.subscribe(sub);
+                return () => {
+                  entry.cancelled = true;
+                  inner.unsubscribe();
+                };
+              });
+            },
+            buildStyleBaseline: () => NEVER,
+          },
+        },
+        {
+          provide: AnalysisProgressService,
+          useValue: { pollProgress: () => NEVER, pollStyleBaselineProgress: () => NEVER },
+        },
+        {
+          provide: JobRegistryService,
+          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']),
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER,
+            refresh: () => NEVER,
+            get: () => NEVER,
+            setTask: () => NEVER,
+            setBookDefault: () => NEVER,
+            clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(AnalysisPanelComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+    component.chapterId = 'chap-1';
+    component.bookLanguage = 'he';
+    component.selectedAnalysisType = 'LinguisticAnalysis';
+    fixture.detectChanges();
+  });
+
+  /** The hosted run tab, i.e. the component the toggle's event actually travels through. */
+  function runTab(): AnalysisRunTabComponent {
+    const found = fixture.debugElement.query(By.directive(AnalysisRunTabComponent));
+    expect(found).withContext('the run tab must be mounted for this wiring to exist').not.toBeNull();
+    return found.componentInstance as AnalysisRunTabComponent;
+  }
+
+  it('(e) re-reads the style-baseline status when the run tab reports a tier change', () => {
+    const before = opened.length;
+
+    runTab().tierChanged.emit();
+
+    expect(opened.length).withContext('exactly one re-read, not zero and not two').toBe(before + 1);
+
+    opened[opened.length - 1].subject.next(makeBaselineStatus({ builtWithDifferentModel: true }));
+    fixture.detectChanges();
+
+    expect(component.styleBaselineStatus?.builtWithDifferentModel)
+      .withContext('the newly-active model made the baseline cross-model')
+      .toBeTrue();
+  });
+
+  it('(e) the tier-change re-read SUPERSEDES an in-flight status read instead of racing it', () => {
+    // A status read is already in flight (the panel loads one on a context change; this is that window).
+    component.loadStyleBaselineStatus();
+    const inFlight = opened[opened.length - 1];
+    expect(inFlight.cancelled).withContext('precondition: still open').toBeFalse();
+
+    runTab().tierChanged.emit();
+    const fresh = opened[opened.length - 1];
+
+    expect(fresh).withContext('a NEW request, not a reuse').not.toBe(inFlight);
+    expect(inFlight.cancelled)
+      .withContext('the older request must be cancelled, not left to answer over the newer one')
+      .toBeTrue();
+
+    // Even if the abandoned request somehow answers, its stale snapshot must not paint.
+    inFlight.subject.next(makeBaselineStatus({ builtWithDifferentModel: false }));
+    fresh.subject.next(makeBaselineStatus({ builtWithDifferentModel: true }));
+    fixture.detectChanges();
+
+    expect(component.styleBaselineStatus?.builtWithDifferentModel)
+      .withContext('the newer answer wins')
+      .toBeTrue();
+  });
+
+  it('renders the cross-model warning under the toggle once the re-read lands, with no page reload', () => {
+    runTab().tierChanged.emit();
+    opened[opened.length - 1].subject.next(makeBaselineStatus({ builtWithDifferentModel: true }));
+    fixture.detectChanges();
+
+    const warning = fixture.debugElement.query(By.css('[data-testid="sb-cross-model-warning"]'));
+    expect(warning).withContext('the warning row the whole todo exists for').not.toBeNull();
   });
 });
 

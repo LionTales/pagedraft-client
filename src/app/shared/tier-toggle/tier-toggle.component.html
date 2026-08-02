@@ -1,0 +1,139 @@
+<!-- The compact per-edit-type tier toggle (tier-ux-rework c3). One line: two words, the selected one
+     highlighted, and an info affordance. Nothing here names a provider, a model or a version. -->
+@if (visible) {
+  <!-- tt-scope-book is a PLACEMENT hook, not a semantic one: this row is the last element of the dashboard's
+       scrolling column, so its info panel opens block-start instead of block-end (see the scss). -->
+  <div
+    class="tier-toggle"
+    [class.tt-scope-book]="scope === 'book'"
+    [attr.dir]="dir"
+    data-testid="tier-toggle">
+    @if (scope === 'book') {
+      <span class="tt-title" data-testid="tier-toggle-title">{{ label('bookDefaultTitle') }}</span>
+    }
+
+    @if (loading) {
+      <span class="tt-status" data-testid="tier-toggle-loading">{{ label('loading') }}</span>
+    }
+
+    @if (loadError) {
+      <span class="tt-error" data-testid="tier-toggle-load-error">
+        {{ label('loadError') }}
+        <button type="button" class="tt-link" data-testid="tier-toggle-retry" (click)="reload()">
+          {{ label('retry') }}
+        </button>
+      </span>
+    }
+
+    @if (hasAnswer) {
+      <!-- The choice. aria-disabled (never the native disabled attribute) so a keyboard user can still reach
+           and read an unavailable option; the click handlers carry the matching guards. -->
+      <div class="tt-seg" role="radiogroup" [attr.aria-label]="groupAriaLabel">
+        <button
+          type="button"
+          role="radio"
+          class="tt-opt"
+          [class.selected]="selectedTier === 'fast'"
+          [attr.aria-checked]="selectedTier === 'fast'"
+          [attr.aria-disabled]="saving || selectedTier === 'fast'"
+          data-testid="tier-toggle-fast"
+          (click)="chooseFast()">
+          {{ label('tierFast') }}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          class="tt-opt"
+          [class.selected]="selectedTier === 'thinking'"
+          [attr.aria-checked]="selectedTier === 'thinking'"
+          [attr.aria-disabled]="saving || selectedTier === 'thinking' || !canChooseThinking"
+          [attr.title]="canChooseThinking ? null : reasonText"
+          data-testid="tier-toggle-thinking"
+          (click)="requestThinking()">
+          {{ label('tierThinking') }}
+        </button>
+      </div>
+
+      <!-- Info: revealed on hover/focus on a pointer device, pinned by click/tap on touch. The popover stays
+           in the DOM either way and is wired via aria-describedby, so a screen reader gets the explanation
+           without depending on a hover it cannot perform. -->
+      <span class="tt-info-wrap">
+        <button
+          type="button"
+          class="tt-info"
+          [attr.aria-label]="label('infoAria')"
+          [attr.aria-expanded]="infoOpen"
+          [attr.aria-describedby]="popoverId"
+          data-testid="tier-toggle-info"
+          (click)="toggleInfo()">
+          ?
+        </button>
+        <span
+          class="tt-popover"
+          [class.open]="infoOpen"
+          role="tooltip"
+          [id]="popoverId"
+          data-testid="tier-toggle-info-popover">
+          <span class="tt-pop-line">{{ label('tierFast') }}: {{ label('infoFast') }}</span>
+          <span class="tt-pop-line">{{ label('tierThinking') }}: {{ label('infoThinking') }}</span>
+        </span>
+      </span>
+
+      @if (saving) {
+        <span class="tt-status" data-testid="tier-toggle-saving">{{ label('saving') }}</span>
+      }
+
+      <!-- Only when this task carries its own override: without it the book default can never reach the task
+           again, because a stored override outranks the default forever. -->
+      @if (canFollowBookDefault) {
+        <button
+          type="button"
+          class="tt-link"
+          data-testid="tier-toggle-follow-default"
+          (click)="followBookDefault()">
+          {{ label('followDefault') }}
+        </button>
+      }
+    }
+
+    <!-- Disabled WITH a reason: a dead control with no explanation is the thing this replaces. -->
+    @if (hasAnswer && reasonText) {
+      <span class="tt-reason" data-testid="tier-toggle-reason">{{ reasonText }}</span>
+    }
+
+    <!-- Fall back VISIBLY, never silently. -->
+    @if (hasAnswer && fallbackActive) {
+      <span class="tt-warn" data-testid="tier-toggle-fallback">{{ label('fallbackWarning') }}</span>
+    }
+
+    @if (saveError) {
+      <span class="tt-error" data-testid="tier-toggle-save-error">{{ saveError }}</span>
+    }
+
+    <!-- The inline consent step. Rendered only when the server says this deployment needs one; where both
+         tiers are already off this machine the flag is false and picking thinking commits directly. -->
+    @if (showConsent) {
+      <span class="tt-consent" data-testid="tier-toggle-consent">
+        <span class="tt-consent-body">{{ label('consentBody') }}</span>
+        <span class="tt-consent-actions">
+          <button
+            type="button"
+            class="pd-btn pd-btn-primary tt-consent-btn"
+            [disabled]="saving"
+            data-testid="tier-toggle-consent-confirm"
+            (click)="confirmThinking()">
+            {{ saving ? label('saving') : label('consentConfirm') }}
+          </button>
+          <button
+            type="button"
+            class="pd-btn pd-btn-ghost tt-consent-btn"
+            [disabled]="saving"
+            data-testid="tier-toggle-consent-cancel"
+            (click)="cancelConsent()">
+            {{ label('cancel') }}
+          </button>
+        </span>
+      </span>
+    }
+  </div>
+}

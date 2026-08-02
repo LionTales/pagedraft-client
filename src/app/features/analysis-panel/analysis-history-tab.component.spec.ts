@@ -21,7 +21,6 @@ function makeLinguisticResult(
     type: 'LinguisticAnalysis',
     analysisType: 'LinguisticAnalysis',
     resultText: '',
-    modelName: 'test-model',
     createdAt: new Date().toISOString(),
     scope: 'Chapter',
     structuredResult: JSON.stringify(linguisticData),
@@ -60,7 +59,6 @@ function makeLiteraryResult(
     type: 'LiteraryAnalysis',
     analysisType: 'LiteraryAnalysis',
     resultText: resultText ?? '',
-    modelName: 'test-model',
     createdAt: new Date().toISOString(),
     scope: 'Chapter',
     structuredResult: null,
@@ -352,7 +350,6 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
         type: 'Proofread',
         analysisType: 'Proofread',
         resultText: '',
-        modelName: 'model',
         createdAt: new Date().toISOString(),
         scope: 'Chapter',
         structuredResult: null,
@@ -448,7 +445,6 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
         type: 'Proofread',
         analysisType: 'Proofread',
         resultText: 'the dropped raw text',
-        modelName: 'test-model',
         createdAt: new Date().toISOString(),
         scope: 'Chapter',
         structuredResult: null,
@@ -509,7 +505,6 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
         type: 'Proofread',
         analysisType: 'Proofread',
         resultText: 'Some proofread result.',
-        modelName: 'test-model',
         createdAt: new Date().toISOString(),
         scope: 'Chapter',
         structuredResult: null,
@@ -680,7 +675,6 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
         type: 'Custom',
         analysisType: 'Custom',
         resultText,
-        modelName: 'test-model',
         createdAt: new Date().toISOString(),
         scope: 'Chapter',
         structuredResult: null,
@@ -732,7 +726,6 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
         type: 'Proofread',
         analysisType: 'Proofread',
         resultText: '',
-        modelName: 'test-model',
         createdAt: new Date().toISOString(),
         scope: 'Chapter',
         structuredResult: null,
@@ -807,7 +800,6 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
         type: 'Proofread',
         analysisType: 'Proofread',
         resultText: '',
-        modelName: 'test-model',
         createdAt: new Date().toISOString(),
         scope: 'Chapter',
         structuredResult: null,
@@ -850,14 +842,32 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
     });
   });
 
-  describe('visibleModelName: suppress the internal "chunked" sentinel in the history heading', () => {
-    it('returns null for "chunked" and blank/absent names, real name unchanged', () => {
-      expect(component.visibleModelName('chunked')).toBeNull();
-      expect(component.visibleModelName('')).toBeNull();
-      expect(component.visibleModelName('   ')).toBeNull();
-      expect(component.visibleModelName(null)).toBeNull();
-      expect(component.visibleModelName(undefined)).toBeNull();
-      expect(component.visibleModelName('  gemma4:12b ')).toBe('gemma4:12b');
+  /**
+   * IP PIN, mirroring the run tab's. The history heading carried the same model parenthetical; it was latent
+   * rather than visible only because the seeded rows happened to have a null modelName. Model identity is
+   * internal IP and must not render here either.
+   */
+  describe('history headings never expose model identity', () => {
+    ['Ollama:gemma4:12b', 'gemma4:12b', 'chunked', 'stream'].forEach(model => {
+      it(`renders no model parenthetical when the current item carries "${model}"`, () => {
+        component.bookLanguage = 'he';
+        // Cast through any: `modelName` is deliberately gone from AnalysisResultDto.
+        component.history = [
+          { id: 'r1', type: 'Proofread', analysisType: 'Proofread', resultText: 'x', modelName: model } as any,
+        ];
+        component.ngOnChanges({ history: {} as any });
+        fixture.detectChanges();
+
+        const heading = fixture.nativeElement.querySelector('h4') as HTMLElement;
+        expect(heading).not.toBeNull();
+        expect(heading.textContent).toContain('הגהה');
+        expect(heading.textContent).not.toContain(model);
+        expect(heading.textContent).not.toContain('(');
+      });
+    });
+
+    it('exposes no visibleModelName helper (the parenthetical has no source left)', () => {
+      expect((component as any).visibleModelName).toBeUndefined();
     });
   });
 });

@@ -5,6 +5,7 @@ import { BookReviewStatusDto } from '../../core/models/book-review';
 import { BookReviewService } from '../../core/services/book-review.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 
 /** Derived review state for the whole-book developmental review. Single source of truth shared by the
  *  status row (@Output) and the dashboard host (field + handler types). */
@@ -23,7 +24,7 @@ export type BookReviewState = 'building' | 'not-built' | 'ready' | 'stale' | 'ne
 @Component({
   selector: 'app-book-review-status-row',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, TierToggleComponent],
   templateUrl: './book-review-status-row.component.html',
   styleUrl: './book-status-row.scss',
 })
@@ -39,6 +40,19 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
    * an in-progress build started in another tab/session as well.
    */
   @Output() reviewStateChange = new EventEmitter<BookReviewState>();
+
+  /**
+   * The tier toggle hosted on this row committed a tier change (tier-ux-rework fixes c04). PURE
+   * PASS-THROUGH: this row does NOT re-read its own status here, even though it owns it.
+   *
+   * WHY. A tier change moves the ACTIVE MODEL, and `builtWithDifferentModel` is computed against the active
+   * model on the review status AND on the sibling summary status, so both rows go stale together. The
+   * dashboard already owns that fan-out (it does the same for a summary terminal, calling straight into
+   * `loadBookReviewStatus()`), so routing this row's toggle up gives ONE dispatch point that both tier
+   * toggles on the page share - rather than one branch refreshing here and the other refreshing there, which
+   * is how a duplicate/partial refresh gets shipped.
+   */
+  @Output() tierChanged = new EventEmitter<void>();
 
   /** Latest book-review status read for the current book (null while loading / no book). */
   bookReviewStatus: BookReviewStatusDto | null = null;

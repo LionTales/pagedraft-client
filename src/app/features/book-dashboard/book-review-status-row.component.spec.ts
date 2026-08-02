@@ -20,6 +20,7 @@ import { NEVER, Subject, of, throwError } from 'rxjs';
 import { BookReviewStatusRowComponent } from './book-review-status-row.component';
 import { BookReviewService } from '../../core/services/book-review.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
+import { AiTierService } from '../../core/services/ai-tier.service';
 import { BookReviewStatusDto } from '../../core/models/book-review';
 
 function makeBookReviewStatus(
@@ -31,8 +32,6 @@ function makeBookReviewStatus(
     hasReview: true,
     findingCount: 12,
     lastUpdatedAt: new Date().toISOString(),
-    builtWithModel: 'gemma4:12b',
-    activeModel: 'gemma4:12b',
     builtWithDifferentModel: false,
     staleVsBriefs: false,
     hasBriefs: true,
@@ -70,6 +69,21 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
           },
         },
         { provide: JobRegistryService, useValue: jobRegistrySpy },
+        // tier-ux-rework c3: the row now hosts the BookReview tier toggle, which injects AiTierService
+        // (-> HttpClient). Stubbed so the suite does not fail with a NullInjector error naming HttpClient.
+        {
+          provide: AiTierService,
+          useValue: {
+            // `watch` is the shared per-book answer channel (tier-ux-rework fixes c02): the toggle subscribes
+            // to it on every mount, so a stub without it fails this suite with a TypeError from a child.
+            watch: () => NEVER,
+            refresh: () => NEVER,
+            get: () => NEVER,
+            setTask: () => NEVER,
+            setBookDefault: () => NEVER,
+            clearTask: () => NEVER,
+          },
+        },
       ],
     }).compileComponents();
 
@@ -97,11 +111,28 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
     expect(query('[data-testid="book-review-row"]')).not.toBeNull();
   });
 
+  /**
+   * tier-ux-rework c3: the whole-book review launcher carries its OWN tier toggle, wired to the BookReview
+   * task. The review is off the thinking allowlist, so the toggle renders disabled with the server's reason
+   * rather than being hidden: the launcher is exactly where a user asks "which model does this spend".
+   */
+  it('hosts a tier toggle wired to the BookReview task', () => {
+    component.bookReviewStatus = makeBookReviewStatus();
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+
+    const toggles = fixture.debugElement.queryAll(By.css('app-tier-toggle'));
+    expect(toggles.length).toBe(1);
+    expect(toggles[0].componentInstance.task).toBe('BookReview');
+    expect(toggles[0].componentInstance.bookId).toBe('book-1');
+    expect(toggles[0].componentInstance.bookLanguage).toBe('he');
+  });
+
   // ── NEEDS SUMMARY GATE (hasBriefs===false) ─────────────────────────────────
 
   it('NEEDS-SUMMARY: shows the hint and no build button when hasBriefs is false', () => {
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: false, ready: false, hasBriefs: false, findingCount: 0, lastUpdatedAt: null,
+    hasReview: false, ready: false, hasBriefs: false, findingCount: 0, lastUpdatedAt: null,
     });
     fixture.detectChanges();
 
@@ -142,7 +173,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
   it('NOT BUILT: shows the not-built badge and a "Build now" button', () => {
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: false, ready: false, findingCount: 0, lastUpdatedAt: null, hasBriefs: true,
+    hasReview: false, ready: false, findingCount: 0, lastUpdatedAt: null, hasBriefs: true,
     });
     fixture.detectChanges();
 
@@ -196,7 +227,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
   it('STALE (staleVsBriefs): shows stale finding count and a "Refresh" action', () => {
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: true, ready: false, staleVsBriefs: true, findingCount: 5,
+    hasReview: true, ready: false, staleVsBriefs: true, findingCount: 5,
     });
     fixture.detectChanges();
 
@@ -210,8 +241,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
   it('STALE (builtWithDifferentModel): forced stale even when staleVsBriefs is false', () => {
     component.bookReviewStatus = makeBookReviewStatus({
       hasReview: true, ready: false, staleVsBriefs: false, builtWithDifferentModel: true,
-      builtWithModel: 'old-model', activeModel: 'gemma4:12b',
-    });
+          });
     fixture.detectChanges();
 
     expect(component.bookReviewState).toBe('stale');
@@ -271,7 +301,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
     const reviewSvc = TestBed.inject(BookReviewService);
     const buildSpy = spyOn(reviewSvc, 'buildReview').and.returnValue(NEVER);
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: false, ready: false, findingCount: 0, hasBriefs: true,
+    hasReview: false, ready: false, findingCount: 0, hasBriefs: true,
     });
     fixture.detectChanges();
 
@@ -290,7 +320,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
     const reviewSvc = TestBed.inject(BookReviewService);
     const buildSpy = spyOn(reviewSvc, 'buildReview').and.returnValue(NEVER);
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: false, ready: false, hasBriefs: true, findingCount: 0,
+    hasReview: false, ready: false, hasBriefs: true, findingCount: 0,
     });
     fixture.detectChanges();
 
@@ -305,7 +335,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
   it('CONSENT: hidden while a build is in flight (prevents duplicate build on lingering confirm)', () => {
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: true, ready: false, staleVsBriefs: true,
+    hasReview: true, ready: false, staleVsBriefs: true,
     });
     component.showBookReviewConsent = true;
     component.bookReviewBuilding = true;
@@ -355,8 +385,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
   it('CROSS-MODEL (he): shows the Hebrew warning and keeps a Refresh affordance', () => {
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: true, ready: false, staleVsBriefs: false, builtWithModel: 'old-model',
-      activeModel: 'gemma4:12b', builtWithDifferentModel: true,
+    hasReview: true, ready: false, staleVsBriefs: false,       builtWithDifferentModel: true,
     });
     fixture.detectChanges();
 
@@ -370,7 +399,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
   it('CROSS-MODEL absent: no warning when builtWithDifferentModel is false', () => {
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: true, ready: false, staleVsBriefs: true, builtWithDifferentModel: false,
+    hasReview: true, ready: false, staleVsBriefs: true, builtWithDifferentModel: false,
     });
     fixture.detectChanges();
 
@@ -382,7 +411,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
   it('Hebrew (default): title is "עריכה התפתחותית" and dir is rtl', () => {
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: false, ready: false, findingCount: 0, hasBriefs: true,
+    hasReview: false, ready: false, findingCount: 0, hasBriefs: true,
     });
     fixture.detectChanges();
 
@@ -394,7 +423,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
   it('English: title is "Developmental review" and dir is ltr', () => {
     component.bookLanguage = 'en';
     component.bookReviewStatus = makeBookReviewStatus({
-      language: 'en', hasReview: false, ready: false, findingCount: 0, hasBriefs: true,
+    language: 'en', hasReview: false, ready: false, findingCount: 0, hasBriefs: true,
     });
     fixture.detectChanges();
 
@@ -407,8 +436,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
     component.bookLanguage = 'en';
     component.bookReviewStatus = makeBookReviewStatus({
       language: 'en', hasReview: true, ready: false, staleVsBriefs: false,
-      builtWithDifferentModel: true, builtWithModel: 'old-model', activeModel: 'gemma4:12b',
-    });
+      builtWithDifferentModel: true,     });
     fixture.detectChanges();
 
     const warning = query('[data-testid="brev-cross-model-warning"]');
@@ -419,7 +447,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
   it('Hebrew: needs-summary hint contains the Hebrew prompt to build briefs first', () => {
     component.bookReviewStatus = makeBookReviewStatus({
-      hasReview: false, ready: false, hasBriefs: false, findingCount: 0,
+    hasReview: false, ready: false, hasBriefs: false, findingCount: 0,
     });
     fixture.detectChanges();
 
@@ -431,7 +459,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
   it('English: needs-summary hint uses English copy', () => {
     component.bookLanguage = 'en';
     component.bookReviewStatus = makeBookReviewStatus({
-      language: 'en', hasReview: false, ready: false, hasBriefs: false, findingCount: 0,
+    language: 'en', hasReview: false, ready: false, hasBriefs: false, findingCount: 0,
     });
     fixture.detectChanges();
 
@@ -894,7 +922,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
     it('READY without coverage (chaptersTotal=0): coverage element is NOT rendered', () => {
       component.bookReviewStatus = makeBookReviewStatus({
-        chaptersReviewed: 0, chaptersTotal: 0, windowCount: 0,
+      chaptersReviewed: 0, chaptersTotal: 0, windowCount: 0,
       });
       fixture.detectChanges();
 
@@ -1004,7 +1032,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
     it('PARTIAL coverage: bookReviewCoverageText contains real done/total AND decimal percentage', () => {
       component.bookReviewStatus = makeBookReviewStatus({
-        chaptersReviewed: 40, chaptersTotal: 64,
+      chaptersReviewed: 40, chaptersTotal: 64,
       });
       fixture.detectChanges();
 
@@ -1015,7 +1043,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
     it('FULL coverage: bookReviewCoverageText contains (100%) when all chapters reviewed', () => {
       component.bookReviewStatus = makeBookReviewStatus({
-        chaptersReviewed: 48, chaptersTotal: 48,
+      chaptersReviewed: 48, chaptersTotal: 48,
       });
       fixture.detectChanges();
 
@@ -1025,7 +1053,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
     it('chaptersTotal=0: bookReviewCoverageText is empty and brev-coverage-chapters is absent', () => {
       component.bookReviewStatus = makeBookReviewStatus({
-        chaptersReviewed: 0, chaptersTotal: 0,
+      chaptersReviewed: 0, chaptersTotal: 0,
       });
       fixture.detectChanges();
 

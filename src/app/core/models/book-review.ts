@@ -48,8 +48,9 @@ export interface ChapterAnchor {
 /**
  * A single persisted whole-book finding as returned by GET .../review/findings.
  * Mirrors BookFindingDto (camelCase): id, dimension, verdict, severity, rationale,
- * evidence, chapterAnchors, suggestedAction, status, builtWithModel, createdAt, updatedAt.
+ * evidence, chapterAnchors, suggestedAction, status, createdAt, updatedAt.
  * Note: bookId and language are on the container BookReviewFindingsDto, not per-finding.
+ * Carries no builtWithModel: which model produced a finding is internal IP and stays server-side.
  */
 export interface BookFinding {
   id: string;
@@ -61,7 +62,6 @@ export interface BookFinding {
   chapterAnchors: ChapterAnchor[];
   suggestedAction: string | null;
   status: FindingStatus;
-  builtWithModel: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -92,7 +92,7 @@ export interface BookReviewFindingsDto {
 /**
  * Response for GET .../review/status — coverage + freshness of the cached whole-book review.
  * Mirrors BookReviewStatusDto (camelCase): bookId, language, hasReview, findingCount,
- * lastUpdatedAt, builtWithModel, activeModel, builtWithDifferentModel, staleVsBriefs,
+ * lastUpdatedAt, builtWithDifferentModel, staleVsBriefs,
  * hasBriefs, activeBuildJobId, ready, chaptersReviewed, chaptersTotal, windowCount,
  * ranSynthesis, ranContinuityReduce, failedWindows.
  *
@@ -121,13 +121,12 @@ export interface BookReviewStatusDto {
   findingCount: number;
   /** UTC ISO timestamp of the last review build, or null if never built. */
   lastUpdatedAt: string | null;
-  /** Model the review was built with; null when no review exists. */
-  builtWithModel: string | null;
-  /** Currently-active BookReview model id; null when unknown. */
-  activeModel: string | null;
   /**
    * True when a review exists but was built with a DIFFERENT model than the currently-active one.
    * Surface a distinct "refresh" warning.
+   *
+   * The only cross-model signal on the wire; the two model names it replaced are internal IP and stay
+   * server-side. See BookStyleBaselineStatusDto for the full note.
    */
   builtWithDifferentModel: boolean;
   /**

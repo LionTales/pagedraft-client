@@ -98,6 +98,7 @@
     [styleBaselineBuilding]="styleBaselineBuilding"
     [styleBaselineProgressPercent]="styleBaselineProgressPercent"
     (buildStyleBaseline)="onBuildStyleBaseline()"
+    (tierChanged)="onTierChanged()"
     (proofreadAccept)="onProofreadAccept($event)"
     (proofreadDismiss)="onProofreadDismiss($event)"
     (lineEditAccept)="onLineEditAccept($event.suggestion, $event.result)"

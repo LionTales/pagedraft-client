@@ -21,7 +21,6 @@ describe('LineEditParserService', () => {
       jobId: null,
       type: 'LineEdit',
       resultText: '',
-      modelName: 'test-model',
       createdAt: new Date().toISOString(),
       scope: 'Chapter',
       analysisType: 'LineEdit',

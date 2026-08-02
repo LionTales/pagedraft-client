@@ -1,4 +1,16 @@
 <section class="run-tab-content">
+  <!-- The model tier for THIS edit type (tier-ux-rework c3). Bound to the selected analysis type, which the
+       toggle resolves to its routing task: several analysis types (Literary, Overview, Character, Story) run
+       as LinguisticAnalysis and therefore share ONE setting, and a type with no tier control (Summarize,
+       Custom) renders nothing. It re-derives from the snapshot in hand when the picker changes; only a book
+       or language change re-reads. -->
+  <app-tier-toggle
+    [bookId]="bookId"
+    [bookLanguage]="bookLanguage"
+    [task]="selectedAnalysisType"
+    (tierChanged)="tierChanged.emit()">
+  </app-tier-toggle>
+
   <!-- Style baseline status row (a3/a4). Only meaningful for LinguisticAnalysis, where deviations are
        computed against the book baseline; show it on the Linguistic run so the user can build/refresh. -->
   <div
@@ -99,7 +111,7 @@
   <!-- Proofread: show suggestion cards from diff (only when type picker is Proofread and the
        result is reliable; an unreliable result suppresses the cards and shows a warning instead). -->
   <div class="suggestions-block" *ngIf="selectedAnalysisType === 'Proofread' && proofreadSuggestions.length > 0 && !isProofreadResultUnreliable">
-    <h4 *ngIf="latestResult">{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}<ng-container *ngIf="visibleModelName(latestResult.modelName) as m"> ({{ m }})</ng-container></h4>
+    <h4 *ngIf="latestResult">{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}</h4>
     <h4 *ngIf="!latestResult">{{ runLabel('suggestions') }}</h4>
     <p class="run-duration muted" *ngIf="lastRunDurationLabel">{{ runLabel('runTime') }} {{ lastRunDurationLabel }}</p>
     <div class="suggestions-list">
@@ -121,7 +133,7 @@
   <article
     class="result-view"
     *ngIf="selectedAnalysisType === 'Proofread' && latestResult && !streamingText && isProofreadResultUnreliable">
-    <h4>{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}<ng-container *ngIf="visibleModelName(latestResult.modelName) as m"> ({{ m }})</ng-container></h4>
+    <h4>{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}</h4>
     <p class="run-duration muted" *ngIf="lastRunDurationLabel">{{ runLabel('runTime') }} {{ lastRunDurationLabel }}</p>
     <p class="proofread-length-hint muted">
       {{ runLabel('unreliableProofread') }}
@@ -137,7 +149,7 @@
       && (lineEditRunSuggestions.length || getLineEdit(latestResult))
     ">
     <article class="result-view">
-      <h4>{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}<ng-container *ngIf="visibleModelName(latestResult.modelName) as m"> ({{ m }})</ng-container></h4>
+      <h4>{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}</h4>
       <p class="run-duration muted" *ngIf="lastRunDurationLabel">{{ runLabel('runTime') }} {{ lastRunDurationLabel }}</p>
       <ng-container *ngIf="getLineEdit(latestResult) as lineEdit">
         <p class="line-edit-overall" *ngIf="lineEdit.overallFeedback">{{ lineEdit.overallFeedback }}</p>
@@ -171,7 +183,7 @@
   <article
     class="result-view"
     *ngIf="latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis'">
-    <h4>{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}<ng-container *ngIf="visibleModelName(latestResult.modelName) as m"> ({{ m }})</ng-container></h4>
+    <h4>{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}</h4>
     <p class="run-duration muted" *ngIf="lastRunDurationLabel">{{ runLabel('runTime') }} {{ lastRunDurationLabel }}</p>
     <app-linguistic-result [result]="latestResult"></app-linguistic-result>
     <!-- Deviations rely on the book style baseline; when it is missing/stale, hint the user to build it
@@ -215,7 +227,7 @@
   <article
     class="result-view"
     *ngIf="latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LiteraryAnalysis'">
-    <h4>{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}<ng-container *ngIf="visibleModelName(latestResult.modelName) as m"> ({{ m }})</ng-container></h4>
+    <h4>{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}</h4>
     <p class="run-duration muted" *ngIf="lastRunDurationLabel">{{ runLabel('runTime') }} {{ lastRunDurationLabel }}</p>
     <app-literary-result [result]="latestResult"></app-literary-result>
   </article>
@@ -229,7 +241,7 @@
            && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LinguisticAnalysis')
            && !(latestResult && !streamingText && (latestResult.analysisType || latestResult.type) === 'LiteraryAnalysis'); else emptyRun">
     <h4 *ngIf="streamingText">{{ runLabel('liveResult') }}</h4>
-    <h4 *ngIf="!streamingText && latestResult">{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}<ng-container *ngIf="visibleModelName(latestResult.modelName) as m"> ({{ m }})</ng-container></h4>
+    <h4 *ngIf="!streamingText && latestResult">{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}</h4>
     <p class="proofread-all-good" *ngIf="isProofreadWithNoSuggestions && !isProofreadResultUnreliable && !proofreadFinalizing">
       {{ runLabel('noChangesNeeded') }}
     </p>

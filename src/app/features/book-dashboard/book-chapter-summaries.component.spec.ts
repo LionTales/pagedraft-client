@@ -63,7 +63,6 @@ function makeView(overrides: Partial<ChapterSummaryViewDto> = {}): ChapterSummar
     createdAt: new Date().toISOString(),
     summaryUserEditedAt: null,
     structuredBuiltAt: new Date().toISOString(),
-    builtWithModel: 'gemma4:12b',
     structuredBrief: null,
     ...overrides,
   };
@@ -92,7 +91,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     rederiveSubject = new Subject<RederiveChapterSummaryResponse>();
 
     bookServiceMock = {
-      getById: () => getByIdSubject.asObservable(),
+    getById: () => getByIdSubject.asObservable(),
     };
     summaryServiceMock = {
       getChapterSummary: (_b: string, chapterId: string) => {
@@ -121,7 +120,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
 
   function triggerInit(): void {
     component.ngOnChanges({
-      bookId: new SimpleChange(null, 'book-1', true),
+    bookId: new SimpleChange(null, 'book-1', true),
     });
     fixture.detectChanges();
   }
@@ -653,8 +652,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
       rederived: true,
       hasStructuredBrief: true,
       structuredBuiltAt: new Date().toISOString(),
-      builtWithModel: 'gemma4:12b',
-      message: 'ok',
+            message: 'ok',
     });
     rederiveSubject.complete();
     fixture.detectChanges();
@@ -707,8 +705,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
       rederived: true,
       hasStructuredBrief: true,
       structuredBuiltAt: new Date().toISOString(),
-      builtWithModel: 'gemma4:12b',
-      message: 'ok',
+            message: 'ok',
     });
     rederiveSubject.complete();
     fixture.detectChanges();

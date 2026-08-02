@@ -78,6 +78,17 @@
     </ng-container>
   </div>
 
+  <!-- The model tier for the whole-book review (tier-ux-rework c3), on the launcher surface itself. The
+       review is off the thinking allowlist, so this renders disabled with the server's reason rather than
+       being hidden: "this one always runs fast, here is why" is the honest answer to a question the launcher
+       otherwise leaves open. -->
+  <app-tier-toggle
+    [bookId]="bookId"
+    [bookLanguage]="bookLanguage"
+    task="BookReview"
+    (tierChanged)="tierChanged.emit()">
+  </app-tier-toggle>
+
   <!-- Cross-model staleness warning: review exists but was built with a different model. -->
   <p
     class="sb-cross-model-warning"
