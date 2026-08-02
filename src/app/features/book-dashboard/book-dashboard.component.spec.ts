@@ -12,7 +12,12 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { NEVER, Observable, Subject, of } from 'rxjs';
 import { BookProfileDto } from '../../core/models/book';
-import { BookDashboardComponent } from './book-dashboard.component';
+import {
+  BookDashboardComponent,
+  DASHBOARD_LABELS_EN,
+  DASHBOARD_LABELS_HE,
+  DashboardLabelKey,
+} from './book-dashboard.component';
 import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
 import { BookService } from '../../core/services/book.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
@@ -880,5 +885,153 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
     (component as any).summaryRow = undefined;
     (component as any).reviewRow = undefined;
     expect(() => component.onTierChanged()).not.toThrow();
+  });
+});
+
+/**
+ * Book-scoped chrome i18n parity. The dashboard's own profile card was originally Hebrew-only: the root
+ * container was hardcoded dir="rtl" and roughly 30 strings were inline literals, so an English book rendered
+ * a half-Hebrew, right-to-left page while every CHILD component on the same page correctly followed
+ * [bookLanguage]. Found by loading an English book in a real browser; no spec covered it because the
+ * existing suite only ever set bookLanguage = 'he'. These lock the rule in both directions.
+ */
+describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', {
+            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+          }),
+        },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+  });
+
+  /**
+   * Derived from the real Hebrew map, so a key added to the maps is covered by the per-key suites below
+   * without anyone editing this file. The list is only as complete as DASHBOARD_LABELS_HE itself; the
+   * set-equality suite below is what ties the English map to it at runtime.
+   */
+  const ALL_KEYS = Object.keys(DASHBOARD_LABELS_HE) as DashboardLabelKey[];
+
+  const HEBREW = /[\u0590-\u05FF]/;
+
+  it('derives a non-empty key list (an empty derivation would pass every per-key loop vacuously)', () => {
+    expect(ALL_KEYS.length).withContext('Object.keys(DASHBOARD_LABELS_HE) must not be empty').toBeGreaterThan(0);
+  });
+
+  it('holds the same key set in both language maps, in both directions', () => {
+    const heKeys = Object.keys(DASHBOARD_LABELS_HE);
+    const enKeys = Object.keys(DASHBOARD_LABELS_EN);
+    const missingFromEn = heKeys.filter((k) => !enKeys.includes(k));
+    const missingFromHe = enKeys.filter((k) => !heKeys.includes(k));
+
+    expect(missingFromEn)
+      .withContext(`keys in the Hebrew map with no English counterpart: ${missingFromEn.join(', ')}`)
+      .toEqual([]);
+    expect(missingFromHe)
+      .withContext(`keys in the English map with no Hebrew counterpart: ${missingFromHe.join(', ')}`)
+      .toEqual([]);
+  });
+
+  it('resolves every label in both languages, with no key falling back to the other language', () => {
+    component.bookLanguage = 'he';
+    const he = ALL_KEYS.map((k) => component.label(k));
+    component.bookLanguage = 'en';
+    const en = ALL_KEYS.map((k) => component.label(k));
+
+    he.forEach((v, i) => {
+      expect(v).withContext(`he label for "${ALL_KEYS[i]}" must be non-empty`).toBeTruthy();
+      expect(HEBREW.test(v)).withContext(`he label for "${ALL_KEYS[i]}" must be Hebrew`).toBeTrue();
+    });
+    en.forEach((v, i) => {
+      expect(v).withContext(`en label for "${ALL_KEYS[i]}" must be non-empty`).toBeTruthy();
+      expect(HEBREW.test(v)).withContext(`en label for "${ALL_KEYS[i]}" must NOT contain Hebrew`).toBeFalse();
+    });
+  });
+
+  it('carries no em-dash or en-dash in any user-facing string (project text rule)', () => {
+    (['he', 'en'] as const).forEach((lang) => {
+      component.bookLanguage = lang;
+      ALL_KEYS.forEach((k) => {
+        const v = component.label(k);
+        expect(v.includes('\u2014')).withContext(`${lang}/${k} must not contain an em-dash`).toBeFalse();
+        expect(v.includes('\u2013')).withContext(`${lang}/${k} must not contain an en-dash`).toBeFalse();
+      });
+    });
+  });
+
+  it('follows the BOOK language for direction, not a hardcoded rtl (the shipped defect)', () => {
+    component.bookLanguage = 'en';
+    expect(component.bookDir).toBe('ltr');
+    component.bookLanguage = 'he';
+    expect(component.bookDir).toBe('rtl');
+    // An unset/unknown language stays Hebrew-default, matching the rest of the app.
+    component.bookLanguage = null;
+    expect(component.bookDir).toBe('rtl');
+  });
+
+  it('keeps reviewDir consistent with the dashboard direction', () => {
+    component.bookLanguage = 'en';
+    expect(component.reviewDir).toBe(component.bookDir);
+    component.bookLanguage = 'he';
+    expect(component.reviewDir).toBe(component.bookDir);
+  });
+
+  it('renders an English book with an ltr container and English chrome (no Hebrew in the DOM)', () => {
+    component.bookLanguage = 'en';
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement.querySelector('.book-dashboard') as HTMLElement;
+    expect(root.getAttribute('dir')).toBe('ltr');
+
+    const title = fixture.nativeElement.querySelector('.dashboard-title') as HTMLElement;
+    expect(title.textContent).toContain('Book dashboard');
+    expect(HEBREW.test(title.textContent ?? '')).withContext('English book must not render Hebrew chrome').toBeFalse();
+
+    const refresh = fixture.nativeElement.querySelector('.refresh-btn') as HTMLElement;
+    expect(refresh.getAttribute('title')).toBe('Refresh profile');
+  });
+
+  it('renders a Hebrew book with an rtl container and Hebrew chrome', () => {
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement.querySelector('.book-dashboard') as HTMLElement;
+    expect(root.getAttribute('dir')).toBe('rtl');
+
+    const title = fixture.nativeElement.querySelector('.dashboard-title') as HTMLElement;
+    expect(HEBREW.test(title.textContent ?? '')).toBeTrue();
   });
 });
