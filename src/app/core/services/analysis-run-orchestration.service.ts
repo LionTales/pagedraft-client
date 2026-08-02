@@ -312,7 +312,6 @@ export class AnalysisRunOrchestrationService {
               chapterId: ctx.chapterId,
               type: ctx.selectedAnalysisType,
               resultText: accumulated,
-              modelName: '',
               createdAt: new Date().toISOString(),
               analysisType: ctx.selectedAnalysisType,
               // Stamp the language the run used. Without it LinguisticResultComponent treats a missing

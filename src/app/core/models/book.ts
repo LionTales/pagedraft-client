@@ -4,41 +4,89 @@
 export type AiTierValue = 'fast' | 'thinking';
 
 /**
- * Whether the thinking tier is usable on THIS server, and if not, why not. The three failure values are
- * kept distinct because they need three different sentences and imply three different user actions:
- *  - 'routeNotConfigured'        the tier keys are absent, so a book stored as thinking SILENTLY runs local;
+ * Whether the thinking tier is usable, and if not, why not. Every value is a TOKEN, never a sentence: the
+ * server deliberately sends no prose because this client is he/en bilingual and owns the copy. The failure
+ * values are kept distinct because they need different sentences and imply different user actions:
+ *  - 'routeNotConfigured'        the tier keys are absent, so a book stored as thinking SILENTLY runs local
+ *                                (an operator kill switch, so an operator can undo it);
  *  - 'providerNotRegistered'     the tier names a provider this server does not have, so a run would fail;
- *  - 'providerCredentialsMissing' the provider has no API key here, so a run would fail.
+ *  - 'providerCredentialsMissing' the provider has no access configured here, so a run would fail;
+ *  - 'taskNotEligible'           PER TASK: this task is off the thinking allowlist (LineEdit, BookReview).
+ *                                Permanent product property, nothing to fix;
+ *  - 'languageAlwaysFast'        PER TASK: the {task}_{lang} rung outranks the tier rung for this book's
+ *                                language (the English-Proofread NO-GO). The fix is the BOOK LANGUAGE, not
+ *                                the deployment, which is why it is not folded into routeNotConfigured.
  */
 export type AiTierReadiness =
   | 'ready'
   | 'routeNotConfigured'
   | 'providerNotRegistered'
-  | 'providerCredentialsMissing';
+  | 'providerCredentialsMissing'
+  | 'taskNotEligible'
+  | 'languageAlwaysFast';
 
 /**
- * One allowlisted task's ACTUAL route for this book. `usesTier` false is not an error: for an English book
- * the server's `Proofread_en` key outranks the tier, so English proofreading stays local on both tiers by
- * design, and the surface says so per task rather than painting the whole book "cloud".
+ * One user-facing task's tier answer (tier-ux-rework c1/c2). Keyed by the AiTaskType name (`Proofread`,
+ * `LineEdit`, `LinguisticAnalysis`, `BookReview`), NOT by AnalysisType: several analysis types route to one
+ * task, so resolve an analysis type through {@link resolveAiTaskKey} before matching against this list, or
+ * four "different" toggles would secretly be one setting.
+ *
+ * There is deliberately NO provider/model field anywhere on this payload, and since be-c03 no routing-derived
+ * field of any kind. Model identity is internal IP and the server strips it before serializing; do not re-add
+ * a "which model" field for debugging. The one that was here, a `processingLocation` token justified as the
+ * fact the consent copy could not be written without, was read by nothing and could not have been: it
+ * described the task's CURRENT effective tier, which when a consent prompt opens is always 'fast', while
+ * consent is a question about the thinking route the user is about to move to.
  */
-export interface BookAiTierRouteDto {
+export interface BookAiTierTaskDto {
+  /** The AiTaskType name. */
   task: string;
-  provider: string;
-  model: string;
-  usesTier: boolean;
-}
-
-/** GET/PUT /api/books/{bookId}/ai-tier. */
-export interface BookAiTierDto {
-  bookId: string;
-  tier: AiTierValue;
+  /** This task's own override, or null when it INHERITS the book default. null is NOT the same as 'fast'. */
+  storedTier: AiTierValue | null;
+  /**
+   * THE TIER THAT WILL ACTUALLY ROUTE for this task, already clamped server-side (be-c01) - NOT the stored
+   * setting and NOT "the override else the book default". A task the tier cannot move (LineEdit, BookReview),
+   * one whose book language always stays fast (an English book's Proofread) or one whose thinking route an
+   * operator removed reads 'fast' here however the book default is set. Bind the highlighted option to this
+   * and never re-derive it: what was ASKED for is `storedTier` + `fallbackActive`.
+   */
+  effectiveTier: AiTierValue;
+  /** Whether 'thinking' can route FOR THIS TASK. Anything but 'ready' means a PUT of thinking is a 409. */
   thinkingReadiness: AiTierReadiness;
   /**
-   * The book stores 'thinking' but NO route actually uses the tier, so it is running on the local models.
-   * This is the visible-fallback flag: the UI must render it rather than showing an unqualified "thinking".
+   * 'Thinking' was asked for and is NOT being honoured: the per-task form of "fall back visibly, never
+   * silently", and a claim about the SETTING rather than about the run. It can be true while `effectiveTier`
+   * reads 'fast' - that pairing IS the fallback. It is deliberately false when a book default merely washed
+   * over a task that could never honour it, because the `thinkingReadiness` reason covers that case and a
+   * warning there would contradict the option beside it.
    */
   fallbackActive: boolean;
-  routes: BookAiTierRouteDto[];
+}
+
+/** GET/PUT/DELETE /api/books/{bookId}/ai-tier. */
+export interface BookAiTierDto {
+  bookId: string;
+  /** The book-level DEFAULT tier. Since c1 it is a SEED: a task with its own override does not follow it. */
+  tier: AiTierValue;
+  /** Deployment-wide readiness (the book-default control's verdict). Per-task verdicts live on `tasks`. */
+  thinkingReadiness: AiTierReadiness;
+  /**
+   * The BOOK DEFAULT is 'thinking' but NO route actually uses the tier, so it is running on the local models.
+   * This is the visible-fallback flag: the UI must render it rather than showing an unqualified "thinking".
+   * Scoped to the book default, which is what the book-scope toggle highlights: a per-task opt-in that is not
+   * being honoured raises `fallbackActive` on THAT task's row instead, so this flag can never contradict the
+   * pill rendered beside it.
+   */
+  fallbackActive: boolean;
+  /**
+   * Whether the client must render an explicit consent step before committing a task to 'thinking'. It is a
+   * RENDERING instruction driven by deployment topology (in a hosted deployment both tiers are already off
+   * this machine, so the local-vs-cloud consent step is meaningless there), NOT an authorization gate: the
+   * server's 409 on an unroutable 'thinking' request is unchanged and independent of it.
+   */
+  consentRequired: boolean;
+  /** Every user-facing task's stored and effective tier, so a per-task toggle renders the server's answer. */
+  tasks: BookAiTierTaskDto[];
 }
 
 export interface BookDto {

@@ -1,0 +1,231 @@
+// The compact tier toggle (tier-ux-rework c3). Descended from the at-* styles of the removed dashboard
+// control, but the layout collapses to ONE inline row: this sits next to a run button, not in a settings
+// card. Every inline size is logical (inline-start/end, margin-inline) so RTL is structural rather than a
+// set of mirrored overrides.
+
+// Block-level so the control behaves the same whether its host lays children out as a flex column (the run
+// tab, the review status row) or as normal flow (a card).
+:host {
+  display: block;
+}
+
+.tier-toggle {
+  // THE POPOVER'S CONTAINING BLOCK. Deliberately the whole ROW, not the 1.15rem `?` wrapper: every surface
+  // that hosts this control is a narrow scrolling column (the analysis run tab is ~347px wide with
+  // `overflow: auto`, the book dashboard the same), so a panel anchored to a button sitting mid-row grows
+  // straight out through the clipping ancestor's inline edge and the copy is unrecoverable - there is no
+  // horizontal scrollbar to chase it with. Anchored to the row instead, `max-inline-size: min(18rem, 100%)`
+  // clamps the panel to the row, and the row is by construction inside the scroller.
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pd-space-2);
+  font-family: var(--pd-font-ui);
+}
+
+// Only rendered in book scope. `flex: 1 1 0` rather than the default `0 1 auto` because flex line-breaking
+// happens BEFORE flex shrinking: with an auto basis the title's full max-content width decides the line, so
+// on a narrow surface it pushed the `?` onto a second flex row and made a one-line settings row 87px tall. A
+// zero basis keeps the title on the line with the control and lets its TEXT wrap if the surface is narrower
+// than the copy. Caption size/medium weight because this is a settings-row label, not a section heading -
+// the same demotion the book default itself got when it left the dashboard hero position.
+.tt-title {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text);
+}
+
+.tt-status {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+}
+
+// ── The segmented two-word control ───────────────────────────────────────────
+
+.tt-seg {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 2px;
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-surface-sunken);
+}
+
+.tt-opt {
+  padding: var(--pd-space-1) var(--pd-space-3);
+  border: none;
+  border-radius: var(--pd-radius-pill);
+  background: transparent;
+  color: var(--pd-text-secondary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: 1.6;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+// The SELECTED word is the highlighted one. Selection is the filled pill; unavailability is the dimming, so
+// "already chosen" (also aria-disabled) can never be mistaken for "cannot be chosen".
+.tt-opt.selected {
+  background: var(--pd-surface);
+  color: var(--pd-text);
+  font-weight: var(--pd-weight-bold);
+  box-shadow: inset 0 0 0 1px var(--pd-primary-700);
+}
+
+.tt-opt[aria-disabled='true'] {
+  cursor: default;
+}
+
+.tt-opt[aria-disabled='true']:not(.selected) {
+  opacity: 0.55;
+}
+
+// ── Info affordance: hover/focus tooltip on a pointer device, tap popover on touch ──
+
+// NOT position:relative - the popover is anchored to `.tier-toggle` (see above), and a relative wrapper here
+// would silently take the containing block back. `align-self: stretch` extends the hover box to the bottom of
+// its flex line so the pointer reaches the panel across a 2px gap instead of a dead strip; where the row wraps
+// (a reason or warning under the control) the gap is the height of those lines, which is deliberate and
+// harmless: the panel is pure text with nothing to click, so it has to be READABLE on hover, not REACHABLE.
+// The `?` is also a real button that pins it open, which is the affordance a touch user and a keyboard user
+// get anyway.
+.tt-info-wrap {
+  display: inline-flex;
+  align-self: stretch;
+  align-items: center;
+}
+
+.tt-info {
+  inline-size: 1.15rem;
+  block-size: 1.15rem;
+  padding: 0;
+  border: 1px solid var(--pd-border-strong);
+  border-radius: 50%;
+  background: var(--pd-surface);
+  color: var(--pd-text-secondary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tt-popover {
+  position: absolute;
+  inset-block-start: calc(100% + var(--pd-space-1));
+  inset-inline-start: 0;
+  z-index: 20;
+  inline-size: max-content;
+  // The clamp that makes the panel readable: 100% is the ROW, which is inside the scroller by construction,
+  // so neither inline edge can leave the clipping ancestor in either writing direction.
+  max-inline-size: min(18rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-1);
+  padding: var(--pd-space-2) var(--pd-space-3);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-surface);
+  box-shadow: var(--pd-shadow-1);
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+  line-height: 1.5;
+  text-align: start;
+  // Hidden by default, revealed by hover/focus (pointer) or by the .open pin (touch/click). visibility
+  // rather than display so the aria-describedby target stays in the accessibility tree.
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity var(--pd-dur-fast) var(--pd-ease);
+}
+
+// The book-default row is the LAST thing in the dashboard's scrolling column, so a panel hanging below it
+// lands past the scroller's block-end edge and shows about 7px of itself to anyone hovering. It opens
+// block-start instead. This is placement, not scope semantics: the flip is keyed off the one scope that is
+// pinned to the foot of its container, and if the book default ever moves to a settings page nearer the top
+// this rule moves with it.
+.tier-toggle.tt-scope-book .tt-popover {
+  inset-block-start: auto;
+  inset-block-end: calc(100% + var(--pd-space-1));
+}
+
+.tt-info-wrap:hover .tt-popover,
+.tt-info:focus-visible + .tt-popover,
+.tt-popover.open {
+  opacity: 1;
+  visibility: visible;
+}
+
+.tt-pop-line {
+  display: block;
+}
+
+// ── Reasons, warnings, errors ────────────────────────────────────────────────
+
+.tt-reason {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+  line-height: 1.5;
+}
+
+.tt-warn {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-improve);
+  line-height: 1.5;
+  border-inline-start: 3px solid var(--pd-improve);
+  padding-inline-start: var(--pd-space-2);
+}
+
+.tt-error {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-cut);
+  line-height: 1.5;
+}
+
+.tt-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--pd-text-link);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  cursor: pointer;
+}
+
+.tt-link:hover {
+  text-decoration: underline;
+}
+
+// ── The inline consent step ──────────────────────────────────────────────────
+// Wraps onto its own line under the toggle (flex-basis 100%) instead of stretching the row.
+
+.tt-consent {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pd-space-2);
+  padding: var(--pd-space-2) var(--pd-space-3);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-surface);
+}
+
+.tt-consent-body {
+  flex: 1 1 14rem;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+  line-height: 1.5;
+}
+
+.tt-consent-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--pd-space-2);
+}
+
+.tt-consent-btn {
+  font-size: var(--pd-text-caption);
+}

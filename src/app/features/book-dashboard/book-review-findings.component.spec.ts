@@ -40,7 +40,6 @@ function makeFinding(overrides: Partial<BookFinding> = {}): BookFinding {
     chapterAnchors: [{ chapterId: 'c-3', order: 3, title: 'The Turn' }],
     suggestedAction: 'Plant the betrayal two chapters earlier.',
     status: 'open',
-    builtWithModel: 'gemma4:12b',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,
@@ -103,7 +102,7 @@ describe('BookReviewFindingsComponent (wb3-c02)', () => {
   /** Trigger the initial load via ngOnChanges (mirrors how the host drives @Inputs). */
   function triggerInit(): void {
     component.ngOnChanges({
-      bookId: new SimpleChange(null, component.bookId, true),
+    bookId: new SimpleChange(null, component.bookId, true),
     });
   }
 

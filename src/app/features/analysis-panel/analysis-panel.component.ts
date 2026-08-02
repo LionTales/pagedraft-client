@@ -387,6 +387,21 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     });
   }
 
+  /**
+   * The run tab's tier toggle committed a tier change (tier-ux-rework fixes c04). Changing the tier for
+   * LinguisticAnalysis changes the ACTIVE MODEL, and `builtWithDifferentModel` on the style-baseline status
+   * is computed against exactly that - so the cross-model warning rendered just under the toggle is stale
+   * the moment the write lands, and used to stay stale until the user reloaded the page.
+   *
+   * Deliberately routed through `loadStyleBaselineStatus()` rather than issuing a fetch of its own: that
+   * method already cancels the previous in-flight status GET and re-checks (book, language) on the answer,
+   * so this re-read SUPERSEDES an overlapping one instead of racing it. A second raw fetch beside it would
+   * reintroduce exactly the older-answer-wins race that guard exists for.
+   */
+  onTierChanged(): void {
+    this.loadStyleBaselineStatus();
+  }
+
   /** Stop any active baseline progress poll. */
   private stopStyleBaselineProgress(): void {
     if (this.styleBaselineProgressStop$) {

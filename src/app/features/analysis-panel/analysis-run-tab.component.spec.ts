@@ -1,8 +1,10 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { SimpleChange } from '@angular/core';
 import { By } from '@angular/platform-browser';
+import { NEVER } from 'rxjs';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
+import { AiTierService } from '../../core/services/ai-tier.service';
 import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
@@ -21,7 +23,6 @@ function makeLinguisticResult(
     type: 'LinguisticAnalysis',
     analysisType: 'LinguisticAnalysis',
     resultText: '',
-    modelName: 'test-model',
     createdAt: new Date().toISOString(),
     scope: 'Chapter',
     structuredResult,
@@ -46,7 +47,6 @@ function makeProofreadResult(
     type: 'Proofread',
     analysisType: 'Proofread',
     resultText: '',
-    modelName: 'test-model',
     createdAt: new Date().toISOString(),
     scope: 'Scene',
     structuredResult: null,
@@ -73,8 +73,6 @@ function makeBaselineStatus(
     hasBaseline: true,
     ready: true,
     lastUpdatedAt: new Date().toISOString(),
-    builtWithModel: 'gemma4:12b',
-    activeModel: 'gemma4:12b',
     builtWithDifferentModel: false,
     activeBuildJobId: null,
     chaptersToBuild: 0,
@@ -95,8 +93,26 @@ describe('AnalysisRunTabComponent', () => {
   beforeEach(async () => {
     await TestBed.configureTestingModule({
       imports: [AnalysisRunTabComponent],
-      // Linguistic results never parse as Line Edit; stub keeps the test isolated.
-      providers: [{ provide: LineEditParserService, useValue: { getLineEdit: () => null } }],
+      providers: [
+        // Linguistic results never parse as Line Edit; stub keeps the test isolated.
+        { provide: LineEditParserService, useValue: { getLineEdit: () => null } },
+        // tier-ux-rework c3: the run tab now hosts the per-edit-type tier toggle, which injects AiTierService
+        // (-> HttpClient). Without this stub every test in this suite fails with a NullInjector error naming
+        // HttpClient rather than the child that introduced it.
+        {
+          provide: AiTierService,
+          useValue: {
+            // `watch` is the shared per-book answer channel (tier-ux-rework fixes c02): the toggle subscribes
+            // to it on every mount, so a stub without it fails this suite with a TypeError from a child.
+            watch: () => NEVER,
+            refresh: () => NEVER,
+            get: () => NEVER,
+            setTask: () => NEVER,
+            setBookDefault: () => NEVER,
+            clearTask: () => NEVER,
+          },
+        },
+      ],
     }).compileComponents();
 
     fixture = TestBed.createComponent(AnalysisRunTabComponent);
@@ -106,6 +122,60 @@ describe('AnalysisRunTabComponent', () => {
   function query(selector: string) {
     return fixture.debugElement.query(By.css(selector));
   }
+
+  // =========================================================================
+  // tier-ux-rework c3: the per-edit-type tier toggle lives on the run surface
+  // =========================================================================
+
+  describe('per-edit-type tier toggle', () => {
+    it('mounts one toggle bound to the book and to the CURRENTLY selected analysis type', () => {
+      component.bookId = 'book-1';
+      component.bookLanguage = 'he';
+      component.selectedAnalysisType = 'Proofread';
+      fixture.detectChanges();
+
+      const toggles = fixture.debugElement.queryAll(By.css('app-tier-toggle'));
+      expect(toggles.length).toBe(1);
+      expect(toggles[0].componentInstance.bookId).toBe('book-1');
+      expect(toggles[0].componentInstance.bookLanguage).toBe('he');
+      expect(toggles[0].componentInstance.task).toBe('Proofread');
+      expect(toggles[0].componentInstance.scope).toBe('task');
+    });
+
+    /**
+     * The toggle must FOLLOW the picker: a run tab still showing the Proofread tier while the user has
+     * selected Line Edit would state the wrong setting for the button they are about to press.
+     */
+    it('re-binds to the new type when the picker changes', () => {
+      component.bookId = 'book-1';
+      component.selectedAnalysisType = 'Proofread';
+      fixture.detectChanges();
+
+      component.selectedAnalysisType = 'LineEdit';
+      fixture.detectChanges();
+
+      expect(query('app-tier-toggle').componentInstance.task).toBe('LineEdit');
+    });
+
+    /**
+     * tier-ux-rework fixes c04. This tab RENDERS the style-baseline status row (with its cross-model
+     * staleness warning) but the analysis panel above OWNS the fetch and its supersession guard, so the tab's
+     * only job on a tier change is to pass the event up. A tab that swallowed it would leave the warning
+     * rendered right below the toggle stale until a manual page reload.
+     */
+    it('passes the toggle\'s tierChanged up to the panel that owns the baseline fetch', () => {
+      component.bookId = 'book-1';
+      component.selectedAnalysisType = 'LinguisticAnalysis';
+      fixture.detectChanges();
+
+      let bubbled = 0;
+      component.tierChanged.subscribe(() => bubbled++);
+
+      query('app-tier-toggle').componentInstance.tierChanged.emit();
+
+      expect(bubbled).withContext('one toggle event, one tab event').toBe(1);
+    });
+  });
 
   // =========================================================================
   // Regression: a completed LinguisticAnalysis must not also show "no run yet"
@@ -155,7 +225,6 @@ describe('AnalysisRunTabComponent', () => {
         type: 'LiteraryAnalysis',
         analysisType: 'LiteraryAnalysis',
         resultText: literaryJson,
-        modelName: 'test-model',
         createdAt: new Date().toISOString(),
         scope: 'Chapter',
         structuredResult: null,
@@ -332,7 +401,6 @@ describe('AnalysisRunTabComponent', () => {
         type: 'Custom',
         analysisType: 'Custom',
         resultText,
-        modelName: 'test-model',
         createdAt: new Date().toISOString(),
         scope: 'Chapter',
         structuredResult: null,
@@ -395,7 +463,7 @@ describe('AnalysisRunTabComponent', () => {
       component.latestResult = makeProofreadResult({ proofreadResultUnreliable: false });
       component.selectedAnalysisType = 'Proofread';
       component.proofreadSuggestions = [{
-        id: 'p-1', original: 'teh', suggested: 'the', category: 'spelling', startOffset: 0, endOffset: 3,
+      id: 'p-1', original: 'teh', suggested: 'the', category: 'spelling', startOffset: 0, endOffset: 3,
       }];
       component.streamingText = '';
       fixture.detectChanges();
@@ -496,8 +564,9 @@ describe('AnalysisRunTabComponent', () => {
 
   // =========================================================================
   // Proofread Run-tab states: the four mutually-exclusive completed-run states.
-  // Each shows the model name in its header, exactly one message, and never a
-  // "looks clean" alongside a warning (or vice versa).
+  // Each shows exactly one message, never a "looks clean" alongside a warning (or vice versa), and never
+  // the model that produced the result: these headers used to print it, which is what put
+  // "(Ollama:gemma4:12b)" on a user's screen.
   // =========================================================================
 
   describe('Proofread Run-tab states', () => {
@@ -515,12 +584,11 @@ describe('AnalysisRunTabComponent', () => {
     }
 
     // ---- State 1: UNRELIABLE + has suggestions (PROBLEM 2) ----------------
-    it('UNRELIABLE + has suggestions: warning renders, cards do NOT, model name in header', () => {
+    it('UNRELIABLE + has suggestions: warning renders, cards do NOT, NO model name in header', () => {
       component.bookLanguage = 'en';
       component.latestResult = makeProofreadResult({
         proofreadResultUnreliable: true,
-        modelName: 'Ollama:dicta',
-      });
+              });
       component.selectedAnalysisType = 'Proofread';
       component.proofreadSuggestions = [oneSuggestion];
       component.streamingText = '';
@@ -541,18 +609,18 @@ describe('AnalysisRunTabComponent', () => {
       // Exactly one warning paragraph.
       expect(fixture.debugElement.queryAll(By.css('.proofread-length-hint')).length).toBe(1);
 
-      // Model name appears in the (sole) result header.
+      // The result header names the analysis type only. Model identity is internal IP (see the IP pin below).
       const header = warning.nativeElement.closest('article').querySelector('h4');
       expect(header.textContent).toContain('Proofread');
-      expect(header.textContent).toContain('Ollama:dicta');
+      expect(header.textContent).not.toContain('Ollama:dicta');
+      expect(header.textContent).not.toContain('(');
     });
 
     // ---- State 1b: UNRELIABLE + no suggestions ---------------------------
-    it('UNRELIABLE + no suggestions: warning renders, "looks clean" does NOT, model name present', () => {
+    it('UNRELIABLE + no suggestions: warning renders, "looks clean" does NOT, NO model name in header', () => {
       component.latestResult = makeProofreadResult({
         proofreadResultUnreliable: true,
-        modelName: 'Ollama:dicta',
-      });
+              });
       component.selectedAnalysisType = 'Proofread';
       component.proofreadSuggestions = [];
       component.streamingText = '';
@@ -568,15 +636,15 @@ describe('AnalysisRunTabComponent', () => {
       expect(query('[data-testid="no-run-yet"]')).toBeNull();
 
       const header = warning.nativeElement.closest('article').querySelector('h4');
-      expect(header.textContent).toContain('Ollama:dicta');
+      expect(header.textContent).not.toContain('Ollama:dicta');
+      expect(header.textContent).not.toContain('(');
     });
 
     // ---- State 2: RELIABLE + has suggestions (PROBLEM 1 regression) -------
-    it('RELIABLE + has suggestions: cards render, warning does NOT, model name in header', () => {
+    it('RELIABLE + has suggestions: cards render, warning does NOT, NO model name in header', () => {
       component.latestResult = makeProofreadResult({
         proofreadResultUnreliable: false,
-        modelName: 'Ollama:dicta',
-      });
+              });
       component.selectedAnalysisType = 'Proofread';
       component.proofreadSuggestions = [oneSuggestion];
       component.streamingText = '';
@@ -592,11 +660,12 @@ describe('AnalysisRunTabComponent', () => {
       expect(query('.proofread-length-hint')).toBeNull();
       expect(query('.proofread-all-good')).toBeNull();
 
-      // Model name now shows in the suggestions header (regression for PROBLEM 1).
+      // The suggestions header names the analysis type only, never the model that produced it.
       // bookLanguage not set -> chromeLang defaults to 'he', so type label is localized.
       const header = block.nativeElement.querySelector('h4');
       expect(header.textContent).toContain('הגהה'); // Hebrew localized label for 'Proofread'
-      expect(header.textContent).toContain('Ollama:dicta');
+      expect(header.textContent).not.toContain('Ollama:dicta');
+      expect(header.textContent).not.toContain('(');
     });
 
     // ---- c05: an English book renders the ENGLISH analysis-type label in the
@@ -609,8 +678,7 @@ describe('AnalysisRunTabComponent', () => {
       component.bookLanguage = 'en';
       component.latestResult = makeProofreadResult({
         proofreadResultUnreliable: false,
-        modelName: 'Ollama:dicta',
-      });
+              });
       component.selectedAnalysisType = 'Proofread';
       component.proofreadSuggestions = [oneSuggestion];
       component.streamingText = '';
@@ -629,11 +697,10 @@ describe('AnalysisRunTabComponent', () => {
         // through the LineEdit run branch whose header also reads analysisTypeLabel(...).
         type: 'LineEdit',
         analysisType: 'LineEdit',
-        modelName: 'Ollama:dicta',
-      });
+              });
       component.selectedAnalysisType = 'LineEdit';
       component.lineEditRunSuggestions = [{
-        id: 'le-1', original: 'he walked', suggested: 'he strode', category: 'style', startOffset: 0, endOffset: 9,
+      id: 'le-1', original: 'he walked', suggested: 'he strode', category: 'style', startOffset: 0, endOffset: 9,
       }];
       component.streamingText = '';
       fixture.detectChanges();
@@ -645,12 +712,11 @@ describe('AnalysisRunTabComponent', () => {
     });
 
     // ---- State 3: RELIABLE + no suggestions ------------------------------
-    it('RELIABLE + no suggestions: "looks clean" renders, warning does NOT, model name present', () => {
+    it('RELIABLE + no suggestions: "looks clean" renders, warning does NOT, NO model name in header', () => {
       component.bookLanguage = 'en';
       component.latestResult = makeProofreadResult({
         proofreadResultUnreliable: false,
-        modelName: 'Ollama:dicta',
-      });
+              });
       component.selectedAnalysisType = 'Proofread';
       component.proofreadSuggestions = [];
       component.streamingText = '';
@@ -666,7 +732,8 @@ describe('AnalysisRunTabComponent', () => {
       expect(query('.suggestions-block')).toBeNull();
 
       const header = allGood.nativeElement.closest('article').querySelector('h4');
-      expect(header.textContent).toContain('Ollama:dicta');
+      expect(header.textContent).not.toContain('Ollama:dicta');
+      expect(header.textContent).not.toContain('(');
     });
 
     it('CLEAN: treats an undefined proofreadResultUnreliable as reliable', () => {
@@ -831,7 +898,7 @@ describe('AnalysisRunTabComponent', () => {
 
     it('CONSENT cancel: closes the prompt without emitting build', () => {
       component.styleBaselineStatus = makeBaselineStatus({
-        hasBaseline: false, ready: false, builtChapters: 0, chaptersToBuild: 1, estimatedSeconds: 30,
+      hasBaseline: false, ready: false, builtChapters: 0, chaptersToBuild: 1, estimatedSeconds: 30,
       });
       let emittedCount = 0;
       component.buildStyleBaseline.subscribe(() => emittedCount++);
@@ -903,7 +970,7 @@ describe('AnalysisRunTabComponent', () => {
 
     it('deviations empty-state hint shows when the baseline is missing/insufficient', () => {
       component.styleBaselineStatus = makeBaselineStatus({
-        hasBaseline: false, ready: false, builtChapters: 0,
+      hasBaseline: false, ready: false, builtChapters: 0,
       });
       component.latestResult = makeLinguisticResult(
         JSON.stringify({ deviations: [], consistencyIssues: [] })
@@ -932,8 +999,6 @@ describe('AnalysisRunTabComponent', () => {
       component.styleBaselineStatus = makeBaselineStatus({
         ready: false,
         staleCount: 3,
-        builtWithModel: 'old-model',
-        activeModel: 'gemma4:12b',
         builtWithDifferentModel: true,
         chaptersToBuild: 3,
         estimatedSeconds: 90,
@@ -999,7 +1064,7 @@ describe('AnalysisRunTabComponent', () => {
     // ---- Bug 1: the consent prompt must not stay confirmable while a build is in flight ----
     it('BUILDING: hides the consent prompt even if showBaselineConsent is still true', () => {
       component.styleBaselineStatus = makeBaselineStatus({
-        ready: false, staleCount: 2, chaptersToBuild: 2, estimatedSeconds: 90,
+      ready: false, staleCount: 2, chaptersToBuild: 2, estimatedSeconds: 90,
       });
       component.showBaselineConsent = true;   // prompt was opened...
       component.styleBaselineBuilding = true;  // ...then a build started / reattached (DEF-2)
@@ -1159,42 +1224,51 @@ describe('AnalysisRunTabComponent', () => {
     });
   });
 
-  describe('visibleModelName: suppress the internal "chunked" sentinel in the result heading', () => {
-    it('returns null for the "chunked" sentinel so the (chunked) parenthetical is omitted', () => {
-      expect(component.visibleModelName('chunked')).toBeNull();
+  /**
+   * IP PIN. The result heading used to render the model beside the analysis name, so a finished run showed
+   * e.g. "ספרותי (Ollama:gemma4:12b)". Which model ran is internal IP: the server no longer sends
+   * `modelName` at all, and no heading may reintroduce it from any other source. This replaces the old
+   * `visibleModelName` suite, whose whole job was hiding ONE sentinel ("chunked") while letting every real
+   * model name through - the wrong shape of guard for the decision that has since been taken.
+   */
+  describe('result headings never expose model identity', () => {
+    const MODEL_STRINGS = [
+      'Ollama:gemma4:12b',
+      'gemma4:12b',
+      'OpenRouter:google/gemma-4-31b-it',
+      'chunked',
+      'stream',
+    ];
+
+    MODEL_STRINGS.forEach(model => {
+      it(`renders no model parenthetical when a result carries "${model}"`, () => {
+        component.bookLanguage = 'he';
+        component.selectedAnalysisType = 'Proofread';
+        // Cast through any: `modelName` is deliberately gone from AnalysisResultDto. Setting it anyway is
+        // the point - even if a stale server or a cached payload still carried it, nothing may render it.
+        component.latestResult = {
+          analysisType: 'Proofread',
+          type: 'Proofread',
+          modelName: model,
+          language: 'he',
+          proofreadResultUnreliable: false,
+        } as any;
+        component.proofreadSuggestions = [
+          { id: 's1', originalText: 'a', suggestedText: 'b', startOffset: 0, endOffset: 1 } as any,
+        ];
+        fixture.detectChanges();
+
+        const heading = fixture.nativeElement.querySelector('.suggestions-block h4') as HTMLElement;
+        expect(heading).not.toBeNull();
+        // Non-vacuous: the heading still names the analysis type.
+        expect(heading.textContent).toContain('הגהה');
+        expect(heading.textContent).not.toContain(model);
+        expect(heading.textContent).not.toContain('(');
+      });
     });
 
-    it('returns null for blank/whitespace/absent model names', () => {
-      expect(component.visibleModelName('')).toBeNull();
-      expect(component.visibleModelName('   ')).toBeNull();
-      expect(component.visibleModelName(null)).toBeNull();
-      expect(component.visibleModelName(undefined)).toBeNull();
-    });
-
-    it('returns a real model name unchanged (trimmed)', () => {
-      expect(component.visibleModelName('gemma4:12b')).toBe('gemma4:12b');
-      expect(component.visibleModelName('  gemma4:12b  ')).toBe('gemma4:12b');
-    });
-
-    it('does NOT render "(chunked)" in the proofread result heading', () => {
-      component.bookLanguage = 'he';
-      component.selectedAnalysisType = 'Proofread';
-      component.latestResult = {
-        analysisType: 'Proofread',
-        type: 'Proofread',
-        modelName: 'chunked',
-        language: 'he',
-        proofreadResultUnreliable: false,
-      } as any;
-      component.proofreadSuggestions = [
-        { id: 's1', originalText: 'a', suggestedText: 'b', startOffset: 0, endOffset: 1 } as any,
-      ];
-      fixture.detectChanges();
-
-      const heading = fixture.nativeElement.querySelector('.suggestions-block h4') as HTMLElement;
-      expect(heading).not.toBeNull();
-      expect(heading.textContent).not.toContain('chunked');
-      expect(heading.textContent).not.toContain('(');
+    it('exposes no visibleModelName helper (the parenthetical has no source left)', () => {
+      expect((component as any).visibleModelName).toBeUndefined();
     });
   });
 });

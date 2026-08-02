@@ -31,8 +31,6 @@ export interface ChapterSummaryViewDto {
   summaryUserEditedAt: string | null;
   /** When the structured brief was last (re)built. UTC ISO or null (until built). */
   structuredBuiltAt: string | null;
-  /** Model the structured brief was built with; null until built. */
-  builtWithModel: string | null;
   /**
    * READ-only enrichment (wb3-c04 fallback): the PARSED structured-brief facts (plotEvents / characterStates /
    * thematicMarkers / toneNotes / openThreads), so the FE can render a human-readable digest of the AI
@@ -61,6 +59,5 @@ export interface RederiveChapterSummaryResponse {
   rederived: boolean;
   hasStructuredBrief: boolean;
   structuredBuiltAt: string | null;
-  builtWithModel: string | null;
   message: string;
 }

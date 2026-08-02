@@ -1,10 +1,18 @@
+/**
+ * An analysis result as the API returns it.
+ *
+ * DELIBERATELY CARRIES NO MODEL IDENTITY. This used to have a `modelName` (provider:model) that the run tab
+ * and the history tab rendered beside the result heading, so a finished run displayed e.g.
+ * "ספרותי (Ollama:gemma4:12b)". Which model ran is internal IP and changes over time, so the server stopped
+ * sending it. Do not re-add it here: the field no longer exists on the wire, and AiTierResultSurface-
+ * DeidentificationTests (API) fails if it comes back.
+ */
 export interface AnalysisResultDto {
   id: string;
   chapterId: string;
   jobId?: string | null;
   type: string;
   resultText: string;
-  modelName: string;
   createdAt: string;
   structuredResult?: string | null;
   scope?: string | null;

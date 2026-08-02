@@ -18,7 +18,6 @@ function makeLiteraryResult(
     type: 'LiteraryAnalysis',
     analysisType: 'LiteraryAnalysis',
     resultText: resultText ?? '',
-    modelName: 'test-model',
     createdAt: new Date().toISOString(),
     scope: 'Chapter',
     structuredResult: null,

@@ -36,7 +36,6 @@ function makeFinding(overrides: Partial<BookFinding> = {}): BookFinding {
     chapterAnchors: [{ chapterId: 'c-3', order: 3, title: 'The Turn' }],
     suggestedAction: null,
     status: 'open',
-    builtWithModel: 'gemma4:12b',
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     ...overrides,
@@ -84,7 +83,7 @@ describe('ChapterFindingsChecklistComponent (rf-f05)', () => {
   function triggerInit(): void {
     component.ngOnInit();
     component.ngOnChanges({
-      bookId: new SimpleChange(null, component.bookId, true),
+    bookId: new SimpleChange(null, component.bookId, true),
     });
     fixture.detectChanges();
   }
@@ -163,7 +162,7 @@ describe('ChapterFindingsChecklistComponent (rf-f05)', () => {
     // Navigate to a DIFFERENT chapter (c-3 -> c-7): ngOnChanges must clear the stale context.
     component.chapterId = 'c-7';
     component.ngOnChanges({
-      chapterId: new SimpleChange('c-3', 'c-7', false),
+    chapterId: new SimpleChange('c-3', 'c-7', false),
     });
     fixture.detectChanges();
 

@@ -21,7 +21,6 @@ describe('SuggestionKeyService', () => {
       jobId: null,
       type: 'Proofread',
       resultText: '',
-      modelName: 'model',
       createdAt: '2026-01-01T00:00:00Z',
       scope: 'Chapter',
       analysisType: 'Proofread',

@@ -19,13 +19,12 @@ export interface BookSummaryStatusDto {
   ready: boolean;
   /** UTC ISO timestamp of the last summary update, or null if never built. */
   lastUpdatedAt: string | null;
-  /** Model the summary was built with (empty/absent until first build). */
-  builtWithModel: string | null;
-  /** Currently-active model id (for display); null when unknown. */
-  activeModel: string | null;
   /**
    * True when a summary exists but was built with a DIFFERENT model than the currently-active one
    * (cross-model staleness). Surface a distinct "refresh" warning.
+   *
+   * The only cross-model signal on the wire; the two model names it replaced are internal IP and stay
+   * server-side. See BookStyleBaselineStatusDto for the full note.
    */
   builtWithDifferentModel: boolean;
   /**

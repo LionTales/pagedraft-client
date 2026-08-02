@@ -3,18 +3,18 @@ import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from
 import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { formatRelativeTime } from '../../core/utils/relative-time';
-import { visibleModelName } from '../../core/utils/visible-model-name';
 import { resolveCardLang } from './card-lang';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { SuggestionCardComponent } from './suggestion-card.component';
 import { LinguisticResultComponent } from './linguistic-result.component';
 import { LiteraryResultComponent } from './literary-result.component';
 import { MarkdownTextComponent } from './markdown-text.component';
+import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 
 @Component({
   selector: 'app-analysis-run-tab',
   standalone: true,
-  imports: [CommonModule, SuggestionCardComponent, LinguisticResultComponent, LiteraryResultComponent, MarkdownTextComponent],
+  imports: [CommonModule, SuggestionCardComponent, LinguisticResultComponent, LiteraryResultComponent, MarkdownTextComponent, TierToggleComponent],
   templateUrl: './analysis-run-tab.component.html',
   styleUrl: './analysis-run-tab.component.scss'
 })
@@ -50,6 +50,15 @@ export class AnalysisRunTabComponent implements OnChanges {
 
   /** User confirmed the consent prompt -> parent should start the build and flip to BUILDING. */
   @Output() buildStyleBaseline = new EventEmitter<void>();
+
+  /**
+   * The hosted tier toggle committed a tier change, so the ACTIVE MODEL may have moved (tier-ux-rework fixes
+   * c04). Pure pass-through: this tab RENDERS the style-baseline status but the panel above OWNS the fetch
+   * (and its supersession guard), so the re-read has to happen there. `builtWithDifferentModel` on that
+   * status is computed against the active model and drives the cross-model warning rendered a few lines
+   * below the toggle, which is why the two must not drift until the next page load.
+   */
+  @Output() tierChanged = new EventEmitter<void>();
 
   @Output() proofreadAccept = new EventEmitter<AnalysisSuggestion>();
   @Output() proofreadDismiss = new EventEmitter<AnalysisSuggestion>();
@@ -142,11 +151,6 @@ export class AnalysisRunTabComponent implements OnChanges {
   analysisTypeLabel(value: string): string {
     const map = ANALYSIS_TYPE_LABELS[this.chromeLang];
     return map[value] ?? value;
-  }
-
-  /** Delegates to the shared util; kept as an instance method so templates call it unchanged. */
-  visibleModelName(modelName: string | null | undefined): string | null {
-    return visibleModelName(modelName);
   }
 
   // ── Style baseline status row (a3/a4) ──────────────────────────────────────

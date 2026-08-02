@@ -666,7 +666,7 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
           row.offerRederive = false;
           row.rederiveResult = resp.rederived ? 'done' : 'partial';
           // Reflect the freshly built structured surface so the stale badge updates. We adopt the structured
-          // STAMPS (hasStructuredBrief/structuredBuiltAt/builtWithModel) that isStructuredStale() reads, but
+          // STAMPS (hasStructuredBrief/structuredBuiltAt) that isStructuredStale() reads, but
           // deliberately do NOT re-fetch/adopt the parsed `structuredBrief` digest here (P3-14). The digest's
           // only render surface is showStructuredFallback(), which requires an EMPTY flat summary
           // (!view.hasSummary). A re-derive is only ever offered AFTER a successful save of a NON-blank flat
@@ -680,7 +680,6 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
               ...row.view,
               hasStructuredBrief: resp.hasStructuredBrief,
               structuredBuiltAt: resp.structuredBuiltAt,
-              builtWithModel: resp.builtWithModel,
             };
           }
           this.cdr.detectChanges();

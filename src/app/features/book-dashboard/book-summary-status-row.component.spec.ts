@@ -33,8 +33,6 @@ function makeBookSummaryStatus(
     hasSummary: true,
     ready: true,
     lastUpdatedAt: new Date().toISOString(),
-    builtWithModel: 'gemma4:12b',
-    activeModel: 'gemma4:12b',
     builtWithDifferentModel: false,
     activeBuildJobId: null,
     chaptersToBuild: 0,
@@ -66,7 +64,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
         {
           provide: AnalysisProgressService,
           useValue: {
-            pollBookSummaryProgress: () => NEVER,
+          pollBookSummaryProgress: () => NEVER,
           },
         },
         { provide: JobRegistryService, useValue: jobRegistrySpy },
@@ -213,7 +211,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
     const summarySvc = TestBed.inject(BookSummaryService);
     const buildSpy = spyOn(summarySvc, 'buildBookSummary').and.returnValue(NEVER);
     component.bookSummaryStatus = makeBookSummaryStatus({
-      hasSummary: false, ready: false, builtChapters: 0, chaptersToBuild: 1, estimatedSeconds: 30,
+    hasSummary: false, ready: false, builtChapters: 0, chaptersToBuild: 1, estimatedSeconds: 30,
     });
     fixture.detectChanges();
 
@@ -241,7 +239,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
 
   it('CONSENT: hidden while a build is in flight (prevents duplicate build on lingering confirm)', () => {
     component.bookSummaryStatus = makeBookSummaryStatus({
-      ready: false, staleCount: 2, chaptersToBuild: 2, estimatedSeconds: 90,
+    ready: false, staleCount: 2, chaptersToBuild: 2, estimatedSeconds: 90,
     });
     component.showBookSummaryConsent = true;
     component.bookSummaryBuilding = true;
@@ -292,8 +290,6 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
     component.bookSummaryStatus = makeBookSummaryStatus({
       ready: false,
       staleCount: 2,
-      builtWithModel: 'old-model',
-      activeModel: 'gemma4:12b',
       builtWithDifferentModel: true,
       chaptersToBuild: 2,
       estimatedSeconds: 60,
