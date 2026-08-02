@@ -757,10 +757,24 @@ export class BookDashboardComponent implements OnInit, OnChanges {
    * otherwise carry over from the previous book. On a real bookId change (not the first binding, which
    * ngOnInit already loads), reset that own state and reload the profile so nothing leaks across books.
    * Skipped on firstChange so the initial load runs once via ngOnInit, not twice.
+   *
+   * c02: a bookLanguage change is the SAME kind of context switch and is handled identically, matching the
+   * sibling chapter-summaries component (which already keys on bookId || bookLanguage). The book language is
+   * mutable in-session: BookService.update() writes it and the editor binds [bookLanguage]="book.language"
+   * off that same record, so this input really does change under a live dashboard. Everything this component
+   * renders from the language is either a pure getter (labels, direction, which re-render on their own) or
+   * SERVER content that was generated in the previous language: the profile card is built by a language-keyed
+   * refresh, and the Ask answer was answered in the old language. Without this branch the chrome flipped to
+   * the new language while the profile card kept the old language's content and no reload was ever issued.
    */
   ngOnChanges(changes: SimpleChanges): void {
     const bookIdChange = changes['bookId'];
-    if (bookIdChange && !bookIdChange.firstChange) {
+    const languageChange = changes['bookLanguage'];
+    const contextChanged =
+      (!!bookIdChange && !bookIdChange.firstChange) ||
+      (!!languageChange && !languageChange.firstChange);
+    // One reset + one reload even when both inputs change in the same tick (the editor can rebind both).
+    if (contextChanged) {
       this.resetOwnState();
       this.loadProfile();
     }
@@ -779,6 +793,14 @@ export class BookDashboardComponent implements OnInit, OnChanges {
    * the dashboard's OWN showFindings gate on the previous book's state. Reset both to a not-running baseline;
    * the rows re-emit the new book's true state when their requests return. (rf-c02: the host "review running"
    * affordance no longer flows through here - it is registry-derived and re-scoped per book by the editor.)
+   *
+   * c02: THIS is where the three request latches (loading / refreshing / asking) are settled for a context
+   * switch, and it is the only place that may settle them on behalf of a request that is being abandoned. A
+   * request in flight when the switch happens belongs to the OLD context, so its handlers bail without
+   * touching any latch (see the guards below); if this reset did not clear them, an abandoned refresh or ask
+   * would leave its button permanently disabled. loading is cleared here for the same reason and is then
+   * re-raised immediately by the loadProfile() that every switch issues, so the card never flickers; clearing
+   * it also leaves a correct idle state in the one path where no reload follows (no bookId).
    */
   private resetOwnState(): void {
     this.reviewTab = 'findings';
@@ -791,6 +813,8 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     this.expandedPlotNode = null;
     this.reviewState = 'unknown';
     this.summaryBuilding = false;
+    this.loading = false;
+    this.refreshing = false;
   }
 
   /**
@@ -970,9 +994,20 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     this.openChapter.emit(anchor);
   }
 
+  /**
+   * The effective book language for BOTH the server calls and the chrome, matching the contract the sibling
+   * chapter-summaries component already uses: the bound bookLanguage when it carries a value, otherwise the
+   * app-wide Hebrew default. This is not display-only: refreshProfile/ask stamp it onto the language-keyed
+   * ChunkSummary and BookProfile rows, so an unthreaded call makes an English book build Hebrew briefs and
+   * mislabels the cache the briefs and style-baseline paths later read.
+   */
+  private get language(): string {
+    return (this.bookLanguage?.trim()) || 'he';
+  }
+
   /** True when the book language is English. Single source for every language branch on this component. */
   private get isEn(): boolean {
-    return (this.bookLanguage ?? '').toLowerCase().startsWith('en');
+    return this.language.toLowerCase().startsWith('en');
   }
 
   /**
@@ -1019,17 +1054,36 @@ export class BookDashboardComponent implements OnInit, OnChanges {
       : this.profile.synopsis.slice(0, 200) + '…';
   }
 
+  /**
+   * c02 stale-response contract, shared by this method, onRefresh and onAsk.
+   *
+   * Each capture the (bookId, language) they were issued under and re-check BOTH in the next AND the error
+   * handler, the same guard the sibling chapter-summaries component applies to every one of its requests.
+   * The language belongs in the key because the profile is language-keyed server content: a load issued for
+   * a Hebrew book must not paint a dashboard that has since switched to English.
+   *
+   * ORDERING INVARIANT, in the direction that actually holds: the guard runs before EVERY write in the
+   * handler, latch clears included, so a response from a superseded context writes nothing at all. It does
+   * not need to write anything: the latch it would have cleared was already settled for it by the
+   * resetOwnState() that ran on the switch. The reverse order (clear the latch, then bail) is the live bug,
+   * because by the time a stale response lands the latch it clears is no longer its own: it belongs to the
+   * request the NEW context started, which would then be left with its spinner off while still in flight.
+   */
   private loadProfile(): void {
     if (!this.bookId) return;
+    const bookId = this.bookId;
+    const lang = this.language;
     this.loading = true;
     this.error = null;
-    this.bookService.getProfile(this.bookId).subscribe({
+    this.bookService.getProfile(bookId).subscribe({
       next: (p) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         this.profile = p;
         this.parseStructured();
         this.loading = false;
       },
       error: (err) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         if (err.status === 404) {
           this.profile = null;
           this.error = null;
@@ -1071,35 +1125,45 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     this.expandedPlotNode = this.expandedPlotNode === node ? null : node;
   }
 
+  /** Rebuild the profile in the CURRENT language. Guarded per the stale-response contract on loadProfile. */
   onRefresh(): void {
     if (!this.bookId || this.refreshing) return;
+    const bookId = this.bookId;
+    const lang = this.language;
     this.refreshing = true;
     this.error = null;
-    this.bookService.refreshProfile(this.bookId).subscribe({
+    this.bookService.refreshProfile(bookId, lang).subscribe({
       next: (p) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         this.profile = p;
         this.parseStructured();
         this.refreshing = false;
       },
       error: (err) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         this.error = err.message || this.label('profileRefreshError');
         this.refreshing = false;
       }
     });
   }
 
+  /** Ask the book a question in the CURRENT language. Guarded per the stale-response contract on loadProfile. */
   onAsk(): void {
     const q = this.askQuestion.trim();
     if (!this.bookId || !q || this.asking) return;
+    const bookId = this.bookId;
+    const lang = this.language;
     this.asking = true;
     this.askError = null;
-    this.bookService.ask(this.bookId, q).subscribe({
+    this.bookService.ask(bookId, q, lang).subscribe({
       next: (result) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         this.lastAnswer = result;
         this.citationChapterIds = this.tryParseCitations(result.structuredResult);
         this.asking = false;
       },
       error: (err) => {
+        if (this.bookId !== bookId || this.language !== lang) return;
         this.askError = err.error?.message || err.message || this.label('askFailed');
         this.asking = false;
       }

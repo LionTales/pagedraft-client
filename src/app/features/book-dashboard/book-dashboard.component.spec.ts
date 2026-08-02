@@ -1035,3 +1035,399 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
     expect(HEBREW.test(title.textContent ?? '')).toBeTrue();
   });
 });
+
+/**
+ * c01: the dashboard's own SERVER calls must carry the book language, not just its chrome.
+ *
+ * The chrome was made book-scoped (the suite above) while onRefresh/onAsk still called the service with no
+ * language argument, so both fell through to the service default of 'he' and then the controller default of
+ * "he". That is not display-only: RefreshProfileAsync threads the language into the chapter summarize and
+ * profile build, which STAMP it onto ChunkSummary.Language and BookProfile.Language. An English book
+ * therefore spent a whole-book AI run producing Hebrew briefs AND mislabelled the language-keyed cache rows
+ * that the briefs and style-baseline paths read back.
+ *
+ * These drive the REAL onRefresh/onAsk (nothing on the component is stubbed) with BookService mocked, and
+ * assert on the argument that reaches the service. The service/controller defaults are left alone on
+ * purpose: they are a correct backstop, the caller was the defect.
+ */
+describe('BookDashboardComponent threads the book language into its server calls (c01)', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  let bookService: jasmine.SpyObj<BookService>;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', {
+            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+          }),
+        },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    bookService = TestBed.inject(BookService) as jasmine.SpyObj<BookService>;
+    component.bookId = 'book-1';
+  });
+
+  /** Drive the two real server-calling handlers once each, with a question set so onAsk does not bail. */
+  function driveBothCalls(): void {
+    component.onRefresh();
+    component.askQuestion = 'who is the protagonist?';
+    component.onAsk();
+  }
+
+  it('sends the English language on BOTH refreshProfile and ask for an English book', () => {
+    component.bookLanguage = 'en';
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'en');
+    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'en');
+  });
+
+  it('sends the Hebrew language on BOTH calls for a Hebrew book', () => {
+    component.bookLanguage = 'he';
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
+  });
+
+  it('falls back to Hebrew on BOTH calls when the book language is null', () => {
+    component.bookLanguage = null;
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
+  });
+
+  it('falls back to Hebrew on BOTH calls when the book language is blank or whitespace', () => {
+    component.bookLanguage = '   ';
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
+  });
+
+  it('passes a language argument explicitly rather than relying on the service default', () => {
+    component.bookLanguage = 'en';
+
+    driveBothCalls();
+
+    expect(bookService.refreshProfile.calls.mostRecent().args.length)
+      .withContext('refreshProfile must receive the language argument, not fall through to its default')
+      .toBe(2);
+    expect(bookService.ask.calls.mostRecent().args.length)
+      .withContext('ask must receive the language argument, not fall through to its default')
+      .toBe(3);
+  });
+});
+
+/**
+ * c02: the dashboard must watch bookLanguage, not just bookId, and must drop responses from the language it
+ * has left behind.
+ *
+ * The book language is mutable in-session (BookService.update writes it; the editor binds
+ * [bookLanguage]="book.language" off that same record), and ngOnChanges only keyed on bookId. So on a
+ * language switch the chrome flipped (pure getters) while the profile card kept content generated in the
+ * PREVIOUS language and no reload was issued. There was also no language in the in-flight guard, so a load
+ * started under one language was accepted after the switch.
+ *
+ * Every request here is driven through an rxjs Subject held OPEN across the assertions. of()/throwError()
+ * resolve synchronously, which closes the in-flight window before the context can change, and would pass
+ * against the unfixed code.
+ */
+describe('BookDashboardComponent watches bookLanguage and drops stale responses (c02)', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  let bookService: jasmine.SpyObj<BookService>;
+  /** One entry per getProfile / refreshProfile / ask call, in issue order, each answerable on demand. */
+  let profileLoads: Subject<BookProfileDto>[];
+  let refreshes: Subject<BookProfileDto>[];
+  let asks: Subject<any>[];
+
+  function queued<T>(log: Subject<T>[]): Observable<T> {
+    const subject = new Subject<T>();
+    log.push(subject);
+    return subject.asObservable();
+  }
+
+  function profileFor(genre: string): BookProfileDto {
+    return { genre, synopsis: null, charactersJson: null, storyStructureJson: null } as unknown as BookProfileDto;
+  }
+
+  /** Rebind [bookLanguage] the way the host does: set the input, then run ngOnChanges (non-firstChange). */
+  function switchLanguageTo(next: string): void {
+    const previous = component.bookLanguage;
+    component.bookLanguage = next;
+    component.ngOnChanges({ bookLanguage: new SimpleChange(previous, next, false) });
+  }
+
+  beforeEach(async () => {
+    profileLoads = [];
+    refreshes = [];
+    asks = [];
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', {
+            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+          }),
+        },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    bookService = TestBed.inject(BookService) as jasmine.SpyObj<BookService>;
+    bookService.getProfile.and.callFake(() => queued(profileLoads));
+    bookService.refreshProfile.and.callFake(() => queued(refreshes));
+    bookService.ask.and.callFake(() => queued(asks));
+
+    component.bookId = 'book-1';
+    component.bookLanguage = 'he';
+    // ngOnInit issues the first profile load under 'he'; it is left OPEN (the Subject never completes).
+    fixture.detectChanges();
+    expect(profileLoads.length).withContext('precondition: one profile load in flight under he').toBe(1);
+  });
+
+  it('treats a bookLanguage change like a book switch: resets own state and reloads the profile', () => {
+    // Own state the user built up under the Hebrew book.
+    component.reviewTab = 'bible';
+    component.askQuestion = 'who is the villain?';
+    component.lastAnswer = { resultText: 'old Hebrew answer' } as any;
+    component.citationChapterIds = ['Ch 1'];
+    component.synopsisExpanded = true;
+    component.expandedPlotNode = 'climax';
+
+    switchLanguageTo('en');
+
+    expect(component.reviewTab).withContext('a language switch must reset the dashboard-owned tab').toBe('findings');
+    expect(component.askQuestion).toBe('');
+    expect(component.lastAnswer).withContext('the answer was produced in the previous language').toBeNull();
+    expect(component.citationChapterIds).toEqual([]);
+    expect(component.synopsisExpanded).toBeFalse();
+    expect(component.expandedPlotNode).toBeNull();
+    expect(profileLoads.length)
+      .withContext('the profile is language-keyed server content, so a language switch must reload it')
+      .toBe(2);
+  });
+
+  it('does NOT reload on the FIRST bookLanguage binding (ngOnInit owns the one init load)', () => {
+    component.ngOnChanges({ bookLanguage: new SimpleChange(undefined, 'he', true) });
+    expect(profileLoads.length).toBe(1);
+  });
+
+  it('IGNORES a profile load response that resolves after the language switched (next handler)', () => {
+    const staleLoad = profileLoads[0]; // issued under 'he'
+
+    switchLanguageTo('en'); // resets, and issues the 'en' load which is still in flight
+    expect(profileLoads.length).toBe(2);
+
+    // The abandoned 'he' request finally answers.
+    staleLoad.next(profileFor('HebrewGenre'));
+
+    expect(component.profile)
+      .withContext('a profile generated in the PREVIOUS language must never populate the card')
+      .toBeNull();
+    expect(component.loading)
+      .withContext('the stale response cleared the CURRENT load latch: guard must run before the latch clear')
+      .toBeTrue();
+
+    // The guard is not over-broad: the load for the current language is still accepted.
+    profileLoads[1].next(profileFor('EnglishGenre'));
+    expect(component.profile?.genre).toBe('EnglishGenre');
+    expect(component.loading).toBeFalse();
+  });
+
+  it('IGNORES a profile load ERROR that arrives after the language switched (error handler)', () => {
+    const staleLoad = profileLoads[0];
+
+    switchLanguageTo('en');
+
+    staleLoad.error({ status: 500, message: 'he-side failure' });
+
+    expect(component.error)
+      .withContext('a failure from the abandoned language must not surface as the current error')
+      .toBeNull();
+    expect(component.loading)
+      .withContext('the stale error cleared the CURRENT load latch: guard must run before the latch clear')
+      .toBeTrue();
+  });
+
+  it('leaves no refreshing latch raised for a refresh abandoned by the switch (the reset settles it)', () => {
+    component.onRefresh();
+    expect(component.refreshing).withContext('precondition: a he refresh is in flight').toBeTrue();
+
+    switchLanguageTo('en');
+
+    expect(component.refreshing)
+      .withContext('the switch abandons the refresh, so the switch must settle its latch')
+      .toBeFalse();
+    // Proof the button is usable again: a new refresh can start under the new language.
+    component.onRefresh();
+    expect(refreshes.length).toBe(2);
+    expect(bookService.refreshProfile.calls.mostRecent().args).toEqual(['book-1', 'en']);
+  });
+
+  it('a stale refresh response must not settle the CURRENT refresh (next handler ordering)', () => {
+    component.onRefresh();
+    const staleRefresh = refreshes[0]; // issued under 'he'
+
+    switchLanguageTo('en');
+    component.onRefresh(); // a fresh refresh under 'en' is now the one in flight
+    expect(component.refreshing).withContext('precondition: an en refresh is in flight').toBeTrue();
+    expect(refreshes.length).toBe(2);
+
+    staleRefresh.next(profileFor('HebrewGenre'));
+
+    expect(component.profile)
+      .withContext('a profile refreshed in the PREVIOUS language must never populate the card')
+      .toBeNull();
+    expect(component.refreshing)
+      .withContext('the stale response cleared the CURRENT refresh latch: guard must run first')
+      .toBeTrue();
+  });
+
+  it('a stale refresh ERROR must not settle or fail the CURRENT refresh (error handler ordering)', () => {
+    component.onRefresh();
+    const staleRefresh = refreshes[0];
+
+    switchLanguageTo('en');
+    component.onRefresh();
+
+    staleRefresh.error({ message: 'he-side refresh failure' });
+
+    expect(component.error)
+      .withContext('a failure from the abandoned language must not surface as the current error')
+      .toBeNull();
+    expect(component.refreshing)
+      .withContext('the stale error cleared the CURRENT refresh latch: guard must run first')
+      .toBeTrue();
+  });
+
+  it('leaves no asking latch raised for an ask abandoned by the switch, and drops its answer', () => {
+    component.askQuestion = 'who is the villain?';
+    component.onAsk();
+    expect(component.asking).withContext('precondition: a he ask is in flight').toBeTrue();
+    const staleAsk = asks[0];
+
+    switchLanguageTo('en');
+
+    expect(component.asking)
+      .withContext('the switch abandons the ask, so the switch must settle its latch')
+      .toBeFalse();
+
+    staleAsk.next({ resultText: 'Hebrew answer', structuredResult: null } as any);
+
+    expect(component.lastAnswer)
+      .withContext('an answer produced in the PREVIOUS language must not be shown')
+      .toBeNull();
+    expect(component.asking).toBeFalse();
+  });
+
+  it('a stale ask response must not settle the CURRENT ask (next handler ordering)', () => {
+    component.askQuestion = 'who is the villain?';
+    component.onAsk();
+    const staleAsk = asks[0]; // issued under 'he'
+
+    switchLanguageTo('en');
+    component.askQuestion = 'who is the protagonist?';
+    component.onAsk(); // a fresh ask under 'en' is now the one in flight
+    expect(component.asking).withContext('precondition: an en ask is in flight').toBeTrue();
+    expect(asks.length).toBe(2);
+
+    staleAsk.next({ resultText: 'Hebrew answer', structuredResult: null } as any);
+
+    expect(component.lastAnswer)
+      .withContext('an answer produced in the PREVIOUS language must not be shown')
+      .toBeNull();
+    expect(component.asking)
+      .withContext('the stale answer cleared the CURRENT ask latch: guard must run first')
+      .toBeTrue();
+  });
+
+  it('a stale ask ERROR must not settle or fail the CURRENT ask (error handler ordering)', () => {
+    component.askQuestion = 'who is the villain?';
+    component.onAsk();
+    const staleAsk = asks[0];
+
+    switchLanguageTo('en');
+    component.askQuestion = 'who is the protagonist?';
+    component.onAsk();
+
+    staleAsk.error({ message: 'he-side ask failure' });
+
+    expect(component.askError)
+      .withContext('a failure from the abandoned language must not surface as the current ask error')
+      .toBeNull();
+    expect(component.asking)
+      .withContext('the stale error cleared the CURRENT ask latch: guard must run first')
+      .toBeTrue();
+  });
+
+  it('still drops a response abandoned by a bookId switch (the pre-existing axis stays guarded)', () => {
+    const staleLoad = profileLoads[0];
+
+    const previous = component.bookId;
+    component.bookId = 'book-2';
+    component.ngOnChanges({ bookId: new SimpleChange(previous, 'book-2', false) });
+
+    staleLoad.next(profileFor('BookOneGenre'));
+
+    expect(component.profile).withContext('book-1 content must not paint book-2').toBeNull();
+    expect(component.loading).toBeTrue();
+  });
+});
