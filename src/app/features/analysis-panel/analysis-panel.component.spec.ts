@@ -1,5 +1,6 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { Component, SimpleChange } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
 import { By } from '@angular/platform-browser';
 import { EMPTY, NEVER, Observable, Subject, of, throwError, takeUntil } from 'rxjs';
 import { AnalysisPanelComponent } from './analysis-panel.component';
@@ -14,6 +15,7 @@ import { AnalysisProgressService } from '../../core/services/analysis-progress.s
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
+import { runString } from '../../core/i18n/run-strings';
 
 /**
  * c01: a host that mounts the panel behind a structural `@if`, exactly the way `editor-page.component.html`
@@ -2780,6 +2782,407 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
 
     const warning = fixture.debugElement.query(By.css('[data-testid="sb-cross-model-warning"]'));
     expect(warning).withContext('the warning row the whole todo exists for').not.toBeNull();
+  });
+});
+
+/**
+ * c01: the final-result retry must not become a back door around the stale-context drop guard.
+ *
+ * The retry adds up to ~1.8s of extra life to a run's terminal read. That is exactly long enough for the
+ * user to switch chapters in between, so a retry that SUCCEEDS lands in a context the run does not belong
+ * to. It must therefore arrive as an ordinary `job-result` event and meet `resultBelongsToRunOrigin` like
+ * any other late result - dropped, with `{ kind: 'result-dropped' }` told to the host - rather than
+ * injecting the previous chapter's suggestions (and its offsets) into the document now open.
+ *
+ * This suite deliberately uses the REAL AnalysisRunOrchestrationService, unlike the main panel suite which
+ * stubs it: the whole point is that the retry and the drop guard are on the same path. Only the two
+ * HTTP-shaped services are stubbed, each handing back an open Subject so the run stays mid-flight across
+ * the navigation.
+ */
+describe('AnalysisPanelComponent final-result retry vs a context change (c01)', () => {
+  let component: AnalysisPanelComponent;
+  let fixture: ComponentFixture<AnalysisPanelComponent>;
+  /** One open Subject per `getByJob` CALL, in call order. */
+  let attempts: Subject<AnalysisResultDto>[];
+  /** The progress poll for the run, held open so the run only resolves when this spec says so. */
+  let progress$: Subject<any>;
+
+  const RETRY_DELAY_MS = 600;
+
+  function notFound(): HttpErrorResponse {
+    return new HttpErrorResponse({ status: 404, statusText: 'Not Found' });
+  }
+
+  function chapterAResult(): AnalysisResultDto {
+    return {
+      id: 'r-A',
+      chapterId: 'chap-A',
+      sceneId: null,
+      bookId: 'book-1',
+      jobId: 'job-A',
+      type: 'Proofread',
+      analysisType: 'Proofread',
+      resultText: 'chapter A output',
+      createdAt: new Date().toISOString(),
+      suggestions: [
+        {
+          id: 's-1',
+          suggestionType: 'Proofread',
+          originalText: 'teh',
+          suggestedText: 'the',
+          rationale: 'typo',
+          startOffset: 0,
+          endOffset: 3,
+          outcome: 'Pending',
+        } as unknown as AnalysisSuggestionDto,
+      ],
+    };
+  }
+
+  beforeEach(async () => {
+    attempts = [];
+    progress$ = new Subject<any>();
+    await TestBed.configureTestingModule({
+      imports: [AnalysisPanelComponent],
+      providers: [
+        {
+          provide: AnalysisService,
+          useValue: {
+            getTemplates: () => of([]),
+            getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
+            getHistory: () => of([]),
+            updateSuggestionOutcome: () => of(void 0),
+            explainSuggestion: () => NEVER,
+            run: () => NEVER,
+            startAsync: () => of({ jobId: 'job-A', analysisType: 'Proofread', scope: 'Chapter' }),
+            getByJob: () => {
+              const attempt = new Subject<AnalysisResultDto>();
+              attempts.push(attempt);
+              return attempt.asObservable();
+            },
+            runStream: () => NEVER,
+            createTemplate: () => NEVER,
+          },
+        },
+        { provide: DocumentVersionService, useValue: { list: () => of([]), create: () => NEVER, get: () => NEVER } },
+        // NOT stubbed: the real orchestration service is the subject under test here.
+        {
+          provide: AnalysisProgressService,
+          useValue: {
+            pollProgress: () => progress$.asObservable(),
+            pollStyleBaselineProgress: () => NEVER,
+          },
+        },
+        {
+          provide: SuggestionAnchorService,
+          useFactory: () => {
+            const spy = jasmine.createSpyObj('SuggestionAnchorService', ['relocateAll', 'relocateOne']);
+            spy.relocateAll.and.callFake((suggestions: any[]) =>
+              suggestions.map((s: any) => ({
+                ...s,
+                relocatedStart: s.startOffset ?? 0,
+                relocatedEnd: s.endOffset ?? 0,
+                stale: false,
+              }))
+            );
+            spy.relocateOne.and.callFake((s: any) => ({ ...s, relocatedStart: 0, relocatedEnd: 0, stale: false }));
+            return spy;
+          },
+        },
+        {
+          provide: StyleBaselineService,
+          useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER },
+        },
+        {
+          provide: JobRegistryService,
+          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', {
+            track: undefined,
+            jobById$: of(null),
+          }),
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER,
+            refresh: () => NEVER,
+            get: () => NEVER,
+            setTask: () => NEVER,
+            setBookDefault: () => NEVER,
+            clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(AnalysisPanelComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+    component.chapterId = 'chap-A';
+    component.sceneId = null;
+    component.documentChapterId = 'chap-A';
+    component.documentSceneId = null;
+    component.selectedAnalysisType = 'Proofread';
+    // Long enough to cross the 500-word Proofread threshold, so the run takes the ASYNC job path and
+    // therefore reaches loadFinalResultForJob at all.
+    component.documentText = Array(600).fill('word').join(' ');
+    fixture.detectChanges();
+  });
+
+  /** Run on chapter A, poll to `succeeded`, and let the first final-result read 404. */
+  function runToPendingRetry(hostEvents: AnalysisRunEvent[]): void {
+    component.runEvent.subscribe(e => hostEvents.push(e));
+    component.runAnalysis();
+    expect((component as any).isRunning).withContext('precondition: the run is open').toBeTrue();
+
+    progress$.next({
+      jobId: 'job-A',
+      analysisType: 'Proofread',
+      scope: 'Chapter',
+      bookId: 'book-1',
+      chapterId: 'chap-A',
+      sceneId: null,
+      status: 'succeeded',
+      currentChunk: 3,
+      totalChunks: 3,
+      completedChunks: 3,
+      message: '',
+      estimatedCompletionPercent: 100,
+    });
+
+    expect(attempts.length).withContext('the final-result read fires on succeeded').toBe(1);
+    attempts[0].error(notFound());
+    expect(hostEvents.some(e => e.kind === 'error'))
+      .withContext('the transient 404 must not be reported as a failed run')
+      .toBeFalse();
+  }
+
+  it('a retry that succeeds AFTER a chapter switch is dropped, not injected', fakeAsync(() => {
+    const hostEvents: AnalysisRunEvent[] = [];
+    runToPendingRetry(hostEvents);
+
+    // The user navigates away while the retry is pending - this is the window the retry created.
+    component.chapterId = 'chap-B';
+    component.ngOnChanges({ chapterId: new SimpleChange('chap-A', 'chap-B', false) });
+    component.activeSubTab = 'history';
+    const latestBefore = component['latestResult'];
+
+    tick(RETRY_DELAY_MS);
+    expect(attempts.length).withContext('the retry really did fire after the switch').toBe(2);
+    attempts[1].next(chapterAResult());
+    attempts[1].complete();
+
+    expect(component['latestResult'])
+      .withContext('chapter A\'s result must never be injected into chapter B: its offsets map into a '
+        + 'different document, which is a corruption risk on accept')
+      .toBe(latestBefore as any);
+    expect(component.activeSubTab).toBe('history');
+    expect(component.proofreadSuggestions.length).toBe(0);
+    expect(hostEvents.filter(e => e.kind === 'job-result').length)
+      .withContext('a dropped result must not reach the host as a success')
+      .toBe(0);
+    expect(hostEvents.filter(e => e.kind === 'result-dropped').length)
+      .withContext('the retry travels the ORDINARY job-result channel, so resultBelongsToRunOrigin sees '
+        + 'it and the host is told the truth - the retry is not a back door around that guard')
+      .toBe(1);
+
+    component.ngOnDestroy();
+  }));
+
+  it('control: a retry that succeeds with the user still on the origin chapter applies normally', fakeAsync(() => {
+    const hostEvents: AnalysisRunEvent[] = [];
+    component.activeSubTab = 'history';
+    runToPendingRetry(hostEvents);
+
+    tick(RETRY_DELAY_MS);
+    const result = chapterAResult();
+    attempts[1].next(result);
+    attempts[1].complete();
+
+    expect(component['latestResult'])
+      .withContext('the retry is only worth having if a recovered result is actually surfaced')
+      .toBe(result);
+    expect(component.activeSubTab).toBe('run');
+    expect(hostEvents.filter(e => e.kind === 'job-result').length).toBe(1);
+    expect(hostEvents.filter(e => e.kind === 'error').length)
+      .withContext('the run recovered, so no failure was ever reported')
+      .toBe(0);
+
+    component.ngOnDestroy();
+  }));
+
+});
+
+// ── c02: the panel's own failure banner is localized too ────────────────────────────────────────────
+//
+// `.run-error` is the FOURTH run surface (the three PROGRESS surfaces have their own rendered-DOM spec
+// in `shared/analysis-run-dialog/run-chrome-i18n.spec.ts`). It had TWO independent English sources, on
+// two DIFFERENT run paths, and both are driven here because either one alone leaves the other's literal
+// live:
+//
+//   (A) the SYNC-with-jobId path. `startProgressPollingIfNeeded` emits a `progress` event and NEVER an
+//       `error` one, so a failed poll leaves the PANEL's own literal on screen. This is the only path
+//       that renders it: on (B) the orchestration error event lands in the same synchronous turn and
+//       overwrites it, which is exactly why a test that drove only (B) passed against the un-localized
+//       panel literal.
+//   (B) the ASYNC-job path. `startProgressPollingForJob` emits `progress` AND then `error`, so the
+//       banner ends up showing the ORCHESTRATION service's message.
+//
+// Both are asserted through the RENDERED banner rather than through the `runError` field: the field
+// could be localized and the template still bind something else.
+describe('AnalysisPanelComponent run-failure banner i18n (c02)', () => {
+  let fixture: ComponentFixture<AnalysisPanelComponent>;
+  let component: AnalysisPanelComponent;
+  let progress$: Subject<any>;
+  /** Answers the SYNC /analyze call. Handing back a jobId is what starts the sync-path progress poll. */
+  let syncRun$: Subject<AnalysisResultDto>;
+
+  const SHORT_TEXT = 'a few words only';
+  const LONG_TEXT = Array(600).fill('word').join(' ');
+
+  function failedProgress(): any {
+    return {
+      jobId: 'job-A',
+      analysisType: 'Proofread',
+      scope: 'Chapter',
+      bookId: 'book-1',
+      chapterId: 'chap-A',
+      sceneId: null,
+      status: 'failed',
+      currentChunk: 1,
+      totalChunks: 3,
+      completedChunks: 1,
+      // The backend's own prose. It must not reach the banner in either language.
+      message: 'Proofread failed: System.InvalidOperationException',
+      estimatedCompletionPercent: 33,
+    };
+  }
+
+  function bannerText(): string {
+    const el = fixture.debugElement.query(By.css('.run-error'));
+    return (el?.nativeElement as HTMLElement | undefined)?.textContent?.trim() ?? '';
+  }
+
+  beforeEach(async () => {
+    progress$ = new Subject<any>();
+    syncRun$ = new Subject<AnalysisResultDto>();
+
+    await TestBed.configureTestingModule({
+      imports: [AnalysisPanelComponent],
+      providers: [
+        {
+          provide: AnalysisService,
+          useValue: {
+            getTemplates: () => of([]),
+            getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
+            getHistory: () => of([]),
+            updateSuggestionOutcome: () => of(void 0),
+            explainSuggestion: () => NEVER,
+            run: () => syncRun$.asObservable(),
+            startAsync: () => of({ jobId: 'job-A', analysisType: 'Proofread', scope: 'Chapter' }),
+            getByJob: () => NEVER,
+            runStream: () => NEVER,
+            createTemplate: () => NEVER,
+          },
+        },
+        { provide: DocumentVersionService, useValue: { list: () => of([]), create: () => NEVER, get: () => NEVER } },
+        // NOT stubbed: the real orchestration service composes the strings under test.
+        {
+          provide: AnalysisProgressService,
+          useValue: { pollProgress: () => progress$.asObservable(), pollStyleBaselineProgress: () => NEVER },
+        },
+        {
+          provide: SuggestionAnchorService,
+          useValue: jasmine.createSpyObj('SuggestionAnchorService', { relocateAll: [], relocateOne: null }),
+        },
+        {
+          provide: StyleBaselineService,
+          useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER },
+        },
+        {
+          provide: JobRegistryService,
+          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', {
+            track: undefined,
+            jobById$: of(null),
+          }),
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(AnalysisPanelComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+    component.chapterId = 'chap-A';
+    component.sceneId = null;
+    component.documentChapterId = 'chap-A';
+    component.documentSceneId = null;
+    component.selectedAnalysisType = 'Proofread';
+  });
+
+  afterEach(() => component.ngOnDestroy());
+
+  /** (A) short text -> sync /analyze, whose response carries a jobId, so a progress poll starts. */
+  function failOnTheSyncPath(bookLanguage: string): void {
+    component.bookLanguage = bookLanguage;
+    component.documentText = SHORT_TEXT;
+    fixture.detectChanges();
+
+    component.runAnalysis();
+    syncRun$.next({
+      id: 'r-A', chapterId: 'chap-A', jobId: 'job-A', type: 'Proofread', analysisType: 'Proofread',
+      resultText: '', createdAt: new Date().toISOString(),
+    });
+    progress$.next(failedProgress());
+    fixture.detectChanges();
+  }
+
+  /** (B) long text -> the async analysis-jobs path. */
+  function failOnTheAsyncPath(bookLanguage: string): void {
+    component.bookLanguage = bookLanguage;
+    component.documentText = LONG_TEXT;
+    fixture.detectChanges();
+
+    component.runAnalysis();
+    progress$.next(failedProgress());
+    fixture.detectChanges();
+  }
+
+  describe("(A) the SYNC path, where the PANEL's own literal is what renders", () => {
+    it('a HEBREW book renders the banner in Hebrew, with no Latin letters and no em-dash', () => {
+      failOnTheSyncPath('he');
+
+      expect(bannerText())
+        .withContext('the banner must actually render, or the Latin check below is vacuous')
+        .toBe(runString('he', 'runFailed', { type: 'הגהה' }));
+      expect(bannerText()).not.toMatch(/[A-Za-z]/);
+      expect(bannerText()).not.toContain('—');
+    });
+
+    it('an ENGLISH book renders the same sentence in English (the control)', () => {
+      failOnTheSyncPath('en');
+      expect(bannerText()).toBe(runString('en', 'runFailed', { type: 'Proofread' }));
+    });
+  });
+
+  describe("(B) the ASYNC path, where the ORCHESTRATION service's message is what renders", () => {
+    it('a HEBREW book renders the banner in Hebrew, with no Latin letters and no em-dash', () => {
+      failOnTheAsyncPath('he');
+
+      expect(bannerText()).toBe(runString('he', 'runFailed', { type: 'הגהה' }));
+      expect(bannerText()).not.toMatch(/[A-Za-z]/);
+      expect(bannerText()).not.toContain('—');
+    });
+
+    it('an ENGLISH book renders the same sentence in English (the control)', () => {
+      failOnTheAsyncPath('en');
+      expect(bannerText()).toBe(runString('en', 'runFailed', { type: 'Proofread' }));
+    });
   });
 });
 
