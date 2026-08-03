@@ -184,10 +184,7 @@
               [documentSceneId]="documentOwnerSceneId"
               [saveBeforeRun]="saveBeforeRun"
               (analysisStarted)="onAnalysisStarted()"
-              (analysisCompleted)="onAnalysisCompleted()"
-              (asyncJobStarted)="onAnalysisCompleted()"
-              (analysisStatus)="onAnalysisStatus($event)"
-              (analysisProgressPercent)="onAnalysisProgressPercent($event)"
+              (runEvent)="onAnalysisRunEvent($event)"
               (applyCorrection)="onApplyCorrection($event)"
               (showInDocument)="selectRangeInEditor($event)"
               (scrollTargetChange)="onScrollTargetChange($event)"
@@ -241,20 +238,15 @@
       </button>
     }
   </div>
-  @if (analysisRunning) {
-    <div class="analysis-overlay" role="status" aria-live="polite" [attr.aria-label]="reviewPanelIsHebrew ? 'ניתוח מתבצע' : 'Analysis in progress'">
-      <div class="analysis-overlay-card">
-        <h3 class="analysis-overlay-title">{{ reviewPanelIsHebrew ? 'מריץ ניתוח' : 'Run analysis' }}</h3>
-        <div class="analysis-spinner"></div>
-        <p class="analysis-overlay-message">{{ analysisStatusText }}</p>
-        <div class="analysis-progress-wrapper" *ngIf="analysisStatusPercent !== null">
-          <div class="analysis-progress-bar">
-            <div class="analysis-progress-fill" [style.width.%]="analysisStatusPercent"></div>
-          </div>
-          <span class="analysis-progress-label">{{ analysisStatusPercent }}%</span>
-        </div>
-      </div>
-    </div>
-  }
+  <!-- Wave 1d: the analysis run-progress dialog. A positioned card, NOT a blocking overlay: the chapter
+       behind it stays readable and editable. Its percent comes from JobRegistryService (the same owner the
+       in-panel indicator and the Activity Center read), never from the run's own progress events. -->
+  <app-analysis-run-dialog
+    [(open)]="runDialogOpen"
+    [runEvents]="runEvents$"
+    [analysisType]="runDialogAnalysisType"
+    [bookLanguage]="book?.language ?? null"
+    (minimizeRequested)="onRunDialogMinimize($event)">
+  </app-analysis-run-dialog>
 </div>
 

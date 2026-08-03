@@ -1,0 +1,257 @@
+/*
+ * Analysis run-progress dialog (Wave 1d).
+ *
+ * A POSITIONED CARD, not a full-screen blocker: there is no backdrop element at all, so the chapter
+ * behind the dialog stays both readable and clickable. Sits in the block-end / inline-end corner,
+ * clear of the Activity Center bell (which is pinned to the block-start / inline-start corner) so the
+ * two overlays never collide and the minimize flight has somewhere to go.
+ *
+ * Logical properties throughout (inset-inline-*, margin-inline-*) so the card mirrors correctly under
+ * the host [dir], which follows the BOOK language.
+ */
+
+:host {
+  /* Non-layout container; the card is fixed-positioned. */
+  display: contents;
+}
+
+.rd-card {
+  position: fixed;
+  inset-block-end: var(--pd-space-6);
+  inset-inline-end: var(--pd-space-6);
+  z-index: var(--pd-z-overlay);
+
+  width: min(420px, calc(100vw - (2 * var(--pd-space-6))));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-3);
+
+  padding: var(--pd-space-5) var(--pd-space-6);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-lg);
+  background: var(--pd-surface);
+  box-shadow: var(--pd-shadow-4);
+
+  animation: rd-card-in var(--pd-dur-base) var(--pd-ease) both;
+}
+
+@keyframes rd-card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+
+.rd-header {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-3);
+}
+
+/* Muted sub-label naming the run's unit (chapter/scene). Mirrors the Activity Center's `.ac-scope`
+   vocabulary: same caption size + muted color, shrink-to-content so it never steals the title's
+   ellipsis space. */
+.rd-scope {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+  flex: 0 0 auto;
+}
+
+.rd-title {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rd-dismiss {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--pd-radius-sm);
+  background: none;
+  cursor: pointer;
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-body-sm);
+  line-height: 1;
+  transition: background var(--pd-dur-fast) var(--pd-ease), color var(--pd-dur-fast) var(--pd-ease);
+}
+
+.rd-dismiss:hover {
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text);
+}
+
+.rd-dismiss:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+/* ── Status pill (same vocabulary/colours as the Activity Center rows) ─────── */
+
+.rd-status-pill {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--pd-space-3);
+  border-radius: var(--pd-radius-pill);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.status-running {
+  background: var(--pd-info-bg);
+  color: var(--pd-primary-700);
+}
+
+.status-pending {
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-secondary);
+}
+
+.status-done {
+  background: var(--pd-keep-bg);
+  color: var(--pd-keep);
+}
+
+.status-failed {
+  background: var(--pd-cut-bg);
+  color: var(--pd-cut);
+}
+
+.status-canceled {
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-muted);
+}
+
+/* ── Progress (markup mirrors the Activity Center row) ────────────────────── */
+
+.rd-progress-track {
+  width: 100%;
+  height: 6px;
+  background: var(--pd-neutral-100);
+  border-radius: var(--pd-radius-pill);
+  overflow: hidden;
+}
+
+.rd-progress-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-3);
+}
+
+.rd-progress-row .rd-progress-track {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.rd-progress-percent {
+  flex: 0 0 auto;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--pd-neutral-600);
+}
+
+/* Ended, percent never known (state (c) with a null percent - c05). Deliberately has NO fill child at
+   all, so there is nothing that could carry the infinite `--indet` keyframe animation: a finished run
+   must never pulse next to its own "Failed" / "Canceled" pill. Softer than the live track's grey so it
+   reads as an inert rule rather than an empty progress bar waiting to fill. Mirrors
+   `.ac-progress-track--ended` and `.jpi-track--ended`. */
+.rd-progress-track--ended {
+  background: var(--pd-divider);
+}
+
+/* Determinate fill: width is set via [style.width.%]. No min-width, so a true 0% looks empty. */
+.rd-progress-fill--det {
+  height: 100%;
+  background: var(--pd-primary-600);
+  border-radius: var(--pd-radius-pill);
+  transition: width var(--pd-dur-base) var(--pd-ease);
+}
+
+.rd-progress-fill--indet {
+  height: 100%;
+  width: 40%;
+  background: var(--pd-primary-600);
+  border-radius: var(--pd-radius-pill);
+  animation: rd-indeterminate 1.4s var(--pd-ease) infinite;
+}
+
+@keyframes rd-indeterminate {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(150%); }
+  100% { transform: translateX(150%); }
+}
+
+/* ── Message + actions ────────────────────────────────────────────────────── */
+
+.rd-message {
+  margin: 0;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.rd-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-3);
+  flex-wrap: wrap;
+}
+
+.rd-minimize {
+  flex: 0 0 auto;
+  padding: var(--pd-space-2) var(--pd-space-4);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-text);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-medium);
+  cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+
+.rd-minimize:hover {
+  background: var(--pd-surface-sunken);
+}
+
+.rd-minimize:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.rd-hint {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+}
+
+/* Respect the user's reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .rd-card,
+  .rd-progress-fill--indet {
+    animation: none;
+  }
+
+  .rd-progress-fill--det {
+    transition: none;
+  }
+}

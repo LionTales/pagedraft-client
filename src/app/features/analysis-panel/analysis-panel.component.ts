@@ -8,7 +8,7 @@ import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { JobRegistryService, normalizeLang } from '../../core/services/job-registry.service';
-import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
+import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent, assertUnhandledRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
@@ -20,11 +20,12 @@ import { SuggestionCardComponent } from './suggestion-card.component';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { AnalysisHistoryTabComponent } from './analysis-history-tab.component';
 import { AnalysisVersionsTabComponent } from './analysis-versions-tab.component';
+import { JobProgressInlineComponent } from '../../shared/job-progress-inline/job-progress-inline.component';
 
 @Component({
   selector: 'app-analysis-panel',
   standalone: true,
-  imports: [CommonModule, FormsModule, SuggestionCardComponent, AnalysisRunTabComponent, AnalysisHistoryTabComponent, AnalysisVersionsTabComponent],
+  imports: [CommonModule, FormsModule, SuggestionCardComponent, AnalysisRunTabComponent, AnalysisHistoryTabComponent, AnalysisVersionsTabComponent, JobProgressInlineComponent],
   templateUrl: './analysis-panel.component.html',
   styleUrl: './analysis-panel.component.scss'
 })
@@ -42,17 +43,29 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   /** If provided, called before run/streaming so the editor can save; must return Promise that resolves when save is done. */
   @Input() saveBeforeRun?: () => Promise<void>;
   @Output() analysisStarted = new EventEmitter<void>();
-  @Output() analysisCompleted = new EventEmitter<void>();
   /**
-   * Emitted when an async (long) job has been registered and the blocking overlay can be
-   * dismissed. The editor hides its full-screen overlay; the panel keeps `isRunning = true`
-   * and shows a compact dismissible banner until the job finishes.
+   * Wave 1d (c2): the run's event stream, fanned out to the host so it can drive the run-progress
+   * dialog. Every event the panel handles is forwarded EXCEPT `'streaming-token'`, which is high-volume
+   * and which no host surface consumes.
+   *
+   * It is NOT a byte-for-byte copy of the orchestration stream, and must not be documented as one: c06
+   * replaces a `'sync-result'` / `'job-result'` whose origin no longer matches the context on screen with
+   * `{ kind: 'result-dropped' }`, so the host is never told "Done" about a result this panel discarded
+   * (see {@link resultBelongsToRunOrigin}). Two members - `'run-finished'` and `'result-dropped'` - are
+   * therefore emitted by this panel and by nothing else.
+   *
+   * This REPLACES the former `analysisStatus` / `analysisProgressPercent` outputs. Those were the second
+   * owner of a job's progress: the editor re-derived, re-clamped and made-monotonic its own percent from
+   * the orchestration service's `'progress'` events, in parallel with the registry that already owned the
+   * same number. Progress now travels on exactly one channel (JobRegistryService); this output carries
+   * only the run LIFECYCLE, which is what a dialog needs before a job id exists.
+   *
+   * c01: it also carries the run's TERMINAL, as the synthetic `'run-finished'` event (see
+   * {@link emitRunFinished}). The former `analysisCompleted` / `asyncJobStarted` outputs were deleted with
+   * it: they had no consumer left anywhere in the app, and `analysisCompleted` being the terminal on a
+   * channel nobody bound is exactly what stranded the dialog.
    */
-  @Output() asyncJobStarted = new EventEmitter<void>();
-  /** Optional human-readable status for the global analysis spinner (e.g. estimated chunks). */
-  @Output() analysisStatus = new EventEmitter<string>();
-  /** Optional numeric progress (0–100) for the global analysis spinner. */
-  @Output() analysisProgressPercent = new EventEmitter<number | null>();
+  @Output() runEvent = new EventEmitter<AnalysisRunEvent>();
   @Output() applyCorrection = new EventEmitter<ApplyCorrectionEvent>();
   @Output() showInDocument = new EventEmitter<{ suggestionId?: string; startOffset?: number; endOffset?: number; originalText?: string }>();
   @Output() suggestionRangesChange = new EventEmitter<{ suggestionId?: string; startOffset: number; endOffset: number }[]>();
@@ -130,6 +143,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    */
   asyncJobInFlight = false;
   /**
+   * Wave 1d (c2): the registry job id of the CURRENT run, captured from `'job-started'` and cleared at the
+   * next run start. It is the ONLY input the in-panel progress bar needs: `app-job-progress-inline` reads
+   * the percent straight off {@link JobRegistryService.jobById$}, the same owner the run dialog and the
+   * Activity Center read, so the three surfaces cannot drift.
+   *
+   * Deliberately NOT captured from a `sync-result`'s embedded `result.jobId`: that id was minted inside a
+   * blocking `/analyze` call and was never seeded into the server's progress tracker, so polling it 404s
+   * (see the d1 decision in the Wave 1d plan). It is never tracked, so `jobById$` would render nothing
+   * for it anyway; capturing only `job-started` keeps that non-accidental.
+   */
+  currentRunJobId: string | null = null;
+  /**
    * Persistent companion to the transient {@link asyncJobInFlight}. True once the CURRENT in-flight run
    * has gone async (a `job-started` fired) and its banner has NOT been dismissed; cleared at run start,
    * on dismiss, and on every run terminal. Unlike `asyncJobInFlight` (which `ngOnChanges` zeroes on a
@@ -200,9 +225,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   /**
    * Chapter/scene the CURRENT run was started against (captured in prepareForRun). pf-f01 made long runs
    * non-blocking and the panel instance is reused across navigation, so an async terminal can arrive after
-   * the user switched chapters. onRunResultReceived compares this origin against the live this.chapterId/
-   * this.sceneId (mirroring the loadHistory guard) and DROPS a result whose origin no longer matches, so a
-   * prior chapter's result never injects into - or is accepted into - the new chapter's document.
+   * the user switched chapters. resultBelongsToRunOrigin compares this origin against the live
+   * this.chapterId/this.sceneId (mirroring the loadHistory guard); a result whose origin no longer matches
+   * is DROPPED, so a prior chapter's result never injects into - or is accepted into - the new chapter's
+   * document, and the host is told `result-dropped` instead of a success (c06).
    */
   private runOriginChapterId: string | null = null;
   private runOriginSceneId: string | null = null;
@@ -222,8 +248,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private analysisResultIdsBeforeRun = new Set<string>();
   /** Human-readable duration label for the last completed run (e.g. "45s", "2m 10s"). */
   lastRunDurationLabel: string | null = null;
-  /** Latest estimated completion percent for the current Proofread run (0–100). */
-  currentProgressPercent: number | null = null;
   /** Line Edit suggestions for the current Run tab (from server-side AnalysisSuggestion rows). */
   lineEditRunSuggestions: AnalysisSuggestion[] = [];
   /** True after we've restored Line Edit suggestions for the current chapter/scene (so we don't re-run mapping on every documentText change while user edits). */
@@ -332,6 +356,23 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    // c01 remedy B. This panel is mounted under `@if (editHelpView === 'analysis')` inside
+    // `@else if (reviewMode === 'edit')`, so switching the Edit-help sub-tab or the Review/Edit control
+    // DESTROYS it - and the unsubscribe below CANCELS the in-flight run. The host's run dialog is not
+    // destroyed with us (it lives outside that `@if`), so without this it keeps a live progress bar up for
+    // a run that no longer exists. On the sync path there is no registry job to resolve off either.
+    //
+    // Emitting an @Output from ngOnDestroy DOES reach the host: Angular's destroyViewTree cleans child
+    // views first, and cleanUpView runs executeOnDestroys BEFORE processCleanups, so the parent's output
+    // subscription is still live here. Proven by the real-template DOM specs, not assumed.
+    //
+    // A registry-TRACKED run is deliberately not special-cased here: that job really does keep running
+    // server-side, and the dialog's own `jobId === null` guard is what keeps its card waiting for the
+    // registry. One guard, in the consumer that owns the state machine.
+    if (this.isRunning) {
+      this.isRunning = false;
+      this.emitRunFinished();
+    }
     this.runSubscription?.unsubscribe();
     this.orchestrationService.stopProgressPolling();
     this.clearProofreadFinalizeRetryTimer();
@@ -549,7 +590,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    * the run guards on this getter instead lets a new context start its own run while the origin's
    * background job keeps running (tracked by the JobRegistry, recovered by loadHistory on return), and
    * restores the "Running…" state when the user navigates back to the origin. Scene-precise, mirroring
-   * the onRunResultReceived origin drop-guard.
+   * the {@link resultBelongsToRunOrigin} drop-guard.
    */
   get isRunningForCurrentContext(): boolean {
     return this.isRunning
@@ -1675,9 +1716,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
     const ctx = this.buildRunContext();
     this.prepareForRun();
-    this.analysisStatus.emit(
-      this.orchestrationService.emitInitialStatusForRun(ctx, true)
-    );
+    // The streaming path has no orchestration-level "status" event of its own (unlike
+    // runAnalysisAfterSave, which prepends one), so synthesize the SAME event shape here rather than a
+    // second output channel. The dialog's state (a) message reads it off the one stream.
+    this.runEvent.emit({
+      kind: 'status',
+      message: this.orchestrationService.emitInitialStatusForRun(ctx, true),
+    });
 
     const startStreaming = () => {
       this.runSubscription?.unsubscribe();
@@ -1692,8 +1737,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.saveBeforeRun()
         .then(startStreaming)
         .catch(() => {
-          this.isRunning = false;
-          this.analysisCompleted.emit();
+          // The save rejected, so the run never starts and no subscription is ever created: this is the
+          // ONE terminal route that cannot reach the subscription's error/complete handlers. Route it
+          // through the same terminal as every other ending rather than half-clearing the flags here.
+          this.onRunFinished();
         });
     } else {
       startStreaming();
@@ -1732,8 +1779,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     );
     this.runStartedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     this.lastRunDurationLabel = null;
-    this.currentProgressPercent = null;
-    this.analysisProgressPercent.emit(null);
+    // Drop the previous run's job id so the in-panel bar can never mirror a stale job.
+    this.currentRunJobId = null;
   }
 
   private buildRunContext(): AnalysisRunContext {
@@ -1754,33 +1801,46 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   private handleRunEvent(event: AnalysisRunEvent): void {
+    // Wave 1d (c2): fan the raw event out to the host FIRST, so the run dialog sees the run lifecycle in
+    // the order it happened. `streaming-token` is excluded (high-volume, and no host surface reads it).
+    // Note this carries LIFECYCLE only: the `progress` event's percent is deliberately NOT consumed by
+    // any host surface - the registry owns that number on all three surfaces.
+    //
+    // c06: the two RESULT events are excluded here and fanned out from their own case below instead.
+    // That is not a reordering - they are still emitted from this same synchronous call, after every
+    // earlier event, before every later one, and before onRunResultReceived mutates a single field - it
+    // only lets the PAYLOAD depend on whether this panel is about to keep the result or drop it. See
+    // `resultBelongsToRunOrigin`.
+    if (event.kind !== 'streaming-token' && event.kind !== 'sync-result' && event.kind !== 'job-result') {
+      this.runEvent.emit(event);
+    }
+
     switch (event.kind) {
       case 'status':
-        this.analysisStatus.emit(event.message);
         break;
       case 'progress':
-        this.analysisStatus.emit(event.message);
-        if (event.percent != null) {
-          this.currentProgressPercent = event.percent;
-          this.analysisProgressPercent.emit(event.percent);
-        }
         if (event.rawStatus === 'failed') {
           this.isRunning = false;
           this.asyncJobInFlight = false;
           this.asyncBannerActiveForRun = false;
           this.runError = `${this.selectedAnalysisType || 'Analysis'} failed – see error message.`;
           this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
-          this.analysisCompleted.emit();
         } else if (event.rawStatus === 'canceled') {
           this.isRunning = false;
           this.asyncJobInFlight = false;
           this.asyncBannerActiveForRun = false;
           this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
-          this.analysisCompleted.emit();
         }
         break;
       case 'sync-result':
       case 'job-result':
+        // c06: decide the drop BEFORE telling the host. A result we are about to discard must not reach
+        // the host as a success: on the sync path nothing was ever registry-tracked, so the run dialog
+        // would latch "Done" at 100% for suggestions that were never surfaced anywhere, and (per c02's
+        // book-scoped contract) that card then survives the very chapter switch that caused the drop.
+        this.runEvent.emit(
+          this.resultBelongsToRunOrigin(event.result) ? event : { kind: 'result-dropped' }
+        );
         this.onRunResultReceived(event.result);
         break;
       case 'job-started':
@@ -1803,12 +1863,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
             chapterId: this.runOriginChapterId ?? undefined,
             scopeLabel: this.runOriginSceneId ? 'סצנה' : 'פרק', // DRAFT he - needs native review
           });
-          // Dismiss the full-screen blocking overlay; the compact in-panel banner takes over.
+          // The one id the in-panel progress bar mirrors, read back out of the registry (never polled here).
+          this.currentRunJobId = event.jobId;
+          // The compact in-panel banner takes over as the in-page indicator for this run.
           this.asyncJobInFlight = true;
           // Persist that this run is an async job with an active banner so returning to the origin
           // context after a mid-run navigation reconstructs the banner (see ngOnChanges reconcile).
           this.asyncBannerActiveForRun = true;
-          this.asyncJobStarted.emit();
         }
         break;
       case 'streaming-token':
@@ -1823,10 +1884,50 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.asyncBannerActiveForRun = false;
         this.runError = event.message;
         this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
-        this.analysisCompleted.emit();
         break;
+      case 'run-finished':
+      case 'result-dropped':
+        // The two PANEL-emitted members (c01 / c06). They exist only on the `runEvent` OUTPUT, put
+        // there by emitRunFinished() and by the result case above; no orchestration observable produces
+        // either, and this method only ever sees an orchestration observable. So there is genuinely
+        // nothing to do - but the answer is written down rather than left to the default arm, because
+        // "no case at all" is indistinguishable from "we forgot".
+        break;
+
+      default:
+        // Exhaustiveness fence (final-r02): see assertUnhandledRunEvent. A new member of
+        // AnalysisRunEvent must fail the build here until someone decides what this panel does with it.
+        assertUnhandledRunEvent(event);
     }
     this.cdr.detectChanges();
+  }
+
+  /**
+   * Does this terminal result still belong to the context on screen?
+   *
+   * pf-f01 made long runs non-blocking, and this panel instance is REUSED across navigation, so a
+   * terminal result can arrive after the user switched chapters/scenes. Injecting the PRIOR chapter's
+   * result into the NEW chapter would show a wrong-context result AND map the prior chapter's offsets
+   * into the new document (a corruption risk on accept). So a result whose origin does not match the
+   * current context is DROPPED, mirroring the loadHistory guard. Prefer the origin captured at run start;
+   * fall back to the result DTO's own chapterId/sceneId when no origin was captured (e.g. a reattached
+   * job). The result stays safe: when the user returns to the original chapter the guarded loadHistory
+   * (and the JobRegistry reattach) re-surface the persisted row.
+   *
+   * The comparison is against the CURRENT context at ARRIVAL time, not against wherever the user went in
+   * between: a run whose user navigated away and back before it landed is kept, exactly as if they had
+   * never left.
+   *
+   * c06 extracted this from {@link onRunResultReceived} so `handleRunEvent` can ask the SAME question
+   * before it fans the result out to the host. Two callers, one copy of the rule: a second, drifting copy
+   * of it is precisely how the host came to be told "Done" about a result this panel discarded.
+   */
+  private resultBelongsToRunOrigin(result: AnalysisResultDto): boolean {
+    const originChapterId = this.runOriginChapterId ?? result.chapterId ?? null;
+    const originSceneId = this.runOriginChapterId != null
+      ? this.runOriginSceneId
+      : (result.sceneId ?? null);
+    return originChapterId === this.chapterId && originSceneId === (this.sceneId ?? null);
   }
 
   private onRunResultReceived(result: AnalysisResultDto): void {
@@ -1836,20 +1937,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.asyncJobInFlight = false;
     this.asyncBannerActiveForRun = false;
 
-    // pf-f01 made long runs non-blocking, and this panel instance is REUSED across navigation, so a
-    // terminal result can arrive after the user switched chapters/scenes. Injecting the PRIOR chapter's
-    // result into the NEW chapter would show a wrong-context result AND map the prior chapter's offsets
-    // into the new document (a corruption risk on accept). So DROP a result whose origin does not match
-    // the current context, mirroring the loadHistory guard. Prefer the origin captured at run start; fall
-    // back to the result DTO's own chapterId/sceneId when no origin was captured (e.g. a reattached job).
-    // The result stays safe: when the user returns to the original chapter the guarded loadHistory (and
-    // the JobRegistry reattach) re-surface the persisted row.
-    const originChapterId = this.runOriginChapterId ?? result.chapterId ?? null;
-    const originSceneId = this.runOriginChapterId != null
-      ? this.runOriginSceneId
-      : (result.sceneId ?? null);
-    if (originChapterId !== this.chapterId || originSceneId !== (this.sceneId ?? null)) {
-      this.analysisCompleted.emit();
+    if (!this.resultBelongsToRunOrigin(result)) {
+      // The host was already told, and told the TRUTH: handleRunEvent asked this same predicate and sent
+      // `{ kind: 'result-dropped' }` instead of the result event, so the run dialog abandons its card
+      // rather than reporting a success that never reached any surface (c06).
       return;
     }
 
@@ -1860,7 +1951,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.activeSubTab = 'run';
     this.applyProofreadOrLineEditResultToRunTab(result);
     this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
-    this.analysisCompleted.emit();
   }
 
   private onStreamingCompleted(latestResult: AnalysisResultDto): void {
@@ -1920,7 +2010,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.streamingText = '';
     this.loadHistory(true);
     this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
-    this.analysisCompleted.emit();
   }
 
   /** Dismiss the compact async-job banner without cancelling the job (it keeps running in the background). */
@@ -1931,14 +2020,38 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.asyncBannerActiveForRun = false;
   }
 
+  /**
+   * The run's AUTHORITATIVE terminal: the run subscription completed or errored, or the save that had to
+   * precede a streaming run rejected so no subscription was ever created.
+   *
+   * c01: this now signals the host on the `runEvent` channel it actually binds. It used to emit
+   * `analysisCompleted`, which the editor stopped binding when the blocking overlay was deleted, so the
+   * run dialog had no route out of its "Starting..." state for any run that ended without one of the
+   * orchestration service's own terminal EVENTS (sync-result / job-result / streaming-complete / error).
+   */
   private onRunFinished(): void {
     if (!this.isRunning) return;
     this.isRunning = false;
     this.asyncJobInFlight = false;
     this.asyncBannerActiveForRun = false;
     this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
-    this.analysisCompleted.emit();
+    this.emitRunFinished();
     this.cdr.detectChanges();
+  }
+
+  /**
+   * Put the run's terminal on the ONE channel the host listens to.
+   *
+   * Emitted directly rather than routed through {@link handleRunEvent}: `'run-finished'` is never produced
+   * by an orchestration observable, so it is not a stream event, and handleRunEvent's top-of-method
+   * fan-out (every kind except `'streaming-token'` and the two result kinds, which c06 fans out from
+   * their own case) would make routing it there a second emit of the same signal.
+   *
+   * On a normal run this fires AFTER a real terminal event, so the consumer must be single-resolve. The
+   * dialog is: its `terminal` latch is written exactly once per run.
+   */
+  private emitRunFinished(): void {
+    this.runEvent.emit({ kind: 'run-finished' });
   }
 
   private applyProofreadOrLineEditResultToRunTab(result: AnalysisResultDto): void {

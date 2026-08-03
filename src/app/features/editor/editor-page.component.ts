@@ -1,8 +1,8 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit, OnDestroy, ViewChild } from '@angular/core';
+import { Component, DoCheck, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ImportHandoffCardComponent } from './import-handoff-card/import-handoff-card.component';
-import { Subject, Subscription } from 'rxjs';
+import { ReplaySubject, Subject, Subscription } from 'rxjs';
 import { debounceTime, takeUntil } from 'rxjs/operators';
 import { DocumentEditorContainerComponent, DocumentEditorContainerModule, ToolbarService } from '@syncfusion/ej2-angular-documenteditor';
 import { BookService } from '../../core/services/book.service';
@@ -21,6 +21,12 @@ import { IssuePanelComponent, ApplyCorrectionEvent } from '../language-engine/is
 import { BookDashboardComponent } from '../book-dashboard/book-dashboard.component';
 import { ChapterFindingsChecklistComponent } from './chapter-findings-checklist.component';
 import { SegmentedControlComponent, SegmentedOption } from '../../shared/segmented-control/segmented-control.component';
+import {
+  AnalysisRunDialogComponent,
+  RunDialogMinimizeEvent,
+} from '../../shared/analysis-run-dialog/analysis-run-dialog.component';
+import { flyToActivityCenter } from '../../shared/analysis-run-dialog/minimize-flight';
+import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { LanguageIssue } from '../../core/models/language-engine';
 import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-analysis';
 import { EditorTextService } from '../../core/services/editor-text.service';
@@ -46,16 +52,24 @@ import { createElement, classList, EventHandler } from '@syncfusion/ej2-base';
     ChapterFindingsChecklistComponent,
     SegmentedControlComponent,
     ImportHandoffCardComponent,
+    AnalysisRunDialogComponent,
   ],
   providers: [ToolbarService],
   templateUrl: './editor-page.component.html',
   styleUrl: './editor-page.component.scss'
 })
-export class EditorPageComponent implements OnInit, OnDestroy {
+export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
   @ViewChild('docEditor', { static: false })
   docEditor?: DocumentEditorContainerComponent;
   @ViewChild(AnalysisPanelComponent, { static: false })
   analysisPanel?: AnalysisPanelComponent;
+  /**
+   * c02: the run-progress dialog. Unlike the analysis panel it is mounted UNCONDITIONALLY, so this is
+   * resolved from the first change-detection pass onward. READ-ONLY from here: the context reconcile in
+   * {@link ngDoCheck} asks it for its public `state` and never writes any of its internals.
+   */
+  @ViewChild(AnalysisRunDialogComponent, { static: false })
+  runDialog?: AnalysisRunDialogComponent;
   /** rf-f13: reference to the mounted dashboard so the checklist "View" action can select the Findings tab. */
   @ViewChild(BookDashboardComponent, { static: false })
   dashboardComp?: BookDashboardComponent;
@@ -146,12 +160,51 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /** Drag state captured on pointerdown; null when not dragging. */
   private resizeDrag: { pointerId: number; startX: number; startWidth: number; handle: HTMLElement } | null = null;
 
-  /** True while an analysis run or stream is in progress; shows full-screen overlay and blocks interaction. */
-  analysisRunning = false;
-  /** Human-readable status text shown in the analysis overlay spinner. */
-  analysisStatusText = 'מריץ ניתוח…'; // DRAFT he - needs native review
-  /** Numeric percent (0–100) for analysis overlay progress bar; null when unknown. */
-  analysisStatusPercent: number | null = null;
+  // ── Wave 1d: the analysis run-progress dialog ──────────────────────────────
+  //
+  // This REPLACES the old full-screen `.analysis-overlay`, which was a SECOND OWNER of a running job's
+  // progress: it re-derived its own percent from the orchestration service's `'progress'` events
+  // (clamping and force-monotonic-ing it locally) while JobRegistryService already owned the same number
+  // for the Activity Center. The dialog, the in-panel indicator and the Activity Center now all read the
+  // registry, so one job cannot show three different percentages.
+  //
+  // The dialog is also NOT a blocker: the chapter behind it stays readable and editable, so there is no
+  // longer any need to dismiss it early when a run goes async (the old `(asyncJobStarted)` -> hide-overlay
+  // wiring, now deleted).
+
+  /**
+   * Whether the run-progress dialog is showing. Two-way bound, so the dialog flips it false when the user
+   * minimizes or closes it. This is NOT a "run is in flight" flag: per the d1 contract the dialog stays up
+   * in its terminal state until the user dismisses it.
+   */
+  runDialogOpen = false;
+
+  /** Replay buffer size for {@link runEvents$}. See the field doc for why replay is needed at all. */
+  private static readonly RUN_EVENT_REPLAY = 32;
+
+  /**
+   * The CURRENT run's event stream, re-created per run.
+   *
+   * A ReplaySubject rather than a plain Subject because the streaming path pushes its initial status
+   * SYNCHRONOUSLY, inside the same call stack as `analysisStarted`, i.e. before Angular's next change
+   * detection pass has handed the new stream to the dialog. Without replay that first message would be
+   * dropped and state (a) would render its generic fallback. The buffer only ever has to survive one tick.
+   *
+   * Re-creating it per run is ALSO the dialog's run boundary: its ngOnChanges resets the state machine
+   * when `runEvents` changes while open, so starting a second run while a previous terminal card is still
+   * on screen restarts cleanly instead of inheriting the finished run's latched state.
+   */
+  runEvents$: ReplaySubject<AnalysisRunEvent> | null = null;
+
+  /** Analysis type of the current run; titles the dialog until a tracked job supplies its own title. */
+  runDialogAnalysisType = '';
+
+  /**
+   * c02: the (bookId, chapterId, sceneId) triple as of the previous change-detection pass. `null` until
+   * the first pass, which only records a baseline. See {@link ngDoCheck} for why this is the key.
+   */
+  private lastRunDialogContext: { bookId: string | null; chapterId: string | null; sceneId: string | null } | null = null;
+
   /** Used for editor-shell dir attribute (e.g. 'rtl' for Hebrew). */
   get editorDirection(): string {
     const lang = this.book?.language?.toLowerCase();
@@ -1157,51 +1210,103 @@ export class EditorPageComponent implements OnInit, OnDestroy {
   /** Callback for analysis panel: save before run so analysis uses latest content. */
   readonly saveBeforeRun = () => this.saveCurrentDocumentPromise();
 
-  /** Called when analysis panel starts a run or stream; shows overlay and freezes UI. */
+  /**
+   * The analysis panel started a run or a stream: open the run-progress dialog on a FRESH event stream.
+   *
+   * Both bindings change in the same change-detection pass, which the dialog collapses into a single
+   * state-machine reset (see its ngOnChanges).
+   */
   onAnalysisStarted(): void {
-    this.analysisRunning = true;
-    this.analysisStatusText = 'מריץ ניתוח…'; // DRAFT he - needs native review
-    this.analysisStatusPercent = null;
+    this.runDialogAnalysisType = this.analysisPanel?.selectedAnalysisType ?? '';
+    this.runEvents$ = new ReplaySubject<AnalysisRunEvent>(EditorPageComponent.RUN_EVENT_REPLAY);
+    this.runDialogOpen = true;
     this.refreshDocumentPlainText();
   }
 
-  /** Called when analysis panel finishes (success or error); hides overlay. */
-  onAnalysisCompleted(): void {
-    this.analysisRunning = false;
+  /**
+   * Forward one raw run event into the current run's dialog stream.
+   *
+   * Pure transport: the editor no longer interprets these events. In particular it does NOT read the
+   * `'progress'` percent any more, because that was the second owner this wave converged away. The dialog
+   * takes only the run LIFECYCLE from here; every number it shows comes from JobRegistryService.
+   */
+  onAnalysisRunEvent(event: AnalysisRunEvent): void {
+    this.runEvents$?.next(event);
   }
 
   /**
-   * Receive human-readable status messages from the analysis panel while a run is in progress.
-   * The raw `message` is an English string from the orchestration service (e.g. "Proofread chunked · …").
-   * For book-scoped Hebrew books (the default) we ignore the raw string and show a fixed Hebrew label
-   * so the overlay never renders raw English. For English books we pass it through unchanged.
+   * Minimize: fly a ghost of the dialog card toward the Activity Center bell, which is where the job
+   * stays visible once the dialog is gone. The job itself is untouched (it stays tracked and keeps
+   * polling); this handler is purely the visual hand-off.
+   *
+   * The bell is pinned with `inset-inline-start`, so its physical corner FLIPS between Hebrew (RTL, the
+   * default) and English. `flyToActivityCenter` therefore measures the bell's live rect instead of aiming
+   * at a hardcoded corner, and honours `prefers-reduced-motion` with a cross-fade.
    */
-  onAnalysisStatus(message: string): void {
-    if (message && this.analysisRunning) {
-      if (this.reviewPanelIsHebrew) {
-        // Keep the overlay label fixed at "מריץ ניתוח…" (DRAFT he - needs native review).
-        // The progress bar (percent) still updates so the user sees progress.
-        this.analysisStatusText = 'מריץ ניתוח…'; // DRAFT he - needs native review
-      } else {
-        this.analysisStatusText = message;
-      }
-    }
+  onRunDialogMinimize(event: RunDialogMinimizeEvent): void {
+    flyToActivityCenter(event.originRect);
   }
 
-  /** Receive numeric progress (0–100) from analysis panel to show a progress bar in the overlay. */
-  onAnalysisProgressPercent(percent: number | null): void {
-    if (!this.analysisRunning) {
-      this.analysisStatusPercent = null;
+  /**
+   * c02: reconcile the run-progress card to the unit the user is actually looking at.
+   *
+   * CONTRACT (B, book-scoped - the full argument is in the plan's `## c02 decision`). The card is scoped
+   * to the BOOK, like the Activity Center it minimizes into, NOT to the chapter. A chapter or scene
+   * switch does not take a live run's card away: the panel does not end its run on a context switch
+   * (`AnalysisPanelComponent.ngOnChanges` never touches `runSubscription`), so the card is still
+   * describing something that is genuinely happening, and a background run outliving the surface that
+   * started it is the entire premise of the minimize gesture. Two things DO clear it:
+   *
+   *   - a BOOK switch, always, live run or not. This card is book-scoped chrome (it renders in this
+   *     book's language and titles itself from this book's analysis-type vocabulary), so the previous
+   *     book's card must never survive onto the next one. The JOB is untouched and stays visible in the
+   *     app-level Activity Center, which is legitimately cross-book.
+   *   - a TERMINAL card, on any context change. A finished run for a unit the user has left has nothing
+   *     left to tell them: it cannot progress, it cannot be minimized, and its result already went to the
+   *     panel for the unit it belongs to. This is the review's "Done card for chapter A lingering over
+   *     chapter B".
+   *
+   * WHY ngDoCheck. There is no single existing per-context reset site to hang this on. `resetScrollTarget`
+   * is called from `selectChapter` and `selectScene` only, while the SignalR handlers (scene deleted,
+   * scenes cleared, a scene list that no longer contains the selection) and chapter delete write
+   * `selectedSceneId` / `selectedChapterId` directly, and `bookId` is written only by the `route.params`
+   * subscription. Keying on the VALUE of the same triple the analysis panel reconciles on is the only
+   * single site that covers every writer - it is the editor-side equivalent of the panel's own
+   * `ngOnChanges` reconcile (`analysis-panel.component.ts`), which is a DoCheck-time hook for exactly the
+   * same reason. It cannot fire on a re-render or an unrelated field change (nothing happens unless one of
+   * the three values differs), nor on the initial load (the first pass records a baseline and returns).
+   *
+   * OWNERSHIP. The dialog remains the single owner of its RUN state machine: this reads its public
+   * `state` and never writes `jobId` / `trackedJob` / `terminal`. What it writes is `open`, the host's own
+   * input (the editor is already its writer, at `onAnalysisStarted`), answering a question the dialog
+   * cannot answer for itself because it does not know what chapter is on screen. Terminal-ness is READ
+   * rather than re-derived on purpose: `(b) -> (c)` is the registry's call alone (d1 item 6), so it never
+   * reaches the editor on the run-event channel, and any editor-local reconstruction of it would be a
+   * second, permanently-stale copy of the state machine.
+   */
+  ngDoCheck(): void {
+    const bookId = this.bookId;
+    const chapterId = this.selectedChapterId;
+    const sceneId = this.selectedSceneId;
+    const previous = this.lastRunDialogContext;
+    if (previous
+      && previous.bookId === bookId
+      && previous.chapterId === chapterId
+      && previous.sceneId === sceneId) {
       return;
     }
-    if (percent == null || Number.isNaN(percent)) {
-      return;
+    this.lastRunDialogContext = { bookId, chapterId, sceneId };
+    // Nothing to reconcile on the very first pass (no context was navigated away from) or while no card
+    // is on screen.
+    if (!previous || !this.runDialogOpen) return;
+    if (previous.bookId !== bookId || this.runDialog?.state === 'terminal') {
+      // Drop the card AND its stream, mirroring onAnalysisStarted's three writes in reverse. The run
+      // itself is not cancelled: the panel owns that subscription, and a tracked job stays in the
+      // registry (and so in the Activity Center) either way.
+      this.runDialogOpen = false;
+      this.runEvents$ = null;
+      this.runDialogAnalysisType = '';
     }
-    const next = Math.max(0, Math.min(100, Math.round(percent)));
-    // Keep progress bar non-decreasing so out-of-order backend updates don't show the bar going backwards.
-    this.analysisStatusPercent = this.analysisStatusPercent != null
-      ? Math.max(this.analysisStatusPercent, next)
-      : next;
   }
 
   /** Save if needed, then navigate to books list. Used by Back to books button and canDeactivate (browser back). */

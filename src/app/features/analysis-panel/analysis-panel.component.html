@@ -47,11 +47,18 @@
 
   @if (asyncJobInFlight) {
     <div class="async-job-banner" role="status" aria-live="polite">
-      <span class="async-job-banner-spinner" aria-hidden="true"></span>
-      <span class="async-job-banner-msg">{{ panelLabel('asyncBannerMsg') }}</span>
-      <button type="button" class="async-job-banner-dismiss" (click)="dismissAsyncBanner()" [attr.aria-label]="panelLabel('asyncBannerDismiss')">
-        {{ panelLabel('asyncBannerDismiss') }}
-      </button>
+      <div class="async-job-banner-row">
+        <span class="async-job-banner-spinner" aria-hidden="true"></span>
+        <span class="async-job-banner-msg">{{ panelLabel('asyncBannerMsg') }}</span>
+        <button type="button" class="async-job-banner-dismiss" (click)="dismissAsyncBanner()" [attr.aria-label]="panelLabel('asyncBannerDismiss')">
+          {{ panelLabel('asyncBannerDismiss') }}
+        </button>
+      </div>
+      <!-- Wave 1d (c2): the IN-PAGE progress indicator. Reads the SAME registry job the run dialog and
+           the Activity Center read, so the three surfaces always show one number. -->
+      @if (currentRunJobId) {
+        <app-job-progress-inline [jobId]="currentRunJobId"></app-job-progress-inline>
+      }
     </div>
   }
 

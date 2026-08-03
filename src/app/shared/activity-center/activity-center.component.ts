@@ -16,6 +16,7 @@ import {
   JobRegistryService,
   JobStatus,
   TrackedJob,
+  isTerminal,
 } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 
@@ -157,7 +158,15 @@ const STATUS_CLASS: Record<JobStatus, string> = {
 
                 <!-- Progress bar: determinate rows carry aria value attrs AND a numeric percent
                      readout (so progress is legible, not just a bar); indeterminate rows omit both
-                     (no reliable number yet) so no ambiguous aria-valuenow="null" is emitted. -->
+                     (no reliable number yet) so no ambiguous aria-valuenow="null" is emitted.
+                     THIRD case (c05): a row whose job is already TERMINAL but never learned a percent
+                     (a failed job whose poll errored before any chunk count arrived, a canceled one)
+                     is neither. It used to fall into the indeterminate branch and pulse an infinite
+                     animation next to its own "Failed" / "Canceled" pill, and announce itself to a
+                     screen reader as a live task of unknown size. Such a row is now an inert bar that
+                     is not a progressbar at all. Kept identical to the run dialog's
+                     .rd-progress-track--ended branch and the in-page indicator's .jpi-track--ended:
+                     the three surfaces must agree, which is the whole point of Wave 1d. -->
                 @if (job.percent !== null) {
                   <div class="ac-progress-row">
                     <div class="ac-progress-track" role="progressbar"
@@ -170,6 +179,9 @@ const STATUS_CLASS: Record<JobStatus, string> = {
                     </div>
                     <span class="ac-progress-percent" aria-hidden="true">{{ job.percent }}%</span>
                   </div>
+                } @else if (isEnded(job.status)) {
+                  <!-- Over, and no percent was ever known: inert, and NOT a progressbar. -->
+                  <div class="ac-progress-track ac-progress-track--ended" aria-hidden="true"></div>
                 } @else {
                   <div class="ac-progress-track" role="progressbar">
                     <!-- Indeterminate animation -->
@@ -296,6 +308,15 @@ export class ActivityCenterComponent implements OnDestroy {
 
   statusClass(status: JobStatus): string {
     return STATUS_CLASS[status] ?? '';
+  }
+
+  /**
+   * Whether a row's job is over (c05). The registry's own `isTerminal` predicate is reused rather than
+   * hand-rolled, so "over" means exactly what it means everywhere else. Only the progress bar reads
+   * this: a terminal row with a null percent must not render the pulsing indeterminate treatment.
+   */
+  isEnded(status: JobStatus): boolean {
+    return isTerminal(status);
   }
 
   relativeTime(isoUtc: string | null | undefined): string {

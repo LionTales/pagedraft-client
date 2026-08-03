@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
-import { Component, EventEmitter, NO_ERRORS_SCHEMA, Output } from '@angular/core';
+import { Component, EventEmitter, NO_ERRORS_SCHEMA, OnDestroy, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { By } from '@angular/platform-browser';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -14,11 +14,14 @@ import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisService } from '../../core/services/analysis.service';
-import { JobRegistryService } from '../../core/services/job-registry.service';
+import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { SfdtManipulationService, SCROLL_TARGET_BOOKMARK } from '../../core/services/sfdt-manipulation.service';
 import { EditorTextService } from '../../core/services/editor-text.service';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 import { ReviseContextService } from '../../core/services/revise-context.service';
+import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
+import { AnalysisResultDto } from '../../core/models/analysis';
+import { AnalysisRunDialogComponent, RUN_DIALOG_LABELS_HE } from '../../shared/analysis-run-dialog/analysis-run-dialog.component';
 
 describe('EditorPageComponent (focused logic)', () => {
   let component: EditorPageComponent;
@@ -977,45 +980,61 @@ describe('EditorPageComponent (focused logic)', () => {
     });
   });
 
-  // ── pf-f01: analysis overlay blocking / non-blocking behaviour ────────────────────────
+  // ── Wave 1d: the run-progress dialog replaces the pf-f01 blocking overlay ────────────
   //
-  // The blocking full-screen overlay is shown for synchronous (short) runs. For async (long) runs,
-  // the panel emits asyncJobStarted after registering the job; the editor handles it by calling
-  // onAnalysisCompleted() to dismiss the overlay. This keeps the editor usable while the job runs.
-  describe('pf-f01 analysis overlay blocking/non-blocking', () => {
-    it('onAnalysisStarted sets analysisRunning true (sync path: overlay appears)', () => {
-      expect(component.analysisRunning).toBe(false);
+  // The old full-screen `.analysis-overlay` blocked the editor for sync runs and was dismissed early on
+  // `asyncJobStarted`. It is gone, together with the editor-local percent it carried (the second owner of
+  // a running job's progress). What the editor owns now is only: open the dialog on a FRESH stream per
+  // run, transport raw run events into it, and play the minimize flight.
+  describe('Wave 1d run-progress dialog wiring', () => {
+    it('onAnalysisStarted opens the dialog on a brand-new event stream', () => {
+      expect(component.runDialogOpen).toBe(false);
+      expect(component.runEvents$).toBeNull();
+
       component.onAnalysisStarted();
-      expect(component.analysisRunning).toBe(true);
+
+      expect(component.runDialogOpen).toBe(true);
+      expect(component.runEvents$).not.toBeNull();
     });
 
-    it('onAnalysisCompleted clears analysisRunning (overlay is hidden)', () => {
+    it('a SECOND run replaces the stream, so the dialog resets even if the first card is still open', () => {
       component.onAnalysisStarted();
-      expect(component.analysisRunning).toBe(true);
+      const firstRun = component.runEvents$;
 
-      component.onAnalysisCompleted();
-      expect(component.analysisRunning).toBe(false);
+      // The user never dismissed the terminal card: `open` is still true.
+      expect(component.runDialogOpen).toBe(true);
+      component.onAnalysisStarted();
+
+      expect(component.runEvents$).not.toBeNull();
+      expect(component.runEvents$).not.toBe(firstRun);
+      expect(component.runDialogOpen).toBe(true);
     });
 
-    it('editor is NOT blocked during async run: onAnalysisCompleted() when asyncJobStarted fires clears the overlay', () => {
-      // Simulate: analysis started (overlay shown), then async job registered (overlay dismissed).
+    it('forwards raw run events onto the current stream (and replays them to a late subscriber)', () => {
       component.onAnalysisStarted();
-      expect(component.analysisRunning).toBe(true);
+      component.onAnalysisRunEvent({ kind: 'status', message: 'Proofread chunked' });
+      component.onAnalysisRunEvent({ kind: 'job-started', jobId: 'JOB-9' });
 
-      // asyncJobStarted maps to onAnalysisCompleted() in the template — call it directly.
-      component.onAnalysisCompleted();
-      expect(component.analysisRunning).toBe(false);
+      const seen: unknown[] = [];
+      component.runEvents$!.subscribe(e => seen.push(e));
+
+      expect(seen).toEqual([
+        { kind: 'status', message: 'Proofread chunked' },
+        { kind: 'job-started', jobId: 'JOB-9' },
+      ]);
     });
 
-    it('short sync /analyze path is unchanged: analysisRunning stays true until onAnalysisCompleted fires', () => {
-      // Simulate a sync run: only start + complete, no asyncJobStarted.
-      component.onAnalysisStarted();
-      expect(component.analysisRunning).toBe(true);
+    it('forwarding a run event before any run started is a no-op, not a crash', () => {
+      expect(() => component.onAnalysisRunEvent({ kind: 'status', message: 'stray' })).not.toThrow();
+    });
 
-      // No asyncJobStarted emitted (sync path does not emit it).
-      // Overlay stays until the analysis actually completes.
-      component.onAnalysisCompleted();
-      expect(component.analysisRunning).toBe(false);
+    it('the dialog owns dismissal: nothing in the editor closes it when a run ends', () => {
+      component.onAnalysisStarted();
+      component.onAnalysisRunEvent({ kind: 'error', message: 'boom' });
+
+      // The old overlay hid itself here (analysisCompleted / asyncJobStarted). The dialog now renders its
+      // own terminal state until the user closes it, so the editor must NOT flip `open`.
+      expect(component.runDialogOpen).toBe(true);
     });
   });
 });
@@ -1055,6 +1074,8 @@ class StubImportHandoffCardComponent {
  */
 class RegistryStub {
   private readonly running = new Map<string, BehaviorSubject<boolean>>();
+  /** c02: per-job snapshot streams, held open for the whole test (see jobById$). */
+  private readonly jobs = new Map<string, BehaviorSubject<TrackedJob | null>>();
   reattach = jasmine.createSpy('reattach');
 
   private subjectFor(bookId: string): BehaviorSubject<boolean> {
@@ -1070,17 +1091,70 @@ class RegistryStub {
     return this.subjectFor(bookId).asObservable();
   }
 
+  /**
+   * c01: the run dialog is now a REAL component in this suite (it is the surface the panel's unmount must
+   * not strand), and it injects the registry. c02 needs the dialog to actually REACH state (b) and state
+   * (c), so this is a per-job BehaviorSubject held OPEN for the life of the test rather than a
+   * synchronous `of()`: a collapsed window would let a stale-card assertion pass against the bug.
+   *
+   * A job that no test ever pushes through {@link setJob} stays `null` forever, which keeps c01's unmount
+   * cases exactly as they were (they never send `job-started`, so state (a) never advances).
+   */
+  jobById$(jobId: string): Observable<TrackedJob | null> {
+    return this.jobSubjectFor(jobId).asObservable();
+  }
+
   /** Test hook: set the running flag for a specific book. */
   setRunning(bookId: string, running: boolean): void {
     this.subjectFor(bookId).next(running);
   }
+
+  /** Test hook: push a registry snapshot for one job (the ONLY owner of a tracked run's percent/status). */
+  setJob(jobId: string, job: TrackedJob | null): void {
+    this.jobSubjectFor(jobId).next(job);
+  }
+
+  private jobSubjectFor(jobId: string): BehaviorSubject<TrackedJob | null> {
+    let s = this.jobs.get(jobId);
+    if (!s) {
+      s = new BehaviorSubject<TrackedJob | null>(null);
+      this.jobs.set(jobId, s);
+    }
+    return s;
+  }
 }
 
+/**
+ * Inert stand-in for AnalysisPanelComponent with the SAME selector, declaring the two outputs the real
+ * template binds - `(analysisStarted)` and `(runEvent)` - so those bindings are real subscriptions here
+ * rather than stray DOM event listeners.
+ *
+ * c01: the former `(asyncJobStarted)` declaration and its comment ("the real template binds
+ * (asyncJobStarted); the stub must declare it") were removed. The template binds neither that nor
+ * `analysisCompleted` any more; both @Outputs were deleted after the run terminal moved onto `runEvent`.
+ *
+ * `startRun()` / `ngOnDestroy()` mirror the real panel's lifecycle contract: it emits `analysisStarted`
+ * when a run begins and, per its ngOnDestroy, emits the `'run-finished'` terminal on `runEvent` if a run
+ * is still in flight when it is destroyed. That the REAL panel honours this (and that the emit survives
+ * Angular's teardown order) is pinned separately over the real component in
+ * `analysis-panel.component.spec.ts`; what this stub is here to let us test is the EDITOR half.
+ */
 @Component({ selector: 'app-analysis-panel', standalone: true, template: '' })
-class StubAnalysisPanelComponent {
-  // pf-f01: the real template binds (asyncJobStarted); the stub must declare it so the
-  // binding compiles in the real-template DOM test suite.
-  @Output() asyncJobStarted = new EventEmitter<void>();
+class StubAnalysisPanelComponent implements OnDestroy {
+  @Output() analysisStarted = new EventEmitter<void>();
+  @Output() runEvent = new EventEmitter<AnalysisRunEvent>();
+
+  /** Mirrors AnalysisPanelComponent.isRunning: true between a run start and its terminal. */
+  private running = false;
+
+  startRun(): void {
+    this.running = true;
+    this.analysisStarted.emit();
+  }
+
+  ngOnDestroy(): void {
+    if (this.running) this.runEvent.emit({ kind: 'run-finished' });
+  }
 }
 
 @Component({ selector: 'app-issue-panel', standalone: true, template: '' })
@@ -1162,6 +1236,10 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
             StubBookDashboardComponent,
             StubSegmentedControlComponent,
             StubImportHandoffCardComponent,
+            // c01: NOT stubbed. The defect is that the run terminal never crosses from the `@if`-mounted
+            // panel to the dialog, so the dialog's own state machine has to be the real one for the
+            // assertion to mean anything.
+            AnalysisRunDialogComponent,
           ],
           schemas: [NO_ERRORS_SCHEMA], // tolerate <ejs-documenteditorcontainer> + its bindings
         },
@@ -1545,6 +1623,319 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       btn.click();
 
       expect(openSpy).withContext('openReviewPanel() must be called when the button HOST is clicked').toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ── c01: unmounting the analysis panel mid-run must not strand the run dialog ──────────────────
+  //
+  // The panel is `@if`-mounted (`@if (editHelpView === 'analysis')` inside `@else if (reviewMode ===
+  // 'edit')`); the dialog is NOT - it sits outside that block and survives. Switching the Edit-help
+  // sub-tab therefore destroys the panel, which cancels the in-flight run, while the dialog stays on
+  // screen. On the sync path nothing was ever registry-tracked, so the dialog had no route out of
+  // "Starting..." and kept a live indeterminate bar up for a run that no longer existed. The old overlay
+  // was a full-screen blocker, which is why this navigation was impossible before this wave.
+  //
+  // This drives the REAL editor-side wiring end to end - the panel's `(runEvent)` binding, the editor's
+  // transport into `runEvents$`, and the real dialog's state machine - and asserts the RENDERED card,
+  // because the entire defect is that the signal never crossed the component boundary. Calling
+  // `onAnalysisRunEvent` by hand would skip the only part that was broken.
+  describe('c01 the run dialog resolves when the analysis panel is unmounted mid-run', () => {
+    /** The stub panel currently mounted by the real template's `@if`. */
+    function panelStub(): StubAnalysisPanelComponent {
+      const found = fixture.debugElement.query(By.directive(StubAnalysisPanelComponent));
+      expect(found).withContext('the analysis panel must be mounted for this wiring to exist').not.toBeNull();
+      return found.componentInstance as StubAnalysisPanelComponent;
+    }
+
+    const dialogCard = () => el().querySelector('.rd-card');
+    const dialogStatus = () => el().querySelector('.rd-status-pill')?.textContent?.trim() ?? null;
+    const dialogMessage = () => el().querySelector('.rd-message')?.textContent?.trim() ?? null;
+
+    beforeEach(() => {
+      component.bookId = 'book-1';
+      component.book = BOOK;
+      component.reviewMode = 'edit';
+      component.editHelpView = 'analysis';
+      fixture.detectChanges();
+    });
+
+    it('switching the Edit-help sub-tab resolves a dialog left in state (a)', () => {
+      // A run starts through the real (analysisStarted) binding: the dialog opens on a fresh stream.
+      panelStub().startRun();
+      fixture.detectChanges();
+
+      // Mid-flight, held open: state (a), indeterminate bar, no terminal.
+      expect(dialogCard()).withContext('the dialog must be on screen mid-run').not.toBeNull();
+      expect(el().querySelector('.rd-progress-fill--indet')).not.toBeNull();
+      expect(dialogMessage()).toBe(RUN_DIALOG_LABELS_HE['starting']);
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['pending']);
+
+      // The user switches to the Language sub-view: the `@if` destroys the panel and cancels the run.
+      component.editHelpView = 'language';
+      fixture.detectChanges();
+
+      expect(has('app-analysis-panel')).withContext('the emitter is gone').toBe(false);
+      // The dialog is still mounted - and it now says the run is over instead of pretending it runs.
+      expect(dialogCard()).not.toBeNull();
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['canceled']);
+      expect(dialogMessage()).toBe(RUN_DIALOG_LABELS_HE['canceled']);
+      // Terminal, so the dismiss control is a plain close: there is no job left to minimize into.
+      expect(el().querySelector('.rd-minimize')).toBeNull();
+      expect(el().querySelector('.rd-dismiss')!.getAttribute('aria-label'))
+        .toBe(RUN_DIALOG_LABELS_HE['close']);
+    });
+
+    it('switching the Review/Edit mode control resolves it too (the other unmount route)', () => {
+      panelStub().startRun();
+      fixture.detectChanges();
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['pending']);
+
+      // The outer `@else if (reviewMode === 'edit')` unmounts the whole Edit-help body.
+      component.reviewMode = 'review';
+      fixture.detectChanges();
+
+      expect(has('app-analysis-panel')).toBe(false);
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['canceled']);
+    });
+
+    it('unmounting with NO run in flight leaves the dialog closed', () => {
+      expect(dialogCard()).toBeNull();
+
+      component.editHelpView = 'language';
+      fixture.detectChanges();
+
+      expect(component.runDialogOpen).toBe(false);
+      expect(dialogCard()).toBeNull();
+    });
+  });
+
+  // ── c02: the run dialog is reconciled to the unit the user is looking at ───────────────────────
+  //
+  // Contract (B), book-scoped (see the plan's `## c02 decision`): a chapter/scene switch does NOT take a
+  // LIVE run's card away - the panel does not end its run on a context switch, and a background run
+  // outliving the surface that started it is the whole premise of the minimize gesture - but a BOOK
+  // switch always clears it, and a TERMINAL card clears on any context change because a finished run for
+  // a unit the user has left has nothing left to tell them.
+  //
+  // These drive the real wiring: the panel's `(runEvent)` binding, the editor's transport, the REAL
+  // dialog's state machine, and the REAL registry stream for state (b)/(c). The registry subject is held
+  // OPEN across every assertion, so the in-flight window is a real window rather than a collapsed `of()`.
+  describe('c02 the run dialog is reconciled to the current chapter/scene/book', () => {
+    function panelStub(): StubAnalysisPanelComponent {
+      const found = fixture.debugElement.query(By.directive(StubAnalysisPanelComponent));
+      expect(found).withContext('the analysis panel must be mounted for this wiring to exist').not.toBeNull();
+      return found.componentInstance as StubAnalysisPanelComponent;
+    }
+
+    const dialogCard = () => el().querySelector('.rd-card');
+    const dialogStatus = () => el().querySelector('.rd-status-pill')?.textContent?.trim() ?? null;
+
+    /** A registry snapshot for JOB-1, running against chapter ch-1 of book-1 unless overridden. */
+    function job(overrides: Partial<TrackedJob> = {}): TrackedJob {
+      return {
+        id: 'JOB-1',
+        kind: 'proofread',
+        bookId: 'book-1',
+        scopeLabel: 'פרק',
+        titleHe: 'הגהה',
+        titleEn: 'Proofread',
+        status: 'running',
+        percent: 40,
+        message: 'Running',
+        startedAt: '2026-08-03T00:00:00Z',
+        updatedAt: '2026-08-03T00:00:00Z',
+        chapterId: 'ch-1',
+        ...overrides,
+      };
+    }
+
+    /** Start a run and take it all the way to state (b): tracked, non-terminal, minimizable. */
+    function startTrackedRun(): void {
+      panelStub().startRun();
+      fixture.detectChanges();
+      panelStub().runEvent.emit({ kind: 'job-started', jobId: 'JOB-1' });
+      registryStub.setJob('JOB-1', job());
+      fixture.detectChanges();
+      // Guard the premise: without a real state-(b) card the survival assertion below would be vacuous.
+      expect(dialogStatus()).withContext('precondition: the card must be in state (b)').toBe(RUN_DIALOG_LABELS_HE['running']);
+      expect(el().querySelector('.rd-minimize')).withContext('state (b) offers minimize').not.toBeNull();
+    }
+
+    beforeEach(() => {
+      component.bookId = 'book-1';
+      component.book = BOOK;
+      component.reviewMode = 'edit';
+      component.editHelpView = 'analysis';
+      component.selectedChapterId = 'ch-1';
+      component.selectedSceneId = null;
+      fixture.detectChanges();
+    });
+
+    it('KEEPS a state-(b) tracked card across a chapter switch inside the same book', () => {
+      startTrackedRun();
+
+      // The user navigates to another chapter while the job keeps running server-side.
+      component.selectedChapterId = 'ch-2';
+      fixture.detectChanges();
+
+      expect(component.runDialogOpen).withContext('a live background run must keep its card').toBe(true);
+      expect(dialogCard()).not.toBeNull();
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['running']);
+      // Still the SAME live run: the registry stream was never torn down, so a later push still lands.
+      registryStub.setJob('JOB-1', job({ percent: 75 }));
+      fixture.detectChanges();
+      expect(el().querySelector('.rd-progress-percent')?.textContent?.trim()).toBe('75%');
+    });
+
+    it('KEEPS a state-(b) tracked card across a scene switch inside the same chapter', () => {
+      startTrackedRun();
+
+      component.selectedSceneId = 'sc-1';
+      fixture.detectChanges();
+
+      expect(component.runDialogOpen).toBe(true);
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['running']);
+    });
+
+    it('CLEARS a terminal card on a chapter switch when the registry ended the run', () => {
+      startTrackedRun();
+
+      // (b) -> (c) is the registry's call alone, so this terminal is invisible to the editor's run-event
+      // channel: only the dialog knows the card is finished. This is the case an editor-local
+      // reconstruction of the state machine would get wrong.
+      registryStub.setJob('JOB-1', job({ status: 'succeeded', percent: 100, message: '' }));
+      fixture.detectChanges();
+      expect(dialogStatus()).withContext('precondition: the card must be terminal').toBe(RUN_DIALOG_LABELS_HE['succeeded']);
+      expect(dialogCard()).not.toBeNull();
+
+      component.selectedChapterId = 'ch-2';
+      fixture.detectChanges();
+
+      expect(component.runDialogOpen).withContext('a finished run for a chapter the user left must not linger').toBe(false);
+      expect(dialogCard()).toBeNull();
+    });
+
+    it('CLEARS a terminal card on a scene switch when a run EVENT ended the run', () => {
+      panelStub().startRun();
+      fixture.detectChanges();
+      // Untracked (sync) path: no job-started, so the error event is the (a) -> (c) terminal.
+      panelStub().runEvent.emit({ kind: 'error', message: 'boom' });
+      fixture.detectChanges();
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['failed']);
+
+      component.selectedSceneId = 'sc-1';
+      fixture.detectChanges();
+
+      expect(component.runDialogOpen).toBe(false);
+      expect(dialogCard()).toBeNull();
+    });
+
+    it('CLEARS a LIVE state-(b) card on a book switch, and drops its event stream', () => {
+      startTrackedRun();
+
+      // Drive the real route-params path, the only writer of bookId.
+      routeParams$.next({ bookId: 'book-2' });
+      fixture.detectChanges();
+
+      expect(component.bookId).toBe('book-2');
+      expect(component.runDialogOpen).withContext("the prior book's card must never survive a book switch").toBe(false);
+      expect(dialogCard()).toBeNull();
+      expect(component.runEvents$).withContext('the prior run stream is dropped with the card').toBeNull();
+      expect(component.runDialogAnalysisType).toBe('');
+      // A late event from the previous book's still-running panel must not resurrect anything.
+      expect(() => component.onAnalysisRunEvent({ kind: 'status', message: 'late' })).not.toThrow();
+      fixture.detectChanges();
+      expect(dialogCard()).toBeNull();
+    });
+
+    it('does NOT clear on a re-render or an unrelated field change', () => {
+      startTrackedRun();
+
+      fixture.detectChanges();
+      fixture.detectChanges();
+      component.hasPendingChanges = true;
+      component.reviewPanelOpen = true;
+      fixture.detectChanges();
+
+      expect(component.runDialogOpen).toBe(true);
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['running']);
+    });
+
+    it('a context change with no card on screen is a no-op (initial load / no run yet)', () => {
+      expect(component.runDialogOpen).toBe(false);
+
+      component.selectedChapterId = 'ch-2';
+      component.selectedSceneId = 'sc-9';
+      fixture.detectChanges();
+
+      expect(component.runDialogOpen).toBe(false);
+      expect(dialogCard()).toBeNull();
+
+      // And a run started AFTER the switch opens normally: the reconcile did not poison the next run.
+      panelStub().startRun();
+      fixture.detectChanges();
+      expect(dialogCard()).not.toBeNull();
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['pending']);
+    });
+
+    // ── c06 (recorded above as c02's second finding, fixed here) ───────────────────────────────────
+    //
+    // Contract (B) keeps a state-(a) card across a chapter switch. On the SYNC path that card resolves
+    // off the result EVENT, so a result the panel discards as stale-context used to leave a green "Done"
+    // over a chapter whose suggestions were never surfaced anywhere - the panel dropped them, and a sync
+    // run is never registry-tracked, so the Activity Center has no row for it either.
+    //
+    // These two drive the real wiring end to end - the panel's `(runEvent)` binding, the editor's
+    // transport into `runEvents$`, and the REAL dialog's state machine - and assert the RENDERED card,
+    // because the defect is entirely about what the user is left looking at. Which of the two events the
+    // panel actually sends for a given navigation is pinned over the real panel (with its real origin
+    // guard) in `analysis-panel.component.spec.ts`, "c06 a discarded result is not reported to the host
+    // as a success".
+    it('c06 CLOSES an untracked card when the panel discards the result as stale-context', () => {
+      panelStub().startRun();
+      fixture.detectChanges();
+
+      // Sync path: no `job-started`, so this is state (a) - the state in which a result event latches
+      // "Done" at 100%.
+      expect(dialogCard()).withContext('the card must be on screen mid-run').not.toBeNull();
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['pending']);
+
+      // The user leaves ch-1 while the run is still open. Contract (B) keeps the live card.
+      component.selectedChapterId = 'ch-2';
+      fixture.detectChanges();
+      expect(component.runDialogOpen).withContext('contract (B): a live card survives a chapter switch').toBe(true);
+
+      // ch-1's result lands and the panel throws it away.
+      panelStub().runEvent.emit({ kind: 'result-dropped' });
+      fixture.detectChanges();
+
+      expect(dialogStatus())
+        .withContext('no card may claim "Done" - or any outcome - for a result the app discarded')
+        .toBeNull();
+      expect(dialogCard()).toBeNull();
+      expect(component.runDialogOpen).toBe(false);
+    });
+
+    it('c06 KEEPS the terminal card when the panel keeps the result (away and back mid-run)', () => {
+      panelStub().startRun();
+      fixture.detectChanges();
+
+      // Away from ch-1 and back again, all before the result lands: the panel's origin guard compares
+      // against the context at ARRIVAL, so this result is KEPT and arrives as the raw event.
+      component.selectedChapterId = 'ch-2';
+      fixture.detectChanges();
+      component.selectedChapterId = 'ch-1';
+      fixture.detectChanges();
+      expect(component.runDialogOpen).toBe(true);
+
+      panelStub().runEvent.emit({
+        kind: 'sync-result',
+        result: { id: 'r-1', chapterId: 'ch-1', type: 'Proofread', resultText: 'ok', createdAt: '' } as AnalysisResultDto,
+      });
+      fixture.detectChanges();
+
+      expect(dialogCard()).withContext('a run whose result WAS surfaced must keep its terminal card').not.toBeNull();
+      expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['succeeded']);
     });
   });
 });

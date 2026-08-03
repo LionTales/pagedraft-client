@@ -280,6 +280,14 @@
   color: var(--pd-neutral-600);
 }
 
+/* Ended, percent never known (terminal row with a null percent - c05). Deliberately has NO fill child,
+   so nothing can carry the infinite `--indet` keyframe animation: a finished job must not pulse next to
+   its own "Failed" / "Canceled" pill. Softer than the live track's grey so it reads as an inert rule.
+   Mirrors `.rd-progress-track--ended` (run dialog) and `.jpi-track--ended` (in-page indicator). */
+.ac-progress-track--ended {
+  background: var(--pd-divider);
+}
+
 /* Determinate fill: width is set via [style.width.%] binding.
    No min-width: a true 0% should look empty, not show a sliver. */
 .ac-progress-fill--det {

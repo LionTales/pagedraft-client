@@ -26,7 +26,14 @@ export interface AnalysisRunContext {
   lineEditChunkTargetWords?: number;
 }
 
-/** Discriminated-union events emitted by the orchestration observables. */
+/**
+ * Discriminated-union events for one analysis run.
+ *
+ * Every member EXCEPT `'run-finished'` and `'result-dropped'` is emitted by the orchestration
+ * observables below. Those two are emitted by `AnalysisPanelComponent` on its `runEvent` output only;
+ * no observable in this service ever produces either. They travel on the same union so a host surface
+ * has ONE channel to listen on, rather than a second parallel @Output.
+ */
 export type AnalysisRunEvent =
   | { kind: 'status'; message: string }
   | { kind: 'progress'; percent: number | null; message: string; rawStatus: string }
@@ -35,7 +42,49 @@ export type AnalysisRunEvent =
   | { kind: 'job-started'; jobId: string }
   | { kind: 'job-result'; result: AnalysisResultDto }
   | { kind: 'streaming-complete'; latestResult: AnalysisResultDto }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+  /**
+   * c01: the panel's AUTHORITATIVE run terminal, on the channel the host actually binds.
+   *
+   * Emitted when the run ends WITHOUT any of the terminal events above having been produced - the run
+   * subscription completed or errored with nothing to report, the save that had to precede a streaming
+   * run rejected, or the panel was destroyed mid-run (which cancels the run). Carries no payload on
+   * purpose: it says only "there is no longer a run behind this surface". A percent must still come from
+   * `JobRegistryService`, and a registry-tracked run must still resolve off the registry alone.
+   *
+   * On a normal run this arrives AFTER a real terminal event, so every consumer must be single-resolve.
+   */
+  | { kind: 'run-finished' }
+  /**
+   * c06: this run produced a result, and the panel DISCARDED it as stale-context.
+   *
+   * Emitted by `AnalysisPanelComponent` IN PLACE OF the `'sync-result'` / `'job-result'` event whenever
+   * the run's captured origin (the chapter/scene the run was started on) no longer matches the context
+   * on screen when the result lands. The panel drops such a result rather than injecting a prior
+   * chapter's suggestions - and offsets - into the document now open, so a host surface must NOT report
+   * a success the app threw away. It carries no result on purpose: there is nothing here for the host
+   * to show.
+   *
+   * The result itself is not lost; it is persisted server-side and re-surfaced by the panel's guarded
+   * history load when the user returns to the origin chapter.
+   */
+  | { kind: 'result-dropped' };
+
+/**
+ * Compile-time exhaustiveness fence for {@link AnalysisRunEvent}.
+ *
+ * Call it from the `default:` arm of every `switch (event.kind)`. Both consumers return `void`, so
+ * without this TypeScript accepts a switch that silently ignores a member: adding `'run-finished'`
+ * (c01) and `'result-dropped'` (c06) to this union was NOT a compile error anywhere, which is exactly
+ * how the run's terminal came to be emitted on a channel nothing answered in the first place. With the
+ * fence, the next member added here fails `ng build` in every switch that has not decided what to do
+ * with it - including deciding, explicitly, to do nothing.
+ *
+ * Runtime behaviour is deliberately nil: an unknown event must never change a surface's state.
+ */
+export function assertUnhandledRunEvent(_event: never): void {
+  // Intentionally empty. The parameter type is the whole point.
+}
 
 /** Parsed progress update returned by handleProgressUpdate (internal use). */
 interface ProgressUpdateResult {

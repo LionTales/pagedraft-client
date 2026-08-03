@@ -209,14 +209,20 @@
    regardless of book dir (no physical left/right pinning). */
 .async-job-banner {
   display: flex;
-  align-items: center;
-  gap: var(--pd-space-3);
+  /* Two stacked rows: the message row, and the registry-backed progress bar underneath it. */
+  flex-direction: column;
+  gap: var(--pd-space-2);
   padding: var(--pd-space-3) var(--pd-space-4);
   border-radius: var(--pd-radius-sm);
   background: var(--pd-surface-brand);
   border: 1px solid var(--pd-primary-200);
   font-size: var(--pd-text-body-sm);
   color: var(--pd-primary-700);
+}
+.async-job-banner-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-3);
 }
 .async-job-banner-spinner {
   flex-shrink: 0;

@@ -1,0 +1,77 @@
+/*
+ * In-page job progress indicator (Wave 1d c2).
+ * Mirrors the Activity Center row's bar so the two surfaces look the same, at the host's own width.
+ * Logical flex only (no physical pinning), so the numeric readout sits at the inline-end in both
+ * directions.
+ */
+
+:host {
+  display: block;
+  width: 100%;
+}
+
+.jpi-track {
+  width: 100%;
+  height: 4px;
+  background: var(--pd-neutral-100);
+  border-radius: var(--pd-radius-pill);
+  overflow: hidden;
+}
+
+.jpi-row {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+}
+
+.jpi-row .jpi-track {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.jpi-percent {
+  flex: 0 0 auto;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--pd-neutral-600);
+}
+
+/* Ended, percent never known (terminal job with a null percent - c05). Deliberately has NO fill child,
+   so nothing can carry the infinite `--indet` keyframe animation. Mirrors `.rd-progress-track--ended`
+   (run dialog) and `.ac-progress-track--ended` (Activity Center). */
+.jpi-track--ended {
+  background: var(--pd-divider);
+}
+
+/* Determinate fill: width comes from [style.width.%]. No min-width, so a true 0% looks empty. */
+.jpi-fill--det {
+  height: 100%;
+  background: var(--pd-primary-600);
+  border-radius: var(--pd-radius-pill);
+  transition: width var(--pd-dur-base) var(--pd-ease);
+}
+
+.jpi-fill--indet {
+  height: 100%;
+  width: 40%;
+  background: var(--pd-primary-600);
+  border-radius: var(--pd-radius-pill);
+  animation: jpi-indeterminate 1.4s var(--pd-ease) infinite;
+}
+
+@keyframes jpi-indeterminate {
+  0%   { transform: translateX(-100%); }
+  50%  { transform: translateX(150%); }
+  100% { transform: translateX(150%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jpi-fill--indet {
+    animation: none;
+  }
+
+  .jpi-fill--det {
+    transition: none;
+  }
+}
