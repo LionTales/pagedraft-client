@@ -280,6 +280,17 @@
   color: var(--pd-neutral-600);
 }
 
+/* c04: the compact "3/10" chunk counts, muted relative to the percent. `direction: ltr` pins the
+   reading order of the pair in this RTL-default panel. Mirrors `.jpi-counts` on the in-page indicator. */
+.ac-progress-counts {
+  flex: 0 0 auto;
+  direction: ltr;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-variant-numeric: tabular-nums;
+  color: var(--pd-neutral-500);
+}
+
 /* Ended, percent never known (terminal row with a null percent - c05). Deliberately has NO fill child,
    so nothing can carry the infinite `--indet` keyframe animation: a finished job must not pulse next to
    its own "Failed" / "Canceled" pill. Softer than the live track's grey so it reads as an inert rule.

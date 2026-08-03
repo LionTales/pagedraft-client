@@ -14,6 +14,7 @@ import {
   JobStatus,
   TrackedJob,
   isTerminal,
+  showsChunkCounts,
 } from '../../core/services/job-registry.service';
 
 /**
@@ -55,6 +56,19 @@ import {
             aria-valuemax="100">
             <div class="jpi-fill jpi-fill--det" [style.width.%]="job.percent"></div>
           </div>
+          <!-- c04: the same completed/total the run dialog spells out as a sentence, in the compact
+               treatment this surface has room for. Language-neutral on purpose ("3/10" is digits and a
+               separator, which the bidi algorithm keeps together in RTL), so this surface needs no
+               language source of its own. The NUMBERS are the registry's, so they cannot differ from
+               the dialog's or the Activity Center's; three-surface-parity.spec.ts pins that.
+               c02: WHICH kinds may show them is the registry's decision too (showsChunkCounts), not a
+               condition copied into this template. This component takes any job id, so although the
+               analysis panel only ever points it at a chapter analysis run today, it must not render a
+               review build's window-plus-reduce-pass denominator as a bare pair if it is ever pointed
+               at one. -->
+          @if (showsCounts(job)) {
+            <span class="jpi-counts" aria-hidden="true">{{ job.completedChunks ?? 0 }}/{{ job.totalChunks }}</span>
+          }
           <span class="jpi-percent" aria-hidden="true">{{ job.percent }}%</span>
         </div>
       } @else if (isEnded(job.status)) {
@@ -93,5 +107,13 @@ export class JobProgressInlineComponent implements OnChanges {
    */
   isEnded(status: JobStatus): boolean {
     return isTerminal(status);
+  }
+
+  /**
+   * Whether this job may render the bare `completed/total` pair (c02). One registry predicate, three
+   * surfaces: see {@link showsChunkCounts} for the per-kind units and why `review` is excluded.
+   */
+  showsCounts(job: TrackedJob): boolean {
+    return showsChunkCounts(job);
   }
 }

@@ -25,7 +25,7 @@ import { NEVER, ReplaySubject, Subject, of } from 'rxjs';
 import { AnalysisRunDialogComponent } from './analysis-run-dialog.component';
 import { JobProgressInlineComponent } from '../job-progress-inline/job-progress-inline.component';
 import { ActivityCenterComponent } from '../activity-center/activity-center.component';
-import { JobRegistryService } from '../../core/services/job-registry.service';
+import { JobKind, JobRegistryService } from '../../core/services/job-registry.service';
 import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { AnalysisProgressDto } from '../../core/models/analysis';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
@@ -75,6 +75,54 @@ function progress(overrides: Partial<AnalysisProgressDto>): AnalysisProgressDto 
   };
 }
 
+/** What each of the three surfaces is showing, keyed the same way by every extractor below. */
+interface SurfaceTriple { dialog: string | null; inline: string | null; activityCenter: string | null }
+
+/** The percent each surface is CURRENTLY telling a screen reader. */
+function ariaPercentsIn(root: HTMLElement): SurfaceTriple {
+  return {
+    dialog: root.querySelector('.rd-progress-track')?.getAttribute('aria-valuenow') ?? null,
+    inline: root.querySelector('.jpi-track')?.getAttribute('aria-valuenow') ?? null,
+    activityCenter: root.querySelector('.ac-progress-track')?.getAttribute('aria-valuenow') ?? null,
+  };
+}
+
+/** The percent each surface is CURRENTLY showing a sighted user. */
+function readoutPercentsIn(root: HTMLElement): SurfaceTriple {
+  const text = (sel: string) => root.querySelector(sel)?.textContent?.trim() ?? null;
+  return {
+    dialog: text('.rd-progress-percent'),
+    inline: text('.jpi-percent'),
+    activityCenter: text('.ac-progress-percent'),
+  };
+}
+
+/**
+ * c04. The completed/total chunk COUNTS each surface is currently showing, normalized to `completed/total`.
+ *
+ * The three treatments differ on purpose - the dialog spells out a localized sentence ("הגהה: 3 מתוך 10
+ * הושלמו"), the two compact surfaces show a bare "3/10" - and the todo's rule is exactly that: a smaller
+ * treatment is fine, a DIFFERENT NUMBER is not. So this pulls the two integers out of whatever each
+ * surface renders and compares the PAIR, which is the fact that has to match. Comparing rendered strings
+ * instead would either force one treatment on all three or assert nothing at all.
+ *
+ * c02: module-scope on purpose. The per-KIND fence at the bottom of this file asks the same question of
+ * a summary / review / style-baseline job, and it has to ask it with the SAME extractor - two extractors
+ * would let the two fences disagree about what "shows a count" even means.
+ */
+function countsPairsIn(root: HTMLElement): SurfaceTriple {
+  const pair = (sel: string) => {
+    const text = root.querySelector(sel)?.textContent ?? '';
+    const m = text.match(/(\d+)\D+?(\d+)/);
+    return m ? `${m[1]}/${m[2]}` : null;
+  };
+  return {
+    dialog: pair('.rd-message'),
+    inline: pair('.jpi-counts'),
+    activityCenter: pair('.ac-progress-counts'),
+  };
+}
+
 describe('three-surface parity over ONE registry job (Wave 1d c2)', () => {
   let fixture: ComponentFixture<ThreeSurfaceHostComponent>;
   let host: ThreeSurfaceHostComponent;
@@ -83,25 +131,9 @@ describe('three-surface parity over ONE registry job (Wave 1d c2)', () => {
   let poll$: Subject<AnalysisProgressDto>;
 
   const root = () => fixture.nativeElement as HTMLElement;
-
-  /** The percent each surface is CURRENTLY telling a screen reader. */
-  function ariaPercents(): { dialog: string | null; inline: string | null; activityCenter: string | null } {
-    return {
-      dialog: root().querySelector('.rd-progress-track')?.getAttribute('aria-valuenow') ?? null,
-      inline: root().querySelector('.jpi-track')?.getAttribute('aria-valuenow') ?? null,
-      activityCenter: root().querySelector('.ac-progress-track')?.getAttribute('aria-valuenow') ?? null,
-    };
-  }
-
-  /** The percent each surface is CURRENTLY showing a sighted user. */
-  function readoutPercents(): { dialog: string | null; inline: string | null; activityCenter: string | null } {
-    const text = (sel: string) => root().querySelector(sel)?.textContent?.trim() ?? null;
-    return {
-      dialog: text('.rd-progress-percent'),
-      inline: text('.jpi-percent'),
-      activityCenter: text('.ac-progress-percent'),
-    };
-  }
+  const ariaPercents = () => ariaPercentsIn(root());
+  const readoutPercents = () => readoutPercentsIn(root());
+  const countsPairs = () => countsPairsIn(root());
 
   beforeEach(async () => {
     poll$ = new Subject<AnalysisProgressDto>();
@@ -161,6 +193,44 @@ describe('three-surface parity over ONE registry job (Wave 1d c2)', () => {
 
     expect(ariaPercents()).toEqual({ dialog: '60', inline: '60', activityCenter: '60' });
     expect(readoutPercents()).toEqual({ dialog: '60%', inline: '60%', activityCenter: '60%' });
+  });
+
+  // c04. The percent is a DERIVED number; the counts are the raw pair it was derived from, and they are
+  // now on screen too. Both come off the same TrackedJob fields, so the fence has to cover both or the
+  // next change can put "3 of 10" on one surface and "4 of 10" on another while the percents still agree.
+  it('ONE registry emission puts the SAME chunk COUNTS on all three surfaces', () => {
+    poll$.next(progress({ completedChunks: 3, totalChunks: 10, message: 'Running chunk 4/10' }));
+    fixture.detectChanges();
+
+    expect(countsPairs()).toEqual({ dialog: '3/10', inline: '3/10', activityCenter: '3/10' });
+    // ...and the percent derived from that same pair, so the two readouts tell one story.
+    expect(readoutPercents()).toEqual({ dialog: '30%', inline: '30%', activityCenter: '30%' });
+  });
+
+  it('the counts advance together, including through 0 of 10 (the moment that read as stalled)', () => {
+    // The user's screenshot: 0% next to a run that had queued ten chunks, because the parallel workers
+    // had not finished one yet. The percent is honest and useless; the counts are what carry the shape.
+    poll$.next(progress({ completedChunks: 0, totalChunks: 10 }));
+    fixture.detectChanges();
+    expect(countsPairs()).toEqual({ dialog: '0/10', inline: '0/10', activityCenter: '0/10' });
+    expect(readoutPercents()).toEqual({ dialog: '0%', inline: '0%', activityCenter: '0%' });
+
+    poll$.next(progress({ completedChunks: 7, totalChunks: 10 }));
+    fixture.detectChanges();
+    expect(countsPairs()).toEqual({ dialog: '7/10', inline: '7/10', activityCenter: '7/10' });
+  });
+
+  it('a run with NO chunk shape shows counts on NONE of them (never "0 of 0")', () => {
+    poll$.next(progress({ totalChunks: 0, estimatedCompletionPercent: 42 }));
+    fixture.detectChanges();
+
+    // The two compact surfaces render no counts element at all...
+    expect(root().querySelector('.jpi-counts')).toBeNull();
+    expect(root().querySelector('.ac-progress-counts')).toBeNull();
+    // ...and the dialog falls back to its count-free sentence, so no pair can be read off it either.
+    expect(countsPairs().dialog).toBeNull();
+    // The percent is unaffected: it came from the other DTO shape.
+    expect(readoutPercents()).toEqual({ dialog: '42%', inline: '42%', activityCenter: '42%' });
   });
 
   it('they stay identical as the job advances (a second emission moves all three together)', () => {
@@ -267,5 +337,143 @@ describe('three-surface parity over ONE registry job (Wave 1d c2)', () => {
     expect(after.dialog).toBeNull();
     expect(after.inline).toBe('80');
     expect(after.activityCenter).toBe('80');
+  });
+});
+
+/**
+ * c02 (2026-08-03): the SAME fence, asked PER KIND.
+ *
+ * `totalChunks` is one wire field with a different UNIT per producer, measured at the call sites:
+ * text chunks of the chapter for `proofread` (`UnifiedAnalysisService.SetTotalChunks(chunks.Count)`),
+ * the book's CHAPTERS for `summary` (`BookSummaryService`) and `style-baseline`
+ * (`StyleBaselineService`), and for `review` (`BookReviewService`) map-reduce WINDOWS plus one
+ * synthesis pass plus a variable number of continuity passes - with a legacy branch that reports
+ * DIMENSIONS into the same field. None of the three surfaces renders a unit label.
+ *
+ * The c04 readers gated on `totalChunks !== null` alone, so a review build rendered a bare `3/9` that
+ * a reader can only take as chapters, and is wrong. The registry now owns the decision
+ * (`showsChunkCounts` / `CHUNK_COUNT_KINDS`) and all three surfaces ask it. This block is the fence:
+ * ONE registry emission, three surfaces, asserted per kind - so the two compact surfaces cannot
+ * diverge from each other OR from the dialog when the answer differs by kind.
+ */
+describe('the bare chunk COUNTS are scoped by job KIND (c02)', () => {
+  let fixture: ComponentFixture<ThreeSurfaceHostComponent>;
+  let host: ThreeSurfaceHostComponent;
+  /** The ONE progress channel behind the real registry, whichever poller the kind routes to. */
+  let poll$: Subject<AnalysisProgressDto>;
+
+  const root = () => fixture.nativeElement as HTMLElement;
+  const countsPairs = () => countsPairsIn(root());
+  const readoutPercents = () => readoutPercentsIn(root());
+  const ariaPercents = () => ariaPercentsIn(root());
+
+  /**
+   * Mount all three surfaces over ONE registry job of the given kind. Every book-level poller is wired
+   * to the SAME subject as the chapter poller, so the kind under test changes which registry code path
+   * runs while the numbers on screen still come from a single emission.
+   */
+  async function setupKind(kind: JobKind): Promise<void> {
+    poll$ = new Subject<AnalysisProgressDto>();
+    const stream = () => poll$.asObservable();
+
+    await TestBed.configureTestingModule({
+      imports: [ThreeSurfaceHostComponent],
+      providers: [
+        provideRouter([]),
+        {
+          provide: AnalysisProgressService,
+          useValue: {
+            pollProgress: stream,
+            pollBookSummaryProgress: stream,
+            pollBookReviewProgress: stream,
+            pollStyleBaselineProgress: stream,
+          },
+        },
+        { provide: AnalysisService, useValue: { getActiveAnalysisJobs: () => of([]) } },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) } },
+        { provide: BookReviewService, useValue: { getReviewStatus: () => of({ activeBuildJobId: null }) } },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => of({ activeBuildJobId: null }) } },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(ThreeSurfaceHostComponent);
+    host = fixture.componentInstance;
+    const registry = TestBed.inject(JobRegistryService);
+
+    registry.track(kind, BOOK_ID, JOB_ID, { chapterId: 'ch-1' });
+    host.jobId = JOB_ID;
+    host.open = true;
+    fixture.detectChanges();
+    host.events$.next({ kind: 'job-started', jobId: JOB_ID });
+    fixture.detectChanges();
+
+    (root().querySelector('.ac-bell') as HTMLButtonElement).click();
+    fixture.detectChanges();
+  }
+
+  it('a chapter proofread shows its counts: its denominator is TEXT CHUNKS of the chapter', async () => {
+    // The control. Scoping by kind must not cost the kind the counts were written for.
+    await setupKind('proofread');
+    poll$.next(progress({ completedChunks: 3, totalChunks: 10 }));
+    fixture.detectChanges();
+
+    expect(countsPairs()).toEqual({ dialog: '3/10', inline: '3/10', activityCenter: '3/10' });
+  });
+
+  it('a summary build shows its counts: its denominator is the book CHAPTERS, which the scope names', async () => {
+    await setupKind('summary');
+    poll$.next(progress({ completedChunks: 3, totalChunks: 12 }));
+    fixture.detectChanges();
+
+    // Decided, not inherited: "3 of 12" on a whole-book summary is 3 of the book's 12 chapters, and it
+    // reads correctly whether taken as chapters or as pieces of work.
+    expect(countsPairs()).toEqual({ dialog: '3/12', inline: '3/12', activityCenter: '3/12' });
+    expect(readoutPercents()).toEqual({ dialog: '25%', inline: '25%', activityCenter: '25%' });
+  });
+
+  it('a style-baseline build shows its counts too: same CHAPTERS denominator', async () => {
+    await setupKind('style-baseline');
+    poll$.next(progress({ completedChunks: 2, totalChunks: 8 }));
+    fixture.detectChanges();
+
+    expect(countsPairs()).toEqual({ dialog: '2/8', inline: '2/8', activityCenter: '2/8' });
+  });
+
+  it('a review build shows NO bare pair on ANY surface: 3/9 there is windows plus reduce passes, not chapters', async () => {
+    await setupKind('review');
+    poll$.next(progress({ completedChunks: 3, totalChunks: 9 }));
+    fixture.detectChanges();
+
+    // Asserted across all three FIRST, so a regression names every surface it reached rather than
+    // stopping at whichever element assertion happens to run first.
+    expect(countsPairs()).toEqual({ dialog: null, inline: null, activityCenter: null });
+    // The two compact surfaces render no counts element at all (not an empty one)...
+    expect(root().querySelector('.jpi-counts')).toBeNull();
+    expect(root().querySelector('.ac-progress-counts')).toBeNull();
+  });
+
+  it('withholding the review pair costs it nothing else: the PERCENT still lands on all three', async () => {
+    // The scoping must remove the ambiguous PAIR only. A review row that lost its progress bar too
+    // would be a worse regression than the one this fixes.
+    await setupKind('review');
+    poll$.next(progress({ completedChunks: 3, totalChunks: 9 }));
+    fixture.detectChanges();
+
+    expect(ariaPercents()).toEqual({ dialog: '33', inline: '33', activityCenter: '33' });
+    expect(readoutPercents()).toEqual({ dialog: '33%', inline: '33%', activityCenter: '33%' });
+    // ...and it is a DETERMINATE bar, not the pulsing "unknown size" one.
+    expect(root().querySelector('.ac-progress-fill--indet')).toBeNull();
+    expect(root().querySelector('.jpi-fill--indet')).toBeNull();
+  });
+
+  it('a SUCCEEDED review still shows no pair: the terminal 9/9 backfill is withheld on kind, not on value', async () => {
+    // `finalize` forces completedChunks to totalChunks on success, so a kind-blind reader would print
+    // "9/9" on a finished review even though nothing else in the run ever showed a count.
+    await setupKind('review');
+    poll$.next(progress({ status: 'Succeeded', completedChunks: 7, totalChunks: 9, message: 'done' }));
+    fixture.detectChanges();
+
+    expect(countsPairs()).toEqual({ dialog: null, inline: null, activityCenter: null });
+    expect(ariaPercents()).toEqual({ dialog: '100', inline: '100', activityCenter: '100' });
   });
 });
