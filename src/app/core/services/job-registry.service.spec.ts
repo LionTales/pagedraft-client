@@ -562,6 +562,61 @@ describe('JobRegistryService', () => {
     });
   });
 
+  describe('jobById$', () => {
+    it('returns null for an id that was never tracked, then the job once it is', async () => {
+      configure();
+      expect(await firstValueFrom(service.jobById$('J1'))).toBeNull();
+
+      service.track('summary', 'book-A', 'J1');
+      expect((await firstValueFrom(service.jobById$('J1')))?.id).toBe('J1');
+    });
+
+    it('follows THAT job across progress updates and its terminal transition', async () => {
+      configure();
+      service.track('proofread', 'book-A', 'J1', { chapterId: 'ch-1' });
+
+      progressStub.chapter$.next(progress({ totalChunks: 4, completedChunks: 1 }));
+      let job = await firstValueFrom(service.jobById$('J1'));
+      expect(job?.percent).toBe(25);
+      expect(job?.status).toBe('running');
+
+      progressStub.chapter$.next(progress({ status: 'Succeeded', totalChunks: 4, completedChunks: 4 }));
+      job = await firstValueFrom(service.jobById$('J1'));
+      expect(job?.status).toBe('succeeded');
+      expect(job?.percent).toBe(100);
+    });
+
+    it('does NOT collide on two concurrent jobs of the same kind for the same book', async () => {
+      // This is exactly why jobByKindForBook$ was unfit for the run dialog: it resolves one job per
+      // (book, kind), so a chapter run and a scene run started back to back share a slot.
+      configure();
+      service.track('proofread', 'book-A', 'CHAPTER-JOB', { chapterId: 'ch-1', scopeLabel: 'פרק' });
+      service.track('proofread', 'book-A', 'SCENE-JOB', { chapterId: 'ch-1', scopeLabel: 'סצנה' });
+
+      expect((await firstValueFrom(service.jobById$('CHAPTER-JOB')))?.scopeLabel).toBe('פרק');
+      expect((await firstValueFrom(service.jobById$('SCENE-JOB')))?.scopeLabel).toBe('סצנה');
+      // The kind-scoped selector cannot tell them apart: it collapses to a single job.
+      const byKind = await firstValueFrom(service.jobByKindForBook$('book-A', 'proofread'));
+      expect(['CHAPTER-JOB', 'SCENE-JOB']).toContain(byKind!.id);
+    });
+
+    it('emits once per real change and dedupes a steady null (distinctUntilChanged)', () => {
+      configure();
+      const seen: (TrackedJob | null)[] = [];
+      const sub = service.jobById$('J1').subscribe(j => seen.push(j));
+
+      // Tracking an UNRELATED job rebuilds the jobs array but must not re-emit null for J1.
+      service.track('summary', 'book-A', 'OTHER');
+      expect(seen).toEqual([null]);
+
+      service.track('summary', 'book-A', 'J1');
+      expect(seen.length).toBe(2);
+      expect(seen[1]?.id).toBe('J1');
+
+      sub.unsubscribe();
+    });
+  });
+
   describe('activeJobs$', () => {
     it('excludes terminal jobs', async () => {
       configure();

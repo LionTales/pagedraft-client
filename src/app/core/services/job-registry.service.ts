@@ -188,6 +188,25 @@ export class JobRegistryService {
     );
   }
 
+  /**
+   * Observe ONE SPECIFIC tracked job by id, or null if it was never tracked / is not tracked yet.
+   *
+   * Added for the analysis run dialog (Wave 1d), which must follow exactly the job its own run started.
+   * {@link jobByKindForBook$} is unfit for that: it resolves "the" job of a KIND for a BOOK, so two
+   * concurrent runs of the same kind for the same book (e.g. a chapter Proofread and a scene Proofread
+   * started back to back) collide on it and a dialog could end up rendering the other run's progress.
+   *
+   * Emits `null` (not an error) for an unknown id, so a caller can subscribe BEFORE `track` upserts the
+   * job and simply transition when it appears. `distinctUntilChanged` dedupes the steady `null` stream;
+   * every `patchJob` rebuilds the job object, so real updates always emit.
+   */
+  jobById$(jobId: string): Observable<TrackedJob | null> {
+    return this.jobs$.pipe(
+      map(jobs => jobs.find(j => j.id === jobId) ?? null),
+      distinctUntilChanged(),
+    );
+  }
+
   /** The (single) tracked job of a given kind for a book, or null. Prefers the active one if several. */
   jobByKindForBook$(bookId: string, kind: JobKind): Observable<TrackedJob | null> {
     return this.jobs$.pipe(
