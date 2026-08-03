@@ -1,11 +1,11 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
-import { SimpleChange } from '@angular/core';
+import { Component, SimpleChange } from '@angular/core';
 import { By } from '@angular/platform-browser';
 import { EMPTY, NEVER, Observable, Subject, of, throwError, takeUntil } from 'rxjs';
 import { AnalysisPanelComponent } from './analysis-panel.component';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { AnalysisService } from '../../core/services/analysis.service';
-import { AnalysisRunOrchestrationService } from '../../core/services/analysis-run-orchestration.service';
+import { AnalysisRunOrchestrationService, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '../../core/models/analysis';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
@@ -15,6 +15,34 @@ import { JobRegistryService } from '../../core/services/job-registry.service';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
+/**
+ * c01: a host that mounts the panel behind a structural `@if`, exactly the way `editor-page.component.html`
+ * does (`@if (editHelpView === 'analysis')` nested in `@else if (reviewMode === 'edit')`).
+ *
+ * The point is the BOUNDARY. The panel's `ngOnDestroy` cancels the in-flight run, and the host's run
+ * dialog is NOT destroyed with it, so the terminal has to cross a real template binding on a component
+ * Angular is in the middle of tearing down. Calling `ngOnDestroy()` by hand would prove nothing about
+ * that: it would not exercise the destroy ORDER (Angular runs child ngOnDestroy hooks before it unhooks
+ * the parent's output listeners), which is the only reason this mechanism works at all.
+ */
+@Component({
+  standalone: true,
+  imports: [AnalysisPanelComponent],
+  template: `
+    @if (mounted) {
+      <app-analysis-panel
+        [bookId]="'book-1'"
+        [chapterId]="'chap-1'"
+        (runEvent)="events.push($event)">
+      </app-analysis-panel>
+    }
+  `,
+})
+class PanelUnmountHostComponent {
+  mounted = true;
+  readonly events: AnalysisRunEvent[] = [];
+}
+
 describe('AnalysisPanelComponent (focused logic)', () => {
   let component: AnalysisPanelComponent;
   let fixture: ComponentFixture<AnalysisPanelComponent>;
@@ -23,7 +51,10 @@ describe('AnalysisPanelComponent (focused logic)', () => {
   let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
 
   beforeEach(async () => {
-    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']);
+    // `jobById$` is read by the in-panel progress bar (app-job-progress-inline) inside the async banner.
+    // Without it on the stub, every async-banner test dies with a TypeError from that grandchild.
+    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track', 'jobById$']);
+    jobRegistrySpy.jobById$.and.returnValue(of(null));
     await TestBed.configureTestingModule({
       imports: [AnalysisPanelComponent],
       providers: [
@@ -1814,29 +1845,38 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
   // pf-f01: async non-blocking overlay and in-panel compact banner.
   describe('pf-f01 async job non-blocking overlay', () => {
-    it('emits asyncJobStarted exactly once on job-started so the editor can dismiss its blocking overlay', () => {
-      let emitCount = 0;
-      component.asyncJobStarted.subscribe(() => { emitCount++; });
+    // c01: these two used to assert the `asyncJobStarted` @Output, which lost its last consumer when the
+    // blocking overlay was deleted and has now been deleted with it. Their INTENT was the async handoff -
+    // the job becomes visible exactly once, and the no-bookId guard skips the whole handoff - so they are
+    // re-pointed at what actually performs it: `jobRegistry.track` plus the in-panel banner state it
+    // raises. Both halves move together or a job is tracked with no indicator (or the reverse).
+    it('publishes the job exactly once on job-started and raises the in-panel banner for it', () => {
       component.bookId = 'book-1';
       component.chapterId = 'chap-1';
       component.selectedAnalysisType = 'Proofread';
 
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-1' });
 
-      expect(emitCount).toBe(1);
+      expect(jobRegistrySpy.track).toHaveBeenCalledTimes(1);
+      expect(jobRegistrySpy.track.calls.mostRecent().args[2]).toBe('async-1');
+      // The banner mirrors the id that was published, so it can never point at a different job.
+      expect((component as any).currentRunJobId).toBe('async-1');
+      expect(component.asyncJobInFlight).toBeTrue();
+      expect((component as any).asyncBannerActiveForRun).toBeTrue();
     });
 
-    it('does NOT emit asyncJobStarted when there is no bookId (guard path skips track and emit)', () => {
-      let emitCount = 0;
-      component.asyncJobStarted.subscribe(() => { emitCount++; });
+    it('does NOT publish the job (or raise the banner) when there is no bookId', () => {
       component.bookId = null;
       component.chapterId = 'chap-1';
       component.selectedAnalysisType = 'Proofread';
 
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-x' });
 
-      // The guard short-circuits: no bookId, so track is skipped AND asyncJobStarted is NOT emitted.
-      expect(emitCount).toBe(0);
+      // The guard short-circuits: the job is never published, so no surface could render it...
+      expect(jobRegistrySpy.track).not.toHaveBeenCalled();
+      // ...and the banner must not claim a job that no surface can track.
+      expect((component as any).currentRunJobId).toBeNull();
+      expect(component.asyncJobInFlight).toBeFalse();
     });
 
     it('sets asyncJobInFlight true on job-started and clears it when the job result arrives', () => {
@@ -1899,6 +1939,161 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     });
   });
 
+  // ── c01 remedy B: an `@if` unmount must not strand the host's run dialog ────────────────────────────
+  //
+  // The panel is `@if`-mounted in the editor; the run dialog is not. Switching the Edit-help sub-tab or
+  // the Review/Edit control destroys the panel, and ngOnDestroy unsubscribes `runSubscription`, which
+  // CANCELS the run. On the sync path nothing was ever registry-tracked, so before this fix the dialog sat
+  // in "Starting..." with a live indeterminate bar forever, describing a run that no longer existed.
+  //
+  // Driven through a Subject held OPEN across the unmount: the whole defect lives in the window between
+  // "a run is in flight" and "the run produced a terminal event", and of()/EMPTY collapses that window.
+  describe('c01 the run terminal crosses the boundary when the panel is destroyed mid-run', () => {
+    let host: PanelUnmountHostComponent;
+    let hostFixture: ComponentFixture<PanelUnmountHostComponent>;
+    let panel: AnalysisPanelComponent;
+    let runStream$: Subject<AnalysisRunEvent>;
+
+    beforeEach(() => {
+      runStream$ = new Subject<AnalysisRunEvent>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStream$.asObservable();
+
+      hostFixture = TestBed.createComponent(PanelUnmountHostComponent);
+      host = hostFixture.componentInstance;
+      hostFixture.detectChanges();
+      panel = hostFixture.debugElement.query(By.directive(AnalysisPanelComponent))
+        .componentInstance as AnalysisPanelComponent;
+      panel.selectedAnalysisType = 'Proofread';
+      panel.documentText = 'Hello world';
+    });
+
+    afterEach(() => hostFixture.destroy());
+
+    it('emits run-finished ONCE to the host when an untracked (sync-path) run is unmounted mid-flight', () => {
+      panel.runAnalysis();
+      runStream$.next({ kind: 'status', message: 'Running Proofread analysis...' });
+      hostFixture.detectChanges();
+
+      // Precondition: genuinely mid-flight, and nothing has told the host the run is over.
+      expect((panel as any).isRunning).toBeTrue();
+      expect(host.events.some(e => e.kind === 'run-finished')).toBeFalse();
+
+      // The user switches the Edit-help sub-tab: the `@if` destroys the panel and cancels the run.
+      host.mounted = false;
+      hostFixture.detectChanges();
+
+      expect(hostFixture.debugElement.query(By.directive(AnalysisPanelComponent))).toBeNull();
+      // The terminal crossed the binding even though the emitter was being torn down.
+      expect(host.events.filter(e => e.kind === 'run-finished').length).toBe(1);
+      // ...and it is the LAST thing the host heard, so the dialog resolves rather than hanging.
+      expect(host.events[host.events.length - 1].kind).toBe('run-finished');
+      // The run really was cancelled: the client stream has no subscriber left.
+      expect(runStream$.observed).toBeFalse();
+    });
+
+    it('emits run-finished on unmount for a TRACKED run too (the dialog, not the panel, guards state (b))', () => {
+      panel.runAnalysis();
+      runStream$.next({ kind: 'job-started', jobId: 'job-A' });
+      hostFixture.detectChanges();
+      expect(panel.asyncJobInFlight).toBeTrue();
+
+      host.mounted = false;
+      hostFixture.detectChanges();
+
+      // The panel does not second-guess the host: it reports that ITS run is over. Whether the card
+      // resolves is the dialog's call, and the dialog keeps a registry-tracked job waiting (d1 item 6) -
+      // pinned by "does NOT resolve a TRACKED run" in analysis-run-dialog.component.spec.ts. Keeping the
+      // guard in ONE place stops the two surfaces from disagreeing about what "tracked" means.
+      expect(host.events.filter(e => e.kind === 'run-finished').length).toBe(1);
+    });
+
+    it('does NOT emit run-finished when the panel is destroyed with no run in flight', () => {
+      // No run was started, so there is nothing to report and nothing to resolve.
+      host.mounted = false;
+      hostFixture.detectChanges();
+
+      expect(host.events.filter(e => e.kind === 'run-finished').length).toBe(0);
+    });
+  });
+
+  // ── c01 remedy A: the subscription's own terminal reaches the host ─────────────────────────────────
+  //
+  // `onRunFinished` is the panel's AUTHORITATIVE run terminal (the subscription's complete/error, plus a
+  // rejected pre-run save). It used to emit `analysisCompleted`, an @Output the editor stopped binding,
+  // so a run that ended without one of the orchestration service's own terminal EVENTS told the host
+  // nothing at all. Subjects are held OPEN so the terminal is pushed while the run is genuinely
+  // mid-flight.
+  describe('c01 the run subscription terminal reaches the host on runEvent', () => {
+    let runStream$: Subject<AnalysisRunEvent>;
+    let hostEvents: AnalysisRunEvent[];
+
+    /** Start a run wired to a Subject we control, and record what crosses the output. */
+    function startRun(): void {
+      runStream$ = new Subject<AnalysisRunEvent>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStream$.asObservable();
+
+      hostEvents = [];
+      component.runEvent.subscribe(e => hostEvents.push(e));
+      component.selectedAnalysisType = 'Proofread';
+      component.documentText = 'Hello world';
+      component.runAnalysis();
+    }
+
+    const terminals = () => hostEvents.filter(e => e.kind === 'run-finished').length;
+
+    it('emits run-finished when the run stream ERRORS with nothing else to report', () => {
+      startRun();
+      runStream$.next({ kind: 'status', message: 'Running Proofread analysis...' });
+      expect(terminals()).withContext('mid-flight: nothing has ended yet').toBe(0);
+
+      // e.g. saveBeforeRun() rejected inside runAnalysisAfterSave, or a link in the chain threw outside
+      // its catchError: the observable errors and no error EVENT was ever produced.
+      runStream$.error(new Error('save failed'));
+
+      expect(terminals()).toBe(1);
+      expect((component as any).isRunning).toBeFalse();
+    });
+
+    it('emits run-finished when the run stream COMPLETES with nothing else to report', () => {
+      startRun();
+      expect(terminals()).toBe(0);
+
+      runStream$.complete();
+
+      expect(terminals()).toBe(1);
+    });
+
+    it('emits run-finished exactly ONCE even though a real terminal event preceded it', () => {
+      startRun();
+      // The normal shape of a sync run: a result event, then the stream completes.
+      runStream$.next({ kind: 'sync-result', result: makeResultWithSuggestions({ chapterId: 'chap-1' }) });
+      runStream$.complete();
+
+      // onRunFinished is guarded on isRunning, which the result already cleared, so the host is not told
+      // twice. (The dialog is single-resolve anyway, but two terminals for one run is a lie either way.)
+      expect(terminals()).toBe(0);
+      expect(hostEvents.filter(e => e.kind === 'sync-result').length).toBe(1);
+    });
+
+    it('emits run-finished when a rejected pre-run save stops a STREAMING run before it starts', fakeAsync(() => {
+      hostEvents = [];
+      component.runEvent.subscribe(e => hostEvents.push(e));
+      component.selectedAnalysisType = 'Proofread';
+      component.documentText = 'Hello world';
+      // This branch never creates a subscription at all, so it is the one terminal route that cannot
+      // reach the complete/error handlers. Latent today (saveCurrentDocumentPromise always resolves).
+      component.saveBeforeRun = () => Promise.reject(new Error('save failed'));
+
+      component.runStreaming();
+      tick();
+
+      expect(terminals()).toBe(1);
+      expect((component as any).isRunning).toBeFalse();
+    }));
+  });
+
   // c01: pf-f01 made long runs non-blocking, and the panel instance is REUSED across navigation. A run
   // started on chapter A whose terminal arrives AFTER the user switched to chapter B must NOT inject A's
   // result over B (and must not leave A's "running" banner lingering on B). Drive the run through a
@@ -1951,8 +2146,12 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       const allBefore = component.allAnalyses;
       component.activeSubTab = 'history';
 
-      let completedEmitted = 0;
-      component.analysisCompleted.subscribe(() => { completedEmitted++; });
+      // c01: the run's resolution reaches the host on the `runEvent` channel (the former
+      // `analysisCompleted` @Output had no consumer left and was deleted). c06 superseded WHICH event
+      // that is for a discarded result: the drop is decided BEFORE the fan-out now, so the host learns
+      // the run ended AND that nothing came of it, instead of being handed a result the panel threw away.
+      const hostEvents: any[] = [];
+      component.runEvent.subscribe(e => hostEvents.push(e));
 
       // Chapter A's terminal arrives while the user is on chapter B.
       runStream$.next({ kind: 'job-result', result: makeChapterAResult() });
@@ -1965,8 +2164,11 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       // Transient flags stay clear so nothing sticks on chapter B.
       expect(component.asyncJobInFlight).toBeFalse();
       expect((component as any).isRunning).toBeFalse();
-      // The run still resolved (completed emitted) so the caller's spinner clears.
-      expect(completedEmitted).toBe(1);
+      // The run still resolved for the host, so its run dialog clears instead of hanging on the dropped
+      // result: exactly one terminal event crossed the boundary, and it is the DROP signal, not the
+      // result (c06).
+      expect(hostEvents.filter(e => e.kind === 'result-dropped').length).toBe(1);
+      expect(hostEvents.filter(e => e.kind === 'job-result').length).toBe(0);
     });
 
     it('drops the prior scene result after a sceneId switch within the same chapter', () => {
@@ -2027,6 +2229,145 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(component.allAnalyses.some(r => r.id === 'r-A')).toBeTrue();
       expect(component.proofreadSuggestions.length).toBeGreaterThan(0);
       expect(component.asyncJobInFlight).toBeFalse();
+    });
+  });
+
+  // ── c06: what the HOST is told about a result this panel discards ──────────────────────────────────
+  //
+  // The fan-out used to hand the raw `sync-result` / `job-result` to the host BEFORE the origin guard
+  // decided to drop it. On the sync path the run dialog is in state (a) with no jobId, so that event
+  // latches succeeded / 100% / "Done" - and under c02's book-scoped contract the card then survives the
+  // very chapter switch that caused the drop. The user saw a green "Done" for suggestions that reached no
+  // surface at all: not the panel (dropped), and not the Activity Center (a sync run is never tracked).
+  //
+  // The decision now precedes the fan-out, and the PAYLOAD is what changes: `{ kind: 'result-dropped' }`
+  // in place of the result event. Nothing is reordered - it is still emitted from the same synchronous
+  // handleRunEvent call, before onRunResultReceived touches a single field.
+  //
+  // Every case is driven through a Subject held OPEN across the navigation, because the whole defect
+  // lives in the window between "a run is in flight" and "its result lands"; of() collapses that window
+  // and passes against the bug.
+  describe('c06 a discarded result is not reported to the host as a success', () => {
+    /** Start a SYNC-path run on chapter A (no `job-started`, so nothing is registry-tracked). */
+    function startSyncRunOnChapterA(): Subject<AnalysisRunEvent> {
+      const runStream$ = new Subject<AnalysisRunEvent>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStream$.asObservable();
+
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-A';
+      component.sceneId = null;
+      component.documentChapterId = 'chap-A';
+      component.documentSceneId = null;
+      component.selectedAnalysisType = 'Proofread';
+      component.documentText = 'Hello world';
+      component.activeSubTab = 'history';
+
+      component.runAnalysis(); // prepareForRun captures runOrigin = chap-A
+      return runStream$;
+    }
+
+    function chapterAResult(): AnalysisResultDto {
+      return makeResultWithSuggestions({ id: 'r-A', chapterId: 'chap-A', sceneId: null });
+    }
+
+    function switchChapter(from: string, to: string): void {
+      component.chapterId = to;
+      component.ngOnChanges({ chapterId: new SimpleChange(from, to, false) });
+    }
+
+    it('sends result-dropped, NOT sync-result, when the chapter changed while the run was in flight', () => {
+      const runStream$ = startSyncRunOnChapterA();
+      const hostEvents: AnalysisRunEvent[] = [];
+      component.runEvent.subscribe(e => hostEvents.push(e));
+
+      // Precondition: genuinely mid-flight, and nothing has been reported yet.
+      expect((component as any).isRunning).withContext('the run must still be open').toBeTrue();
+      expect(hostEvents.length).toBe(0);
+
+      switchChapter('chap-A', 'chap-B');
+
+      // Chapter A's result arrives while the user is on chapter B.
+      runStream$.next({ kind: 'sync-result', result: chapterAResult() });
+
+      expect(hostEvents.filter(e => e.kind === 'sync-result').length)
+        .withContext('a discarded result must NOT reach the host as a success: the run dialog latches a '
+          + 'sync-result as "Done" at 100%, for suggestions this panel just threw away')
+        .toBe(0);
+      expect(hostEvents.filter(e => e.kind === 'result-dropped').length).toBe(1);
+      // ...and it really was discarded, so there is genuinely nothing behind a "Done" card.
+      expect(component.activeSubTab).toBe('history');
+      expect(component.proofreadSuggestions.length).toBe(0);
+    });
+
+    it('sends the raw result when the user switched away and came BACK before it landed', () => {
+      const runStream$ = startSyncRunOnChapterA();
+      const hostEvents: AnalysisRunEvent[] = [];
+      component.runEvent.subscribe(e => hostEvents.push(e));
+
+      // Away, and back again, all while the single run is still open.
+      switchChapter('chap-A', 'chap-B');
+      switchChapter('chap-B', 'chap-A');
+
+      const result = chapterAResult();
+      runStream$.next({ kind: 'sync-result', result });
+
+      expect(hostEvents.filter(e => e.kind === 'result-dropped').length)
+        .withContext('the guard compares the run origin against the context at ARRIVAL time, not against '
+          + 'wherever the user wandered in between, so this result is KEPT and must keep its terminal card')
+        .toBe(0);
+      expect(hostEvents.filter(e => e.kind === 'sync-result').length).toBe(1);
+      // The panel applied it, which is what makes the "Done" card truthful here.
+      expect(component['latestResult']).toBe(result);
+      expect(component.activeSubTab).toBe('run');
+      expect(component.proofreadSuggestions.length).toBeGreaterThan(0);
+    });
+
+    it('a scene switch inside the same chapter drops the same way', () => {
+      const runStream$ = new Subject<AnalysisRunEvent>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => runStream$.asObservable();
+
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-A';
+      component.sceneId = 'scene-1';
+      component.selectedAnalysisType = 'Proofread';
+      component.documentText = 'Hello world';
+      component.runAnalysis();
+
+      const hostEvents: AnalysisRunEvent[] = [];
+      component.runEvent.subscribe(e => hostEvents.push(e));
+
+      component.sceneId = 'scene-2';
+      component.ngOnChanges({ sceneId: new SimpleChange('scene-1', 'scene-2', false) });
+
+      runStream$.next({
+        kind: 'sync-result',
+        result: makeResultWithSuggestions({ id: 'r-A', chapterId: 'chap-A', sceneId: 'scene-1' }),
+      });
+
+      expect(hostEvents.filter(e => e.kind === 'sync-result').length).toBe(0);
+      expect(hostEvents.filter(e => e.kind === 'result-dropped').length).toBe(1);
+    });
+
+    it('does the same for a TRACKED run: the panel never fences state (b), the dialog does', () => {
+      const runStream$ = startSyncRunOnChapterA();
+      const hostEvents: AnalysisRunEvent[] = [];
+      component.runEvent.subscribe(e => hostEvents.push(e));
+      runStream$.next({ kind: 'job-started', jobId: 'job-A' });
+      expect(component.asyncJobInFlight).toBeTrue();
+
+      switchChapter('chap-A', 'chap-B');
+      runStream$.next({ kind: 'job-result', result: chapterAResult() });
+
+      // The panel reports what IT did - it discarded the result - and says nothing about whether the
+      // card should resolve. Keeping the `jobId === null` fence in ONE place (the dialog) is what stops
+      // the two surfaces from disagreeing about what "tracked" means; pinned by "does NOT touch a
+      // TRACKED card" in analysis-run-dialog.component.spec.ts.
+      expect(hostEvents.filter(e => e.kind === 'result-dropped').length).toBe(1);
+      expect(hostEvents.filter(e => e.kind === 'job-result').length).toBe(0);
+      // The job-started event itself is untouched by c06's payload split.
+      expect(hostEvents.filter(e => e.kind === 'job-started').length).toBe(1);
     });
   });
 
@@ -2357,7 +2698,11 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
         },
         {
           provide: JobRegistryService,
-          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']),
+          // `jobById$` feeds the in-panel progress bar inside the async banner (Wave 1d c2).
+          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', {
+            track: undefined,
+            jobById$: of(null),
+          }),
         },
         {
           provide: AiTierService,

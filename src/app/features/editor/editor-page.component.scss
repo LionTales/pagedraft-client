@@ -502,86 +502,10 @@
   text-align: center;
 }
 
-.analysis-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: rgba(255, 255, 255, 0.85);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: auto;
-}
-
-.analysis-overlay-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1rem;
-  padding: 1.5rem 2rem;
-  background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
-  border: 1px solid #eee;
-  min-width: 260px;
-  max-width: 360px;
-}
-
-.analysis-overlay-title {
-  margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
-  color: #222;
-}
-
-.analysis-spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid #e0e0e0;
-  border-top-color: #0078d4;
-  border-radius: 50%;
-  animation: analysis-spin 0.8s linear infinite;
-}
-
-@keyframes analysis-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.analysis-overlay-message {
-  margin: 0;
-  font-size: 0.95rem;
-  color: #333;
-  text-align: center;
-}
-
-.analysis-progress-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  margin-top: 0.25rem;
-}
-
-.analysis-progress-bar {
-  flex: 1;
-  height: 6px;
-  border-radius: 999px;
-  background: #f0f0f0;
-  overflow: hidden;
-}
-
-.analysis-progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #0078d4, #4ba3ff);
-  transition: width 0.25s ease-out;
-}
-
-.analysis-progress-label {
-  font-size: 0.75rem;
-  color: #555;
-  min-width: 2.5rem;
-  text-align: right;
-}
+/*
+ * The former `.analysis-overlay` block lived here: a full-screen blocking spinner with its own progress
+ * bar, fed by a second, editor-local copy of the run percent. Wave 1d replaced it with
+ * <app-analysis-run-dialog>, a non-blocking positioned card whose progress comes from JobRegistryService.
+ * Its styles live with that component; nothing here replaces them.
+ */
 
