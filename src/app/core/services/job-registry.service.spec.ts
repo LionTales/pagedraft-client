@@ -3,9 +3,11 @@ import { Subject, of, throwError } from 'rxjs';
 import { firstValueFrom } from 'rxjs';
 
 import {
+  JobKind,
   JobRegistryService,
   TrackedJob,
   normalizeProgress,
+  showsChunkCounts,
   progressPercent,
   clampPercent,
   normalizeStatus,
@@ -126,6 +128,130 @@ describe('JobRegistryService', () => {
       const n = normalizeProgress(progress({ status: 'Succeeded', totalChunks: 3, completedChunks: 1 }));
       expect(n.status).toBe('succeeded');
       expect(n.percent).toBe(100);
+    });
+
+    // c04. The counts were already being read here to DERIVE the percent and then thrown away, which is
+    // why the only way to put "3 of 10" on screen used to be parsing it back out of the backend's
+    // English prose. They now come back out alongside it.
+    it('normalizeProgress carries the RAW chunk counts, not just the derived percent', () => {
+      const n = normalizeProgress(progress({ totalChunks: 10, completedChunks: 3 }));
+      expect(n.percent).toBe(30);
+      expect(n.completedChunks).toBe(3);
+      expect(n.totalChunks).toBe(10);
+    });
+
+    it('a run with NO chunk shape reports null counts, never "0 of 0"', () => {
+      // totalChunks <= 0 is the backend's "not chunked / not chunked yet" state. Mapping it to null
+      // rather than 0 is what makes every surface's "do we have counts?" test one null check.
+      const n = normalizeProgress(progress({ totalChunks: 0, completedChunks: 0, estimatedCompletionPercent: 42 }));
+      expect(n.percent).toBe(42);
+      expect(n.totalChunks).toBeNull();
+      expect(n.completedChunks).toBeNull();
+    });
+
+    it('clamps a completed count that exceeds the total, so the counts agree with the percent', () => {
+      // progressPercent already clamps this to 100%; an unclamped count would make the estimator's
+      // remaining-chunks negative and put "5 of 2" next to "100%".
+      const n = normalizeProgress(progress({ totalChunks: 2, completedChunks: 5 }));
+      expect(n.percent).toBe(100);
+      expect(n.completedChunks).toBe(2);
+    });
+  });
+
+  // ── c04: the chunk counts and the per-JOB throughput clock ──────────────────────────────────────
+  //
+  // The registry is the SINGLE OWNER of both, exactly as it already is of the percent. These specs pin
+  // the ownership at the source; `three-surface-parity.spec.ts` pins that the surfaces all read it.
+  describe('chunk counts + throughput clock (c04)', () => {
+    it('a poll puts the real counts on the tracked job', () => {
+      configure();
+      service.track('proofread', 'book-A', 'J1', { chapterId: 'ch-1' });
+      progressStub.chapter$.next(progress({ status: 'Running', totalChunks: 10, completedChunks: 3 }));
+
+      const job = jobById('J1')!;
+      expect(job.completedChunks).toBe(3);
+      expect(job.totalChunks).toBe(10);
+      expect(job.percent).toBe(30);
+    });
+
+    it('counts are STICKY: a later poll with no chunk shape does not blank the readout', () => {
+      configure();
+      service.track('proofread', 'book-A', 'J1', { chapterId: 'ch-1' });
+      progressStub.chapter$.next(progress({ status: 'Running', totalChunks: 10, completedChunks: 3 }));
+      progressStub.chapter$.next(progress({ status: 'Running', totalChunks: 0, completedChunks: 0 }));
+
+      const job = jobById('J1')!;
+      expect(job.completedChunks).toBe(3);
+      expect(job.totalChunks).toBe(10);
+    });
+
+    it('a run this client STARTED opens its throughput window at track time', () => {
+      configure();
+      service.track('proofread', 'book-A', 'J1', { chapterId: 'ch-1' });
+
+      const job = jobById('J1')!;
+      expect(job.chunkClock.baselineAt).toBe(job.startedAt);
+      expect(job.chunkClock.baselineCompleted).toBe(0);
+      expect(job.chunkClock.lastCompletionAt).toBeNull();
+    });
+
+    it('stamps the last COMPLETION, and a repeated snapshot does not move it', () => {
+      configure();
+      service.track('proofread', 'book-A', 'J1', { chapterId: 'ch-1' });
+      progressStub.chapter$.next(progress({ status: 'Running', totalChunks: 10, completedChunks: 0 }));
+      expect(jobById('J1')!.chunkClock.lastCompletionAt).toBeNull();
+
+      progressStub.chapter$.next(progress({ status: 'Running', totalChunks: 10, completedChunks: 2 }));
+      const stamped = jobById('J1')!.chunkClock;
+      expect(stamped.lastCompletionAt).not.toBeNull();
+
+      // Asserted by IDENTITY, not by comparing timestamps: two emissions inside the same millisecond
+      // would produce equal ISO strings whether or not the clock was re-stamped, so a value comparison
+      // here would pass against the bug. The same object means no observation was folded in at all.
+      progressStub.chapter$.next(progress({ status: 'Running', totalChunks: 10, completedChunks: 2 }));
+      expect(jobById('J1')!.chunkClock).toBe(stamped);
+    });
+
+    it('a REATTACHED job gets NO client-side start time, so it cannot produce a wrong estimate', () => {
+      // The run was already in flight before this tab existed. Treating the moment the client noticed
+      // it as the run start would under-state elapsed and therefore under-state the time remaining.
+      configure({ analysis: makeAnalysisStub([activeJob({ jobId: 'RE-1' })]) });
+      service.reattach('book-A', 'he');
+
+      const job = jobById('RE-1')!;
+      expect(job.chunkClock.baselineAt).toBeNull();
+
+      // The window opens at the first OBSERVED poll instead, adopting whatever was already done.
+      progressStub.chapter$.next(progress({ status: 'Running', totalChunks: 10, completedChunks: 4 }));
+      const clock = jobById('RE-1')!.chunkClock;
+      expect(clock.baselineAt).not.toBeNull();
+      expect(clock.baselineCompleted).toBe(4);
+      // The 4 pre-existing chunks are NOT evidence: they finished outside the observed window.
+      expect(clock.lastCompletionAt).toBeNull();
+    });
+
+    it('a SUCCEEDED run reads N of N, for the same reason its percent is forced to 100', () => {
+      configure();
+      service.track('proofread', 'book-A', 'J1', { chapterId: 'ch-1' });
+      progressStub.chapter$.next(progress({ status: 'Running', totalChunks: 10, completedChunks: 8 }));
+      // A terminal snapshot that lags by two chunks: the card must not read "8 of 10" beside "Done".
+      progressStub.chapter$.next(progress({ status: 'Succeeded', totalChunks: 10, completedChunks: 8 }));
+
+      const job = jobById('J1')!;
+      expect(job.status).toBe('succeeded');
+      expect(job.percent).toBe(100);
+      expect(job.completedChunks).toBe(10);
+      expect(job.totalChunks).toBe(10);
+    });
+
+    it('a FAILED run keeps its real shortfall: there the missing chunks ARE the truth', () => {
+      configure();
+      service.track('proofread', 'book-A', 'J1', { chapterId: 'ch-1' });
+      progressStub.chapter$.next(progress({ status: 'Running', totalChunks: 10, completedChunks: 6 }));
+      progressStub.chapter$.next(progress({ status: 'Failed', totalChunks: 10, completedChunks: 6 }));
+
+      expect(jobById('J1')!.completedChunks).toBe(6);
+      expect(jobById('J1')!.totalChunks).toBe(10);
     });
   });
 
@@ -626,6 +752,43 @@ describe('JobRegistryService', () => {
 
       const active = await firstValueFrom(service.activeJobs$);
       expect(active.map(j => j.id)).toEqual(['J1']);
+    });
+  });
+
+  /**
+   * c02. `totalChunks` is ONE wire field with a different UNIT per producer, and no surface labels it.
+   * This is the registry-level pin of the decision; `three-surface-parity.spec.ts` pins that all three
+   * surfaces actually ask THIS predicate rather than re-testing `totalChunks !== null` locally.
+   */
+  describe('showsChunkCounts - which KINDS may render a bare completed/total pair', () => {
+    const withCounts = (kind: JobKind) => ({ kind, totalChunks: 10 });
+
+    it('shows the pair for a chapter proofread (denominator: TEXT CHUNKS of the chapter)', () => {
+      expect(showsChunkCounts(withCounts('proofread'))).toBeTrue();
+    });
+
+    it('shows the pair for summary and style-baseline (denominator: the book CHAPTERS)', () => {
+      expect(showsChunkCounts(withCounts('summary'))).toBeTrue();
+      expect(showsChunkCounts(withCounts('style-baseline'))).toBeTrue();
+    });
+
+    it('shows the pair for the reserved whole-book-analysis kind, which rides the chapter chunk shape', () => {
+      expect(showsChunkCounts(withCounts('whole-book-analysis'))).toBeTrue();
+    });
+
+    it('WITHHOLDS the pair for review: its denominator is map WINDOWS plus reduce passes, not chapters', () => {
+      expect(showsChunkCounts(withCounts('review'))).toBeFalse();
+    });
+
+    it('withholds the pair from every kind when there is no chunk shape at all (never "0 of 0")', () => {
+      for (const kind of ['proofread', 'summary', 'style-baseline', 'whole-book-analysis', 'review'] as JobKind[]) {
+        expect(showsChunkCounts({ kind, totalChunks: null })).toBeFalse();
+      }
+    });
+
+    it('withholds the pair for a job that is not tracked at all', () => {
+      expect(showsChunkCounts(null)).toBeFalse();
+      expect(showsChunkCounts(undefined)).toBeFalse();
     });
   });
 });

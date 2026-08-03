@@ -1,4 +1,6 @@
+import { DOCUMENT } from '@angular/common';
 import {
+  AfterViewChecked,
   ChangeDetectionStrategy,
   ChangeDetectorRef,
   Component,
@@ -16,13 +18,18 @@ import {
 import { Observable, Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
 
+import { applyBackgroundInert, containFocusWithin, focusablesWithin } from './modal-a11y';
 import { ANALYSIS_TYPE_LABELS } from '../../core/models/analysis';
+import { formatEtaLabel, runChromeLang, runString } from '../../core/i18n/run-strings';
+import { estimateRemainingMs } from '../../core/utils/chunk-eta';
 import { AnalysisRunEvent, assertUnhandledRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import {
   JobRegistryService,
+  JobStatus,
   TerminalStatus,
   TrackedJob,
   isTerminal,
+  showsChunkCounts,
 } from '../../core/services/job-registry.service';
 
 // ── i18n label maps (BOOK-scoped chrome: follows the book language, not the app language) ──────────
@@ -148,17 +155,37 @@ export interface RunDialogMinimizeEvent {
  * (c) closing just dismisses the view: in (a) the run continues because the panel, not this dialog,
  * owns the HTTP subscription, but nothing is registry-tracked yet so there is nothing to minimize into.
  *
- * ── Shape ──────────────────────────────────────────────────────────────────────────────────────────
- * A positioned card, NOT a full-screen blocker: no dimming backdrop, no focus trap, `aria-modal=false`,
- * and no click-blocking layer, so the chapter behind it stays readable AND interactive. The progress
- * markup (determinate row with aria-valuenow/valuemin/valuemax + numeric readout; indeterminate pulse
- * with no ambiguous aria-valuenow; and, for a run that is OVER with no percent ever learned, an inert
- * bar that is not a progressbar at all - c05) mirrors the Activity Center row and the in-page indicator
- * exactly, so a screen reader gets the same contract on all three surfaces.
+ * ── Shape: MODAL WHILE THE RUN IS LIVE (c03) ───────────────────────────────────────────────────────
+ * Two sibling fixed layers, mirroring Pagewise's `pw-modal`: a `.rd-backdrop` scrim (blurred, with a
+ * heavier flat scrim where `backdrop-filter` is unsupported) and, above it, a `.rd-overlay` centering
+ * container (`display: grid; place-items: center`) holding the `.rd-card`. Centering is the container's
+ * job, so the card itself needs no width/height math and no corner pinning, and it is direction-
+ * agnostic. The a11y attributes live on the CONTAINER, not on the card: `role="dialog"`, `aria-modal`,
+ * the `aria-label`, and `tabindex="-1"` so it can hold focus and receive Escape.
  *
- * Because it is modeless, it also does NOT claim any global key: Escape is bound on the card element,
- * so it dismisses only when focus is genuinely inside the card and the editor behind it keeps its own
- * Escape gestures (c04).
+ * MODALITY IS A PROPERTY OF THE RUN, not of the dialog's lifetime (user decision, 2026-08-03):
+ *   (a)/(b), the run is LIVE -> MODAL. Backdrop + blur, the background made `inert`, focus moved into
+ *                               the card and TRAPPED there, `aria-modal="true"`.
+ *   (c), the run is OVER     -> the modality DROPS. The backdrop element is REMOVED (removed, not faded
+ *                               out: an invisible scrim would go on eating pointer events), every
+ *                               `inert` attribute is removed, the trap is released, focus is RESTORED
+ *                               to whatever held it before the dialog opened, and `aria-modal` flips to
+ *                               `false`. The card stays on screen as a dismissible notice.
+ * The dialog still does NOT auto-close: state (c) persists until dismissed, exactly as under d1. It
+ * simply stops blocking, so a finished (or failed) run can never leave the app unusable.
+ *
+ * The release therefore has TWO triggers, and both are tested: the `(b) -> (c)` transition and the
+ * dismiss/minimize. Releasing only on dismiss would leave a live focus trap inside a card that no
+ * longer claims to be modal - the specific defect this state machine could introduce.
+ *
+ * This REVERSES the Wave 1d d1 decision, which made the card deliberately modeless ("the user must be
+ * able to read the chapter behind it"). The user overrode it after the first live run. Nothing in this
+ * file, the SCSS, or the notes still argues the old shape.
+ *
+ * The progress markup (determinate row with aria-valuenow/valuemin/valuemax + numeric readout;
+ * indeterminate pulse with no ambiguous aria-valuenow; and, for a run that is OVER with no percent ever
+ * learned, an inert bar that is not a progressbar at all - c05) mirrors the Activity Center row and the
+ * in-page indicator exactly, so a screen reader gets the same contract on all three surfaces.
  *
  * ── Mounting (c2 wires this) ───────────────────────────────────────────────────────────────────────
  * The host creates a hot `Subject<AnalysisRunEvent>` and `next()`s every event it already handles into
@@ -182,86 +209,112 @@ export interface RunDialogMinimizeEvent {
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     @if (state !== 'hidden') {
+      <!-- The scrim is a SIBLING of the centering container (the pw-modal structure), and it exists
+           ONLY while the run is live: this block REMOVES the element at the (b) -> (c) transition
+           rather than fading it out, so nothing invisible is left eating pointer events. -->
+      @if (isModal) {
+        <div class="rd-backdrop" aria-hidden="true" (click)="onBackdropClick()"></div>
+      }
+
       <div
-        #card
-        class="rd-card"
+        #overlay
+        class="rd-overlay"
         role="dialog"
-        aria-modal="false"
+        [attr.aria-modal]="isModal ? 'true' : 'false'"
+        tabindex="-1"
         (keydown.escape)="dismiss()"
+        (keydown.tab)="onTab($event, false)"
+        (keydown.shift.tab)="onTab($event, true)"
         [attr.aria-label]="title + ' · ' + label('dialogAria')">
+        <div
+          #card
+          class="rd-card">
 
-        <div class="rd-header">
-          @if (scopeLabel; as scope) {
-            <span class="rd-scope">{{ scope }}</span>
-          }
-          <span class="rd-title">{{ title }}</span>
-          <span class="rd-status-pill" [class]="'rd-status-pill ' + statusClass">{{ statusLabel }}</span>
-          <button
-            class="rd-dismiss"
-            type="button"
-            [attr.aria-label]="dismissLabel"
-            (click)="dismiss()">&#x2715;</button>
-        </div>
+          <div class="rd-header">
+            @if (scopeLabel; as scope) {
+              <span class="rd-scope">{{ scope }}</span>
+            }
+            <span class="rd-title">{{ title }}</span>
+            <span class="rd-status-pill" [class]="'rd-status-pill ' + statusClass">{{ statusLabel }}</span>
+            <button
+              class="rd-dismiss"
+              type="button"
+              [attr.aria-label]="dismissLabel"
+              (click)="dismiss()">&#x2715;</button>
+          </div>
 
-        <!-- Progress. THREE cases, because a null percent means two different things (c05):
-             1. a KNOWN percent -> determinate: aria-valuenow/valuemin/valuemax plus a numeric readout.
-                Identical markup on all three surfaces; three-surface-parity.spec.ts pins it.
-             2. no percent and the run is OVER (state (c)) -> an INERT bar. See the comment below.
-             3. no percent and the run is still GOING (states (a)/(b)) -> the indeterminate pulse, with
-                the aria value attrs omitted so no ambiguous aria-valuenow="null" is emitted.
-             Cases 2 and 3 used to be one branch, so a terminal card whose percent was never learned
-             (an 'error' terminal, or c01's 'run-finished' -> canceled, or a registry 'failed' with no
-             percent) pulsed an infinite CSS keyframe animation next to its own "Failed"/"Canceled"
-             pill. The animation is keyed on the STATE MACHINE now, not on percent nullity; the percent
-             getter itself is unchanged (d1 item 6 depends on it exactly as it is). -->
-        @if (percent !== null) {
-          <div class="rd-progress-row">
-            <div class="rd-progress-track" role="progressbar"
-              [attr.aria-valuenow]="percent"
-              aria-valuemin="0"
-              aria-valuemax="100">
-              <div class="rd-progress-fill rd-progress-fill--det" [style.width.%]="percent"></div>
+          <!-- Progress. THREE cases, because a null percent means two different things (c05):
+               1. a KNOWN percent -> determinate: aria-valuenow/valuemin/valuemax plus a numeric readout.
+                  Identical markup on all three surfaces; three-surface-parity.spec.ts pins it.
+               2. no percent and the run is OVER (state (c)) -> an INERT bar. See the comment below.
+               3. no percent and the run is still GOING (states (a)/(b)) -> the indeterminate pulse, with
+                  the aria value attrs omitted so no ambiguous aria-valuenow="null" is emitted.
+               Cases 2 and 3 used to be one branch, so a terminal card whose percent was never learned
+               (an 'error' terminal, or c01's 'run-finished' -> canceled, or a registry 'failed' with no
+               percent) pulsed an infinite CSS keyframe animation next to its own "Failed"/"Canceled"
+               pill. The animation is keyed on the STATE MACHINE now, not on percent nullity; the percent
+               getter itself is unchanged (d1 item 6 depends on it exactly as it is). -->
+          @if (percent !== null) {
+            <div class="rd-progress-row">
+              <div class="rd-progress-track" role="progressbar"
+                [attr.aria-valuenow]="percent"
+                aria-valuemin="0"
+                aria-valuemax="100">
+                <div class="rd-progress-fill rd-progress-fill--det" [style.width.%]="percent"></div>
+              </div>
+              <span class="rd-progress-percent" aria-hidden="true">{{ percent }}%</span>
             </div>
-            <span class="rd-progress-percent" aria-hidden="true">{{ percent }}%</span>
-          </div>
-        } @else if (state === 'terminal') {
-          <!-- ARIA DECISION (c05): a finished run with no known percent is NOT a progressbar, so this
-               branch drops role="progressbar" entirely rather than merely dropping the animation.
-               ARIA defines a progressbar with no aria-valuenow as an INDETERMINATE one, i.e. "a task is
-               in progress, amount unknown" - a screen reader would announce a live task on a card whose
-               own status pill says the run is over, and it would announce it BEFORE the pill. Nothing is
-               lost by removing it: the outcome is already carried by the localized status pill and by
-               the .rd-message paragraph, which is role="status" aria-live="polite". The empty track is
-               kept purely so the card does not jump when a run latches terminal while the user is
-               looking at it, and it is aria-hidden because it now carries no information at all.
-               NOTE the asymmetry with case 1: a terminal run that DOES know its percent (succeeded at
-               100%, or a failed run holding its last known 60%) keeps the full progressbar contract,
-               because that number is real and the three-surface aria parity is pinned on it. -->
-          <div class="rd-progress-track rd-progress-track--ended" aria-hidden="true"></div>
-        } @else {
-          <div class="rd-progress-track" role="progressbar">
-            <div class="rd-progress-fill rd-progress-fill--indet"></div>
-          </div>
-        }
+          } @else if (state === 'terminal') {
+            <!-- ARIA DECISION (c05): a finished run with no known percent is NOT a progressbar, so this
+                 branch drops role="progressbar" entirely rather than merely dropping the animation.
+                 ARIA defines a progressbar with no aria-valuenow as an INDETERMINATE one, i.e. "a task is
+                 in progress, amount unknown" - a screen reader would announce a live task on a card whose
+                 own status pill says the run is over, and it would announce it BEFORE the pill. Nothing is
+                 lost by removing it: the outcome is already carried by the localized status pill and by
+                 the .rd-message paragraph, which is role="status" aria-live="polite". The empty track is
+                 kept purely so the card does not jump when a run latches terminal while the user is
+                 looking at it, and it is aria-hidden because it now carries no information at all.
+                 NOTE the asymmetry with case 1: a terminal run that DOES know its percent (succeeded at
+                 100%, or a failed run holding its last known 60%) keeps the full progressbar contract,
+                 because that number is real and the three-surface aria parity is pinned on it. -->
+            <div class="rd-progress-track rd-progress-track--ended" aria-hidden="true"></div>
+          } @else {
+            <div class="rd-progress-track" role="progressbar">
+              <div class="rd-progress-fill rd-progress-fill--indet"></div>
+            </div>
+          }
 
-        <p class="rd-message" role="status" aria-live="polite">{{ message }}</p>
+          <p class="rd-message" role="status" aria-live="polite">{{ message }}</p>
 
-        @if (canMinimize) {
-          <div class="rd-actions">
-            <button class="rd-minimize" type="button" (click)="minimize()">
-              {{ label('minimize') }}
-            </button>
-            <span class="rd-hint">{{ label('keepsRunning') }}</span>
-          </div>
-        }
+          <!-- c04: the approximate time remaining. Rendered ONLY when the estimator has a basis for one
+               (see estimateRemainingMs in core/utils/chunk-eta.ts), so it appears mid-run rather than at
+               "0 of 10" and is gone again at the terminal. Deliberately NOT a live region: .rd-message
+               above already is one, and a second polite region revising itself on every chunk would
+               talk over it. -->
+          @if (etaLabel; as eta) {
+            <p class="rd-eta">{{ eta }}</p>
+          }
+
+          @if (canMinimize) {
+            <div class="rd-actions">
+              <button class="rd-minimize" type="button" (click)="minimize()">
+                {{ label('minimize') }}
+              </button>
+              <span class="rd-hint">{{ label('keepsRunning') }}</span>
+            </div>
+          }
+        </div>
       </div>
     }
   `,
   styleUrl: './analysis-run-dialog.component.scss',
 })
-export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
+export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, OnDestroy {
   private readonly registry = inject(JobRegistryService);
   private readonly cdr = inject(ChangeDetectorRef);
+  private readonly doc = inject(DOCUMENT);
+  /** The component host. It is the boundary of "the dialog" for the background-inert walk. */
+  private readonly hostRef = inject<ElementRef<HTMLElement>>(ElementRef);
 
   /**
    * Whether the dialog is showing. Intended to be bound two-way (`[(open)]`): the dialog sets it false
@@ -291,6 +344,29 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
 
   @ViewChild('card') private cardRef?: ElementRef<HTMLElement>;
 
+  /** The centering/overlay container: it carries the dialog role, the aria attrs and the key bindings. */
+  @ViewChild('overlay') private overlayRef?: ElementRef<HTMLElement>;
+
+  /**
+   * Whether the modal side effects are CURRENTLY engaged (c03). Deliberately a separate field from the
+   * derived {@link isModal}: `isModal` says what the state machine WANTS, this says what has actually
+   * been done to the DOM, and reconciling the two in one place ({@link syncModality}) is what makes the
+   * release fire at the `(b) -> (c)` transition and not only on dismiss.
+   */
+  private modalActive = false;
+
+  /** What held focus when the modal engaged. Restored when it drops, whichever way it drops. */
+  private previouslyFocused: HTMLElement | null = null;
+
+  /** Undo for {@link applyBackgroundInert}. Non-null exactly while {@link modalActive} is true. */
+  private releaseInert: (() => void) | null = null;
+
+  /**
+   * Undo for {@link containFocusWithin} (c01). Non-null exactly while {@link modalActive} is true, and
+   * released FIRST inside {@link releaseModality} so it cannot fight the focus restore that follows it.
+   */
+  private releaseFocusContainment: (() => void) | null = null;
+
   /** OUTER teardown: everything this run subscribed to. Fired at every run boundary; also on destroy. */
   private runStop$ = new Subject<void>();
 
@@ -312,10 +388,16 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
 
   // ── Language / direction ─────────────────────────────────────────────────────────────────────────
 
-  /** Book-scoped chrome language ('he' default, 'en' for an English book). */
+  /**
+   * Book-scoped chrome language ('he' default, 'en' for an English book).
+   *
+   * c02: delegated to `runChromeLang` rather than re-implemented. This getter and the panel's
+   * `panelLang` had the rule written out twice already, and the orchestration service composing the
+   * sentences this component RENDERS would have made it three - a book in some third language getting
+   * one answer from the composer and another from the renderer is exactly the divergence that costs.
+   */
   get chromeLang(): 'he' | 'en' {
-    const lang = (this.bookLanguage ?? '').trim().toLowerCase();
-    return lang.startsWith('en') ? 'en' : 'he';
+    return runChromeLang(this.bookLanguage);
   }
 
   @HostBinding('attr.dir')
@@ -339,11 +421,32 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
       return;
     }
     if (changes['open'] && this.open === false) {
+      // The HOST closed us (the editor's per-context reconcile does exactly this on a book change).
+      // Release synchronously rather than waiting for the next view check: `syncModality` is the
+      // backstop for the transition no gesture drives ((b) -> (c)), not the primary path for a close.
+      this.releaseModality();
       this.runStop$.next();
     }
   }
 
+  /**
+   * The ONE place the DOM-level modal side effects are reconciled with the state machine (c03).
+   *
+   * It runs here rather than in the handlers that change the state because the overlay element has to
+   * EXIST before focus can move into it, and because the transition that matters most - `(b) -> (c)`,
+   * where the modality drops - is driven by a registry emission, not by a user gesture. Anchoring the
+   * reconcile to the view keeps both the engage and the release on one path, so neither can be
+   * forgotten at a new call site.
+   *
+   * It never writes a bound field, so it cannot raise `ExpressionChangedAfterItHasBeenChecked`.
+   */
+  ngAfterViewChecked(): void {
+    this.syncModality();
+  }
+
   ngOnDestroy(): void {
+    // A component torn down while modal must not leave the app inert. Nothing else runs after this.
+    this.releaseModality();
     this.jobStop$.next();
     this.jobStop$.complete();
     this.runStop$.next();
@@ -357,6 +460,18 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
     if (this.terminal) return 'terminal';
     if (this.jobId !== null && this.trackedJob !== null) return 'tracked';
     return 'starting';
+  }
+
+  /**
+   * Whether the dialog is BLOCKING (c03): true in states (a) and (b), false in (c) and while hidden.
+   *
+   * Derived from {@link state}, which is itself derived from the `terminal` latch that `isTerminal`
+   * (the registry's one terminal predicate) sets. There is deliberately no second notion of "the run is
+   * over" here: modality is a projection of the existing state machine, not a parallel one.
+   */
+  get isModal(): boolean {
+    const state = this.state;
+    return state === 'starting' || state === 'tracked';
   }
 
   /** Minimize is a property of state (b) itself: tracked implies minimizable, percent or not. */
@@ -393,15 +508,96 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
   }
 
   /**
-   * Message. In (a) the raw `'status'` text is the only source there is; from (b) on, the registry's
-   * `job.message` is the single source of truth (d1). The backend detail text itself is not localized
-   * today, exactly as on the Activity Center; the localized status pill next to it carries the meaning
-   * in both languages, and the fallbacks below are localized.
+   * Message. In (a) the raw `'status'` text is the only source there is (and it is now composed by
+   * `AnalysisRunOrchestrationService` in this book's language). From (b) on, the message is COMPOSED
+   * HERE from the tracked job's STATUS, by {@link runDetail}.
+   *
+   * c02: this getter used to render `job.message` - the backend's raw English prose, e.g.
+   * `Running chunk 2/10`, inside RTL Hebrew chrome, next to a correctly-localized `בריצה` pill. This
+   * dialog is the ONLY surface that ever rendered that field (the Activity Center and the in-page
+   * indicator never have), so there was no precedent to follow and nothing else to keep in step. The
+   * server keeps sending prose and `TrackedJob.message` keeps carrying it; it is simply not chrome.
+   *
+   * `terminal.message`, when set, still wins: that path carries a CLIENT-composed localized sentence,
+   * or a `{ error }` body the API deliberately sent to explain a rejection. A registry terminal
+   * ((b) -> (c)) latches an EMPTY message on purpose (see `attachToJob`) so this composes instead.
    */
   get message(): string {
-    if (this.terminal) return this.terminal.message || this.label(this.terminal.status);
-    if (this.state === 'tracked') return this.trackedJob?.message || this.label('running');
+    if (this.terminal) return this.terminal.message || this.runDetail(this.terminal.status);
+    if (this.state === 'tracked') return this.runDetail(this.trackedJob?.status ?? 'running');
     return this.statusMessage || this.label('starting');
+  }
+
+  /**
+   * The localized detail sentence for a job in a given status, composed from STRUCTURED state rather
+   * than from any server prose (the c02 STEP 2 decision; see `core/i18n/run-strings.ts`).
+   *
+   * c04 fills the seam c02 left here: a RUNNING job whose chunk counts are known says "{type}: 3 of 10
+   * completed" instead of the count-free "{type}: running...". It reuses c02's existing
+   * `progressCompleted` key rather than minting a near-synonym - that key was already written for
+   * exactly this sentence, it is already covered by the he/en parity and placeholder specs, and having
+   * one wording for one fact is the point of the closed union.
+   *
+   * The counts come off {@link chunkCounts}, i.e. off `TrackedJob`, i.e. off the registry - the same
+   * single owner the percent comes from. Nothing here derives, remembers or adjusts a number.
+   */
+  private runDetail(status: JobStatus): string {
+    const lang = this.chromeLang;
+    const type = this.title;
+    switch (status) {
+      case 'succeeded': return runString(lang, 'runSucceeded', { type });
+      case 'failed':    return runString(lang, 'runFailed', { type });
+      case 'canceled':  return runString(lang, 'runCanceled', { type });
+      case 'pending':   return runString(lang, 'progressPreparing', { type });
+      case 'running': {
+        const counts = this.chunkCounts;
+        return counts
+          ? runString(lang, 'progressCompleted', { type, completed: counts.completed, total: counts.total })
+          : runString(lang, 'progressRunning', { type });
+      }
+    }
+  }
+
+  /**
+   * The tracked job's REAL chunk counts, or null when this run has no counts to show. Straight off
+   * `TrackedJob`; the in-page indicator and the Activity Center row read the SAME two fields, which is
+   * what `three-surface-parity.spec.ts` now pins.
+   *
+   * c02: the "may this run show counts at all?" test is the registry's {@link showsChunkCounts}, not a
+   * local `totalChunks !== null`. It covers both halves at once - no chunk shape (a single-shot
+   * analysis, or a run not chunked yet), and a KIND whose denominator is not a legible unit (`review`,
+   * which counts map windows plus a variable number of reduce passes). This dialog only ever follows a
+   * chapter analysis run today, so the kind half changes nothing here in practice; it is wired anyway so
+   * that all three surfaces ask ONE predicate and a future re-use of the dialog cannot become a fourth
+   * answer.
+   */
+  get chunkCounts(): { completed: number; total: number } | null {
+    const job = this.trackedJob;
+    if (!showsChunkCounts(job)) return null;
+    return { completed: job!.completedChunks ?? 0, total: job!.totalChunks! };
+  }
+
+  /**
+   * c04: the approximate time remaining, or null when there is no basis for one.
+   *
+   * State (b) ONLY. In (a) nothing is tracked, and in (c) the run is over so "remaining" is meaningless
+   * (the estimator would return null there anyway - remaining chunks is 0 for a succeeded run - but a
+   * FAILED run can latch terminal with chunks still outstanding, and a card reading "Failed" above
+   * "about 4 minutes remaining" would be absurd; the state gate is what rules that out, not luck).
+   *
+   * Everything the estimate is computed from is registry state, including the clock: this getter
+   * measures no time of its own, so re-opening the dialog mid-run cannot restart the estimate.
+   */
+  get etaLabel(): string | null {
+    if (this.state !== 'tracked') return null;
+    const job = this.trackedJob;
+    if (!job) return null;
+    const remainingMs = estimateRemainingMs({
+      completedChunks: job.completedChunks,
+      totalChunks: job.totalChunks,
+      clock: job.chunkClock,
+    });
+    return remainingMs === null ? null : formatEtaLabel(this.chromeLang, remainingMs);
   }
 
   get statusLabel(): string {
@@ -431,10 +627,14 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
    */
   minimize(): void {
     if (!this.canMinimize || this.jobId === null) return;
-    this.minimizeRequested.emit({
-      jobId: this.jobId,
-      originRect: this.cardRef?.nativeElement.getBoundingClientRect() ?? null,
-    });
+    // Measure BEFORE anything moves: this is the card's LIVE rect, wherever the card happens to be.
+    // c03 centred it (it used to be pinned to a corner) and this line needed no change for that -
+    // `minimize-flight.ts` computes a physical delta between two MEASURED points and hardcodes neither.
+    const originRect = this.cardRef?.nativeElement.getBoundingClientRect() ?? null;
+    // Drop the modality BEFORE the flight, not with the card: the ghost animates over a page that is
+    // already usable, and the background is never inert for a card that is on its way out.
+    this.releaseModality();
+    this.minimizeRequested.emit({ jobId: this.jobId, originRect });
     this.setOpen(false);
   }
 
@@ -447,27 +647,84 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
     this.setOpen(false);
   }
 
-  // Escape is bound on the CARD (`(keydown.escape)` on `.rd-card` in the template), not on the document
-  // (c04). A modeless card must not claim a global key: this dialog is `aria-modal="false"` with no
-  // focus trap and no backdrop precisely so the user keeps working in the Syncfusion document editor
-  // behind it, and Syncfusion uses Escape for its own dismiss gestures. A `document:keydown.escape`
-  // host listener therefore minimized (fly-to-bell animation and all) a card that never had focus.
+  /**
+   * Backdrop click. It exists only while the dialog is modal, and it DISMISSES (c03).
+   *
+   * A deliberate divergence from the Pagewise reference, whose `closeOnBackdrop` defaults to false:
+   * there a dismiss can mean cancelling the operation the modal was confirming, so a stray click must
+   * not do it. Here dismissal is non-destructive in every state - in (b) it is a MINIMIZE and the job
+   * keeps running (there is no cancel endpoint at all), and in (a) the panel owns the HTTP subscription
+   * regardless - so the click costs the user nothing and the alternative is a scrim that looks
+   * interactive and silently ignores them.
+   */
+  onBackdropClick(): void {
+    this.dismiss();
+  }
+
+  /**
+   * The focus TRAP, bound on the overlay container as `(keydown.tab)` / `(keydown.shift.tab)`.
+   *
+   * Active only while {@link modalActive}: in state (c) the modality is gone, so Tab must be allowed to
+   * leave the card and reach the page again - a trap that outlives the modality is exactly the bug this
+   * state machine could introduce.
+   *
+   * `inert` on the background already stops focus from landing there in browsers that implement it;
+   * this cycle is what contains the keyboard everywhere else, and it is also what makes Tab WRAP rather
+   * than escaping into the browser chrome.
+   */
+  onTab(event: Event, backwards: boolean): void {
+    if (!this.modalActive) return;
+    const card = this.cardRef?.nativeElement;
+    const overlay = this.overlayRef?.nativeElement;
+    if (!card || !overlay) return;
+
+    const focusables = focusablesWithin(card);
+    if (focusables.length === 0) {
+      // Nothing to cycle through; keep focus on the container rather than letting it leave.
+      event.preventDefault();
+      overlay.focus();
+      return;
+    }
+
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = this.doc.activeElement;
+    const inside = active instanceof HTMLElement && card.contains(active);
+
+    if (backwards ? (!inside || active === first) : (!inside || active === last)) {
+      event.preventDefault();
+      (backwards ? last : first).focus();
+    }
+  }
+
+  // ── Escape (c03 re-scopes the fixes plan's c04, it does not revert it) ─────────────────────────────
   //
-  // The template binding is the scope, and it is a structural one rather than a runtime check: keydown
-  // bubbles from the focused element, so the handler runs ONLY when focus is inside the card, and no
-  // document-level listener exists at all - the editor's own Escape handling cannot be affected by this
-  // component. It also dies with the card's `@if`, which subsumes the old `if (this.open)` guard.
+  // Escape is bound on the overlay CONTAINER (`(keydown.escape)` on `.rd-overlay`, which is
+  // `tabindex="-1"` so it can hold focus), which is the Pagewise `pw-modal` shape. It is neither the
+  // original `@HostListener('document:keydown.escape')` nor the `.rd-card` binding the fixes plan's c04
+  // moved it to, and both of those are now wrong for a specific, checkable reason:
   //
-  // It is reachable: `.rd-dismiss` is always rendered and focusable (and `.rd-minimize` in state (b)),
-  // so a keyboard user who tabs to the card's controls can dismiss with Escape. The handler goes through
-  // `dismiss()`, so state (b) still MINIMIZES with the live origin rect and states (a)/(c) still close
-  // without emitting `minimizeRequested`.
+  //  - A `document:` listener is what c04 removed, and its argument still holds where it applied: the
+  //    editor behind a NON-blocking card is a place the user is genuinely typing, Syncfusion uses Escape
+  //    for its own dismiss gestures, and a global listener minimized - fly-to-bell animation and all - a
+  //    card that never had focus. Under c03 that argument no longer describes states (a)/(b), where the
+  //    background is inert and there is nothing behind the card to type into, but it describes state (c)
+  //    EXACTLY, and (c) is now a state the user can sit in indefinitely. So the global listener stays
+  //    deleted, and c04's finding survives on the one state where its premise is still true.
+  //  - The `.rd-card` binding would silently lose the FIRST Escape of every modal run: focus-on-open
+  //    lands on the overlay container, which is NOT inside `.rd-card`, so a user who opens the modal and
+  //    immediately presses Escape would get nothing. That is a concrete regression, not a preference.
   //
-  // Contrast the Activity Center, which keeps its `document:keydown.escape`: that panel renders a
-  // click-to-close `.ac-backdrop` over the page, so while it is open it OWNS the interaction (there is
-  // nothing behind it the user is expected to be typing into) and the global key is correct there. Note
-  // its card is `aria-modal="false"` too - the distinction that matters here is the backdrop, not the
-  // aria attribute.
+  // On the container the binding is correct in every state, for the same structural reason c04 wanted:
+  // keydown BUBBLES, so the handler runs only when focus is somewhere inside this dialog.
+  //  - (a)/(b): focus is trapped inside the overlay, so "focus is in the container" and "the modal is
+  //    up" are the same statement. The binding covers every Escape the user can generate.
+  //  - (c): the trap is released and focus may well be back in the editor. The binding then behaves
+  //    exactly as the `.rd-card` one did - Escape from inside the card dismisses, Escape from the editor
+  //    does nothing - which is the c04 contract, preserved unchanged for the state it was written for.
+  //
+  // The handler is `dismiss()`, so state (b) still MINIMIZES with the live origin rect and (a)/(c) still
+  // close without emitting `minimizeRequested`.
 
   // ── Internals ────────────────────────────────────────────────────────────────────────────────────
 
@@ -475,8 +732,112 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
     if (this.open === value) return;
     this.open = value;
     this.openChange.emit(value);
-    if (!value) this.runStop$.next();
+    if (!value) {
+      // Synchronous, not left to the next `ngAfterViewChecked`: the app must be usable the moment the
+      // card goes, and `minimize()` has already released by the time it gets here (idempotent).
+      this.releaseModality();
+      this.runStop$.next();
+    }
     this.cdr.markForCheck();
+  }
+
+  // ── Modality (c03) ────────────────────────────────────────────────────────────────────────────────
+
+  /** Reconcile the DOM-level modal effects with {@link isModal}. Idempotent; called on every check. */
+  private syncModality(): void {
+    const wanted = this.isModal;
+    if (wanted === this.modalActive) return;
+    if (wanted) this.engageModality();
+    else this.releaseModality();
+  }
+
+  /**
+   * Engage: remember what had focus, make everything outside this dialog inert, move focus onto the
+   * overlay container, and KEEP it there. The container rather than the first button, so a screen reader
+   * announces the dialog itself (its `role`/`aria-modal`/`aria-label`) before any control, and so the
+   * very first Escape or Tab is already ours.
+   *
+   * ── The single `focus()` call was not enough, and this was measured (c01) ────────────────────────
+   * In the real editor the line below runs, focus lands on the overlay, and about 55ms later Syncfusion
+   * takes it back to its hidden text-target iframe - which is INSIDE the inert subtree, because `inert`
+   * does not reach into a nested browsing context. From there NEITHER key binding on this overlay can
+   * fire: both Escape and the Tab cycle are bound on `.rd-overlay` and keydown bubbles from wherever
+   * focus actually is. Four real Tab presses moved focus nowhere and a real Escape did not dismiss.
+   *
+   * So focus is now CONTAINED for as long as the modality lasts rather than merely initialised, which
+   * is the CDK `FocusTrap` + focus-monitor strategy. {@link containFocusWithin} owns the listeners and
+   * the recursion guard; this method owns nothing but the lifetime, so teardown stays one idempotent
+   * {@link releaseModality} with no new teardown site.
+   */
+  private engageModality(): void {
+    const overlay = this.overlayRef?.nativeElement;
+    if (!overlay) return; // not rendered yet; the next check will engage it
+
+    const active = this.doc.activeElement;
+    this.previouslyFocused = active instanceof HTMLElement ? active : null;
+    // The walk is anchored on the HOST, not on the overlay: the backdrop is the overlay's SIBLING
+    // inside the host, so anchoring on the overlay would mark the dialog's own scrim inert and its
+    // click-to-dismiss would silently stop working. The host is the boundary of "the dialog".
+    this.releaseInert = applyBackgroundInert(this.hostRef.nativeElement, this.doc);
+    // Same anchor as the inert walk, so the two layers agree about what counts as "inside the dialog".
+    // The target is resolved lazily: Angular re-creates the overlay element across renders, so a
+    // captured reference would go stale and re-assert focus onto a detached node.
+    this.releaseFocusContainment = containFocusWithin(
+      this.hostRef.nativeElement,
+      () => this.overlayRef?.nativeElement ?? null,
+      this.doc,
+    );
+    this.modalActive = true;
+    overlay.focus({ preventScroll: true });
+  }
+
+  /**
+   * Release: remove every `inert` attribute we added, stop trapping, and give focus back.
+   *
+   * Idempotent, because it has several callers and that is the point: the `(b) -> (c)` transition (via
+   * {@link syncModality}, since no user gesture drives that one), {@link minimize}, {@link setOpen},
+   * `ngOnChanges` when the HOST writes `open = false`, and `ngOnDestroy`. Releasing only on dismiss
+   * would leave a live focus trap and an inert page behind a card that claims `aria-modal="false"`.
+   *
+   * Focus is restored only when it is still inside this dialog (or nowhere): after the modality drops in
+   * state (c) the user may have clicked into the document, and yanking focus back then would be worse
+   * than not restoring it at all.
+   *
+   * ── ORDER IS LOAD-BEARING (c01) ──────────────────────────────────────────────────────────────────
+   * The focus containment is released FIRST, before the restore below. It is a document-level listener
+   * that pulls focus back into the host, so a restore performed while it is still installed would be
+   * undone by our own listener: focus would be yanked back into a dialog that is on its way out. This
+   * is not a hypothetical - the live probe that established the mechanism did exactly that, because it
+   * used a DOM proxy for "still modal" instead of being torn down imperatively.
+   *
+   * ── What c01 changed about the `focusIsOurs` predicate ───────────────────────────────────────────
+   * Nothing in the predicate; everything about WHICH BRANCH RUNS in the real app. Before c01, focus at
+   * release time was typically Syncfusion's iframe - not `body`, not inside the overlay - so
+   * `focusIsOurs` was FALSE and the restore was silently skipped on every real run. It was dead code
+   * that the fixture's clean focus state made look alive. Now containment holds focus on the overlay
+   * for the whole modal window, so at release `overlay.contains(active)` is TRUE and the restore
+   * genuinely runs. The predicate is still correct and is deliberately unchanged: its OTHER job -
+   * declining to restore in state (c) after the user has clicked into the document - is reached
+   * through the (b) -> (c) transition, where the modality drops and containment stops before the user
+   * clicks anywhere. Widening it to "restore unconditionally" would break exactly that case.
+   */
+  private releaseModality(): void {
+    if (!this.modalActive) return;
+    this.modalActive = false;
+    // FIRST: stop containing focus, so the restore below is not fought by our own listener.
+    this.releaseFocusContainment?.();
+    this.releaseFocusContainment = null;
+    this.releaseInert?.();
+    this.releaseInert = null;
+
+    const target = this.previouslyFocused;
+    this.previouslyFocused = null;
+    if (!target || !target.isConnected) return;
+
+    const active = this.doc.activeElement;
+    const overlay = this.overlayRef?.nativeElement;
+    const focusIsOurs = !active || active === this.doc.body || (!!overlay && overlay.contains(active));
+    if (focusIsOurs) target.focus({ preventScroll: true });
   }
 
   /** Drop the previous run's subscriptions and state, then attach to the current event stream. */
@@ -501,7 +862,9 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
         break;
 
       case 'status':
-        // State (a) only. From (b) on, `job.message` is the single source (d1).
+        // State (a) only. From (b) on, the detail line is COMPOSED by `runDetail` from the tracked job's
+        // structured status/counts (c02 + c04) - d1's original "job.message is the single source" rule no
+        // longer holds, because that field is the backend's raw English prose and no surface renders it.
         if (this.jobId === null) this.statusMessage = event.message;
         break;
 
@@ -584,7 +947,11 @@ export class AnalysisRunDialogComponent implements OnChanges, OnDestroy {
         if (this.terminal) return;
         this.trackedJob = job;
         if (job && isTerminal(job.status)) {
-          this.latchTerminal(job.status, job.message, job.status === 'succeeded' ? 100 : job.percent);
+          // c02: latch an EMPTY message, NOT `job.message`. That field carries the backend's raw English
+          // prose ("Proofread finished", or a .NET exception string on a failure), and this is the one
+          // surface that renders it. An empty message routes the `message` getter through `runDetail`,
+          // which composes the localized sentence from the terminal STATUS instead.
+          this.latchTerminal(job.status, '', job.status === 'succeeded' ? 100 : job.percent);
         }
         this.cdr.markForCheck();
       });

@@ -15,6 +15,7 @@ import { SyncService } from '../../core/services/sync.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { SfdtManipulationService, SCROLL_TARGET_BOOKMARK } from '../../core/services/sfdt-manipulation.service';
 import { EditorTextService } from '../../core/services/editor-text.service';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
@@ -22,6 +23,7 @@ import { ReviseContextService } from '../../core/services/revise-context.service
 import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { AnalysisResultDto } from '../../core/models/analysis';
 import { AnalysisRunDialogComponent, RUN_DIALOG_LABELS_HE } from '../../shared/analysis-run-dialog/analysis-run-dialog.component';
+import { runString } from '../../core/i18n/run-strings';
 
 describe('EditorPageComponent (focused logic)', () => {
   let component: EditorPageComponent;
@@ -1678,7 +1680,9 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       // The dialog is still mounted - and it now says the run is over instead of pretending it runs.
       expect(dialogCard()).not.toBeNull();
       expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['canceled']);
-      expect(dialogMessage()).toBe(RUN_DIALOG_LABELS_HE['canceled']);
+      // c02: the message line is the COMPOSED localized sentence, not the bare pill label. No
+      // analysisType was set on this run, so the type resolves to the generic 'ניתוח'.
+      expect(dialogMessage()).toBe(runString('he', 'runCanceled', { type: 'ניתוח' }));
       // Terminal, so the dismiss control is a plain close: there is no job left to minimize into.
       expect(el().querySelector('.rd-minimize')).toBeNull();
       expect(el().querySelector('.rd-dismiss')!.getAttribute('aria-label'))
@@ -1741,6 +1745,10 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
         titleEn: 'Proofread',
         status: 'running',
         percent: 40,
+        // c04: no chunk shape by default, so this fixture renders no counts and no ETA.
+        completedChunks: null,
+        totalChunks: null,
+        chunkClock: EMPTY_CHUNK_CLOCK,
         message: 'Running',
         startedAt: '2026-08-03T00:00:00Z',
         updatedAt: '2026-08-03T00:00:00Z',

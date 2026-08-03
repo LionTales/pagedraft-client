@@ -22,6 +22,7 @@ import { provideRouter } from '@angular/router';
 import { ActivityCenterComponent, LABELS_HE, LABELS_EN } from './activity-center.component';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -36,6 +37,10 @@ function makeJob(overrides: Partial<TrackedJob> = {}): TrackedJob {
     titleEn: 'Reviewing book',
     status: 'running',
     percent: null,
+    // c04: no chunk shape by default, so the compact "3/10" counts are absent unless a spec asks.
+    completedChunks: null,
+    totalChunks: null,
+    chunkClock: EMPTY_CHUNK_CLOCK,
     message: '',
     startedAt: now,
     updatedAt: now,

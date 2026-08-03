@@ -4,6 +4,7 @@ import { catchError, distinctUntilChanged, map } from 'rxjs/operators';
 
 import { AnalysisProgressDto, ANALYSIS_TYPE_LABELS } from '../models/analysis';
 import { ActiveAnalysisJobDto } from '../models/active-analysis-job';
+import { ChunkClock, EMPTY_CHUNK_CLOCK, advanceChunkClock, startChunkClock } from '../utils/chunk-eta';
 import { AnalysisProgressService } from './analysis-progress.service';
 import { AnalysisService } from './analysis.service';
 import { BookSummaryService } from './book-summary.service';
@@ -120,6 +121,18 @@ export class JobRegistryService {
       titleEn: meta.titleEn ?? titles.en,
       status: 'running',
       percent: clampPercent(meta.initialPercent ?? null),
+      completedChunks: null,
+      totalChunks: null,
+      // c04. The throughput clock is stamped HERE, once, per job - not per component, and not per
+      // surface: a dialog re-opened after a minimize or an Activity Center opened at 60% must measure
+      // the window the RUN has been going, not the window their own view has existed for.
+      //
+      // A REATTACHED job gets no baseline (see TrackMeta.reattached): the run started before this tab
+      // did, `startedAt` here is merely when the client noticed it, and treating that as the run start
+      // would under-state elapsed and therefore under-state the time remaining - a confidently wrong
+      // estimate, which the todo rules out explicitly. The clock instead opens at the first observed
+      // poll and measures only what this client actually saw.
+      chunkClock: meta.reattached ? EMPTY_CHUNK_CLOCK : startChunkClock(startedAt),
       message: meta.message ?? '',
       startedAt,
       updatedAt: startedAt,
@@ -164,6 +177,9 @@ export class JobRegistryService {
           initialPercent: s.percent,
           analysisType: s.analysisType,
           chapterId: s.chapterId,
+          // c04: this job was already running before the client knew about it, so it gets no
+          // client-side start time and therefore no ETA until it has been observed for a while.
+          reattached: true,
         });
       }
     });
@@ -308,15 +324,28 @@ export class JobRegistryService {
     if (!job || isTerminal(job.status)) return; // context/stale guard + single-finalize
 
     const norm = normalizeProgress(p);
+    const at = nowIso();
+    // c04: fold this observation into the throughput clock BEFORE the terminal branch, so the last
+    // chunk of a run that succeeds on the same poll still counts as evidence. Counts are STICKY: a
+    // later poll that carries no chunk shape (a transient snapshot before/after chunking) keeps the
+    // last known pair rather than blanking the readout, exactly as `percent` already does.
+    const clock = advanceChunkClock(job.chunkClock, job.completedChunks, norm.completedChunks, at);
+    const counts = {
+      completedChunks: norm.completedChunks ?? job.completedChunks,
+      totalChunks: norm.totalChunks ?? job.totalChunks,
+      chunkClock: clock,
+    };
+
     if (isTerminal(norm.status)) {
-      this.finalize(jobId, norm.status, norm.percent, norm.message);
+      this.finalize(jobId, norm.status, norm.percent, norm.message, counts);
       return;
     }
     this.patchJob(jobId, {
+      ...counts,
       status: norm.status,
       percent: norm.percent ?? job.percent,
       message: norm.message || job.message,
-      updatedAt: nowIso(),
+      updatedAt: at,
     });
   }
 
@@ -325,14 +354,30 @@ export class JobRegistryService {
    * job is a no-op (this is the single-finalize guarantee that replaces the per-component
    * `*HandledTerminalJobId` guards). Stops the poll and enforces the completed-cap.
    */
-  private finalize(jobId: string, status: TerminalStatus, percent?: number | null, message?: string): void {
+  private finalize(
+    jobId: string,
+    status: TerminalStatus,
+    percent?: number | null,
+    message?: string,
+    counts?: ChunkCountPatch,
+  ): void {
     const job = this.findJob(jobId);
     if (!job || isTerminal(job.status)) return; // already finalized once - never again
 
     this.stopPoll(jobId);
+    const completedChunks = counts?.completedChunks ?? job.completedChunks;
+    const totalChunks = counts?.totalChunks ?? job.totalChunks;
     this.patchJob(jobId, {
       status,
       percent: status === 'succeeded' ? 100 : (percent ?? job.percent),
+      // c04: a SUCCEEDED run reads "10 of 10", for the same reason its percent is forced to 100. The
+      // final poll usually says so already, but a terminal reached through the poll's error channel
+      // (or a snapshot that lags by one chunk) would otherwise leave a finished card reading "9 of 10"
+      // beside its own "Done" pill. A failed/canceled run keeps its real last-known counts: there the
+      // shortfall is the truth.
+      completedChunks: status === 'succeeded' ? (totalChunks ?? completedChunks) : completedChunks,
+      totalChunks,
+      ...(counts ? { chunkClock: counts.chunkClock } : {}),
       message: message || job.message,
       updatedAt: nowIso(),
     });
@@ -409,6 +454,62 @@ export type JobKind = 'summary' | 'review' | 'proofread' | 'style-baseline' | 'w
  */
 const WHOLE_BOOK_BUILD_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['summary', 'review']);
 
+/**
+ * c02 (2026-08-03): the JobKinds whose `totalChunks` denominator is a unit a reader can identify from
+ * the run's own scope, and which may therefore render the BARE, unlabelled `3/10` pair.
+ *
+ * `TotalChunks` is ONE wire field with a DIFFERENT unit per producer. Measured at the call sites, not
+ * inferred:
+ *
+ * | kind              | producer                                                  | unit of `totalChunks`                            |
+ * |-------------------|-----------------------------------------------------------|--------------------------------------------------|
+ * | `proofread`       | `UnifiedAnalysisService` (`SetTotalChunks(chunks.Count)`)   | TEXT CHUNKS of the chapter/scene being analyzed   |
+ * | `summary`         | `BookSummaryService` (`SetTotalChunks(chapters.Count)`)     | CHAPTERS of the book                              |
+ * | `style-baseline`  | `StyleBaselineService` (`SetTotalChunks(chapters.Count)`)   | CHAPTERS of the book                              |
+ * | `review`          | `BookReviewService` (`windowCount + reducePassCount`)       | MAP WINDOWS **plus** a variable number of REDUCE  |
+ * |                   | and the legacy branch (`SetTotalChunks(Dimensions.Length)`) | passes, or DIMENSIONS on the legacy branch        |
+ *
+ * The first three denominators are countable units of the thing the user pointed at: the chapter they
+ * asked to proofread, the chapters of the book they asked to summarize. A bare `3/12` is legible there
+ * whichever of the two readings ("3 of 12 chapters" / "3 of 12 pieces of work") the reader takes,
+ * because both are true and both are monotone in progress.
+ *
+ * `review` is excluded, and it is the only exclusion. Its denominator is not a unit at all: it is a
+ * count of map-reduce WINDOWS (a window spans several chapters) plus one synthesis pass plus a
+ * VARIABLE, plan-dependent number of continuity passes, and the legacy per-dimension branch reports
+ * dimensions into the same field. So `3/10` on a review row for a 40-chapter book invites exactly one
+ * reading ("10 chapters?") and that reading is wrong, the denominator can change between two runs of an
+ * unchanged book, and none of the three surfaces carries a unit label to correct any of it. A number
+ * that is only readable if you know which server-side branch produced it is not shown.
+ *
+ * SINGLE SOURCE OF TRUTH: every surface asks {@link showsChunkCounts}; no surface hand-copies the
+ * condition (the `WHOLE_BOOK_BUILD_KINDS` precedent, same file, same reason). A NEW JobKind is absent
+ * from this set and therefore renders no counts until someone states its unit here, which is the safe
+ * default: the failure mode this scoping fixes was a reader that showed whatever the wire sent.
+ */
+const CHUNK_COUNT_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
+  'proofread',
+  // Reserved Phase-2 kind. It rides the chapter-analysis progress shape (see `progressStreamFor`,
+  // which polls it through `pollProgress`), so its counts are text chunks like `proofread`'s.
+  'whole-book-analysis',
+  'summary',
+  'style-baseline',
+]);
+
+/**
+ * Whether a tracked job's chunk counts may be rendered as a bare `completed/total` pair.
+ *
+ * BOTH halves of the test live here so neither is re-derived per surface: the job must have a chunk
+ * shape at all (`totalChunks !== null`, the registry's own "counts are known" test) AND its kind's
+ * denominator must be a legible unit ({@link CHUNK_COUNT_KINDS}). The run dialog, the in-page indicator
+ * and the Activity Center row all call this one predicate; `three-surface-parity.spec.ts` pins that they
+ * agree per kind.
+ */
+export function showsChunkCounts(job: Pick<TrackedJob, 'kind' | 'totalChunks'> | null | undefined): boolean {
+  if (!job || job.totalChunks === null) return false;
+  return CHUNK_COUNT_KINDS.has(job.kind);
+}
+
 /** The registry's lowercase status vocabulary (backend PascalCase enums normalize down to these). */
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled';
 export type TerminalStatus = 'succeeded' | 'failed' | 'canceled';
@@ -426,6 +527,39 @@ export interface TrackedJob {
   status: JobStatus;
   /** 0-100, or null when indeterminate (no reliable percent available). Never NaN/negative/over-100. */
   percent: number | null;
+  /**
+   * c04: the REAL chunk counts behind {@link percent}, carried as structured numbers.
+   *
+   * `0%` beside a run that has queued ten chunks is honest but reads as stalled, because `percent` is
+   * derived from `completedChunks / totalChunks` and the parallel workers finish nothing for the first
+   * stretch. "0 of 10" says the same thing and reads as work in progress. Every surface that shows a
+   * count reads THESE fields, exactly as it reads `percent`, so the three surfaces cannot disagree
+   * (`three-surface-parity.spec.ts` is the fence).
+   *
+   * `totalChunks` is null - not 0 - whenever the run has no usable chunk shape (a single-shot analysis,
+   * or a poll before chunking has happened), so "counts are known" is exactly `totalChunks !== null`
+   * and no surface has to re-derive that test. `completedChunks` is null in the same situations, and 0
+   * (a real zero) once chunking is known but nothing has finished.
+   */
+  completedChunks: number | null;
+  totalChunks: number | null;
+  /**
+   * c04: the per-JOB throughput clock the time-remaining estimate is computed from. Registry-owned, so
+   * a surface mounted mid-run cannot compute from its own mount time. See `core/utils/chunk-eta.ts`;
+   * pass it to `estimateRemainingMs` rather than reading its fields directly.
+   */
+  chunkClock: ChunkClock;
+  /**
+   * The backend's own progress prose, verbatim ("Running chunk 2/10", "Proofread finished", a .NET
+   * exception string on a failure).
+   *
+   * c02: this is DIAGNOSTIC, not chrome, and NO surface renders it. It is always English, so rendering
+   * it put Latin prose inside RTL Hebrew chrome next to a correctly-localized status pill; the run
+   * dialog (the only surface that ever read it) now composes its detail line from the STRUCTURED
+   * status/percent instead. Kept on the view-model because it is the one place a backend-side failure
+   * reason is visible at all from the client, and because dropping the field would silently discard it
+   * from the reattach payload too. If you are about to bind this into a template: do not.
+   */
   message: string;
   startedAt: string;
   updatedAt: string;
@@ -447,6 +581,21 @@ export interface TrackMeta {
   chapterId?: string;
   resultRoute?: string;
   analysisType?: string;
+  /**
+   * c04: this job was discovered by the REATTACH seam rather than started by this client, so it has no
+   * trustworthy client-side start time and its throughput clock opens at the first observed poll
+   * instead. Set ONLY by `reattach`. It is not a TrackedJob field (`pickMeta` does not carry it): it
+   * describes how the job was learned about, and it is consumed once, when the clock is created.
+   */
+  reattached?: boolean;
+}
+
+/** The chunk-count fields one progress observation contributes. Kept together so `finalize` and the
+ * running patch cannot apply a different subset of them. */
+interface ChunkCountPatch {
+  completedChunks: number | null;
+  totalChunks: number | null;
+  chunkClock: ChunkClock;
 }
 
 /** Normalized in-flight job discovered by the reattach seam. */
@@ -463,15 +612,45 @@ interface ReattachSource {
 // ── Pure helpers (exported where the spec needs them) ─────────────────────────────────────────────
 
 /**
- * Normalize EITHER progress DTO shape into { status, percent, message }.
+ * Normalize EITHER progress DTO shape into { status, percent, message, completedChunks, totalChunks }.
  *   - book-level pollers carry `estimatedCompletionPercent` (0-100; may be absent/negative -> null).
  *   - analysis poller carries `completedChunks`/`totalChunks` -> round(100*completed/total).
  * Percent is clamped 0-100 and is null (indeterminate) when neither shape yields a usable number.
+ *
+ * c04: the raw counts come back out alongside the derived percent. They were already being read here to
+ * DERIVE the percent and then discarded; a surface that wanted "3 of 10" had no way to get it, and
+ * parsing it back out of the backend's English `message` was the alternative this plan rejected.
  */
-export function normalizeProgress(p: AnalysisProgressDto): { status: JobStatus; percent: number | null; message: string } {
+export function normalizeProgress(p: AnalysisProgressDto): {
+  status: JobStatus;
+  percent: number | null;
+  message: string;
+  completedChunks: number | null;
+  totalChunks: number | null;
+} {
   const status = normalizeStatus(p?.status);
   const percent = status === 'succeeded' ? 100 : progressPercent(p);
-  return { status, percent, message: p?.message ?? '' };
+  return { status, percent, message: p?.message ?? '', ...chunkCounts(p) };
+}
+
+/**
+ * The DTO's chunk counts, or nulls when it carries no usable chunk shape.
+ *
+ * `totalChunks <= 0` is the backend's "not chunked / not chunked yet" state, and it maps to NULL rather
+ * than 0 so every consumer's "do we have counts?" test is a single null check (and so nothing can render
+ * "0 of 0"). The completed count is clamped into [0, total]: a snapshot claiming more completed than
+ * total would make the estimator's remaining count negative, and the percent is already clamped the same
+ * way, so this keeps the two readouts telling one story.
+ */
+function chunkCounts(p: AnalysisProgressDto): { completedChunks: number | null; totalChunks: number | null } {
+  const rawTotal = p?.totalChunks;
+  if (typeof rawTotal !== 'number' || !Number.isFinite(rawTotal) || rawTotal <= 0) {
+    return { completedChunks: null, totalChunks: null };
+  }
+  const total = Math.floor(rawTotal);
+  const rawCompleted = p?.completedChunks;
+  const completed = typeof rawCompleted === 'number' && Number.isFinite(rawCompleted) ? Math.floor(rawCompleted) : 0;
+  return { completedChunks: Math.max(0, Math.min(total, completed)), totalChunks: total };
 }
 
 /**

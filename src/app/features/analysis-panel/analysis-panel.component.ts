@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Subject, Subscription, forkJoin } from 'rxjs';
 import { ANALYSIS_TYPE_LABELS, ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
+import { analysisTypeLabelFor, runChromeLang, runString } from '../../core/i18n/run-strings';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
@@ -75,9 +76,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   readonly analysisTypes = ANALYSIS_TYPES;
 
-  /** Panel chrome language: book-scoped, Hebrew default, English only for an English book. */
+  /**
+   * Panel chrome language: book-scoped, Hebrew default, English only for an English book.
+   *
+   * c02: delegated to `runChromeLang`, the one implementation of that rule. The panel renders the
+   * sentences the orchestration service composes in the run's language, so the two must not be able to
+   * disagree about what a non-en, non-he book gets.
+   */
   get panelLang(): 'he' | 'en' {
-    return (this.bookLanguage?.trim().toLowerCase() || 'he').startsWith('en') ? 'en' : 'he';
+    return runChromeLang(this.bookLanguage);
   }
 
   /** Logical direction for the panel chrome; follows the book language so en books render ltr. */
@@ -1693,8 +1700,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   runAnalysis(): void {
     if (!this.bookId || !this.chapterId || !this.canRun || this.isRunningForCurrentContext) return;
     const pending = this.getPendingSuggestionCountForActive();
-    const scopeLabel = this.sceneId ? 'scene' : 'chapter';
-    if (!this.orchestrationService.confirmReanalysisIfPendingSuggestions(pending, scopeLabel)) return;
+    const scope = this.sceneId ? 'scene' : 'chapter';
+    if (!this.orchestrationService.confirmReanalysisIfPendingSuggestions(pending, scope, this.language)) return;
 
     this.prepareForRun();
     const ctx = this.buildRunContext();
@@ -1711,8 +1718,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   runStreaming(): void {
     if (!this.bookId || !this.chapterId || !this.canRun || this.isRunningForCurrentContext) return;
     const pending = this.getPendingSuggestionCountForActive();
-    const scopeLabel = this.sceneId ? 'scene' : 'chapter';
-    if (!this.orchestrationService.confirmReanalysisIfPendingSuggestions(pending, scopeLabel)) return;
+    const scope = this.sceneId ? 'scene' : 'chapter';
+    if (!this.orchestrationService.confirmReanalysisIfPendingSuggestions(pending, scope, this.language)) return;
 
     const ctx = this.buildRunContext();
     this.prepareForRun();
@@ -1823,13 +1830,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           this.isRunning = false;
           this.asyncJobInFlight = false;
           this.asyncBannerActiveForRun = false;
-          this.runError = `${this.selectedAnalysisType || 'Analysis'} failed – see error message.`;
-          this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
+          // c02: the panel's `.run-error` banner is book-scoped chrome, so it composes from the SAME
+          // run-string map the orchestration service and the run dialog use. This used to be an English
+          // template literal (with an em-dash) shown verbatim inside Hebrew RTL chrome.
+          this.runError = runString(this.panelLang, 'runFailed', {
+            type: analysisTypeLabelFor(this.panelLang, this.selectedAnalysisType),
+          });
+          this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt, this.language);
         } else if (event.rawStatus === 'canceled') {
           this.isRunning = false;
           this.asyncJobInFlight = false;
           this.asyncBannerActiveForRun = false;
-          this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
+          this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt, this.language);
         }
         break;
       case 'sync-result':
@@ -1883,7 +1895,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.asyncJobInFlight = false;
         this.asyncBannerActiveForRun = false;
         this.runError = event.message;
-        this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
+        this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt, this.language);
         break;
       case 'run-finished':
       case 'result-dropped':
@@ -1950,7 +1962,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.latestResult = result;
     this.activeSubTab = 'run';
     this.applyProofreadOrLineEditResultToRunTab(result);
-    this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
+    this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt, this.language);
   }
 
   private onStreamingCompleted(latestResult: AnalysisResultDto): void {
@@ -2009,7 +2021,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     // deferred proofread surfacing does not depend on streamingText surviving this clear.
     this.streamingText = '';
     this.loadHistory(true);
-    this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
+    this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt, this.language);
   }
 
   /** Dismiss the compact async-job banner without cancelling the job (it keeps running in the background). */
@@ -2034,7 +2046,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.isRunning = false;
     this.asyncJobInFlight = false;
     this.asyncBannerActiveForRun = false;
-    this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt);
+    this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt, this.language);
     this.emitRunFinished();
     this.cdr.detectChanges();
   }

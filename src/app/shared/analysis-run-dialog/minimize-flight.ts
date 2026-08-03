@@ -30,6 +30,16 @@
  * The flight itself is expressed as a PHYSICAL pixel delta between two measured points, so it needs no
  * direction awareness of its own.
  *
+ * ── Why c03 (the centred modal) needed no change here ──────────────────────────────────────────────
+ * VERIFIED, not assumed. Both ends of the flight are MEASURED at gesture time: the origin is the card's
+ * live `getBoundingClientRect()` (taken in `AnalysisRunDialogComponent.minimize()` before anything
+ * moves) and the target is the bell's live rect. Neither end encodes where the card sits, so moving the
+ * card from the block-end/inline-end corner to the viewport centre changes only the numbers. The ghost
+ * is appended to `document.body` at `z-index: 2147483000`, far above the dialog's own backdrop
+ * (`--pd-z-dialog`, 200), so it animates OVER the scrim; and the dialog releases its modality (backdrop
+ * removal, background `inert`, focus restore) BEFORE emitting the gesture, so the page is already usable
+ * while the ghost is still in the air.
+ *
  * ── Reduced motion ─────────────────────────────────────────────────────────────────────────────────
  * Under `prefers-reduced-motion: reduce` the ghost cross-fades in place: no translation, no scaling, and
  * a shorter duration. The gesture still renders (the user gets the same "it went somewhere" confirmation

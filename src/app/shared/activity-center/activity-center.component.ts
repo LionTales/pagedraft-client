@@ -17,6 +17,7 @@ import {
   JobStatus,
   TrackedJob,
   isTerminal,
+  showsChunkCounts,
 } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 
@@ -177,6 +178,20 @@ const STATUS_CLASS: Record<JobStatus, string> = {
                       <div class="ac-progress-fill ac-progress-fill--det"
                         [style.width.%]="job.percent"></div>
                     </div>
+                    <!-- c04: the compact chunk counts. Same two registry fields the run dialog spells
+                         out as a localized sentence and the in-page indicator shows the same way here;
+                         "3/10" is language-neutral, which suits this app-level (Hebrew-default) chrome
+                         because it needs no per-row book language to render.
+                         c02: the decision of WHICH rows get them is the registry's, not this template's.
+                         showsChunkCounts is the one predicate all three surfaces ask, and it is false
+                         for a row with no chunk shape (a single-shot analysis, a poll before chunking)
+                         AND for a review row, whose denominator counts map-reduce windows plus a
+                         variable number of reduce passes rather than anything a reader could name. A
+                         summary / style-baseline row DOES show counts: its denominator is the book's
+                         chapters. See CHUNK_COUNT_KINDS for the per-kind units. -->
+                    @if (showsCounts(job)) {
+                      <span class="ac-progress-counts" aria-hidden="true">{{ job.completedChunks ?? 0 }}/{{ job.totalChunks }}</span>
+                    }
                     <span class="ac-progress-percent" aria-hidden="true">{{ job.percent }}%</span>
                   </div>
                 } @else if (isEnded(job.status)) {
@@ -317,6 +332,16 @@ export class ActivityCenterComponent implements OnDestroy {
    */
   isEnded(status: JobStatus): boolean {
     return isTerminal(status);
+  }
+
+  /**
+   * Whether this row may render the bare `completed/total` pair (c02). Delegates to the registry's
+   * {@link showsChunkCounts} rather than re-testing `totalChunks !== null` here, so the Activity Center,
+   * the in-page indicator and the run dialog cannot end up disagreeing about which KINDS show counts.
+   * This surface is the one that sees every kind, so it is the one the widening actually bit.
+   */
+  showsCounts(job: TrackedJob): boolean {
+    return showsChunkCounts(job);
   }
 
   relativeTime(isoUtc: string | null | undefined): string {
