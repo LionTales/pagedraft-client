@@ -505,7 +505,10 @@
 /*
  * The former `.analysis-overlay` block lived here: a full-screen blocking spinner with its own progress
  * bar, fed by a second, editor-local copy of the run percent. Wave 1d replaced it with
- * <app-analysis-run-dialog>, a non-blocking positioned card whose progress comes from JobRegistryService.
- * Its styles live with that component; nothing here replaces them.
+ * <app-analysis-run-dialog>, whose progress comes from JobRegistryService (one owner, not a second copy).
+ * c03 (2026-08-03) then made that dialog a CENTRED MODAL while the run is LIVE - blurred backdrop,
+ * background `inert`, focus trapped - and non-modal again at the terminal state. So the difference from
+ * the old overlay is no longer "blocking vs not"; it is that the blocking ENDS when the run does, and
+ * that the numbers have a single owner. Its styles live with that component; nothing here replaces them.
  */
 

@@ -238,9 +238,12 @@
       </button>
     }
   </div>
-  <!-- Wave 1d: the analysis run-progress dialog. A positioned card, NOT a blocking overlay: the chapter
-       behind it stays readable and editable. Its percent comes from JobRegistryService (the same owner the
-       in-panel indicator and the Activity Center read), never from the run's own progress events. -->
+  <!-- Wave 1d: the analysis run-progress dialog. A CENTRED MODAL while the run is live (c03): the page
+       behind it is blurred and made inert, and focus is trapped in the card. The modality DROPS the
+       moment the run reaches a terminal state, so a finished or failed run never blocks the app - the
+       card then stays up as a dismissible notice until the user closes it. Its percent comes from
+       JobRegistryService (the same owner the in-panel indicator and the Activity Center read), never
+       from the run's own progress events. -->
   <app-analysis-run-dialog
     [(open)]="runDialogOpen"
     [runEvents]="runEvents$"

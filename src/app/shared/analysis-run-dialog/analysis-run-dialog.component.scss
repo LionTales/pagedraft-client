@@ -1,27 +1,79 @@
 /*
- * Analysis run-progress dialog (Wave 1d).
+ * Analysis run-progress dialog (Wave 1d; made MODAL by c03, 2026-08-03).
  *
- * A POSITIONED CARD, not a full-screen blocker: there is no backdrop element at all, so the chapter
- * behind the dialog stays both readable and clickable. Sits in the block-end / inline-end corner,
- * clear of the Activity Center bell (which is pinned to the block-start / inline-start corner) so the
- * two overlays never collide and the minimize flight has somewhere to go.
+ * A CENTRED MODAL while the run is live, and a plain centred notice once it is over. Two sibling fixed
+ * layers, the `pw-modal` structure: `.rd-backdrop` (the blurred scrim) and `.rd-overlay` (the centring
+ * container) with `.rd-card` as its only child. The scrim element exists ONLY in the modal states - the
+ * template removes it outright at the (b) -> (c) transition rather than fading it out, because an
+ * invisible scrim still eats pointer events.
  *
- * Logical properties throughout (inset-inline-*, margin-inline-*) so the card mirrors correctly under
- * the host [dir], which follows the BOOK language.
+ * The card is centred by `place-items: center` on the container, never by transforms or corner pinning,
+ * which is why it needs no width/height math and why this file no longer positions it at all. That also
+ * makes it direction-agnostic: there is no inline-start/inline-end to mirror. The one remaining logical
+ * property is the overlay's padding, and `[dir]` (book language, set on the host) still governs the
+ * card's internal layout.
+ *
+ * POINTER-EVENT OWNERSHIP, which is what keeps state (c) non-blocking: `.rd-overlay` covers the whole
+ * viewport in BOTH states, so it is permanently `pointer-events: none` and only `.rd-card` takes
+ * clicks. Blocking is therefore entirely the scrim's job, and it disappears with the modality.
  */
 
 :host {
-  /* Non-layout container; the card is fixed-positioned. */
+  /* Non-layout container; the backdrop and overlay are fixed-positioned. */
   display: contents;
 }
 
-.rd-card {
-  position: fixed;
-  inset-block-end: var(--pd-space-6);
-  inset-inline-end: var(--pd-space-6);
-  z-index: var(--pd-z-overlay);
+/* ── Backdrop: the blur + disable layer, modal states only ────────────────── */
 
-  width: min(420px, calc(100vw - (2 * var(--pd-space-6))));
+.rd-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--pd-z-dialog);
+
+  background: rgba(20, 24, 29, 0.32);   /* --pd-neutral-900 at 32% */
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+
+  animation: rd-backdrop-in var(--pd-dur-base) var(--pd-ease) both;
+}
+
+/* No blur support (or blur disabled): fall back to a HEAVIER scrim rather than to nothing. A blur that
+   silently does not apply would leave the background fully legible while the UI claims it is disabled,
+   which is worse than a plainer, more obviously-dimmed page. */
+@supports not ((backdrop-filter: blur(3px)) or (-webkit-backdrop-filter: blur(3px))) {
+  .rd-backdrop {
+    background: rgba(20, 24, 29, 0.58);
+  }
+}
+
+@keyframes rd-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Overlay: the centring container. Holds the dialog role and the key bindings. ── */
+
+.rd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--pd-z-dialog) + 1);
+
+  display: grid;
+  place-items: center;
+  padding: var(--pd-space-6);
+  box-sizing: border-box;
+
+  /* Never eats clicks: see the ownership note in the header. */
+  pointer-events: none;
+  outline: none;   /* it is focused programmatically on open; the CARD carries the visible affordance */
+}
+
+.rd-card {
+  pointer-events: auto;
+
+  width: min(460px, 92vw);
+  max-block-size: calc(100dvh - (2 * var(--pd-space-6)));
+  overflow-y: auto;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -37,8 +89,8 @@
 }
 
 @keyframes rd-card-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
 }
 
 /* ── Header ───────────────────────────────────────────────────────────────── */
@@ -208,6 +260,18 @@
   overflow-wrap: anywhere;
 }
 
+/* c04: the approximate time remaining. Deliberately quieter than .rd-message (caption size, muted
+   colour): it is a hedge, not the status, and it must not compete with the sentence that says what the
+   run is actually doing. It appears and disappears with the estimate, which is why it is its own
+   element rather than a suffix on the message. */
+.rd-eta {
+  margin: 0;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+  overflow-wrap: anywhere;
+}
+
 .rd-actions {
   display: flex;
   align-items: center;
@@ -244,9 +308,11 @@
   color: var(--pd-text-muted);
 }
 
-/* Respect the user's reduced-motion preference. */
+/* Respect the user's reduced-motion preference. The backdrop still APPEARS (it is not decoration: it
+   is the "the app is busy" affordance) - it simply does not fade in. */
 @media (prefers-reduced-motion: reduce) {
   .rd-card,
+  .rd-backdrop,
   .rd-progress-fill--indet {
     animation: none;
   }

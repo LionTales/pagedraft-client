@@ -14,7 +14,11 @@
  *  - (c) with NO percent renders an inert bar, not the pulsing indeterminate one, and is not a
  *    progressbar at all (c05); (a)/(b) with no percent still pulse
  *  - minimize emits the c2 seam and closes; close in (a)/(c) does NOT emit minimize; no cancel exists
- *  - Escape is scoped to the CARD: it dismisses/minimizes only when focus is inside it (c04)
+ *  - c03 MODALITY: the card is a centred modal in (a)/(b) - backdrop, inert background, focus trap,
+ *    aria-modal="true" - and DROPS all of it at (c), where it stays up as a dismissible notice
+ *  - Escape is bound on the overlay CONTAINER: while modal it covers every Escape the user can make
+ *    (focus is trapped inside), and in the non-modal state (c) it still fires only from inside the
+ *    dialog, which is the c04 contract preserved for the state whose premise it was written against
  *  - RTL (Hebrew book) and LTR (English book) both render, with he/en label parity and no em-dash
  *
  * Uses a BehaviorSubject-backed JobRegistryService stub whose jobById$ mirrors the real selector; the
@@ -34,8 +38,22 @@ import {
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { AnalysisResultDto } from '../../core/models/analysis';
+import { RunStringKey, runString } from '../../core/i18n/run-strings';
+import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * The detail line the dialog COMPOSES for a tracked/terminal job (c02), in Hebrew book chrome.
+ *
+ * These assertions used to read `job.message` straight back out of the fixture, which made them
+ * tautological about localization: the spec asserted the dialog echoed whatever English prose the
+ * backend sent. It now asserts the composed localized sentence, and `type` is the job's own localized
+ * TITLE, so two different jobs still produce two different messages.
+ */
+function detail(key: RunStringKey, type: string): string {
+  return runString('he', key, { type });
+}
 
 function makeJob(overrides: Partial<TrackedJob> = {}): TrackedJob {
   const now = new Date().toISOString();
@@ -48,6 +66,12 @@ function makeJob(overrides: Partial<TrackedJob> = {}): TrackedJob {
     titleEn: 'Proofread',
     status: 'running',
     percent: null,
+    // c04 defaults: NO chunk shape and NO throughput observations, so the baseline fixture renders
+    // neither counts nor an ETA. Every c04 spec opts in explicitly, which keeps the pre-c04 assertions
+    // (the composed detail sentence, the parity of the percent) meaning exactly what they meant before.
+    completedChunks: null,
+    totalChunks: null,
+    chunkClock: EMPTY_CHUNK_CLOCK,
     message: '',
     startedAt: now,
     updatedAt: now,
@@ -225,9 +249,10 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
   // exactly the emission a torn-down subscription must not receive.
   describe('supersession: attaching to a new job tears down the previous one (c03)', () => {
     it('a LATE update for the superseded job cannot overwrite the current job', () => {
-      const jobA = makeJob({ id: 'JOB-A', percent: 20, message: 'A · 1 of 5 completed' });
-      const jobB = makeJob({ id: 'JOB-B', percent: 70, message: 'B · 7 of 10 completed' });
-      const jobALate = makeJob({ id: 'JOB-A', percent: 95, message: 'A · 5 of 5 completed (late)' });
+      // Distinct TITLES, not distinct backend prose: the title is what the composed message varies on.
+      const jobA = makeJob({ id: 'JOB-A', percent: 20, titleHe: 'הגהה א' });
+      const jobB = makeJob({ id: 'JOB-B', percent: 70, titleHe: 'הגהה ב' });
+      const jobALate = makeJob({ id: 'JOB-A', percent: 95, titleHe: 'הגהה א' });
 
       startRun();
 
@@ -237,13 +262,13 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       expect(component.state).toBe('tracked');
       expect(component.percent).toBe(20);
       expect(el('.rd-progress-track')!.getAttribute('aria-valuenow')).toBe('20');
-      expect(el('.rd-message')!.textContent!.trim()).toBe('A · 1 of 5 completed');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה א'));
 
       // (2) A second job-started with a DIFFERENT id supersedes it.
       registry.setJobs([jobA, jobB]);
       emit({ kind: 'job-started', jobId: 'JOB-B' });
       expect(component.percent).toBe(70);
-      expect(el('.rd-message')!.textContent!.trim()).toBe('B · 7 of 10 completed');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה ב'));
 
       // (3) A late registry update for the OLD job. `jobB` keeps its identity, so B's stream is silent
       //     (distinctUntilChanged) and only a still-live A subscription could speak here.
@@ -253,12 +278,12 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       // The card still shows B. Before c03 it showed A's 95%.
       expect(component.percent).toBe(70);
       expect(el('.rd-progress-track')!.getAttribute('aria-valuenow')).toBe('70');
-      expect(el('.rd-message')!.textContent!.trim()).toBe('B · 7 of 10 completed');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה ב'));
     });
 
     it('a superseded job going TERMINAL cannot latch the dialog behind the current job', () => {
       const jobA = makeJob({ id: 'JOB-A', percent: 20 });
-      const jobB = makeJob({ id: 'JOB-B', percent: 70, message: 'B · 7 of 10 completed' });
+      const jobB = makeJob({ id: 'JOB-B', percent: 70, titleHe: 'הגהה ב' });
 
       startRun();
       registry.setJobs([jobA]);
@@ -273,7 +298,7 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
 
       expect(component.state).toBe('tracked');
       expect(el('.rd-status-pill')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['running']);
-      expect(el('.rd-message')!.textContent!.trim()).toBe('B · 7 of 10 completed');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה ב'));
       expect(el('.rd-minimize')).not.toBeNull();
     });
 
@@ -295,7 +320,7 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       registry.setJobs([makeJob({ id: 'JOB-1', percent: 80, message: 'still tracking' })]);
       fixture.detectChanges();
       expect(component.percent).toBe(80);
-      expect(el('.rd-message')!.textContent!.trim()).toBe('still tracking');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה'));
     });
   });
 
@@ -355,19 +380,19 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
 
       expect(el('.rd-progress-track')!.getAttribute('aria-valuenow')).toBe('60');
       expect(el('.rd-progress-percent')!.textContent!.trim()).toBe('60%');
-      expect(el('.rd-message')!.textContent!.trim()).toBe('Proofread · 3 of 5 completed');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה'));
     });
 
     it('IGNORES raw "progress" events: the registry is the only source once tracked', () => {
       emit({ kind: 'progress', percent: 95, message: 'stale poll text', rawStatus: 'running' });
 
       expect(el('.rd-progress-track')!.getAttribute('aria-valuenow')).toBe('20');
-      expect(el('.rd-message')!.textContent!.trim()).toBe('Proofread · 1 of 5 completed');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה'));
     });
 
     it('IGNORES raw "status" events once tracked (the registry owns the message)', () => {
       emit({ kind: 'status', message: 'Running Proofread analysis...' });
-      expect(el('.rd-message')!.textContent!.trim()).toBe('Proofread · 1 of 5 completed');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה'));
     });
   });
 
@@ -399,7 +424,7 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       expect(component.state).toBe('terminal');
       expect(component.percent).toBe(60);
       expect(el('.rd-status-pill')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['failed']);
-      expect(el('.rd-message')!.textContent!.trim()).toBe('boom');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('runFailed', 'הגהה'));
     });
 
     it('resolves EXACTLY ONCE: a later raw error cannot flip a succeeded run to failed', () => {
@@ -413,7 +438,7 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
 
       expect(component.state).toBe('terminal');
       expect(el('.rd-status-pill')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['succeeded']);
-      expect(el('.rd-message')!.textContent!.trim()).toBe('done');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('runSucceeded', 'הגהה'));
     });
   });
 
@@ -486,7 +511,7 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       expect(component.state).toBe('terminal');
       // Canceled, NOT succeeded: no result event ever arrived, so there is nothing behind this card.
       expect(el('.rd-status-pill')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['canceled']);
-      expect(el('.rd-message')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['canceled']);
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('runCanceled', 'הגהה'));
       // No percent is read off the event: an unknown-progress run stays indeterminate.
       expect(component.percent).toBeNull();
       expect(el('.rd-minimize')).toBeNull();
@@ -521,7 +546,7 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       expect(component.state).toBe('tracked');
       expect(component.percent).toBe(40);
       expect(el('.rd-progress-track')!.getAttribute('aria-valuenow')).toBe('40');
-      expect(el('.rd-message')!.textContent!.trim()).toBe('Proofread · 2 of 5 completed');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה'));
       expect(el('.rd-minimize')).not.toBeNull();
 
       // The registry, and only the registry, resolves it - and it resolves as SUCCEEDED, which the
@@ -590,7 +615,7 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
 
       expect(component.state).toBe('tracked');
       expect(component.percent).toBe(40);
-      expect(el('.rd-message')!.textContent!.trim()).toBe('Proofread · 2 of 5 completed');
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה'));
       expect(el('.rd-minimize')).not.toBeNull();
       expect(openChanges).withContext('a live tracked card is never closed by the panel (c02 contract B)').toEqual([]);
 
@@ -831,19 +856,27 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
     });
   });
 
-  // ── c04: Escape is scoped to the card, not to the document ─────────────────
+  // ── Escape: scoped to the DIALOG, on the overlay container (c04, re-scoped by c03) ─────────────
   //
-  // The handler used to be `@HostListener('document:keydown.escape')`, so a modeless card claimed the
-  // global Escape key. The user is EXPECTED to keep working in the Syncfusion document editor behind
-  // this dialog (aria-modal="false", no focus trap, no backdrop), and Syncfusion uses Escape for its own
-  // dismiss gestures, so an Escape pressed in the editor closed - or, in state (b), MINIMIZED with the
-  // fly-to-bell animation - a card that never had focus.
+  // The handler was once `@HostListener('document:keydown.escape')`, so the card claimed the global
+  // Escape key while the user was expected to keep working in the Syncfusion editor behind it - and
+  // Syncfusion uses Escape for its own dismiss gestures - so an Escape pressed in the editor closed, or
+  // in state (b) MINIMIZED with the fly-to-bell animation, a card that never had focus. c04 removed it.
   //
-  // The binding now lives on `.rd-card` itself, so keydown must BUBBLE from a focused descendant. These
-  // specs drive the real DOM path: they focus an element and dispatch a bubbling KeyboardEvent from it.
-  // The inside-focus cases and the outside-focus case share `pressEscape`, so a broken dispatch would
-  // fail the inside cases rather than silently greening the outside one.
-  describe('Escape is scoped to the card (c04)', () => {
+  // c03 made the card MODAL while the run is live, which moves the binding from `.rd-card` to the
+  // overlay CONTAINER (`tabindex="-1"`), for a concrete reason rather than a stylistic one: focus-on-
+  // open lands on the container, which is NOT inside `.rd-card`, so a `.rd-card` binding would drop the
+  // FIRST Escape of every modal run. On the container the scope is still structural - keydown BUBBLES,
+  // so the handler runs only when focus is somewhere inside this dialog - and while modal that is every
+  // Escape the user can generate, because the focus trap keeps focus inside.
+  //
+  // In state (c) the modality is gone and c04's original premise (a live editor behind a non-blocking
+  // card) is true again, so the outside-focus cases below assert exactly what c04 asserted.
+  //
+  // These specs drive the real DOM path: they focus an element and dispatch a bubbling KeyboardEvent
+  // from it. The inside-focus cases and the outside-focus cases share `pressEscape`, so a broken
+  // dispatch would fail the inside cases rather than silently greening the outside ones.
+  describe('Escape is scoped to the dialog (c04, re-scoped by c03)', () => {
     let outsider: HTMLButtonElement;
 
     /** Dispatch a REAL bubbling Escape keydown from `target`, exactly as the browser would. */
@@ -932,9 +965,32 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       expect(minimized).toEqual([]);
     });
 
-    // ── focus OUTSIDE the card: the defect ────────────────────────────────────
+    // ── the FIRST Escape of a modal run: the reason the binding is on the container ──
 
-    it('state (b): Escape pressed OUTSIDE the card does nothing and never fires the flight', () => {
+    it('state (a): Escape from the element focus LANDS on when the modal opens dismisses it', () => {
+      const openChanges: boolean[] = [];
+      component.openChange.subscribe(v => openChanges.push(v));
+
+      startRun();
+
+      // Focus-on-open puts focus on the overlay CONTAINER, which is outside `.rd-card`. A `.rd-card`
+      // binding would ignore this Escape entirely - that is the regression this assertion pins.
+      const overlay = el('.rd-overlay')!;
+      expect(document.activeElement).toBe(overlay);
+
+      pressEscape(document.activeElement!);
+
+      expect(el('.rd-card')).toBeNull();
+      expect(openChanges).toEqual([false]);
+    });
+
+    // ── focus OUTSIDE the dialog ──────────────────────────────────────────────
+    //
+    // While MODAL there is no such thing as "focus outside": the background is inert, so the outsider
+    // cannot even take focus. The c04 defect (an Escape from the editor minimizing the card) is asserted
+    // in the state where it is still reachable - the non-modal terminal card.
+
+    it('states (a)/(b): the background is inert, so an outside element cannot even take focus', () => {
       const minimized: RunDialogMinimizeEvent[] = [];
       const openChanges: boolean[] = [];
       component.minimizeRequested.subscribe(e => minimized.push(e));
@@ -942,15 +998,14 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
 
       startRun();
       trackJob();
-
-      // Focus is genuinely elsewhere - NOT the <body> default, which would prove nothing.
-      outsider.focus();
-      expect(document.activeElement).toBe(outsider);
       expect(component.state).toBe('tracked');
+
+      expect(outsider.hasAttribute('inert')).toBeTrue();
+      outsider.focus();
+      expect(document.activeElement).not.toBe(outsider);
 
       pressEscape(outsider);
 
-      // The card is untouched: it never had focus, so Escape was not its key to take.
       expect(el('.rd-card')).not.toBeNull();
       expect(component.open).toBeTrue();
       expect(component.state).toBe('tracked');
@@ -959,11 +1014,17 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       expect(minimized).toEqual([]);
     });
 
-    it('state (a): Escape pressed OUTSIDE the card leaves the card open', () => {
+    it('state (c): Escape pressed OUTSIDE the non-modal card leaves it open (the c04 contract)', () => {
       const openChanges: boolean[] = [];
       component.openChange.subscribe(v => openChanges.push(v));
 
       startRun();
+      emit({ kind: 'error', message: 'boom' });
+      expect(component.state).toBe('terminal');
+
+      // The modality dropped, so the page is live again and focus really can be elsewhere - which is
+      // precisely the situation c04 was written for: the user is back in the Syncfusion editor.
+      expect(outsider.hasAttribute('inert')).toBeFalse();
       outsider.focus();
       expect(document.activeElement).toBe(outsider);
 
@@ -972,6 +1033,378 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       expect(el('.rd-card')).not.toBeNull();
       expect(component.open).toBeTrue();
       expect(openChanges).toEqual([]);
+    });
+  });
+
+  // ── c03: modal while the run is LIVE, non-modal once it is over ────────────
+  //
+  // The product decision, received from the user on 2026-08-03: the dialog BLOCKS in states (a) and (b)
+  // and stops blocking at (c), where the card stays up as a dismissible notice. Every assertion below is
+  // about the MECHANISM (the backdrop element, the `inert` attribute, `aria-modal`, `document.
+  // activeElement`), never about appearance, so none of it can be satisfied by a screenshot.
+  //
+  // The transition test is the load-bearing one: a suite that only covers dismiss stays green while the
+  // focus trap survives into the non-modal state, which is the specific bug this decision creates.
+  describe('modality (c03)', () => {
+    /** A focusable element OUTSIDE the dialog: the background whose inertness is under test. */
+    let outsider: HTMLButtonElement;
+
+    beforeEach(() => {
+      outsider = document.createElement('button');
+      outsider.type = 'button';
+      outsider.id = 'background-control';
+      outsider.textContent = 'background';
+      document.body.appendChild(outsider);
+    });
+
+    afterEach(() => outsider.remove());
+
+    function trackJob(percent: number | null = 40): void {
+      registry.setJobs([makeJob({ id: 'JOB-1', percent })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+    }
+
+    /** Drive the (b) -> (c) transition the way the app does: the REGISTRY reports a terminal status. */
+    function finishJob(): void {
+      registry.setJobs([makeJob({ id: 'JOB-1', percent: 100, status: 'succeeded' })]);
+      fixture.detectChanges();
+    }
+
+    /** Dispatch a real bubbling Tab keydown from `target`; returns the event so the spec can read it. */
+    function pressTab(target: Element, shift = false): KeyboardEvent {
+      const event = new KeyboardEvent('keydown', {
+        key: 'Tab',
+        shiftKey: shift,
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(event);
+      fixture.detectChanges();
+      return event;
+    }
+
+    // ── the backdrop ────────────────────────────────────────────────────────
+
+    it('renders the backdrop in (a) and in (b), and REMOVES the element in (c)', () => {
+      startRun();
+      expect(el('.rd-backdrop')).withContext('state (a)').not.toBeNull();
+
+      trackJob();
+      expect(component.state).toBe('tracked');
+      expect(el('.rd-backdrop')).withContext('state (b)').not.toBeNull();
+
+      finishJob();
+      expect(component.state).toBe('terminal');
+      // Removed, not faded: an invisible scrim would go on eating every click on the page.
+      expect((fixture.nativeElement as HTMLElement).querySelectorAll('.rd-backdrop').length)
+        .withContext('state (c) must have NO backdrop element at all')
+        .toBe(0);
+      // The card itself is still up: dropping the modality is not closing the dialog.
+      expect(el('.rd-card')).not.toBeNull();
+    });
+
+    // ── background inertness ────────────────────────────────────────────────
+
+    it('makes the background inert while modal and live again in (c)', () => {
+      startRun();
+      expect(outsider.hasAttribute('inert')).withContext('state (a)').toBeTrue();
+
+      trackJob();
+      expect(outsider.hasAttribute('inert')).withContext('state (b)').toBeTrue();
+
+      finishJob();
+      expect(outsider.hasAttribute('inert')).withContext('state (c)').toBeFalse();
+    });
+
+    it('never marks its OWN backdrop or overlay inert (the walk is anchored on the HOST)', () => {
+      // The anchor is load-bearing, not a detail: `.rd-backdrop` and `.rd-overlay` are SIBLINGS inside
+      // the component host, so a walk anchored on the overlay marks the dialog's own scrim inert and
+      // backdrop-click dismissal silently stops working. The existing backdrop-click spec cannot catch
+      // that - a programmatic `.click()` fires on an inert element just the same - so assert the
+      // attribute directly. See the anchoring note in `modal-a11y.ts`.
+      startRun();
+      trackJob();
+
+      expect(el('.rd-backdrop')!.hasAttribute('inert'))
+        .withContext('an inert scrim swallows nothing and dismisses nothing')
+        .toBeFalse();
+      expect(el('.rd-overlay')!.hasAttribute('inert')).toBeFalse();
+      expect(el('.rd-card')!.hasAttribute('inert')).toBeFalse();
+      // ...while the background really is inert, so this is not vacuous.
+      expect(outsider.hasAttribute('inert')).toBeTrue();
+    });
+
+    it('leaves nothing inert behind when the HOST closes it (the editor context reset)', () => {
+      // The editor's `ngDoCheck` reconcile writes `runDialogOpen = false` on a book change. That is a
+      // different path from `dismiss()` - it comes in through `ngOnChanges` - and it must release too,
+      // or a background context switch could leave the whole app inert with no card on screen.
+      startRun();
+      expect(outsider.hasAttribute('inert')).toBeTrue();
+
+      fixture.componentRef.setInput('open', false);
+      fixture.detectChanges();
+
+      expect(el('.rd-card')).toBeNull();
+      expect(outsider.hasAttribute('inert')).toBeFalse();
+    });
+
+    it('leaves nothing inert behind when the dialog is dismissed from state (a)', () => {
+      startRun();
+      expect(outsider.hasAttribute('inert')).toBeTrue();
+
+      component.dismiss();
+      fixture.detectChanges();
+
+      expect(outsider.hasAttribute('inert')).toBeFalse();
+    });
+
+    // ── aria-modal ──────────────────────────────────────────────────────────
+
+    it('claims aria-modal="true" only while it really is modal', () => {
+      startRun();
+      expect(el('.rd-overlay')!.getAttribute('aria-modal')).withContext('state (a)').toBe('true');
+
+      trackJob();
+      expect(el('.rd-overlay')!.getAttribute('aria-modal')).withContext('state (b)').toBe('true');
+
+      finishJob();
+      // A card that no longer traps focus must not keep claiming that it does.
+      expect(el('.rd-overlay')!.getAttribute('aria-modal')).withContext('state (c)').toBe('false');
+    });
+
+    // ── focus: in on open, trapped while modal, restored when the modality drops ──
+
+    it('moves focus into the dialog when the modal opens', () => {
+      outsider.focus();
+      expect(document.activeElement).toBe(outsider);
+
+      startRun();
+
+      expect(document.activeElement).toBe(el('.rd-overlay'));
+    });
+
+    it('traps Tab inside the card while modal: the last control wraps to the first', () => {
+      startRun();
+      trackJob();
+
+      const focusables = Array.from(
+        el('.rd-card')!.querySelectorAll<HTMLElement>('button'),
+      );
+      expect(focusables.length).withContext('state (b) renders dismiss + minimize').toBe(2);
+
+      const last = focusables[focusables.length - 1];
+      last.focus();
+      const event = pressTab(last);
+
+      expect(event.defaultPrevented).withContext('the browser default must be suppressed').toBeTrue();
+      expect(document.activeElement).toBe(focusables[0]);
+    });
+
+    it('traps Shift+Tab inside the card while modal: the first control wraps to the last', () => {
+      startRun();
+      trackJob();
+
+      const focusables = Array.from(el('.rd-card')!.querySelectorAll<HTMLElement>('button'));
+      // Non-vacuity, mirroring the forward-Tab spec: with only ONE control in the card, first === last
+      // and "wraps to the last" is trivially true, so this spec would pass on a dialog stuck in state
+      // (a). It really did, under a source mutation that stopped the registry resolving the job.
+      expect(focusables.length).withContext('state (b) renders dismiss + minimize').toBe(2);
+      const first = focusables[0];
+      first.focus();
+      const event = pressTab(first, true);
+
+      expect(event.defaultPrevented).toBeTrue();
+      expect(document.activeElement).toBe(focusables[focusables.length - 1]);
+    });
+
+    it('RELEASES the trap and RESTORES focus at the (b) -> (c) transition, not only on dismiss', () => {
+      outsider.focus();
+      startRun();
+      trackJob();
+      // Focus is genuinely inside the modal before the transition, or the restore proves nothing.
+      expect(el('.rd-overlay')!.contains(document.activeElement)).toBeTrue();
+
+      finishJob();
+
+      // 1. focus went back to whatever had it before the dialog opened...
+      expect(document.activeElement)
+        .withContext('a user left focused inside a card that is no longer modal is trapped')
+        .toBe(outsider);
+      // 2. ...and Tab is no longer intercepted, so the keyboard can leave the card.
+      const dismiss = el('.rd-dismiss')!;
+      dismiss.focus();
+      const event = pressTab(dismiss);
+      expect(event.defaultPrevented)
+        .withContext('a trap that outlives the modality is the bug this decision creates')
+        .toBeFalse();
+    });
+
+    it('restores focus on dismiss from state (a)', () => {
+      outsider.focus();
+      startRun();
+      expect(document.activeElement).not.toBe(outsider);
+
+      component.dismiss();
+      fixture.detectChanges();
+
+      expect(document.activeElement).toBe(outsider);
+    });
+
+    // ── minimize + backdrop click ───────────────────────────────────────────
+
+    it('minimize still emits a LIVE rect, and the background is already live when it fires', () => {
+      const seen: { rect: DOMRect | null; backgroundInert: boolean }[] = [];
+      component.minimizeRequested.subscribe(e =>
+        seen.push({ rect: e.originRect, backgroundInert: outsider.hasAttribute('inert') }),
+      );
+
+      startRun();
+      trackJob();
+      el('.rd-minimize')!.click();
+      fixture.detectChanges();
+
+      expect(seen.length).toBe(1);
+      expect(seen[0].rect).not.toBeNull();
+      // A CENTRED card still measures: the flight reads the card's real box, not a hardcoded corner.
+      expect(seen[0].rect!.width).toBeGreaterThan(0);
+      expect(seen[0].rect!.height).toBeGreaterThan(0);
+      // The flight must play over a page that is already usable.
+      expect(seen[0].backgroundInert)
+        .withContext('the background must be released BEFORE the fly-to-bell flight')
+        .toBeFalse();
+      expect(el('.rd-card')).toBeNull();
+    });
+
+    it('a backdrop click in (b) minimizes, exactly as the dismiss control does', () => {
+      const minimized: RunDialogMinimizeEvent[] = [];
+      component.minimizeRequested.subscribe(e => minimized.push(e));
+
+      startRun();
+      trackJob();
+      el('.rd-backdrop')!.click();
+      fixture.detectChanges();
+
+      expect(minimized.length).toBe(1);
+      expect(minimized[0].jobId).toBe('JOB-1');
+      expect(el('.rd-card')).toBeNull();
+    });
+
+    // ── focus CONTAINMENT while modal (c01) ─────────────────────────────────
+    //
+    // The defect these pin was invisible to this fixture and was found in the browser: with the modal
+    // fully engaged (backdrop up, aria-modal="true", 25 elements inert) `document.activeElement` was
+    // Syncfusion's `iframe.e-de-text-target`, outside the overlay and inside the inert subtree. From
+    // there neither the Escape binding nor the Tab cycle - both on `.rd-overlay` - could fire.
+    //
+    // The fixture cannot host Syncfusion, so these DRIVE THE MECHANISM instead of simulating the editor.
+    // The steal is staged with an element appended to `<body>` AFTER the modal engaged, which is both a
+    // faithful stand-in (it is genuinely not inert, exactly as the iframe's inner document is not) and a
+    // second contract in its own right: `applyBackgroundInert` is a one-shot snapshot, so anything that
+    // arrives later is never marked, and focus containment is the layer that covers it.
+
+    /** A focusable element that arrives AFTER the inert walk ran, so the walk never marked it. */
+    let latecomers: HTMLElement[] = [];
+    function addLateOutsider(id: string): HTMLButtonElement {
+      const late = document.createElement('button');
+      late.type = 'button';
+      late.id = id;
+      late.textContent = id;
+      document.body.appendChild(late);
+      latecomers.push(late);
+      return late;
+    }
+    afterEach(() => {
+      for (const late of latecomers) late.remove();
+      latecomers = [];
+    });
+
+    it('pulls focus BACK into the dialog when something outside steals it while modal', () => {
+      startRun();
+      trackJob();
+      expect(el('.rd-overlay')!.contains(document.activeElement))
+        .withContext('focus starts inside, or the steal proves nothing')
+        .toBeTrue();
+
+      const late = addLateOutsider('late-background-control');
+      // Not vacuous in the other direction either: this element really CAN take focus, because the
+      // inert walk had already run when it was appended.
+      expect(late.hasAttribute('inert'))
+        .withContext('the one-shot inert walk cannot have marked an element that did not exist yet')
+        .toBeFalse();
+
+      late.focus();
+
+      expect(document.activeElement)
+        .withContext('a modal whose focus can be taken has no reachable Escape and no Tab cycle')
+        .toBe(el('.rd-overlay'));
+    });
+
+    it('re-asserts only ONCE per steal: it cannot ping-pong with itself', () => {
+      startRun();
+      trackJob();
+      const overlay = el('.rd-overlay')!;
+      // Installed AFTER engage, so the focus-on-open call is not counted.
+      const focusSpy = spyOn(overlay, 'focus').and.callThrough();
+
+      addLateOutsider('late-loop-control').focus();
+
+      expect(focusSpy.calls.count())
+        .withContext('moving focus fires focusin again; the destination guard must stop the cycle')
+        .toBe(1);
+    });
+
+    it('stops containing focus in state (c), where focus is meant to be free to leave', () => {
+      startRun();
+      trackJob();
+      finishJob();
+      expect(component.state).toBe('terminal');
+
+      // `outsider` is live again in (c) - the same element the inertness spec uses - so this is the
+      // real background, not a latecomer.
+      outsider.focus();
+
+      expect(document.activeElement)
+        .withContext('the non-modal terminal card must not hold the keyboard hostage')
+        .toBe(outsider);
+    });
+
+    it('is already released when minimize() emits, so it cannot fight the fly-to-bell flight', () => {
+      const observed: { active: string | null }[] = [];
+      const late = addLateOutsider('late-minimize-control');
+      component.minimizeRequested.subscribe(() => {
+        // Inside the emit handler: the flight owner is about to move focus/DOM around, and the modality
+        // (inert AND focus containment) is documented as already released by this point.
+        late.focus();
+        observed.push({ active: document.activeElement ? document.activeElement.id : null });
+      });
+
+      startRun();
+      trackJob();
+      el('.rd-minimize')!.click();
+      fixture.detectChanges();
+
+      expect(observed.length).toBe(1);
+      expect(observed[0].active)
+        .withContext('containment must be gone BEFORE minimizeRequested is emitted, not after')
+        .toBe('late-minimize-control');
+
+      // ...and it stays gone once the card is down.
+      const after = addLateOutsider('after-minimize-control');
+      after.focus();
+      expect(document.activeElement).toBe(after);
+    });
+
+    it('leaves no document listener behind after the dialog is destroyed', () => {
+      startRun();
+      trackJob();
+
+      fixture.destroy();
+
+      const late = addLateOutsider('late-after-destroy');
+      late.focus();
+      expect(document.activeElement)
+        .withContext('a destroyed dialog that still grabs focus would break the whole page')
+        .toBe(late);
     });
   });
 
@@ -1015,6 +1448,134 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
     it('no user-facing label contains an em-dash', () => {
       const all = [...Object.values(RUN_DIALOG_LABELS_HE), ...Object.values(RUN_DIALOG_LABELS_EN)];
       expect(all.filter(v => v.includes('—'))).toEqual([]);
+    });
+  });
+
+  // ── c04: real chunk counts + an approximate time remaining ─────────────────
+  //
+  // The defect this closes: the card read "0%" beside a run that had queued ten chunks, because the
+  // percent is derived from completedChunks/totalChunks and the parallel workers finish nothing for the
+  // first stretch. It was honest and it read as stalled. "0 of 10" says the same thing and reads as
+  // work in progress; the ETA appears as soon as there is any basis for one.
+  describe('chunk counts and the approximate time remaining (c04)', () => {
+    /** A clock whose observed window is [T0, T0 + `windowSeconds`]. */
+    function clock(windowSeconds: number | null, baselineCompleted = 0) {
+      const t0 = Date.parse('2026-08-03T10:00:00.000Z');
+      return {
+        baselineAt: new Date(t0).toISOString(),
+        baselineCompleted,
+        lastCompletionAt: windowSeconds === null ? null : new Date(t0 + windowSeconds * 1000).toISOString(),
+      };
+    }
+
+    it('renders the REAL counts in the detail line, not just the percent', () => {
+      startRun({ language: 'he' });
+      registry.setJobs([makeJob({ id: 'JOB-1', percent: 30, completedChunks: 3, totalChunks: 10 })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+
+      expect(el('.rd-message')!.textContent!.trim())
+        .toBe(runString('he', 'progressCompleted', { type: 'הגהה', completed: 3, total: 10 }));
+    });
+
+    it('shows 0 of 10 at the very start, which is the moment that used to read as stalled', () => {
+      startRun({ language: 'en' });
+      registry.setJobs([makeJob({ id: 'JOB-1', percent: 0, completedChunks: 0, totalChunks: 10 })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+
+      expect(el('.rd-message')!.textContent!.trim()).toBe('Proofread: 0 of 10 completed');
+      expect(el('.rd-progress-percent')!.textContent!.trim()).toBe('0%');
+    });
+
+    it('a run with NO chunk shape keeps the count-free sentence', () => {
+      // A single-shot analysis has no chunks; inventing "0 of 0" would be worse than saying nothing.
+      startRun({ language: 'he' });
+      registry.setJobs([makeJob({ id: 'JOB-1', percent: null, completedChunks: null, totalChunks: null })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+
+      expect(el('.rd-message')!.textContent!.trim()).toBe(detail('progressRunning', 'הגהה'));
+    });
+
+    it('shows NO estimate before the first chunk has completed', () => {
+      startRun({ language: 'en' });
+      registry.setJobs([makeJob({
+        id: 'JOB-1', percent: 0, completedChunks: 0, totalChunks: 10, chunkClock: clock(null),
+      })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+
+      expect(el('.rd-eta')).toBeNull();
+    });
+
+    it('shows a LABELLED approximate estimate once throughput is observable', () => {
+      // 2 chunks in 60s -> 30s per chunk of pipeline time x 8 remaining = 240s -> "about 4 minutes".
+      startRun({ language: 'en' });
+      registry.setJobs([makeJob({
+        id: 'JOB-1', percent: 20, completedChunks: 2, totalChunks: 10, chunkClock: clock(60),
+      })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+
+      expect(el('.rd-eta')!.textContent!.trim()).toBe('Estimated time remaining: about 4 minutes');
+    });
+
+    it('labels the estimate in HEBREW for a Hebrew book, with no Latin chrome', () => {
+      startRun({ language: 'he' });
+      registry.setJobs([makeJob({
+        id: 'JOB-1', percent: 20, completedChunks: 2, totalChunks: 10, chunkClock: clock(60),
+      })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+
+      const eta = el('.rd-eta')!.textContent!.trim();
+      expect(eta).toBe('זמן משוער שנותר: כ-4 דקות');
+      expect(eta).not.toMatch(/[A-Za-z]/);
+    });
+
+    it('a REATTACHED job (no client-side start time) shows counts but NO estimate', () => {
+      // The registry gives a reattached job an empty clock precisely so this card cannot invent a
+      // number from a window it never observed. Counts are still real, so the user is not left with 0%.
+      startRun({ language: 'en' });
+      registry.setJobs([makeJob({
+        id: 'JOB-1', percent: 40, completedChunks: 4, totalChunks: 10, chunkClock: EMPTY_CHUNK_CLOCK,
+      })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+
+      expect(el('.rd-message')!.textContent!.trim()).toBe('Proofread: 4 of 10 completed');
+      expect(el('.rd-eta')).toBeNull();
+    });
+
+    it('drops the estimate at the terminal, including a FAILED run with chunks outstanding', () => {
+      startRun({ language: 'en' });
+      registry.setJobs([makeJob({
+        id: 'JOB-1', percent: 20, completedChunks: 2, totalChunks: 10, chunkClock: clock(60),
+      })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+      expect(el('.rd-eta')).not.toBeNull(); // premise: it really was showing one
+
+      // A run that fails at 2 of 10 still has 8 chunks "remaining", so only the STATE gate stops the
+      // card from reading "Failed" above "about 4 minutes remaining".
+      registry.setJobs([makeJob({
+        id: 'JOB-1', status: 'failed', percent: 20, completedChunks: 2, totalChunks: 10, chunkClock: clock(60),
+      })]);
+      fixture.detectChanges();
+
+      expect(el('.rd-status-pill')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_EN['failed']);
+      expect(el('.rd-eta')).toBeNull();
+    });
+
+    it('the estimate does not JITTER while a chunk is in flight', () => {
+      // The registry re-emits the job on every poll tick, several times per chunk. The rate is
+      // evaluated at the last COMPLETION, so ticks that carry no new completion cannot move the line -
+      // and in particular a chunk that is dragging cannot make the estimate count UP.
+      startRun({ language: 'en' });
+      const running = { percent: 20, completedChunks: 2, totalChunks: 10, chunkClock: clock(60) };
+      registry.setJobs([makeJob({ id: 'JOB-1', ...running })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+      const first = el('.rd-eta')!.textContent!.trim();
+
+      // Three more polls, minutes later in wall-clock time, with the same chunk still in flight.
+      for (const updatedAt of ['2026-08-03T10:02:00Z', '2026-08-03T10:05:00Z', '2026-08-03T10:09:00Z']) {
+        registry.setJobs([makeJob({ id: 'JOB-1', ...running, updatedAt })]);
+        fixture.detectChanges();
+        expect(el('.rd-eta')!.textContent!.trim()).toBe(first);
+      }
     });
   });
 });
