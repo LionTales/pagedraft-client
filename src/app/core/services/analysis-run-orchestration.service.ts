@@ -2,8 +2,8 @@ import { Injectable } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import {
   Observable, Subject, EMPTY,
-  of, from, concat, defer, timer, throwError,
-  switchMap, catchError, map, retry
+  of, from, concat, defer, merge, timer, throwError,
+  switchMap, catchError, finalize, map, retry, takeUntil, tap
 } from 'rxjs';
 import {
   AnalysisResultDto,
@@ -49,7 +49,21 @@ export type AnalysisRunEvent =
   | { kind: 'job-started'; jobId: string }
   | { kind: 'job-result'; result: AnalysisResultDto }
   | { kind: 'streaming-complete'; latestResult: AnalysisResultDto }
-  | { kind: 'error'; message: string }
+  /**
+   * A run failure the user must be told about.
+   *
+   * `startBudgetExpired` marks the ONE error this service composes WITHOUT the server having failed:
+   * {@link withStartTimeout}'s expiry (c02). It is the client giving up on waiting, not a verdict on the
+   * run - the request is still in flight, there is no cancel endpoint, and a result may still land. Every
+   * other `error` on this union reports something that actually went wrong, and on the sync route those
+   * arrive from `catchError`, which emits and then COMPLETES, so nothing can follow them.
+   *
+   * The flag exists because those two are indistinguishable by `message` alone, and a surface that has
+   * already resolved on an expiry needs to know its terminal was provisional in order to let this run's
+   * own late result correct it. Optional and absent everywhere else on purpose: no consumer may treat a
+   * plain `error` as retractable.
+   */
+  | { kind: 'error'; message: string; startBudgetExpired?: true }
   /**
    * c01: the panel's AUTHORITATIVE run terminal, on the channel the host actually binds.
    *
@@ -107,12 +121,87 @@ function isFinalResultNotFound(error: unknown): boolean {
   return (error as HttpErrorResponse | null | undefined)?.status === 404;
 }
 
+/**
+ * Does this event PROVE the server answered? The start budget's one cancellation condition.
+ *
+ * `'status'` is the ONE member that proves nothing: it is composed on the CLIENT
+ * ({@link AnalysisRunOrchestrationService.emitInitialStatusForRun}) and emitted the instant the run is
+ * subscribed, before a single byte has left the browser. It is also the only thing the user saw during
+ * the measured hang ("מריץ הגהה..." on screen forever), so a guard that treated it as life would have
+ * been cancelled by the very message that was lying to them.
+ *
+ * Everything else can only exist because a request came back: a jobId, a progress poll answering, a
+ * streamed token, a result, or an error. The two PANEL-emitted members never travel on an observable
+ * this guard wraps, but they END the run, so answering them "yes, stop the timer" is both harmless and
+ * the only answer that is not a leak.
+ *
+ * The `default` arm is the exhaustiveness fence: a new member of {@link AnalysisRunEvent} must be
+ * classified here rather than silently defaulting into "not proof", which would let a healthy new
+ * lifecycle signal be timed out.
+ */
+function provesServerAnswered(event: AnalysisRunEvent): boolean {
+  switch (event.kind) {
+    case 'status':
+      return false;
+    case 'progress':
+    case 'streaming-token':
+    case 'job-started':
+    case 'sync-result':
+    case 'job-result':
+    case 'streaming-complete':
+    case 'error':
+    case 'run-finished':
+    case 'result-dropped':
+      return true;
+    default:
+      assertUnhandledRunEvent(event);
+      return true;
+  }
+}
+
 /** Parsed progress update returned by handleProgressUpdate (internal use). */
 interface ProgressUpdateResult {
   status: string;
   message: string;
   progressPercent: number | null;
 }
+
+/**
+ * Bounded START budget for a run: how long the client will wait for the server's FIRST answer of any
+ * kind before it gives the user their app back. See {@link withStartTimeout}.
+ *
+ * WHY 180s, and what was measured (2026-08-03, `## c01 decision` in the plan):
+ *  - The unbounded side was REPRODUCED, not inferred. With a listener on :5114 that accepts the TCP
+ *    connection and never answers (the shape of an API that is mid-start, or of a wedged model runner),
+ *    a request through the dev proxy was still open at 100s, which was the measuring client's own
+ *    timeout and not a bound anywhere in the browser, the proxy or this client. There is no ceiling on
+ *    this wait at all, which is why the user reported it as endless.
+ *  - The healthy side is what the budget has to clear. A run sits in the dialog's state (a) until the
+ *    server answers, and on the SYNC path that answer is the whole analysis, not a dispatch: the sync
+ *    route is reserved by {@link shouldUseAsyncJob} for sub-threshold documents (one chunk), but on a
+ *    local model that single chunk still has to cold-load the weights and generate.
+ *  - The ASYNC dispatch it also covers is orders of magnitude faster (`POST analysis-jobs` answers as
+ *    soon as the job row is enqueued; no model work), so a cold API's JIT and EF model build fit inside
+ *    this with room to spare.
+ *
+ * WHY 180s STAYS, now that the healthy side HAS been measured (2026-08-04, `## c02 findings`):
+ * The sync route was timed against a real 248-word Hebrew chapter - two words under the server's 250-word
+ * Hebrew threshold, so the largest chapter that can take this route at all. Cold Proofread (`gemma4:12b`)
+ * came in at 73.8s and 70.4s, which 180s clears. Cold LineEdit (`DictaLM-3.0-Nemotron-12B`, the OTHER
+ * task sharing that threshold) came in at 32.0s, 45.1s and **394.3s** - a healthy HTTP 200 carrying a
+ * real result, 2.2x over this budget. So THE BUDGET DOES MISFIRE, and no constant fixes that: the wall
+ * clock tracks GENERATED TOKEN COUNT, which varied 13x across identical requests and is bounded only by
+ * `Ollama_LineEdit.NumPredict` (5120). The 394.3s run did not approach that cap, so the true ceiling is
+ * several times higher again - a budget that never misfired would have to be ~13 minutes, which is
+ * indistinguishable from the endless wait this budget exists to end.
+ *
+ * The number is therefore NOT raised. Raising it re-creates the reported bug (a modal with no bound) to
+ * buy an ever-shrinking reduction in false alarms. Instead the MISFIRE WAS MADE RECOVERABLE: the expiry
+ * carries `startBudgetExpired: true`, and the run dialog lets this run's own late result retract that
+ * terminal. That inverts the asymmetry this comment used to rest on - firing early is now cheap and
+ * self-correcting, firing late is still the original defect - so if anything 180s is now conservative.
+ */
+export const RUN_START_BUDGET_MS = 180_000;
 
 @Injectable({ providedIn: 'root' })
 export class AnalysisRunOrchestrationService {
@@ -131,6 +220,9 @@ export class AnalysisRunOrchestrationService {
    */
   private readonly finalResultRetryMax = 3;
   private readonly finalResultRetryDelayMs = 600;
+
+  /** Bounded start budget for this instance. See {@link RUN_START_BUDGET_MS}. */
+  private readonly runStartTimeoutMs = RUN_START_BUDGET_MS;
 
   constructor(
     private analysisService: AnalysisService,
@@ -329,10 +421,98 @@ export class AnalysisRunOrchestrationService {
       of<AnalysisRunEvent>({ kind: 'status', message: initialStatus }),
       defer(() => this.doRunAnalysis(ctx))
     );
-    if (saveBeforeRun) {
-      return from(saveBeforeRun()).pipe(switchMap(() => run$));
-    }
-    return run$;
+    const withSave$ = saveBeforeRun
+      ? from(saveBeforeRun()).pipe(switchMap(() => run$))
+      : run$;
+    // The guard wraps the SAVE too, not just the run. A `saveBeforeRun()` promise that never settles
+    // emits nothing at all - not even the initial `status` - so it is the one path on which the dialog
+    // can sit in state (a) with no event ever having crossed the channel.
+    return this.withStartTimeout(withSave$, ctx);
+  }
+
+  /**
+   * c01 (run-dialog-starting-state-escape): bound how long a run may produce NO answer from the server.
+   *
+   * ── The defect ────────────────────────────────────────────────────────────────────────────────────
+   * The run dialog is MODAL in its state (a) ("starting"), and state (a) lasts until an event arrives.
+   * Nothing bounded that wait, so a request that never answers left the whole app behind a blurred,
+   * `inert`-backed scrim with an indeterminate bar, forever. MEASURED 2026-08-03 (see
+   * {@link runStartTimeoutMs}): a socket that accepts and never replies keeps such a request open with no
+   * ceiling anywhere in the stack.
+   *
+   * ── Where it lives, and why HERE rather than on the dialog ────────────────────────────────────────
+   * On the orchestration service, because "how long may a run go without answering" is a property of the
+   * RUN, and the dialog is a VIEW over `runEvents$` plus the registry. A view that owns a business
+   * timeout is how the two-poller problem started. The dialog needs no new notion of "over": the expiry
+   * arrives as an ordinary `{ kind: 'error' }` on the one channel it already listens to, so its existing
+   * `terminal` latch fires, `isModal` (a projection of `state`, kept that way) goes false, and c03's
+   * machinery removes the backdrop, clears every `inert` and restores focus. No second terminal predicate
+   * is introduced anywhere.
+   *
+   * ── Shape, deliberately mirroring {@link loadFinalResultForJob} rather than inventing a dialect ────
+   *  - SUBSCRIPTION-SCOPED. `defer` mints the guard per subscription, so there is no budget FIELD on this
+   *    root singleton, no reset site, and nothing for a context change to leave stale. The panel creates
+   *    a fresh subscription per run, so every run gets a whole fresh budget by mechanism.
+   *  - It CANNOT OUTLIVE THE RUN. The timer lives inside this subscription: the panel's `ngOnDestroy` and
+   *    its next-run unsubscribe take it with them, and `finalize` cancels it when the run stream ends on
+   *    its own, so a completed run leaves no pending timer behind.
+   *  - It cancels on the FIRST proof the server answered ({@link provesServerAnswered}), not on the
+   *    dialog reaching any particular state. A slow-but-healthy run is therefore never killed: the moment
+   *    a jobId, a poll, a token, a result or an error exists, the budget is void.
+   *
+   * ── What it does NOT do ───────────────────────────────────────────────────────────────────────────
+   * It does not cancel the run. There is no cancel endpoint at all (see the dialog's "close vs cancel"
+   * note), so the request stays in flight and a result that lands later still reaches the panel through
+   * the ordinary result event and its context guard. The expiry is a statement about what the CLIENT
+   * knows, which is why its copy says the run did not start rather than that it failed.
+   *
+   * `doRunStreaming` is deliberately NOT wrapped: it is not reachable from any template today, and its
+   * legitimate silence is time-to-first-token on a local model rather than a server that is not
+   * answering. If it is ever wired to a control, it needs its own budget decision, not this one.
+   */
+  private withStartTimeout(
+    run$: Observable<AnalysisRunEvent>,
+    ctx: AnalysisRunContext
+  ): Observable<AnalysisRunEvent> {
+    return defer(() => {
+      const answered$ = new Subject<void>();
+      const expiry$ = timer(this.runStartTimeoutMs).pipe(
+        takeUntil(answered$),
+        map((): AnalysisRunEvent => {
+          const lang = runChromeLang(ctx.language);
+          // Observability: a start-budget expiry is a distinct failure mode from a request that failed,
+          // and it leaves no HTTP error in the console to correlate against - the request is still open.
+          // Bracketed-tag console.warn is the convention already used elsewhere in core/services. Ids and
+          // document text are deliberately not logged.
+          console.warn('[AnalysisRun] start budget expired: no answer from the server', {
+            analysisType: ctx.selectedAnalysisType,
+            timeoutMs: this.runStartTimeoutMs,
+          });
+          return {
+            kind: 'error',
+            // c02: marks this terminal as PROVISIONAL. The run was not cancelled (it cannot be), so a
+            // surface that resolves on this must accept this run's own later result as a correction.
+            startBudgetExpired: true,
+            message: runString(lang, 'runStartTimedOut', {
+              type: analysisTypeLabelFor(lang, ctx.selectedAnalysisType),
+            }),
+          };
+        }),
+      );
+      const watched$ = run$.pipe(
+        tap(event => { if (provesServerAnswered(event)) answered$.next(); }),
+        // Covers the endings `tap` cannot see: the run completing or erroring with nothing to report, and
+        // the subscriber walking away. Without it a completed run would leave the timer pending and the
+        // merged stream would not complete until the budget elapsed.
+        finalize(() => answered$.next()),
+      );
+      // ORDER IS LOAD-BEARING: `expiry$` must be subscribed BEFORE `watched$`, so its `takeUntil`
+      // listener is already installed when `watched$` runs. A run that completes SYNCHRONOUSLY on
+      // subscribe (a path that fails fast, or any `of()`-backed stub) fires `finalize` inside its own
+      // subscribe call, and with the sources the other way round that cancellation would be published to
+      // a subject nobody was listening to yet - leaving a live timer behind a finished run.
+      return merge(expiry$, watched$);
+    });
   }
 
   /** Route to sync or async-job path based on server chunk thresholds in ctx. */

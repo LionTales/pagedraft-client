@@ -1,7 +1,12 @@
 import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { HttpErrorResponse } from '@angular/common/http';
-import { NEVER, Subject, of } from 'rxjs';
-import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent } from './analysis-run-orchestration.service';
+import { EMPTY, NEVER, Subject, of } from 'rxjs';
+import {
+  AnalysisRunOrchestrationService,
+  AnalysisRunContext,
+  AnalysisRunEvent,
+  RUN_START_BUDGET_MS,
+} from './analysis-run-orchestration.service';
 import { AnalysisService } from './analysis.service';
 import { AnalysisProgressService } from './analysis-progress.service';
 import { AnalysisProgressDto, AnalysisResultDto } from '../models/analysis';
@@ -695,4 +700,277 @@ describe('AnalysisRunOrchestrationService run-string localization (c02)', () => 
       noLatin(he);
     });
   });
+});
+
+/**
+ * c01 (run-dialog-starting-state-escape): the bounded START budget.
+ *
+ * THE DEFECT. The run dialog is MODAL while a run is live, and its state (a) lasts until the first
+ * event arrives. Nothing bounded that wait, so a request that never answered left the entire app behind
+ * a scrim with an `inert` background and an indeterminate bar, indefinitely - reported by the user as an
+ * endless wait on 2026-08-03.
+ *
+ * THE MEASUREMENT behind the budget (also recorded in the plan's `## c01 decision`): with a socket on
+ * :5114 that ACCEPTS the connection and never replies - an API mid-start, or a wedged model runner - a
+ * request through the dev proxy was still open at 100 seconds, which was the measuring client's own
+ * timeout rather than any bound in the browser, the proxy or this client. The wait genuinely had no
+ * ceiling.
+ *
+ * WHY THE STUBS ARE `NEVER` AND SUBJECTS. Every case here lives in the window between "the request went
+ * out" and "it answered". A synchronous `of()` closes that window inside the subscribe call, so the run
+ * would resolve before the first assertion and a version with no guard at all would pass. `fakeAsync` +
+ * `tick` then makes the BUDGET itself a fact rather than something inferred.
+ */
+describe('AnalysisRunOrchestrationService bounded start budget (c01)', () => {
+  /** The one call the sync route makes; held open so the run stays silent. */
+  let runSubject: Subject<AnalysisResultDto>;
+  /** The async dispatch. Answering it is what proves the server accepted the run. */
+  let startAsyncSubject: Subject<{ jobId: string }>;
+
+  /**
+   * Constructed directly rather than through the TestBed: this describe re-builds the service INSIDE a
+   * `fakeAsync` body (the he/en pass below), and a testing-module reset in the middle of a fake time zone
+   * is a second moving part with nothing to do with what is under test.
+   */
+  function build(): AnalysisRunOrchestrationService {
+    return new AnalysisRunOrchestrationService(
+      {
+        run: () => runSubject.asObservable(),
+        startAsync: () => startAsyncSubject.asObservable(),
+        getByJob: () => NEVER,
+        runStream: () => NEVER,
+      } as unknown as AnalysisService,
+      { pollProgress: () => NEVER } as unknown as AnalysisProgressService,
+    );
+  }
+
+  function noLatinInHebrew(value: string): void {
+    expect(value).withContext('a Hebrew book must show no Latin-script run chrome').not.toMatch(/[A-Za-z]/);
+  }
+
+  let service: AnalysisRunOrchestrationService;
+
+  /** Sub-threshold Proofread: the SYNC route, which is the route the reported hang took. */
+  function syncCtx(overrides: Partial<AnalysisRunContext> = {}): AnalysisRunContext {
+    return ctx({ selectedAnalysisType: 'Proofread', documentText: 'one two three', ...overrides });
+  }
+
+  /** Always async, whatever the document says. */
+  function asyncCtx(overrides: Partial<AnalysisRunContext> = {}): AnalysisRunContext {
+    return ctx({ selectedAnalysisType: 'LinguisticAnalysis', documentText: '', ...overrides });
+  }
+
+  beforeEach(() => {
+    runSubject = new Subject<AnalysisResultDto>();
+    startAsyncSubject = new Subject<{ jobId: string }>();
+    service = build();
+  });
+
+  // The ONE assertion on the budget's VALUE rather than its mechanism, and it exists because f01 removed
+  // the accidental fence that used to hold it: both spec files hand-mirrored the literal `180_000`, so a
+  // change to the constant broke them. They now tick RELATIVE to the export, which is right - they test
+  // the mechanism - but it means every other timing assertion here stays green at any value at all.
+  // c02 MEASURED this number as one that MISFIRES (a healthy cold near-threshold Hebrew LineEdit returned
+  // a real result in 394.3s against it) and kept it anyway, choosing to make the misfire RETRACTABLE
+  // instead of raising it, because no constant can bound a local generation whose length varies 13x. That
+  // is a decision with evidence behind it, and it should not be quietly undone by editing one number.
+  it('is 180s, and that is a DECISION with measurements behind it, not a default', () => {
+    expect(RUN_START_BUDGET_MS)
+      .withContext('c02 measured this budget misfiring at 394.3s and deliberately did NOT raise it - it '
+        + 'made the expiry retractable instead. Read the RUN_START_BUDGET_MS docblock and the plan\'s '
+        + '`## c02 findings` before changing this, and re-argue the retraction if you do')
+      .toBe(180_000);
+  });
+
+  it('reports a localized "did not start" error once the budget is spent, and not before', fakeAsync(() => {
+    const events: AnalysisRunEvent[] = [];
+    const sub = service.runAnalysisAfterSave(syncCtx({ language: 'he' })).subscribe(e => events.push(e));
+
+    // The only thing on the channel is the CLIENT-composed opener - which is exactly what the user was
+    // staring at. It must not be mistaken for a sign of life.
+    expect(events.map(e => e.kind)).toEqual(['status']);
+
+    tick(RUN_START_BUDGET_MS - 1);
+    expect(events.map(e => e.kind))
+      .withContext('a budget that fires early turns a slow healthy run into a false failure')
+      .toEqual(['status']);
+
+    tick(1);
+    const errors = events.filter(e => e.kind === 'error') as { message: string }[];
+    expect(errors.length).withContext('exactly one expiry, not a repeating alarm').toBe(1);
+    expect(errors[0].message).toBe(runString('he', 'runStartTimedOut', { type: 'הגהה' }));
+    noLatinInHebrew(errors[0].message);
+
+    tick(RUN_START_BUDGET_MS * 2);
+    expect(events.filter(e => e.kind === 'error').length).toBe(1);
+
+    sub.unsubscribe();
+  }));
+
+  it('says something DIFFERENT from a run that genuinely failed, in both languages', fakeAsync(() => {
+    // Decision (c). "The run failed" leaves the user nothing to do; "the run did not start" tells them
+    // to try again. One sentence for both facts would re-create the ambiguity this fixes.
+    for (const lang of ['he', 'en'] as const) {
+      runSubject = new Subject<AnalysisResultDto>();
+      startAsyncSubject = new Subject<{ jobId: string }>();
+      service = build();
+
+      const events: AnalysisRunEvent[] = [];
+      const sub = service.runAnalysisAfterSave(syncCtx({ language: lang })).subscribe(e => events.push(e));
+      tick(RUN_START_BUDGET_MS);
+
+      const message = (events.find(e => e.kind === 'error') as { message: string }).message;
+      const typeLabel = lang === 'he' ? 'הגהה' : 'Proofread';
+      expect(message).toBe(runString(lang, 'runStartTimedOut', { type: typeLabel }));
+      expect(message).not.toBe(runString(lang, 'runFailed', { type: typeLabel }));
+      expect(message).not.toBe(runString(lang, 'analysisFailed'));
+      sub.unsubscribe();
+    }
+  }));
+
+  it('logs the expiry once, on the console seam this failure mode has no other trace on', fakeAsync(() => {
+    // A start-budget expiry leaves NO HTTP error behind to correlate against: the request is still open.
+    // Without this line the only record of it would be the user's screenshot.
+    const warn = spyOn(console, 'warn');
+    const sub = service.runAnalysisAfterSave(syncCtx()).subscribe();
+
+    tick(RUN_START_BUDGET_MS - 1);
+    expect(warn).not.toHaveBeenCalled();
+
+    tick(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.calls.mostRecent().args[0] as string).toContain('[AnalysisRun]');
+    expect(warn.calls.mostRecent().args[1] as object).toEqual(
+      jasmine.objectContaining({ analysisType: 'Proofread', timeoutMs: RUN_START_BUDGET_MS }),
+    );
+
+    sub.unsubscribe();
+  }));
+
+  it('is CANCELLED by the first proof the server answered, however late that proof is', fakeAsync(() => {
+    const events: AnalysisRunEvent[] = [];
+    const sub = service.runAnalysisAfterSave(asyncCtx()).subscribe(e => events.push(e));
+
+    // The dispatch answers one second inside the budget. From here the run is healthy, and a
+    // whole-chapter analysis routinely runs for minutes (Linguistic was measured at ~3 min).
+    tick(RUN_START_BUDGET_MS - 1_000);
+    startAsyncSubject.next({ jobId: 'JOB-1' });
+    expect(events.some(e => e.kind === 'job-started')).toBeTrue();
+
+    tick(RUN_START_BUDGET_MS * 3);
+    expect(events.filter(e => e.kind === 'error'))
+      .withContext('killing a job the server already accepted is the regression that matters here')
+      .toEqual([]);
+
+    sub.unsubscribe();
+  }));
+
+  it('a sync result cancels it too, and leaves no timer behind a finished run', fakeAsync(() => {
+    const events: AnalysisRunEvent[] = [];
+    const sub = service.runAnalysisAfterSave(syncCtx()).subscribe(e => events.push(e));
+
+    tick(1_000);
+    runSubject.next({
+      id: 'r-1', chapterId: 'c', type: 'Proofread', analysisType: 'Proofread',
+      resultText: 'ok', createdAt: new Date().toISOString(),
+    });
+    runSubject.complete();
+
+    // A run that ENDED must take its timer with it. `fakeAsync` fails the spec on a leftover timer, so
+    // the tick below asserts the teardown twice over.
+    tick(RUN_START_BUDGET_MS * 2);
+    expect(events.map(e => e.kind)).toEqual(['status', 'sync-result']);
+
+    sub.unsubscribe();
+  }));
+
+  it('a run that ENDS without ever saying anything is not reported as a start timeout', fakeAsync(() => {
+    // The guard has to be cancelled by the run ENDING, not only by an event crossing the channel.
+    // Without that, a stream that completes silently leaves the budget pending, and two things break at
+    // once: the subscriber's `complete` (which is how the panel emits its own run terminal, and how the
+    // dialog stops showing a live card) is held back for the whole budget, and then a "did not start"
+    // error fires at a run that already finished.
+    //
+    // This is also the case that pins the SUBSCRIPTION ORDER inside the guard: the run below completes
+    // synchronously, inside its own subscribe call, so its cancellation is published before anything
+    // that subscribed after it would have been listening.
+    const service = new AnalysisRunOrchestrationService(
+      { run: () => EMPTY, startAsync: () => NEVER, getByJob: () => NEVER } as unknown as AnalysisService,
+      { pollProgress: () => NEVER } as unknown as AnalysisProgressService,
+    );
+    const events: AnalysisRunEvent[] = [];
+    let completed = false;
+    const sub = service.runAnalysisAfterSave(syncCtx()).subscribe({
+      next: e => events.push(e),
+      complete: () => { completed = true; },
+    });
+
+    expect(completed)
+      .withContext('the run is over the moment its own stream ends; a pending budget must not hold the '
+        + 'terminal back for three minutes')
+      .toBeTrue();
+
+    tick(RUN_START_BUDGET_MS * 2);
+    expect(events.filter(e => e.kind === 'error'))
+      .withContext('a finished run must never be told it did not start')
+      .toEqual([]);
+
+    sub.unsubscribe();
+  }));
+
+  it('cannot outlive the run: unsubscribing cancels a pending expiry', fakeAsync(() => {
+    const events: AnalysisRunEvent[] = [];
+    const sub = service.runAnalysisAfterSave(syncCtx()).subscribe(e => events.push(e));
+
+    tick(1_000);
+    // The panel unsubscribes on ngOnDestroy and when the next run starts. A context change is exactly
+    // this, and a timer that survives it would fire a terminal at a card belonging to another chapter.
+    sub.unsubscribe();
+
+    tick(RUN_START_BUDGET_MS * 2);
+    expect(events.filter(e => e.kind === 'error')).toEqual([]);
+  }));
+
+  it('gives every run a FULL fresh budget: the guard is subscription-scoped, not service state', fakeAsync(() => {
+    // Run 1 spends its whole budget.
+    const first: AnalysisRunEvent[] = [];
+    const sub1 = service.runAnalysisAfterSave(syncCtx()).subscribe(e => first.push(e));
+    tick(RUN_START_BUDGET_MS);
+    expect(first.filter(e => e.kind === 'error').length).toBe(1);
+    sub1.unsubscribe();
+
+    // Run 2 must not inherit a spent budget, and the mechanism is that there is no budget FIELD on this
+    // root singleton to leave stale in the first place.
+    runSubject = new Subject<AnalysisResultDto>();
+    const second: AnalysisRunEvent[] = [];
+    const sub2 = service.runAnalysisAfterSave(syncCtx()).subscribe(e => second.push(e));
+    tick(RUN_START_BUDGET_MS - 1);
+    expect(second.filter(e => e.kind === 'error'))
+      .withContext('an inherited budget would have expired the instant run 2 subscribed')
+      .toEqual([]);
+    tick(1);
+    expect(second.filter(e => e.kind === 'error').length).toBe(1);
+
+    sub2.unsubscribe();
+  }));
+
+  it('bounds a pre-run save that never settles: the one path that emits NOTHING at all', fakeAsync(() => {
+    // `runAnalysisAfterSave` gates the whole run behind `saveBeforeRun()`, so a save that hangs never
+    // even produces the opening `status` event. That is the worst version of state (a): a blocking modal
+    // with no message of its own. The guard therefore wraps the save as well as the run.
+    const events: AnalysisRunEvent[] = [];
+    const sub = service
+      .runAnalysisAfterSave(syncCtx({ language: 'en' }), () => new Promise<void>(() => { /* never settles */ }))
+      .subscribe(e => events.push(e));
+
+    tick(RUN_START_BUDGET_MS - 1);
+    expect(events).withContext('nothing at all has crossed the channel yet').toEqual([]);
+
+    tick(1);
+    expect((events[0] as { kind: string; message: string }).kind).toBe('error');
+    expect((events[0] as { kind: string; message: string }).message)
+      .toBe(runString('en', 'runStartTimedOut', { type: 'Proofread' }));
+
+    sub.unsubscribe();
+  }));
 });
