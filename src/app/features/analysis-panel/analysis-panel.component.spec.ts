@@ -1795,7 +1795,13 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       });
     });
 
-    it('does NOT track when there is no bookId (guard)', () => {
+    it('does NOT track when there is no bookId (guard), and SAYS SO (c03)', () => {
+      // c03 observability. A decline here is the one branch on which the server has started a real job
+      // that no client surface picks up: no registry row means no Activity Center entry and no in-page
+      // banner, and nothing throws, so there is no HTTP error in the console to correlate a
+      // "my analysis vanished" report against. The bracketed-tag console.warn is the convention the c01
+      // start-budget expiry and the c02 dismissal seam already use. No ids and no document text.
+      const warn = spyOn(console, 'warn');
       component.bookId = null;
       component.chapterId = 'chap-1';
       component.selectedAnalysisType = 'Proofread';
@@ -1803,6 +1809,25 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-x' });
 
       expect(jobRegistrySpy.track).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalled();
+      const args = warn.calls.mostRecent().args;
+      expect(args[0] as string).toContain('[AnalysisRun]');
+      expect(JSON.stringify(args))
+        .withContext('the job id is deliberately NOT logged')
+        .not.toContain('async-x');
+    });
+
+    it('logs nothing on the ordinary path, so the warn stays a signal', () => {
+      const warn = spyOn(console, 'warn');
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'Proofread';
+      (component as any).prepareForRun();
+
+      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-ok' });
+
+      expect(jobRegistrySpy.track).toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
     });
 
     it('tracks a fresh Linguistic async job with scopeLabel scene when sceneId is set', () => {
@@ -1938,6 +1963,48 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
       // track must be called exactly once: the orchestration poll is reused, not forked.
       expect(jobRegistrySpy.track).toHaveBeenCalledTimes(1);
+    });
+
+    // ── final-r01: the PRODUCTION-SOURCE half of the c02 "a sync run is on none of the three
+    //    surfaces" decision ────────────────────────────────────────────────────────────────────────
+    //
+    // `three-surface-parity.spec.ts` pins the RENDERED consequence of that decision, but its host is a
+    // synthetic fixture that drives JobRegistryService itself: it never runs this panel, which is the
+    // component that owns the one `track()` call site. MEASURED during the closing review: adding a
+    // client-minted synthetic `track()` to `runAnalysis()` - the exact change the decision forbids -
+    // left the whole suite green, so nothing anywhere actually guarded it.
+    //
+    // This is that guard, asserted where the change would be made. `track()` may be reached ONLY from
+    // a `job-started` event; a run that never produces one must reach no surface but the dialog.
+    it('c02: a SYNC run (no job-started) is NEVER tracked, so the bell gets no row it cannot honor', () => {
+      const run$ = new Subject<AnalysisRunEvent>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.runAnalysisAfterSave = () => run$.asObservable();
+
+      component.bookId = 'book-1';
+      component.chapterId = 'chap-1';
+      component.selectedAnalysisType = 'Proofread';
+      jobRegistrySpy.track.calls.reset();
+
+      // The REAL entry point, not handleRunEvent: a synthetic id would most naturally be minted at run
+      // start, before any event exists, and that is precisely where handleRunEvent cannot see it.
+      component.runAnalysis();
+      expect(jobRegistrySpy.track)
+        .withContext('a run has no id to track at start; minting one here is the change c02 rejected')
+        .not.toHaveBeenCalled();
+
+      // The whole sync lifecycle: the client-composed opener, then the blocking call returning.
+      run$.next({ kind: 'status', message: 'running' });
+      run$.next({ kind: 'sync-result', result: { id: 'r-1', chapterId: 'chap-1', type: 'Proofread', analysisType: 'Proofread', resultText: 'ok', createdAt: new Date().toISOString() } as AnalysisResultDto });
+      run$.complete();
+
+      expect(jobRegistrySpy.track)
+        .withContext('a sync run persists with a NULL JobId, cannot be reattached, and dies with this '
+          + 'panel: a registry row would promise durability it does not have')
+        .not.toHaveBeenCalled();
+      expect((component as any).currentRunJobId)
+        .withContext('and the in-page indicator must have nothing to point at either')
+        .toBeNull();
     });
   });
 

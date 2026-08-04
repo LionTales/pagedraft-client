@@ -43,6 +43,7 @@ export type RunDialogLabelKey =
   | 'minimize'
   | 'close'
   | 'keepsRunning'
+  | 'keepsRunningWhileOpen'
   | 'running'
   | 'pending'
   | 'succeeded'
@@ -57,6 +58,7 @@ export const RUN_DIALOG_LABELS_HE: Record<RunDialogLabelKey, string> = {
   minimize:    'מזעור',                      // DRAFT he - needs native review
   close:       'סגירה',                      // DRAFT he - needs native review
   keepsRunning: 'הפעולה תמשיך לרוץ ברקע',    // DRAFT he - needs native review
+  keepsRunningWhileOpen: 'הפעולה תמשיך לרוץ כל עוד חלונית הניתוח פתוחה', // DRAFT he - needs native review
   // status pills (same vocabulary as the Activity Center)
   running:     'בריצה',                      // DRAFT he - needs native review
   pending:     'ממתין',                      // DRAFT he - needs native review
@@ -72,6 +74,7 @@ export const RUN_DIALOG_LABELS_EN: Record<RunDialogLabelKey, string> = {
   minimize:    'Minimize',
   close:       'Close',
   keepsRunning: 'This keeps running in the background',
+  keepsRunningWhileOpen: 'This keeps running while the analysis panel stays open',
   running:     'Running',
   pending:     'Pending',
   succeeded:   'Done',
@@ -94,9 +97,17 @@ const STATUS_CLASS: Record<RunDialogStatusKey, string> = {
 /**
  * The dialog's d1 state machine.
  *  - `hidden`    : not open.
- *  - `starting`  : (a) open, no trackable jobId yet. Indeterminate, NO minimize.
+ *  - `starting`  : (a) open, no trackable jobId yet. Indeterminate, NO minimize; it offers a labelled
+ *                  CLOSE instead (c01), which dismisses without emitting `minimizeRequested`. The
+ *                  absence of minimize here is STRUCTURAL, not an omission - a run with no registry
+ *                  entry has no Activity Center row to be minimized into. c02 re-decided this against a
+ *                  direct user request and kept it; the full argument is on {@link minimize}.
  *  - `tracked`   : (b) a registry-tracked, non-terminal job drives the view. Minimize available.
- *  - `terminal`  : (c) the run is over. No minimize; plain close.
+ *  - `terminal`  : (c) the run is over. No minimize (there is nothing left to hand to the Activity
+ *                  Center), but a labelled CLOSE, on the same principle as (a) and for a stronger
+ *                  reason: (a) and (b) resolve on their own, while (c) persists until dismissed, so a
+ *                  bare glyph here is an undiscovered escape from a card that never goes away. Its
+ *                  actions row carries NO hint - both hints promise a live run, and this one is over.
  */
 export type RunDialogState = 'hidden' | 'starting' | 'tracked' | 'terminal';
 
@@ -131,9 +142,16 @@ export interface RunDialogMinimizeEvent {
  *         | otherwise                   -> (a) starting
  *
  * `(a) -> (b)` fires purely off `job-started` followed by `jobById$` resolving non-null, at ANY elapsed
- * time (no timeout, no auto-fail). `(a) -> (c)` fires off `sync-result` / `job-result` /
- * `streaming-complete` / `error` / `run-finished` while no jobId has been captured. `(b) -> (c)` fires
- * purely off `jobById$` reporting a terminal status. Terminal latches EXACTLY ONCE per run.
+ * time: this component still runs NO clock of its own and still never auto-fails a run. `(a) -> (c)`
+ * fires off `sync-result` / `job-result` / `streaming-complete` / `error` / `run-finished` while the run
+ * is NOT in state (b) (see {@link AnalysisRunDialogComponent.registryOwnsRun}, and note that this is
+ * deliberately NOT "no jobId has been captured" - c03). `(b) -> (c)` fires purely off `jobById$`
+ * reporting a terminal status. Terminal latches EXACTLY ONCE per run.
+ *
+ * A run that never answers IS bounded, but the bound is not here: `AnalysisRunOrchestrationService`
+ * owns a start budget (c01, `withStartTimeout`) and publishes its expiry as an ordinary `'error'` event
+ * on this same stream. So the escape from a blocking state (a) arrives through the path above and needs
+ * no new state, no second terminal predicate and no timer in this view.
  *
  * `run-finished` (c01) is the panel's own terminal rather than an orchestration event: it says the run is
  * over with nothing to report, which today means it was cancelled by the panel being destroyed mid-run or
@@ -145,7 +163,7 @@ export interface RunDialogMinimizeEvent {
  * card to nothing rather than to a terminal: it says the run produced a result and the panel discarded it
  * as belonging to a chapter/scene the user has left. Latching any status there would be a lie in both
  * directions ("Done" for suggestions no surface ever showed, "Canceled" for a run that succeeded), so an
- * UNTRACKED card simply closes. Same `jobId === null` fence as `run-finished`.
+ * UNTRACKED card simply closes. Same `registryOwnsRun` fence as `run-finished`.
  *
  * ── Close vs cancel ────────────────────────────────────────────────────────────────────────────────
  * There is NO cancel affordance: no cancel endpoint exists (neither AnalysisController nor any client
@@ -154,6 +172,11 @@ export interface RunDialogMinimizeEvent {
  * Activity Center), which is why the header dismiss button relabels itself "Minimize" there. In (a) and
  * (c) closing just dismisses the view: in (a) the run continues because the panel, not this dialog,
  * owns the HTTP subscription, but nothing is registry-tracked yet so there is nothing to minimize into.
+ *
+ * c02 sharpened the "the run continues" half, because it is only true for as long as the PANEL lives:
+ * the panel's `ngOnDestroy` unsubscribes the run, so on the sync route leaving the editor cancels it.
+ * State (a)'s hint says exactly that much and no more (`keepsRunningWhileOpen`); state (b) keeps the
+ * unconditional `keepsRunning`, which a server-side job genuinely earns.
  *
  * ── Shape: MODAL WHILE THE RUN IS LIVE (c03) ───────────────────────────────────────────────────────
  * Two sibling fixed layers, mirroring Pagewise's `pw-modal`: a `.rd-backdrop` scrim (blurred, with a
@@ -236,10 +259,14 @@ export interface RunDialogMinimizeEvent {
             }
             <span class="rd-title">{{ title }}</span>
             <span class="rd-status-pill" [class]="'rd-status-pill ' + statusClass">{{ statusLabel }}</span>
+            <!-- The glyph control keeps its accessible name AND now carries a title attribute, so the
+                 escape is discoverable by hover as well as by screen reader. It is no longer the ONLY
+                 escape in state (a): see the labelled control in the actions row below. -->
             <button
               class="rd-dismiss"
               type="button"
               [attr.aria-label]="dismissLabel"
+              [attr.title]="dismissLabel"
               (click)="dismiss()">&#x2715;</button>
           </div>
 
@@ -302,6 +329,56 @@ export interface RunDialogMinimizeEvent {
               </button>
               <span class="rd-hint">{{ label('keepsRunning') }}</span>
             </div>
+          } @else if (state === 'starting') {
+            <!-- THE ROW HAS ONE BRANCH PER VISIBLE STATE, and that is the invariant to preserve: every
+                 state the user can be left in puts a LABELLED control in this slot. (b) minimize, (a)
+                 close, (c) close. A state with no branch here has only the header glyph, which is the
+                 defect P1-1 recorded against (c).
+
+                 c01 (run-dialog-starting-state-escape): state (a) is the ONE modal state with neither
+                 progress nor a minimize control, and the user who sat behind it reported "no button to
+                 dismiss" while the header's bare glyph control was on screen the whole time. An icon
+                 with an accessible name is not a discoverable escape for a sighted user, so state (a)
+                 gets a real labelled control in the same row minimize occupies in (b).
+
+                 It says CLOSE, not "minimize", and that is deliberate rather than cosmetic: nothing is
+                 registry-tracked yet, so there is no Activity Center row to hand the run to and no
+                 destination for the fly-to-bell flight. It emits no minimizeRequested, which keeps that
+                 output's docblock promise ("fires ONLY from state (b), so a listener can assume a live
+                 tracked job") true. c02 re-examined that choice against the user's "even with only 1
+                 chunk, the user could minimize the popup" and KEPT it; see the c02 note below.
+
+                 c02 replaced the hint. It used to reuse state (b)'s keepsRunning ("this keeps running
+                 in the background"), which state (a) cannot keep: on the SYNC route the run lives in an
+                 HTTP subscription the analysis PANEL owns, and AnalysisPanelComponent.ngOnDestroy
+                 unsubscribes it (emitting run-finished), so leaving the editor or switching the
+                 Edit-help sub-tab CANCELS the run. Telling the user "keeps running in the background"
+                 right as we invite them to close the card is exactly the promise that gets broken. The
+                 state-(a) wording is the weaker, always-true statement instead; the moment the run turns
+                 out to be async the card moves to (b) and shows the stronger one. -->
+            <div class="rd-actions">
+              <button class="rd-close" type="button" (click)="dismiss()">
+                {{ label('close') }}
+              </button>
+              <span class="rd-hint">{{ label('keepsRunningWhileOpen') }}</span>
+            </div>
+          } @else if (state === 'terminal') {
+            <!-- P1-1: state (c) gets the SAME labelled escape, for the same reason (a) got it. It used
+                 to render no actions row at all, so the header's bare glyph was the only way out - the
+                 exact affordance c01 declared insufficient above, in the state that needs it MOST:
+                 (a) and (b) resolve on their own, while (c) persists until dismissed, so an
+                 undiscovered glyph leaves a card over the editor indefinitely. The expiry copy c01
+                 itself wrote ends "close this window" (סגרו את החלון), next to no close control.
+
+                 NO hint element here, and that is deliberate rather than an omission: both hint
+                 strings are promises about a LIVE run (keepsRunning in (b), the weaker
+                 keepsRunningWhileOpen in (a)), and in (c) the run is over, so either one would be
+                 false. There is nothing left to promise, so nothing is said. -->
+            <div class="rd-actions">
+              <button class="rd-close" type="button" (click)="dismiss()">
+                {{ label('close') }}
+              </button>
+            </div>
           }
         </div>
       </div>
@@ -339,6 +416,15 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
   /**
    * The minimize gesture. Fires ONLY from state (b), so a listener can assume a live tracked job.
    * c2 hooks the fly-to-bell transition here.
+   *
+   * c02 AUDITED this promise rather than widening it and hoping. The consumer is exactly one:
+   * `EditorPageComponent.onRunDialogMinimize`, bound in `editor-page.component.html`, which calls
+   * `flyToActivityCenter(event.originRect)` UNCONDITIONALLY - it does not re-check that a bell row
+   * exists, and `resolveMinimizeTarget` falls back to a computed corner when the bell cannot be
+   * measured, so an emit from a state with no tracked job would animate a card into an empty corner and
+   * `event.jobId` would have nothing behind it. The promise is therefore load-bearing and is kept: a
+   * state-(a) close dismisses without emitting. See {@link minimize} for why a sync run is not made
+   * trackable in order to earn the gesture.
    */
   @Output() minimizeRequested = new EventEmitter<RunDialogMinimizeEvent>();
 
@@ -381,8 +467,20 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
   /** The ONLY trackable job id, captured from `'job-started'`. Never from `sync-result.jobId`. */
   private jobId: string | null = null;
   private trackedJob: TrackedJob | null = null;
-  /** Latched EXACTLY ONCE per run. Its presence is state (c). */
+  /**
+   * Latched ONCE per run, with the single c02 exception below. Its presence is state (c).
+   */
   private terminal: { status: TerminalStatus; message: string; percent: number | null } | null = null;
+  /**
+   * Is the CURRENT `terminal` the provisional one composed by the start-budget expiry? (c02)
+   *
+   * True only while a `startBudgetExpired` error is the latched terminal; it is what
+   * {@link supersedesExpiredStartBudget} reads to let this run's own late result retract it. Kept as a
+   * separate field rather than a `TerminalStatus` member because every surface that renders the terminal
+   * must keep treating this as an ordinary `'failed'` - the run really has failed as far as the user is
+   * concerned until, and unless, a result actually arrives.
+   */
+  private terminalIsExpiredStartBudget = false;
   /** State-(a) message, from the raw `'status'` events only. */
   private statusMessage = '';
 
@@ -458,8 +556,40 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
   get state(): RunDialogState {
     if (!this.open) return 'hidden';
     if (this.terminal) return 'terminal';
-    if (this.jobId !== null && this.trackedJob !== null) return 'tracked';
+    if (this.registryOwnsRun) return 'tracked';
     return 'starting';
+  }
+
+  /**
+   * Is this run OWNED by the registry - i.e. is it genuinely in state (b)? (c03, 2026-08-04)
+   *
+   * ONE predicate behind two things that used to be spelled differently: the `'tracked'` arm of
+   * {@link state} above, and the fence on every `(a) -> (c)` terminal arm in {@link onRunEvent}. Those
+   * arms used to read `jobId === null`, which is a WEAKER test - it says "no id was captured", not "the
+   * registry owns this run" - and the gap between the two is a state the dialog can actually reach:
+   * `AnalysisPanelComponent.handleRunEvent` emits `'job-started'` to the host (which captures the id
+   * HERE, synchronously) BEFORE it calls `jobRegistry.track(...)`, and that call sits behind a guard.
+   * If the guard ever declines - today it is `if (this.bookId)`, tomorrow it is whatever a new call site
+   * adds - this dialog is left holding `jobId !== null` with `trackedJob === null`, which is state (a):
+   * MODAL, indeterminate, with the c01 start budget ALREADY cancelled (`provesServerAnswered` returns
+   * true for `'job-started'`) and, under the old fence, every terminal latch switched off. Nothing that
+   * could still happen would resolve it.
+   *
+   * Keying the fence on state (b) itself retires that whole class rather than the single guard that can
+   * reach it today: when the registry has no row for this run there is no second authority to defer to,
+   * so the run's own stream resolves the card exactly as it does before any id is captured. The d1 item 6
+   * contract is not widened - it is stated more exactly. "(b) -> (c) is the registry's call alone" is now
+   * literally what the code tests, and the case it was written to stop (a REGISTRY-tracked job whose card
+   * must outlive the panel) is `registryOwnsRun === true` and still fenced. Note also what this is NOT: a
+   * clock. The escape arrives on the run stream this view was already reading, so the rule that the dialog
+   * runs no timer of its own (`docs/FRONTEND_ARCHITECTURE_NOTES.md`) is untouched.
+   *
+   * `trackedJob !== null` alone would be equivalent (it is only ever written from the subscription
+   * `attachToJob` opens), but both conjuncts are kept so this reads as the definition of state (b) rather
+   * than as a shortcut that a later change to `trackedJob`'s writers could quietly falsify.
+   */
+  private get registryOwnsRun(): boolean {
+    return this.jobId !== null && this.trackedJob !== null;
   }
 
   /**
@@ -608,7 +738,17 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
     return STATUS_CLASS[this.statusKey];
   }
 
-  /** The dismiss control never lies about what it does: it is a minimize while a job is tracked. */
+  /**
+   * The dismiss control never lies about what it does: it is a minimize while a job is tracked.
+   *
+   * This names the header's `✕` (as both `aria-label` and `title`). In states (a) and (c) it resolves to
+   * "close", and it is the only escape in NEITHER of them: the actions row renders a real labelled close
+   * button in both, because an accessible name is not a discoverable affordance. (a) got that control in
+   * c01; (c) got it in the P1-1 fix, which is where the sharing of this name across two controls was
+   * decided rather than left to accrete - see the plan's `## c01 decision`. Two controls with the
+   * accessible name "Close" in one dialog is REDUNDANT, not ambiguous: they invoke the same
+   * {@link dismiss}, so either is correct to activate and neither can be the wrong choice.
+   */
   get dismissLabel(): string {
     return this.canMinimize ? this.label('minimize') : this.label('close');
   }
@@ -624,6 +764,30 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
   /**
    * Minimize: the job keeps running and stays visible in the Activity Center. Emits the geometry seam
    * BEFORE hiding, so the animation owner still has a live card to measure.
+   *
+   * ── c02: why a SYNC run still cannot minimize, and why that is the honest answer ──────────────────
+   * The user asked for it directly ("even with only 1 chunk, the user could minimize the popup"), so
+   * this was reconsidered rather than left as-is, and the alternative was costed: TRACK the sync run in
+   * `JobRegistryService` behind a client-minted id, so state (b) and every surface it feeds work
+   * uniformly. It was rejected on three facts, all of them checkable in this repo:
+   *
+   *  1. A SYNC RUN HAS NO EXISTENCE OUTSIDE THE MOUNTED PANEL. `AnalysisPanelComponent.ngOnDestroy`
+   *     unsubscribes the run and emits `run-finished`, i.e. leaving the editor or switching the
+   *     Edit-help sub-tab CANCELS it. The Activity Center is app-level, cross-book chrome whose entire
+   *     promise is "you can navigate away and it is still there". A row for a run that dies when you
+   *     navigate away does not merely lack a feature, it makes the bell mean two different things.
+   *  2. IT CAN NEVER BE REATTACHED. The sync route persists its result with a NULL JobId (verified in
+   *     the database, 2026-08-03), so the reattach seam's `getActiveAnalysisJobs` cannot return it and
+   *     no backend read can rediscover it. Its work lives in an in-flight XHR that a refresh aborts.
+   *  3. THE REGISTRY WOULD REPORT IT FAILED. `track()` unconditionally starts a poll, and a poll of an
+   *     id the server never minted 404s, whose error channel is `finalize(jobId, 'failed')`. That is
+   *     the very trap the d1 contract above already records about the sync response's `result.jobId`.
+   *
+   * So there is nothing to hand over, and a flight toward a bell with no row in it would be a lie told
+   * with an animation. State (a) gets a real labelled CLOSE (c01) instead, and its hint is the weaker,
+   * true one. `minimizeRequested` is therefore UNWIDENED: it still fires only from here, only in state
+   * (b), and its docblock promise still holds for `EditorPageComponent.onRunDialogMinimize`, which is
+   * its one consumer and which calls `flyToActivityCenter` unconditionally.
    */
   minimize(): void {
     if (!this.canMinimize || this.jobId === null) return;
@@ -638,11 +802,28 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
     this.setOpen(false);
   }
 
-  /** Close. For a tracked job this IS minimize; otherwise a plain dismiss. Never cancels the run. */
+  /**
+   * Close. For a tracked job this IS minimize; otherwise a plain dismiss. Never cancels the run.
+   *
+   * The four escapes in state (a) - the header glyph, c01's labelled close, Escape, and the backdrop
+   * click - all land here, which is why the c02 observability seam is here and not on one button.
+   */
   dismiss(): void {
     if (this.canMinimize) {
       this.minimize();
       return;
+    }
+    // c02 OBSERVABILITY. Closing in state (a) is the one dismissal that leaves a LIVE run with no
+    // surface of its own: nothing is registry-tracked, so there is no Activity Center row and no in-page
+    // indicator either, and the only remaining sign of the run is the analysis panel's own disabled
+    // "Running..." button. That is the accepted cost of the c02 decision (see the note above
+    // `minimize()`), but it is also the state in which a "my analysis vanished" report becomes
+    // unexplainable from the console, because nothing failed and nothing was logged. So it is recorded.
+    // Bracketed-tag console.info matches the convention in core/services; no ids and no document text.
+    if (this.state === 'starting') {
+      console.info('[AnalysisRun] run card closed while starting: the run continues with no card', {
+        analysisType: this.analysisType,
+      });
     }
     this.setOpen(false);
   }
@@ -847,14 +1028,16 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
     this.jobId = null;
     this.trackedJob = null;
     this.terminal = null;
+    this.terminalIsExpiredStartBudget = false;
     this.statusMessage = '';
     this.runEvents?.pipe(takeUntil(this.runStop$)).subscribe(event => this.onRunEvent(event));
     this.cdr.markForCheck();
   }
 
   private onRunEvent(event: AnalysisRunEvent): void {
-    // Single-resolve: once (c) is latched, nothing on the raw stream can move the dialog again.
-    if (this.terminal) return;
+    // Single-resolve: once (c) is latched, nothing on the raw stream can move the dialog again - with the
+    // ONE exception below.
+    if (this.terminal && !this.supersedesExpiredStartBudget(event)) return;
 
     switch (event.kind) {
       case 'job-started':
@@ -865,7 +1048,8 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
         // State (a) only. From (b) on, the detail line is COMPOSED by `runDetail` from the tracked job's
         // structured status/counts (c02 + c04) - d1's original "job.message is the single source" rule no
         // longer holds, because that field is the backend's raw English prose and no surface renders it.
-        if (this.jobId === null) this.statusMessage = event.message;
+        // c03: the fence is state (b), not "an id was captured" - see registryOwnsRun.
+        if (!this.registryOwnsRun) this.statusMessage = event.message;
         break;
 
       case 'progress':
@@ -877,12 +1061,27 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
       case 'job-result':
       case 'streaming-complete':
         // (a) -> (c). NOTE `sync-result` may carry a `result.jobId`; it is NOT read here, by design.
-        if (this.jobId === null) this.latchTerminal('succeeded', '', 100);
+        if (!this.registryOwnsRun) {
+          // c02: if the terminal on screen is a start-budget expiry, this result RETRACTS it. Dropping the
+          // provisional latch first is what lets `latchTerminal` write the true outcome.
+          this.retractExpiredStartBudgetTerminal();
+          this.latchTerminal('succeeded', '', 100);
+        }
         break;
 
       case 'error':
         // (a) -> (c). While tracked, (b) -> (c) is the registry's call alone (d1 item 6).
-        if (this.jobId === null) this.latchTerminal('failed', event.message, null);
+        if (!this.registryOwnsRun) {
+          // A GENUINE error retracts a provisional expiry exactly as a result does. The expiry says the
+          // server never answered; this says it answered and the run failed. Both cannot be true of one
+          // run, and this one is the statement with the server behind it.
+          this.retractExpiredStartBudgetTerminal();
+          // c02: remember whether THIS terminal is the provisional one. Set AFTER the retraction above
+          // (which clears the flag) and only on the branch that actually latches, so it can never
+          // describe a terminal some other arm wrote.
+          this.terminalIsExpiredStartBudget = event.startBudgetExpired === true;
+          this.latchTerminal('failed', event.message, null);
+        }
         break;
 
       case 'run-finished':
@@ -891,10 +1090,12 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
         // the save that had to precede it rejected. So the status is 'canceled', not 'succeeded': there is
         // no result behind this card. Percent stays null; nothing about progress is read off this event.
         //
-        // The `jobId === null` guard is load-bearing, not defensive: a registry-tracked run (state (b))
+        // The `registryOwnsRun` guard is load-bearing, not defensive: a registry-tracked run (state (b))
         // genuinely keeps running server-side after the panel goes away, which is the entire point of the
-        // minimize gesture, so (b) -> (c) must stay the registry's call alone (d1 item 6).
-        if (this.jobId === null) this.latchTerminal('canceled', '', null);
+        // minimize gesture, so (b) -> (c) must stay the registry's call alone (d1 item 6). c03 sharpened
+        // the test from `jobId === null` to "not state (b)"; a captured id with no registry row behind it
+        // is NOT a tracked run and must not inherit a tracked run's immunity.
+        if (!this.registryOwnsRun) this.latchTerminal('canceled', '', null);
         break;
 
       case 'result-dropped':
@@ -909,10 +1110,10 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
         // switch, this card would have latched terminal and the editor's c02 reconcile would have closed
         // it at the switch. This is that same end state, reached through the one path that skipped it.
         //
-        // The `jobId === null` guard is the same fence as `run-finished` (d1 item 6): a registry-tracked
+        // The `registryOwnsRun` guard is the same fence as `run-finished` (d1 item 6): a registry-tracked
         // run keeps running server-side and keeps its card, so `(b) -> (c)` stays the registry's call
         // alone. In state (b) this event is a no-op, exactly as the result events themselves already are.
-        if (this.jobId === null) this.setOpen(false);
+        if (!this.registryOwnsRun) this.setOpen(false);
         break;
 
       case 'streaming-token':
@@ -955,6 +1156,74 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
         }
         this.cdr.markForCheck();
       });
+  }
+
+  /**
+   * Is this event allowed through the single-resolve guard to correct a PROVISIONAL terminal? (c02)
+   *
+   * ── Why this does not break the d1 item 6 contract ────────────────────────────────────────────────
+   * The single-resolve latch exists to stop the REGISTRY from moving a terminal: a run in state (b) is
+   * owned by `JobRegistryService`, and `(b) -> (c)` is its call alone. That is why every `(a) -> (c)`
+   * arm above is fenced on {@link registryOwnsRun}. This exception is a DIFFERENT case on all three axes,
+   * which is what makes it distinguishable rather than a hole in that rule:
+   *  - it requires `!registryOwnsRun`, so it is unreachable from state (b) and the registry is not
+   *    involved. c03 moved this off the older `jobId !== null` spelling in lockstep with those arms: the
+   *    flag it reads is written by the `'error'` arm, so leaving one copy of the fence behind would let
+   *    an expiry be latched on a condition this method then refused to retract;
+   *  - the superseding event is THIS RUN'S OWN result, off the same subscription that produced the
+   *    terminal being retracted - not a second, competing authority;
+   *  - it only ever retracts `startBudgetExpired`, an error this client composed because it stopped
+   *    WAITING. It is the one terminal here that was never a statement about the run.
+   * A terminal latched from a genuine server error stays permanent: the flag is absent, this returns
+   * false on the very first line, whatever arrives next. Note the flag is fenced TWICE - here and in
+   * {@link retractExpiredStartBudgetTerminal} - so removing either copy alone leaves the behaviour
+   * intact and the specs green. That is deliberate belt-and-braces on a contract exception, but it
+   * means any mutation testing of this fence has to take both copies together.
+   *
+   * ── Which events may supersede, and why the other seven may not ───────────────────────────────────
+   * Every kind on {@link AnalysisRunEvent} was walked against a provisional terminal, because the class
+   * here is "an event carrying the run's real outcome is dropped while the card shows a guess":
+   *  - `sync-result` / `job-result` / `streaming-complete` - the run answered and SUCCEEDED. Retract.
+   *  - `error` WITHOUT `startBudgetExpired` - the run answered and FAILED. Retract: the expiry says the
+   *    server never answered and this says it did, so leaving the expiry copy up would put the real
+   *    failure in the panel's banner and the timeout copy on the card above it, which is the same
+   *    two-surfaces-contradicting-each-other defect this whole mechanism exists to remove, mirrored.
+   *    (An expiry cannot supersede an expiry: the timer fires once, and this returns false for a flagged
+   *    error anyway, so the provisional terminal can never be re-latched as provisional.)
+   *  - `status` - client-composed and emitted before a byte leaves the browser; it is exactly what
+   *    {@link provesServerAnswered} refuses to treat as life. Allowing it would rewrite the message
+   *    under a resolved card on the say-so of the one event that proves nothing.
+   *  - `progress` - deliberately ignored on every path in this component, terminal or not.
+   *  - `run-finished` - the PANEL saying it stopped listening, not the server reporting an outcome. It
+   *    latches `canceled` with an empty message, so honoring it would replace the expiry's actionable
+   *    copy ("close this and try again") with strictly less information.
+   *  - `result-dropped` - the panel saying the context moved on. The editor's per-context reconcile
+   *    already closes this dialog at a context switch, so there is no stranded card for it to rescue.
+   *  - `job-started` - not a terminal. {@link state} returns `'terminal'` for as long as a terminal is
+   *    latched, so attaching an id could not change what is on screen without a retraction this event
+   *    has no outcome to justify.
+   *
+   * ── Why it has to exist ───────────────────────────────────────────────────────────────────────────
+   * The expiry does NOT cancel the run (there is no cancel endpoint), and c02 MEASURED the budget
+   * misfiring on a healthy run: a cold near-threshold Hebrew LineEdit returned a real result in 394.3s
+   * against a 180s budget. The late result reaches `AnalysisPanelComponent.onRunResultReceived`, which
+   * clears `runError` and renders the suggestions. Without this, the card above those suggestions keeps
+   * saying the run never started, permanently, with no path back - two surfaces contradicting each other
+   * about one run. Correcting the card is the only outcome that is true of both.
+   */
+  private supersedesExpiredStartBudget(event: AnalysisRunEvent): boolean {
+    if (!this.terminalIsExpiredStartBudget || this.registryOwnsRun) return false;
+    return event.kind === 'sync-result'
+      || event.kind === 'job-result'
+      || event.kind === 'streaming-complete'
+      || (event.kind === 'error' && event.startBudgetExpired !== true);
+  }
+
+  /** Drop a provisional start-budget terminal so the real outcome can be latched over it (c02). */
+  private retractExpiredStartBudgetTerminal(): void {
+    if (!this.terminalIsExpiredStartBudget) return;
+    this.terminalIsExpiredStartBudget = false;
+    this.terminal = null;
   }
 
   private latchTerminal(status: TerminalStatus, message: string, percent: number | null): void {

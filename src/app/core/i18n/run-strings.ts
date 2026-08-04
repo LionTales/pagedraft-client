@@ -72,6 +72,14 @@ export type RunStringKey =
   | 'runCanceled'
   | 'analysisFailed'
   | 'loadFinalResultFailed'
+  // The START-BUDGET expiry (run-dialog-starting-state-escape c01). Deliberately NOT a synonym of
+  // `runFailed`: this key exists precisely because the two are DIFFERENT facts, and the plan's decision
+  // (c) turns on the difference. `runFailed` means the server ran the analysis and it failed, which
+  // leaves the user nothing to do. This one means the client never got a single answer back, so the
+  // actionable next step ("close this and try again") is real and is written into the sentence. Keeping
+  // one wording for both would have re-created the defect it fixes: an indeterminate wait that the user
+  // cannot tell apart from a run that genuinely died.
+  | 'runStartTimedOut'
   // ── re-analysis consent prompt ──
   | 'reanalysisConfirmOne'
   | 'reanalysisConfirmMany'
@@ -134,6 +142,7 @@ export const RUN_STRINGS_HE: Record<RunStringKey, string> = {
   runCanceled:           '{type}: בוטל.',
   analysisFailed:        'הניתוח נכשל.',
   loadFinalResultFailed: 'לא ניתן לטעון את התוצאה הסופית. טוען מחדש את ההיסטוריה.',
+  runStartTimedOut:      '{type}: ההרצה לא התחילה. השרת לא הגיב בזמן. סגרו את החלון ונסו שוב.',
 
   reanalysisConfirmOne:  'הרצת ניתוח חדש תסיים את הסשן הנוכחי עבור {scope}. הצעה אחת ממתינה תימחק. להמשיך?',
   reanalysisConfirmMany: 'הרצת ניתוח חדש תסיים את הסשן הנוכחי עבור {scope}. {count} הצעות ממתינות תימחקנה. להמשיך?',
@@ -174,6 +183,7 @@ export const RUN_STRINGS_EN: Record<RunStringKey, string> = {
   runCanceled:           '{type}: canceled.',
   analysisFailed:        'Analysis failed.',
   loadFinalResultFailed: 'Could not load the final result. Reloading history.',
+  runStartTimedOut:      '{type}: the run did not start. The server did not respond in time. Close this and try again.',
 
   reanalysisConfirmOne:  'Running a new analysis will end your current session for this {scope}. 1 pending suggestion will be discarded. Continue?',
   reanalysisConfirmMany: 'Running a new analysis will end your current session for this {scope}. {count} pending suggestions will be discarded. Continue?',

@@ -24,9 +24,10 @@
  * Uses a BehaviorSubject-backed JobRegistryService stub whose jobById$ mirrors the real selector; the
  * real root service (and its five transitive deps) is NOT injected.
  */
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed, fakeAsync, flush, tick } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { By } from '@angular/platform-browser';
-import { BehaviorSubject, Observable, Subject } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, Subject, Subscription } from 'rxjs';
 import { distinctUntilChanged, map } from 'rxjs/operators';
 
 import {
@@ -35,8 +36,16 @@ import {
   RUN_DIALOG_LABELS_HE,
   RunDialogMinimizeEvent,
 } from './analysis-run-dialog.component';
+import { MINIMIZE_GHOST_CLASS, flyToActivityCenter } from './minimize-flight';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
-import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
+import {
+  AnalysisRunContext,
+  AnalysisRunEvent,
+  AnalysisRunOrchestrationService,
+  RUN_START_BUDGET_MS,
+} from '../../core/services/analysis-run-orchestration.service';
+import { AnalysisService } from '../../core/services/analysis.service';
+import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { AnalysisResultDto } from '../../core/models/analysis';
 import { RunStringKey, runString } from '../../core/i18n/run-strings';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
@@ -556,6 +565,96 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
 
       expect(component.state).toBe('terminal');
       expect(el('.rd-status-pill')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['succeeded']);
+    });
+  });
+
+  // ── c03: a captured jobId the registry never resolves ─────────────────────
+  //
+  // "An id was captured" and "the registry owns this run" are two DIFFERENT facts, and the code used to
+  // fence every (a) -> (c) arm on the first one. AnalysisPanelComponent.handleRunEvent fans 'job-started'
+  // out to the host - which is what makes this dialog capture the id - and only AFTERWARDS calls
+  // jobRegistry.track(...), behind a guard. By then the c01 start budget is already spent, because
+  // provesServerAnswered returns true for 'job-started' and that tap runs upstream of the panel's
+  // subscriber. A guard that declines therefore left the card modal, indeterminate, with no timer left and
+  // every terminal latch switched off: nothing that could still happen would resolve it.
+  //
+  // The fence is now `registryOwnsRun` (jobId AND a tracked job, i.e. state (b) itself), so the run's own
+  // stream resolves the card exactly as it does before any id is captured. No clock was added here.
+  //
+  // The registry stub is BehaviorSubject-backed and is simply never given a job for JOB-ORPHAN, so
+  // jobById$ keeps emitting null - the real shape of a declined track(). `events$` is a Subject held OPEN
+  // across the assertions, so state (a) is asserted while the run is genuinely mid-flight rather than
+  // collapsed inside a synchronous of().
+  describe('a captured jobId the registry never resolves (c03)', () => {
+    /** Reach the defect state: the id IS captured, and no registry row ever appears for it. */
+    function startedButUntracked(): void {
+      startRun();
+      emit({ kind: 'job-started', jobId: 'JOB-ORPHAN' });
+      expect(registry.requestedIds)
+        .withContext('premise: the id really was captured and looked up')
+        .toEqual(['JOB-ORPHAN']);
+      expect(component.state)
+        .withContext('premise: this is NOT state (b) - the registry has no row for this run')
+        .toBe('starting');
+      expect(el('.rd-minimize'))
+        .withContext('premise: there is nothing to minimize into, which is what makes the card blocking')
+        .toBeNull();
+    }
+
+    it("resolves to canceled on the panel's run-finished, exactly as a never-started run does", () => {
+      startedButUntracked();
+
+      emit({ kind: 'run-finished' });
+
+      expect(component.state).toBe('terminal');
+      expect(el('.rd-status-pill')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['canceled']);
+      // And the card stops blocking, which is the whole point: the modality is a projection of `state`.
+      expect(component.isModal).toBeFalse();
+    });
+
+    it("resolves to succeeded on the run's OWN job-result", () => {
+      startedButUntracked();
+
+      emit({ kind: 'job-result', result: makeResult() });
+
+      expect(component.state).toBe('terminal');
+      expect(el('.rd-status-pill')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['succeeded']);
+      expect(component.percent).toBe(100);
+    });
+
+    it('resolves to failed on an error from the run stream', () => {
+      startedButUntracked();
+
+      emit({ kind: 'error', message: 'boom' });
+
+      expect(component.state).toBe('terminal');
+      expect(el('.rd-status-pill')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['failed']);
+    });
+
+    it('is abandoned by result-dropped, closing rather than claiming an outcome', () => {
+      startedButUntracked();
+      const openChanges: boolean[] = [];
+      component.openChange.subscribe(v => openChanges.push(v));
+
+      emit({ kind: 'result-dropped' });
+
+      expect(component.state).toBe('hidden');
+      expect(openChanges).toEqual([false]);
+    });
+
+    // The fence must not have WIDENED: a genuinely tracked run still belongs to the registry alone
+    // (d1 item 6). Same event, same id, the one difference being that a registry row exists.
+    it('did not widen the fence: a run the registry DOES own still ignores run-finished', () => {
+      startRun();
+      registry.setJobs([makeJob({ id: 'JOB-1', percent: 40 })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+      expect(component.state).withContext('premise: this one IS state (b)').toBe('tracked');
+
+      emit({ kind: 'run-finished' });
+
+      expect(component.state).toBe('tracked');
+      expect(component.percent).toBe(40);
+      expect(el('.rd-minimize')).not.toBeNull();
     });
   });
 
@@ -1405,6 +1504,680 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       expect(document.activeElement)
         .withContext('a destroyed dialog that still grabs focus would break the whole page')
         .toBe(late);
+    });
+  });
+
+  // ── c01: the bounded START budget, and the escape affordance in state (a) ──
+  //
+  // THE DEFECT, observed live by the user on 2026-08-03: state (a) is modal, indeterminate and has no
+  // minimize, and nothing bounded how long it could last. With a server that accepted the connection and
+  // never answered, the card sat there with a pulsing bar and the localized starting message while the
+  // whole app stayed behind an `inert` background - reported as "endless wait, no progress, no button to
+  // dismiss" (a dismiss control WAS on screen; it was a bare glyph and did not read as one).
+  //
+  // These specs drive the REAL production guard: the budget lives on AnalysisRunOrchestrationService, so
+  // they construct that service over never-answering HTTP stubs and pump its output into the dialog the
+  // way the panel and the editor do. A dialog-only test with a hand-made 'error' event would prove only
+  // that the dialog can latch a terminal, which it already could - the thing under test is that the
+  // escape ARRIVES, and that it arrives through the one channel the dialog already listens on.
+  //
+  // Every assertion about the release is about the MECHANISM (aria-modal, the backdrop ELEMENT, the
+  // `inert` attribute count), per the c03 precedent: a card that merely LOOKS unblocked is the bug.
+  describe('the bounded start budget releases state (a) (c01)', () => {
+    /** A run context shaped like the panel's `buildRunContext()` output. */
+    function runContext(overrides: Partial<AnalysisRunContext> = {}): AnalysisRunContext {
+      return {
+        bookId: 'book-1',
+        chapterId: 'ch-1',
+        sceneId: null,
+        selectedAnalysisType: 'Proofread',
+        customPrompt: null,
+        language: 'he',
+        // Short enough to take the SYNC route, which is the route the reported hang took.
+        documentText: 'מילה אחת שתיים שלוש',
+        ...overrides,
+      };
+    }
+
+    /** The real service over HTTP stubs that never answer: the reproduced hang, in a test. */
+    function orchestrationThatNeverAnswers(
+      overrides: Partial<Record<'run' | 'startAsync', () => Observable<never>>> = {},
+    ): AnalysisRunOrchestrationService {
+      return new AnalysisRunOrchestrationService(
+        { run: () => NEVER, startAsync: () => NEVER, getByJob: () => NEVER, ...overrides } as unknown as AnalysisService,
+        { pollProgress: () => NEVER } as unknown as AnalysisProgressService,
+      );
+    }
+
+    /** Open the dialog on `hot`, then start the real run and pump its events into it. */
+    function startRealRun(
+      service: AnalysisRunOrchestrationService,
+      hot: Subject<AnalysisRunEvent>,
+      ctx: AnalysisRunContext,
+    ): Subscription {
+      fixture.componentRef.setInput('bookLanguage', ctx.language);
+      fixture.componentRef.setInput('analysisType', ctx.selectedAnalysisType);
+      fixture.componentRef.setInput('runEvents', hot);
+      fixture.componentRef.setInput('open', true);
+      fixture.detectChanges();
+      const sub = service.runAnalysisAfterSave(ctx).subscribe(e => hot.next(e));
+      fixture.detectChanges();
+      return sub;
+    }
+
+    it('latches a terminal and DROPS the modality when the budget expires', fakeAsync(() => {
+      const warn = spyOn(console, 'warn');
+      const hot = new Subject<AnalysisRunEvent>();
+      const sub = startRealRun(orchestrationThatNeverAnswers(), hot, runContext());
+
+      // Precondition: this really is the trap. Blocking, indeterminate, no minimize.
+      expect(component.state).toBe('starting');
+      expect(el('.rd-backdrop')).withContext('state (a) is modal').not.toBeNull();
+      expect(el('.rd-progress-fill--indet')).not.toBeNull();
+      expect(document.querySelectorAll('[inert]').length)
+        .withContext('the background really is inert, so the release below is not vacuous')
+        .toBeGreaterThan(0);
+
+      tick(RUN_START_BUDGET_MS - 1);
+      fixture.detectChanges();
+      expect(component.state)
+        .withContext('one millisecond short of the budget the run is still starting: the budget is a '
+          + 'budget, not a race')
+        .toBe('starting');
+
+      tick(1);
+      fixture.detectChanges();
+
+      // 1. A terminal exists - and it is the EXISTING latch, not a second notion of "over".
+      expect(component.state).toBe('terminal');
+      // 2. The modality is gone, by mechanism.
+      expect(el('.rd-overlay')!.getAttribute('aria-modal')).toBe('false');
+      expect((fixture.nativeElement as HTMLElement).querySelectorAll('.rd-backdrop').length)
+        .withContext('an invisible scrim would go on eating every click on the page')
+        .toBe(0);
+      expect(document.querySelectorAll('[inert]').length)
+        .withContext('an app left inert behind a non-blocking card is the trap, unchanged')
+        .toBe(0);
+      // 3. The copy is localized AND distinguishable from a run that genuinely failed.
+      expect(el('.rd-message')!.textContent!.trim())
+        .toBe(runString('he', 'runStartTimedOut', { type: 'הגהה' }));
+      expect(el('.rd-message')!.textContent!.trim())
+        .not.toBe(runString('he', 'runFailed', { type: 'הגהה' }));
+      // 4. The new failure mode is observable: it leaves no HTTP error in the console to correlate on,
+      //    because the request is still open.
+      expect(warn).toHaveBeenCalled();
+      expect(warn.calls.mostRecent().args[0] as string).toContain('[AnalysisRun]');
+
+      sub.unsubscribe();
+      flush();
+    }));
+
+    it("a result that lands AFTER the budget expired retracts the expiry terminal", fakeAsync(() => {
+      // c02 MEASURED this: a cold near-threshold Hebrew LineEdit (248 words, two under the server's
+      // 250-word Hebrew threshold, so genuinely on the SYNC route) returned a real HTTP 200 carrying a
+      // real result in 394.3s, against a 180s budget. The expiry cannot cancel the run - there is no
+      // cancel endpoint - so the result still arrives, and `AnalysisPanelComponent.onRunResultReceived`
+      // clears `runError` and renders the suggestions. A card still reading "did not start" on top of
+      // those suggestions is two surfaces contradicting each other about one run, with no path back.
+      //
+      // The analyze response is a Subject held OPEN across the expiry ON PURPOSE. A synchronous `of()`
+      // would answer before the timer ever ran and collapse the exact window this bug lives in.
+      const analyze$ = new Subject<AnalysisResultDto>();
+      const service = orchestrationThatNeverAnswers({
+        run: () => analyze$.asObservable() as unknown as Observable<never>,
+      });
+      const hot = new Subject<AnalysisRunEvent>();
+      const sub = startRealRun(service, hot, runContext());
+      expect(component.state).toBe('starting');
+
+      tick(RUN_START_BUDGET_MS);
+      fixture.detectChanges();
+
+      // Precondition: the budget really did misfire on a run that is still perfectly healthy.
+      expect(component.state).withContext('the budget must actually have expired').toBe('terminal');
+      expect(el('.rd-message')!.textContent!.trim())
+        .withContext('precondition: the card is reporting that the run never started')
+        .toBe(runString('he', 'runStartTimedOut', { type: 'הגהה' }));
+
+      // The run answers, late but successfully - exactly the 394.3s case.
+      analyze$.next({
+        id: 'res-1',
+        chapterId: 'ch-1',
+        type: 'Proofread',
+        analysisType: 'Proofread',
+        resultText: 'תוצאה',
+        createdAt: new Date().toISOString(),
+      } as AnalysisResultDto);
+      analyze$.complete();
+      fixture.detectChanges();
+
+      expect(el('.rd-message')!.textContent!.trim())
+        .withContext('the run SUCCEEDED and its suggestions are rendered behind this card; the expiry '
+          + 'terminal was provisional and this run\'s own result must retract it')
+        .toBe(runString('he', 'runSucceeded', { type: 'הגהה' }));
+      expect(el('.rd-message')!.textContent!.trim())
+        .not.toBe(runString('he', 'runStartTimedOut', { type: 'הגהה' }));
+      expect(component.state)
+        .withContext('correcting the card must not reopen the run: it stays resolved, just truthfully')
+        .toBe('terminal');
+      expect(document.querySelectorAll('[inert]').length)
+        .withContext('the modality was released at the expiry and must NOT be re-engaged')
+        .toBe(0);
+
+      sub.unsubscribe();
+      flush();
+    }));
+
+    it('a GENUINE error terminal is never retracted by a later result', fakeAsync(() => {
+      // The fence on the exception above. Only `startBudgetExpired` is provisional; a real failure is a
+      // verdict on the run and single-resolve still holds absolutely.
+      const hot = new Subject<AnalysisRunEvent>();
+      fixture.componentRef.setInput('bookLanguage', 'he');
+      fixture.componentRef.setInput('analysisType', 'Proofread');
+      fixture.componentRef.setInput('runEvents', hot);
+      fixture.componentRef.setInput('open', true);
+      fixture.detectChanges();
+
+      hot.next({ kind: 'error', message: 'boom' });
+      fixture.detectChanges();
+      expect(component.state).toBe('terminal');
+      expect(el('.rd-message')!.textContent!.trim()).toBe('boom');
+
+      hot.next({
+        kind: 'sync-result',
+        result: { id: 'res-1', chapterId: 'ch-1', resultText: 'x', createdAt: '' } as AnalysisResultDto,
+      });
+      fixture.detectChanges();
+
+      expect(el('.rd-message')!.textContent!.trim())
+        .withContext('a server error is not provisional; widening the retraction to every terminal would '
+          + 'be the d1 item 6 violation the narrow flag exists to avoid')
+        .toBe('boom');
+      flush();
+    }));
+
+    it('a genuine error that lands AFTER the budget expired retracts the expiry terminal', fakeAsync(() => {
+      // The MIRROR of the retraction above, and the same defect class in the failure direction. The
+      // expiry says the server never answered; a late `error` off the same still-live subscription says
+      // it answered and the run failed. Both cannot be true of one run. Left dropped by single-resolve,
+      // the panel's banner carries the real failure while the card above it keeps the timeout copy - two
+      // surfaces contradicting each other about one run, which is exactly what this mechanism exists to
+      // remove. Reachable because `withStartTimeout` merges the expiry with a stream that stays LIVE:
+      // only the expiry completes, so the run goes on and its `catchError` still composes an `error`.
+      //
+      // Driven through the REAL sync path, with the analyze response a Subject held OPEN across the
+      // expiry, so the error is composed by the service rather than hand-fed to the dialog.
+      const analyze$ = new Subject<AnalysisResultDto>();
+      const service = orchestrationThatNeverAnswers({
+        run: () => analyze$.asObservable() as unknown as Observable<never>,
+      });
+      const hot = new Subject<AnalysisRunEvent>();
+      const sub = startRealRun(service, hot, runContext());
+      expect(component.state).toBe('starting');
+
+      tick(RUN_START_BUDGET_MS);
+      fixture.detectChanges();
+
+      expect(component.state).withContext('the budget must actually have expired').toBe('terminal');
+      expect(el('.rd-message')!.textContent!.trim())
+        .withContext('precondition: the card is reporting that the run never started')
+        .toBe(runString('he', 'runStartTimedOut', { type: 'הגהה' }));
+
+      // The run answers late, and badly.
+      analyze$.error(new HttpErrorResponse({ status: 500, statusText: 'Server Error' }));
+      fixture.detectChanges();
+
+      const shown = el('.rd-message')!.textContent!.trim();
+      expect(shown)
+        .withContext('the server DID answer and the run failed; the card must stop claiming the server '
+          + 'never responded, or the real failure only ever reaches the panel banner')
+        .not.toBe(runString('he', 'runStartTimedOut', { type: 'הגהה' }));
+      expect(shown)
+        .withContext('and what replaces it is the run\'s own failure message, composed by the service')
+        .toBe(runString('he', 'analysisFailed'));
+      expect(component.state)
+        .withContext('correcting the card must not reopen the run: it stays resolved, just truthfully')
+        .toBe('terminal');
+      expect(document.querySelectorAll('[inert]').length)
+        .withContext('the modality was released at the expiry and must NOT be re-engaged')
+        .toBe(0);
+
+      sub.unsubscribe();
+      flush();
+    }));
+
+    it('a genuine error terminal is never retracted by a LATER error either', fakeAsync(() => {
+      // The fence on the arm just widened. Only a terminal latched FROM an expiry is provisional; once a
+      // real failure is on the card, single-resolve holds absolutely, including against another error.
+      const hot = new Subject<AnalysisRunEvent>();
+      fixture.componentRef.setInput('bookLanguage', 'he');
+      fixture.componentRef.setInput('analysisType', 'Proofread');
+      fixture.componentRef.setInput('runEvents', hot);
+      fixture.componentRef.setInput('open', true);
+      fixture.detectChanges();
+
+      hot.next({ kind: 'error', message: 'boom' });
+      fixture.detectChanges();
+      expect(el('.rd-message')!.textContent!.trim()).toBe('boom');
+
+      hot.next({ kind: 'error', message: 'second boom' });
+      fixture.detectChanges();
+
+      expect(el('.rd-message')!.textContent!.trim())
+        .withContext('a server error is not provisional, so nothing after it may rewrite the card')
+        .toBe('boom');
+      flush();
+    }));
+
+    it('a run that reaches (b) BEFORE the budget is never falsely failed', fakeAsync(() => {
+      // THE regression that matters: a slow-but-healthy job must not be killed. The dispatch answers
+      // late but well inside the budget, and the run then goes on far longer than the budget - which is
+      // ordinary for a whole-chapter analysis (Linguistic was measured at ~3 minutes).
+      const dispatch$ = new Subject<{ jobId: string }>();
+      const service = orchestrationThatNeverAnswers({
+        startAsync: () => dispatch$.asObservable() as unknown as Observable<never>,
+      });
+      const hot = new Subject<AnalysisRunEvent>();
+      const seen: AnalysisRunEvent[] = [];
+      hot.subscribe(e => seen.push(e));
+
+      const sub = startRealRun(service, hot, runContext({ selectedAnalysisType: 'LinguisticAnalysis' }));
+      expect(component.state).toBe('starting');
+
+      tick(RUN_START_BUDGET_MS - 1_000);
+      registry.setJobs([makeJob({ id: 'JOB-1', percent: 5 })]);
+      dispatch$.next({ jobId: 'JOB-1' });
+      fixture.detectChanges();
+      expect(component.state).withContext('the dispatch answered inside the budget').toBe('tracked');
+
+      // Now outlast the budget several times over. The job is healthy; nothing may kill it.
+      tick(RUN_START_BUDGET_MS * 3);
+      fixture.detectChanges();
+
+      expect(component.state)
+        .withContext('a timer that survives the answer turns every long healthy run into a false failure')
+        .toBe('tracked');
+      expect(seen.filter(e => e.kind === 'error'))
+        .withContext('no error may cross the channel for a run the server accepted')
+        .toEqual([]);
+      expect(el('.rd-backdrop')).withContext('a live run is still modal').not.toBeNull();
+
+      sub.unsubscribe();
+      flush();
+    }));
+
+    it('does not outlive the run: a dialog torn down mid-wait leaves no timer and no late terminal',
+      fakeAsync(() => {
+        const hot = new Subject<AnalysisRunEvent>();
+        const seen: AnalysisRunEvent[] = [];
+        hot.subscribe(e => seen.push(e));
+        const sub = startRealRun(orchestrationThatNeverAnswers(), hot, runContext());
+        expect(component.state).toBe('starting');
+
+        // The editor's per-context reconcile closes the card on a book/chapter change, and the panel
+        // unsubscribes the run. Both happen here, in that order.
+        fixture.componentRef.setInput('open', false);
+        fixture.detectChanges();
+        sub.unsubscribe();
+
+        // Well past the budget. A surviving timer would fire into a context that has moved on - and
+        // `fakeAsync` fails the spec outright on a leftover timer, so this asserts the mechanism twice.
+        tick(RUN_START_BUDGET_MS * 2);
+        fixture.detectChanges();
+
+        expect(seen.filter(e => e.kind === 'error'))
+          .withContext('a cancelled run must be told nothing at all')
+          .toEqual([]);
+        expect(component.state).toBe('hidden');
+        expect(document.querySelectorAll('[inert]').length).toBe(0);
+      }));
+  });
+
+  // ── c01: state (a) offers a real, labelled escape ──────────────────────────
+  //
+  // The user's report was "no button to dismiss" while the header glyph was on screen. An accessible
+  // name is necessary but it is not an affordance, so state (a) now renders a labelled control in the
+  // same row minimize occupies in state (b).
+  describe('state (a) offers a labelled escape (c01)', () => {
+    it('renders a labelled close control that dismisses without claiming to minimize', () => {
+      const minimized: RunDialogMinimizeEvent[] = [];
+      const openChanges: boolean[] = [];
+      component.minimizeRequested.subscribe(e => minimized.push(e));
+      component.openChange.subscribe(v => openChanges.push(v));
+
+      startRun();
+
+      const close = el('.rd-close');
+      expect(close).withContext('state (a) must offer more than a bare glyph').not.toBeNull();
+      expect(close!.textContent!.trim())
+        .withContext('a LABEL, not an icon: the icon is what the user did not read as an escape')
+        .toBe(RUN_DIALOG_LABELS_HE['close']);
+      // It is a close, never a minimize: nothing is tracked, so there is no bell row to fly to.
+      expect(el('.rd-minimize')).toBeNull();
+      // c02 weakened this hint (it used to reuse state (b)'s unconditional keepsRunning). See the
+      // "state (a) must not over-promise" spec below for why.
+      expect(el('.rd-hint')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['keepsRunningWhileOpen']);
+
+      close!.click();
+      fixture.detectChanges();
+
+      expect(minimized)
+        .withContext('minimizeRequested still fires ONLY from state (b); its docblock promise holds')
+        .toEqual([]);
+      expect(openChanges).toEqual([false]);
+      expect(el('.rd-card')).toBeNull();
+    });
+
+    it('the glyph control carries BOTH an accessible name and a title', () => {
+      startRun();
+      const dismiss = el('.rd-dismiss')!;
+      expect(dismiss.getAttribute('aria-label')).toBe(RUN_DIALOG_LABELS_HE['close']);
+      expect(dismiss.getAttribute('title'))
+        .withContext('hover is the sighted user\'s equivalent of the accessible name')
+        .toBe(RUN_DIALOG_LABELS_HE['close']);
+    });
+
+    it('is absent in state (b), where minimize owns the slot, and PRESENT in state (c)', () => {
+      startRun();
+      registry.setJobs([makeJob({ id: 'JOB-1' })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+      expect(el('.rd-close')).withContext('(b) offers minimize, which is not a close').toBeNull();
+      expect(el('.rd-minimize')).not.toBeNull();
+
+      registry.setJobs([makeJob({ id: 'JOB-1', status: 'succeeded', percent: 100 })]);
+      fixture.detectChanges();
+      expect(component.state).toBe('terminal');
+      // THIS ASSERTION WAS FLIPPED (P1-1, 2026-08-04). It used to require .rd-close ABSENT here, under
+      // the context "(c) is already non-blocking and the header dismiss is enough" - which is a
+      // restatement of the argument c01 rejected for state (a), written as a passing fence, and it is
+      // why nobody caught the gap. State (c) is the state that persists INDEFINITELY (a and b resolve on
+      // their own) and the expiry copy the same change wrote ends "close this window", so the bare glyph
+      // is least sufficient in exactly the state that had only the glyph.
+      expect(el('.rd-close'))
+        .withContext('(c) persists until dismissed and its own copy tells the user to close it, so the '
+          + 'bare glyph is least sufficient here of all - not most')
+        .not.toBeNull();
+    });
+
+    // RTL / narrow-viewport check for the ONE control this todo adds. The layout itself is asserted in
+    // the SCSS by construction (the row is `display: flex` with logical spacing tokens and the control
+    // shares `.rd-minimize`'s rule set verbatim, so there is no physical left/right to mirror); what a
+    // spec CAN pin is that the control follows the BOOK language in both directions, which is the part a
+    // regression would actually break.
+    it('follows the book language and direction in both RTL and LTR', () => {
+      startRun({ language: 'he' });
+      expect((fixture.nativeElement as HTMLElement).getAttribute('dir')).toBe('rtl');
+      expect(el('.rd-close')).withContext('the RTL escape control must exist to be mirrored').not.toBeNull();
+      expect(el('.rd-close')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['close']);
+
+      fixture.componentRef.setInput('open', false);
+      fixture.detectChanges();
+      startRun({ language: 'en-US' });
+      expect((fixture.nativeElement as HTMLElement).getAttribute('dir')).toBe('ltr');
+      expect(el('.rd-close')).withContext('the LTR escape control must exist too').not.toBeNull();
+      expect(el('.rd-close')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_EN['close']);
+    });
+  });
+
+  // ── P1-1: state (c) offers the SAME labelled escape ────────────────────────
+  //
+  // c01 established, from a live user report, that a bare glyph is not a discoverable escape - and gave
+  // the labelled control to state (a) only. State (c) is the OTHER state where that glyph stood alone,
+  // and it is the one that needs it most: (a) and (b) resolve on their own, while (c) persists until
+  // dismissed, so an undiscovered glyph leaves a card floating over the editor indefinitely. The expiry
+  // sentence c01 itself wrote ends "close this window" / `סגרו את החלון` and used to render next to no
+  // close control. MEASURED LIVE 2026-08-04: the .rd-card control inventory in (c) was exactly
+  // [rd-dismiss="✕"] in both he and en.
+  describe('state (c) offers a labelled escape too (P1-1)', () => {
+    /** The measured defect scenario: the c01 start-budget expiry, which arrives as an ordinary error. */
+    function expireIntoTerminal(): void {
+      emit({ kind: 'error', message: runString('he', 'runStartTimedOut', { type: 'הגהה' }) });
+      expect(component.state).withContext('precondition: this really is state (c)').toBe('terminal');
+    }
+
+    it('renders a labelled close in the actions row, not only the header glyph', () => {
+      startRun();
+      expireIntoTerminal();
+
+      const close = el('.rd-close');
+      expect(close)
+        .withContext('the state that persists indefinitely must offer more than a bare glyph')
+        .not.toBeNull();
+      expect(close!.textContent!.trim())
+        .withContext('a LABEL, not an icon: the icon is what the user did not read as an escape')
+        .toBe(RUN_DIALOG_LABELS_HE['close']);
+      // The row is the same slot minimize occupies in (b), and minimize is NOT offered here: the run is
+      // over, so there is nothing to hand to the Activity Center.
+      expect(el('.rd-minimize')).toBeNull();
+      // NO hint: both hint strings are promises about a LIVE run, and this one is over.
+      expect(el('.rd-hint'))
+        .withContext('keepsRunning / keepsRunningWhileOpen would both be false for a finished run')
+        .toBeNull();
+    });
+
+    it('clicking it closes the card and emits NO minimizeRequested', () => {
+      const minimized: RunDialogMinimizeEvent[] = [];
+      const openChanges: boolean[] = [];
+      component.minimizeRequested.subscribe(e => minimized.push(e));
+      component.openChange.subscribe(v => openChanges.push(v));
+
+      startRun();
+      expireIntoTerminal();
+      // Guarded, so that removing the control fails with the sentence that NAMES the defect rather than
+      // with a TypeError on a null click - a red for the wrong reason is not a revert-verify.
+      expect(el('.rd-close'))
+        .withContext('there must be a labelled control in (c) for the user to click at all')
+        .not.toBeNull();
+      el('.rd-close')!.click();
+      fixture.detectChanges();
+
+      expect(el('.rd-card')).toBeNull();
+      expect(minimized)
+        .withContext('minimizeRequested still fires ONLY from state (b); its docblock promise holds')
+        .toEqual([]);
+      expect(openChanges).toEqual([false]);
+    });
+
+    it('follows the book language and direction in both RTL and LTR', () => {
+      startRun({ language: 'he' });
+      expireIntoTerminal();
+      expect((fixture.nativeElement as HTMLElement).getAttribute('dir')).toBe('rtl');
+      expect(el('.rd-close'))
+        .withContext('the Hebrew terminal card must offer the escape to be mirrored at all')
+        .not.toBeNull();
+      expect(el('.rd-close')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_HE['close']);
+
+      // The dialog resets on the open false -> true RUN BOUNDARY, so a second run has to be re-opened.
+      fixture.componentRef.setInput('open', false);
+      fixture.detectChanges();
+      startRun({ language: 'en-US' });
+      emit({ kind: 'error', message: runString('en', 'runStartTimedOut', { type: 'Proofread' }) });
+      expect(component.state).toBe('terminal');
+      expect((fixture.nativeElement as HTMLElement).getAttribute('dir')).toBe('ltr');
+      expect(el('.rd-close'))
+        .withContext('the English terminal card needs the escape just as much')
+        .not.toBeNull();
+      expect(el('.rd-close')!.textContent!.trim()).toBe(RUN_DIALOG_LABELS_EN['close']);
+    });
+
+    it('the expiry copy that says "close this window" is rendered NEXT TO a close control', () => {
+      // The narrowest statement of the defect: the sentence instructs an action the state did not
+      // afford. Both halves are asserted together so neither can drift from the other.
+      startRun();
+      expireIntoTerminal();
+
+      const message = el('.rd-message')!.textContent!.trim();
+      expect(message).toBe(runString('he', 'runStartTimedOut', { type: 'הגהה' }));
+      expect(message)
+        .withContext('premise check: this copy really does instruct the user to close the card')
+        .toContain('סגרו את החלון');
+      expect(el('.rd-close'))
+        .withContext('copy that says "close this window" next to no close control is the defect')
+        .not.toBeNull();
+    });
+  });
+
+  // ── c02: a run that never gets a jobId (the SINGLE-CHUNK / sync run) ───────
+  //
+  // THE USER REQUIREMENT, stated directly: "even with only 1 chunk, the user could minimize the popup".
+  // VERIFIED IN THE DATABASE 2026-08-03: a 247-word chapter persisted with TotalChunks 1, SucceededChunks
+  // 1 and JobId NULL - it took the SYNC route and never entered JobRegistryService.
+  //
+  // The c02 decision (recorded in full on AnalysisRunDialogComponent.minimize) is that such a run gets a
+  // real ESCAPE but never the minimize GESTURE, because minimize means "hand this to the Activity Center
+  // bell and keep watching it there" and a sync run has nothing to hand over: it has no server-side job
+  // to reattach to, and it dies with the analysis panel that owns its HTTP subscription, while the bell
+  // is app-level chrome whose promise is that you can navigate away. These specs pin BOTH halves - the
+  // escape works, and the gesture is not faked.
+  describe('a single-chunk (sync) run: escapable, but never faked as a minimize (c02)', () => {
+    /**
+     * The editor's real handler, wired the way `editor-page.component.html` wires it. The flight's
+     * DESTINATION is the point at issue, so the test drives the actual function the editor calls rather
+     * than asserting on the emit alone: if the gesture ever fires without a tracked job, a ghost appears
+     * in the document and the "no destination, no flight" rule fails here loudly.
+     */
+    function wireEditorFlyToBell(): void {
+      component.minimizeRequested.subscribe(e => flyToActivityCenter(e.originRect));
+    }
+
+    function ghosts(): number {
+      return document.querySelectorAll('.' + MINIMIZE_GHOST_CLASS).length;
+    }
+
+    afterEach(() => {
+      document.querySelectorAll('.' + MINIMIZE_GHOST_CLASS).forEach(n => n.remove());
+    });
+
+    it('offers a working escape from the blocking card, and the run is not resolved by taking it', () => {
+      const minimized: RunDialogMinimizeEvent[] = [];
+      component.minimizeRequested.subscribe(e => minimized.push(e));
+
+      startRun();
+      // The sync route's ONLY pre-result event: one client-composed status, then silence until the
+      // blocking /analyze call returns. This is the whole window the user has to escape in.
+      emit({ kind: 'status', message: 'מריץ הגהה...' });
+      expect(component.state).withContext('a sync run really does sit in state (a)').toBe('starting');
+      expect(el('.rd-backdrop')).withContext('and it really is blocking the app').not.toBeNull();
+
+      const escape = el('.rd-close');
+      expect(escape).withContext('the user asked to be able to get out of this card').not.toBeNull();
+      escape!.click();
+      fixture.detectChanges();
+
+      // Escaped, by mechanism: no card, no scrim, nothing inert.
+      expect(el('.rd-card')).toBeNull();
+      expect((fixture.nativeElement as HTMLElement).querySelectorAll('.rd-backdrop').length).toBe(0);
+      expect(document.querySelectorAll('[inert]').length).toBe(0);
+      // ...and the gesture was NOT the minimize gesture.
+      expect(minimized)
+        .withContext('a sync run has no registry entry, so a minimize emit would hand over nothing')
+        .toEqual([]);
+    });
+
+    it('plays NO fly-to-bell flight, because there is no bell row to fly to', () => {
+      wireEditorFlyToBell();
+      startRun();
+      emit({ kind: 'status', message: 'מריץ הגהה...' });
+
+      expect(ghosts()).withContext('precondition: nothing in flight yet').toBe(0);
+      el('.rd-close')!.click();
+      fixture.detectChanges();
+
+      expect(ghosts())
+        .withContext('flying a ghost at the bell when the bell has no row for this run is a lie told '
+          + 'with an animation')
+        .toBe(0);
+    });
+
+    it('the flight DOES play once a run is genuinely tracked, so the rule above is not vacuous', () => {
+      // The control. If the flight never played at all, the assertion above would pass for the wrong
+      // reason (a broken wiring rather than a withheld gesture).
+      wireEditorFlyToBell();
+      startRun();
+      registry.setJobs([makeJob({ id: 'JOB-1' })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+      expect(component.state).toBe('tracked');
+
+      el('.rd-minimize')!.click();
+      fixture.detectChanges();
+
+      expect(ghosts())
+        .withContext('a tracked job HAS an Activity Center row, so the flight has a real destination')
+        .toBe(1);
+    });
+
+    it('state (a) does not promise the background survival a sync run cannot deliver', () => {
+      // The panel's ngOnDestroy unsubscribes the run (emitting run-finished), so on the sync route
+      // leaving the editor CANCELS it. State (b)'s "this keeps running in the background" is earned by a
+      // server-side job and is false here, which matters precisely because this card is inviting the
+      // user to close it and go do something else.
+      startRun();
+      const startingHint = el('.rd-hint')!.textContent!.trim();
+      expect(startingHint).toBe(RUN_DIALOG_LABELS_HE['keepsRunningWhileOpen']);
+
+      registry.setJobs([makeJob({ id: 'JOB-1' })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+      const trackedHint = el('.rd-hint')!.textContent!.trim();
+      expect(trackedHint).toBe(RUN_DIALOG_LABELS_HE['keepsRunning']);
+
+      expect(startingHint)
+        .withContext('one wording for two different promises is how the promise gets broken')
+        .not.toBe(trackedHint);
+    });
+
+    it('the weaker state-(a) promise is localized in BOTH languages, and differs from (b) in both', () => {
+      for (const [lang, labels] of [['he', RUN_DIALOG_LABELS_HE], ['en-US', RUN_DIALOG_LABELS_EN]] as const) {
+        fixture.componentRef.setInput('open', false);
+        fixture.detectChanges();
+        startRun({ language: lang });
+
+        expect((fixture.nativeElement as HTMLElement).getAttribute('dir'))
+          .toBe(lang === 'he' ? 'rtl' : 'ltr');
+        expect(el('.rd-hint')!.textContent!.trim()).toBe(labels['keepsRunningWhileOpen']);
+        expect(labels['keepsRunningWhileOpen']).not.toBe(labels['keepsRunning']);
+      }
+    });
+
+    // OBSERVABILITY. Closing in state (a) is the one dismissal that leaves a LIVE run with no surface at
+    // all, and nothing about it fails, so without a log a "my analysis vanished" report is unreadable
+    // from the console. It must fire for THAT state only - a log on every close would be noise that
+    // stops being read.
+    it('records the close-with-no-surface, exactly once and only for state (a)', () => {
+      // The dialog resets on the open false -> true RUN BOUNDARY, and `setInput` dedupes against the
+      // value IT last wrote (the component's own `setOpen(false)` is invisible to it), so each
+      // subsequent run has to be re-opened explicitly. Same shape as the c01 RTL/LTR spec above.
+      const reopen = () => {
+        fixture.componentRef.setInput('open', false);
+        fixture.detectChanges();
+        startRun();
+      };
+      const info = spyOn(console, 'info');
+
+      startRun();
+      el('.rd-close')!.click();
+      fixture.detectChanges();
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(info.calls.mostRecent().args[0] as string).toContain('[AnalysisRun]');
+
+      // State (b): the run has a registry row and an Activity Center presence, so nothing is lost.
+      info.calls.reset();
+      reopen();
+      registry.setJobs([makeJob({ id: 'JOB-1' })]);
+      emit({ kind: 'job-started', jobId: 'JOB-1' });
+      expect(component.state).withContext('precondition: this really is state (b)').toBe('tracked');
+      el('.rd-minimize')!.click();
+      fixture.detectChanges();
+      expect(info).withContext('a minimize hands the run to the bell; nothing is unaccounted for').not.toHaveBeenCalled();
+
+      // State (c): the run is over. There is nothing left to lose track of.
+      info.calls.reset();
+      registry.setJobs([]);
+      reopen();
+      emit({ kind: 'error', message: 'boom' });
+      expect(component.state).withContext('precondition: this really is state (c)').toBe('terminal');
+      el('.rd-dismiss')!.click();
+      fixture.detectChanges();
+      expect(info).not.toHaveBeenCalled();
     });
   });
 

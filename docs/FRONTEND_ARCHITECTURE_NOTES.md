@@ -117,8 +117,26 @@ Two rules follow, and both were paid for once already:
 - **A consumer of `run-finished` must be single-resolve and must not use it for a TRACKED job.** On a
   normal run it arrives AFTER the real terminal event. And a registry-tracked job keeps running
   server-side after the panel goes away, which is the whole point of the minimize gesture, so
-  `AnalysisRunDialogComponent` guards its `run-finished` handling on `jobId === null` and leaves state
-  (b) to resolve off the registry alone.
+  `AnalysisRunDialogComponent` fences its `run-finished` handling (and every other `(a) -> (c)` arm) and
+  leaves state (b) to resolve off the registry alone.
+
+  **The fence is state (b) itself, NOT "a jobId was captured" (c03, 2026-08-04).** Those two are not the
+  same predicate, and the gap between them is reachable. `AnalysisPanelComponent.handleRunEvent` fans
+  `'job-started'` out to the host - which is what makes the dialog capture the id - and only AFTERWARDS
+  calls `jobRegistry.track(...)`, behind a guard. Meanwhile the c01 start budget has already been
+  cancelled, because `provesServerAnswered` returns true for `'job-started'`. So a guard that declines
+  leaves the dialog holding an id with no registry row: state (a), modal and indeterminate, budget spent,
+  and - on the old `jobId === null` fence - every terminal latch switched off, with nothing left that
+  could resolve it. The dialog's `registryOwnsRun` (`jobId !== null && trackedJob !== null`) is now the
+  single predicate behind the `'tracked'` arm of `state`, all five fences in `onRunEvent` (the three
+  `(a) -> (c)` latches on the result kinds / `error` / `run-finished`, plus `result-dropped`, which
+  abandons the card rather than latching, plus the state-(a)-only `status` message), and the c02
+  retraction predicate `supersedesExpiredStartBudget`. So "the registry owns this run's terminal" is
+  literally what the code tests. Keep them one predicate: the class
+  of bug here is two conditions that are assumed to be the same one. And note what the fix is NOT - no
+  timer was added to the dialog (see the rule below); the escape arrives on the run stream it already
+  reads. The panel's decline is also logged (`[AnalysisRun] job-started with no bookId`), because an
+  untracked job produces no HTTP error to correlate against.
 
 An @Output emitted from `ngOnDestroy` does reach the parent: Angular's `destroyViewTree` cleans child
 views first and `cleanUpView` runs `executeOnDestroys` before `processCleanups`, so the parent's output
@@ -138,7 +156,7 @@ an invisible scrim keeps eating pointer events), every `inert` attribute the dia
 the focus trap is released, focus is restored to whatever held it before the dialog opened, and
 `aria-modal` flips to `false`. A card that no longer traps focus must not keep claiming that it does.
 
-Four things a future change here must preserve:
+Six things a future change here must preserve:
 
 - **`inert` alone does NOT hold focus here, and this was measured (c01, 2026-08-03).** With the modal
   fully engaged on :4201 - backdrop up, `aria-modal="true"`, 25 elements marked `inert` - the overlay
@@ -175,6 +193,50 @@ Four things a future change here must preserve:
   analyze-progress-popup fixes plan's `c04` removed and which is still reachable in the non-modal state
   (c). On `.rd-card` it drops the FIRST Escape of every modal run, because focus-on-open lands on the
   container, which is outside the card.
+- **Every visible state must have a LABELLED escape, and the BOUND on state (a) does not live in the
+  dialog.** The actions row has one branch per visible state and that is the invariant: (b) minimize,
+  (a) close, (c) close. A state with no branch there is left with only the header `✕`, and an
+  accessible name is treated here as necessary and NOT sufficient - the user who hit this reported "no
+  button to dismiss" while an accessible-named `✕` was on screen. c01 applied that to (a) and left (c)
+  bare; the P1-1 fix (2026-08-04) closed it, and (c) is the state where it matters most, because (a)
+  and (b) resolve on their own while (c) persists until dismissed - an undiscovered glyph there leaves
+  a card over the editor indefinitely, and the expiry copy c01 wrote literally ends "close this
+  window". The terminal row carries NO hint: both hint strings promise a live run.
+
+  State (a) needs a second thing on top of the labelled control, because it is modal, indeterminate and
+  has no minimize (nothing is registry-tracked yet), so it is the one blocking state a user can be stuck
+  in with no information. `AnalysisRunOrchestrationService.withStartTimeout` bounds how long a run may
+  go without ANY answer from the server (180s, `runStartTimeoutMs`) and publishes the expiry as an
+  ordinary `{ kind: 'error' }` event on the run stream, so the dialog's existing terminal latch fires and
+  the release above happens through the one path it already had. Do not move that timer into the dialog:
+  the dialog is a VIEW over `runEvents$` plus the registry, it runs no clock of its own, and `isModal`
+  stays a projection of `state` rather than a second notion of "the run is over". The budget is cancelled
+  by the first event that proves the server answered (everything except the client-composed `'status'`),
+  so a slow-but-healthy run is never killed. Both layers are load-bearing: the labelled control is what
+  the user reaches for, the budget is what rescues them when they never look.
+- **A SYNC run is deliberately NOT registry-tracked, so state (a) offers a CLOSE and never a minimize
+  (c02, 2026-08-03).** This is the rule most likely to be "fixed" by someone reading the state machine
+  and concluding minimize was merely forgotten. It was not. A sub-threshold (single-chunk) analysis goes
+  out as one blocking `/analyze` request and persists its result with a NULL `JobId` (verified in the
+  database), so there is no `job-started` event, no `JobRegistryService.track()` call, no Activity Center
+  row and no in-page indicator. The user asked for minimize on such a run directly; tracking it behind a
+  client-minted synthetic id was costed and rejected on three facts. (1) It has no existence outside the
+  mounted panel: `AnalysisPanelComponent.ngOnDestroy` unsubscribes the run and emits `run-finished`, so
+  leaving the editor CANCELS it, while the Activity Center is app-level cross-book chrome whose promise
+  is precisely that you can navigate away. (2) It can never be reattached, in this tab or after a
+  refresh: no backend read can rediscover a run with no job row, and its work lives in an XHR a reload
+  aborts. (3) `track()` unconditionally starts a poll, and polling an id the server never minted 404s
+  into `finalize(jobId, 'failed')` - the same trap the dialog already documents about the sync response's
+  own `result.jobId`. So minimize would have no destination, and `minimizeRequested` stays state-(b)-only:
+  its one consumer, `EditorPageComponent.onRunDialogMinimize`, calls `flyToActivityCenter`
+  unconditionally, so a widened emit would animate a card into an empty corner. What state (a) gets
+  instead is the labelled close plus a WEAKER hint (`keepsRunningWhileOpen`, not state (b)'s
+  unconditional `keepsRunning`): the card invites the user to close it and go elsewhere, so it must not
+  promise a background survival the sync route cannot deliver. The decision is fenced in TWO places,
+  and it needs both: `three-surface-parity.spec.ts` pins the RENDERED absence of all three surfaces,
+  but its host drives the registry directly and never mounts the analysis panel, so it cannot see a
+  synthetic `track()` added in production (measured - that change left it green); the production-source
+  guard is in `analysis-panel.component.spec.ts` ("c02: a SYNC run (no job-started) is NEVER tracked").
 
 ## Activity Center bell direction
 

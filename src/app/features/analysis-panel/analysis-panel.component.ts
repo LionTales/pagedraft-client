@@ -92,7 +92,17 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     return this.panelLang === 'en' ? 'ltr' : 'rtl';
   }
 
-  /** Localized panel chrome strings (he default, en when the book is English). Keeps he/en parity. */
+  /**
+   * Localized panel chrome strings (he default, en when the book is English). Keeps he/en parity.
+   *
+   * NOTE for anyone adding or removing a key: `key` is a plain `string`, NOT a closed union like the
+   * sibling `RunDialogLabelKey` / `DashboardLabelKey`, and the two maps are independent
+   * `Record<string, string>` literals with `?? key` as the miss fallback. So nothing - not the compiler,
+   * not a parity spec - catches a key added to one language and forgotten in the other, or a key left
+   * behind after its only caller is deleted. Both maps must be edited together, by hand. `runStreaming`
+   * and `streaming` were removed this way (f02 + the closing review): both belonged to `runStreaming()`,
+   * which has no template caller.
+   */
   panelLabel(key: string): string {
     const he: Record<string, string> = {
       title: 'ניתוח',
@@ -101,8 +111,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       saveAsTemplate: 'שמור כתבנית',
       run: 'הרץ ניתוח',
       running: 'מריץ...',
-      runStreaming: 'הרץ עם הזרמה',
-      streaming: 'מזרים...',
       highlight: 'הדגש מילים מוצעות במסמך',
       tabRun: 'ריצה',
       tabHistory: 'היסטוריה',
@@ -118,8 +126,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       saveAsTemplate: 'Save as template',
       run: 'Run analysis',
       running: 'Running...',
-      runStreaming: 'Run with streaming',
-      streaming: 'Streaming...',
       highlight: 'Highlight suggestion words in document',
       tabRun: 'Run',
       tabHistory: 'History',
@@ -1715,6 +1721,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       });
   }
 
+  /**
+   * Deliberately outside the c01 start budget (`withStartTimeout` in `analysis-run-orchestration.service.ts`):
+   * `doRunStreaming` is unbounded because this method has no template caller today. Before wiring this to any
+   * control, it needs its own start-budget decision - it is not covered by inheriting c01's.
+   */
   runStreaming(): void {
     if (!this.bookId || !this.chapterId || !this.canRun || this.isRunningForCurrentContext) return;
     const pending = this.getPendingSuggestionCountForActive();
@@ -1882,6 +1893,22 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           // Persist that this run is an async job with an active banner so returning to the origin
           // context after a mid-run navigation reconstructs the banner (see ngOnChanges reconcile).
           this.asyncBannerActiveForRun = true;
+        } else {
+          // c03 OBSERVABILITY. This is the ONE branch on which the server has started a real job and NO
+          // client surface picks it up: no registry row, so no Activity Center entry, no in-page banner,
+          // and (before c03's fence change in the run dialog) a card the run's own stream could no longer
+          // resolve. The run itself is unaffected and the async start already succeeded, so nothing here
+          // throws and no HTTP error exists to correlate against - which is exactly why a decline must
+          // not be silent. Bracketed-tag console.warn is the convention the c01 budget expiry and the c02
+          // dismissal seam already use; no ids and no document text.
+          //
+          // It is not reachable today: `bookId` is an @Input fed only by `EditorPageComponent.bookId`,
+          // which is written only from the `books/:bookId` route params, and `runAnalysis()` refuses to
+          // start without it. It is logged rather than asserted because the guard's whole purpose is to
+          // survive a future call site that CAN decline.
+          console.warn('[AnalysisRun] job-started with no bookId: the job was not published to the registry', {
+            analysisType: this.runOriginAnalysisType,
+          });
         }
         break;
       case 'streaming-token':

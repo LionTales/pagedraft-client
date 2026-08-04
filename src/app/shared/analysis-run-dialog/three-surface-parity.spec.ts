@@ -341,6 +341,124 @@ describe('three-surface parity over ONE registry job (Wave 1d c2)', () => {
 });
 
 /**
+ * c02 (run-dialog-starting-state-escape, 2026-08-03): the fence asked of a run that is on NONE of the
+ * three surfaces, which is the case the other two blocks cannot see.
+ *
+ * A sub-threshold (single-chunk) analysis takes the SYNC route: one blocking `/analyze` request, a
+ * result persisted with a NULL JobId (verified in the database), no `job-started` event, and therefore
+ * no `JobRegistryService.track()` call anywhere. So it has NO Activity Center row and NO in-page
+ * indicator, and the run dialog is its only surface for the whole run.
+ *
+ * That is a DECISION, not an accident (see `AnalysisRunDialogComponent.minimize`): the alternative was
+ * to track sync runs behind a client-minted synthetic id so minimize, the bell and this very fence would
+ * work uniformly, and it was rejected because such a run cannot be reattached after a refresh and does
+ * not outlive the analysis panel that owns its HTTP subscription, while the Activity Center is
+ * app-level chrome whose whole promise is that it does.
+ *
+ * This block exists so that decision cannot be reversed by accident. Its assertions are deliberately
+ * about the ABSENCE of surfaces, which is exactly what the two blocks above cannot express.
+ *
+ * WHAT IT DOES AND DOES NOT CATCH, measured during final-r01 rather than assumed. This host drives
+ * `JobRegistryService` ITSELF; it does not mount `AnalysisPanelComponent`, which owns the one
+ * `track()` call site. So a production change that starts minting a synthetic id in the panel leaves
+ * THESE two registry-fed assertions (`.ac-row`, `.jpi-track`) green - it was tried, and the whole suite
+ * stayed green. The half of this block that IS a real production guard is the dialog: `.rd-close`
+ * present and `.rd-minimize` absent fail immediately if `canMinimize` is widened to state (a). The
+ * production-source guard for the track() call itself lives in `analysis-panel.component.spec.ts`
+ * ("c02: a SYNC run (no job-started) is NEVER tracked"), and a reversal has to turn BOTH red.
+ */
+describe('a SYNC run is on none of the three surfaces (c02)', () => {
+  let fixture: ComponentFixture<ThreeSurfaceHostComponent>;
+  let host: ThreeSurfaceHostComponent;
+
+  const root = () => fixture.nativeElement as HTMLElement;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [ThreeSurfaceHostComponent],
+      providers: [
+        provideRouter([]),
+        {
+          provide: AnalysisProgressService,
+          useValue: {
+            pollProgress: () => NEVER,
+            pollBookSummaryProgress: () => NEVER,
+            pollBookReviewProgress: () => NEVER,
+            pollStyleBaselineProgress: () => NEVER,
+          },
+        },
+        { provide: AnalysisService, useValue: { getActiveAnalysisJobs: () => of([]) } },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) } },
+        { provide: BookReviewService, useValue: { getReviewStatus: () => of({ activeBuildJobId: null }) } },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => of({ activeBuildJobId: null }) } },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(ThreeSurfaceHostComponent);
+    host = fixture.componentInstance;
+
+    // A SYNC run: NO registry.track() call (the panel makes that call only from `job-started`), no jobId
+    // for the in-page indicator to point at, and one client-composed status event before the blocking
+    // request returns.
+    host.jobId = null;
+    host.open = true;
+    fixture.detectChanges();
+    host.events$.next({ kind: 'status', message: 'מריץ הגהה...' });
+    fixture.detectChanges();
+
+    (root().querySelector('.ac-bell') as HTMLButtonElement).click();
+    fixture.detectChanges();
+  });
+
+  it('mid-run: the dialog is the ONLY surface, and it offers a close rather than a minimize', () => {
+    // The dialog is up and blocking...
+    expect(root().querySelector('.rd-card')).not.toBeNull();
+    expect(root().querySelector('.rd-progress-fill--indet')).not.toBeNull();
+    // ...with an escape that is honestly labelled: no bell row exists, so there is nothing to minimize.
+    expect(root().querySelector('.rd-close')).not.toBeNull();
+    expect(root().querySelector('.rd-minimize')).toBeNull();
+
+    // The Activity Center panel is OPEN and has no row for this run.
+    expect(root().querySelectorAll('.ac-row').length)
+      .withContext('a row here would claim a durable, cross-book job that does not exist')
+      .toBe(0);
+    // And the in-page indicator has nothing to render.
+    expect(root().querySelector('.jpi-track')).toBeNull();
+  });
+
+  it('closing the card leaves the run with no surface at all, which is the accepted cost', () => {
+    (root().querySelector('.rd-close') as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(root().querySelector('.rd-card')).toBeNull();
+    expect(root().querySelectorAll('.ac-row').length).toBe(0);
+    expect(root().querySelector('.jpi-track')).toBeNull();
+    expect(host.open).toBeFalse();
+  });
+
+  it('the terminal sync result adds no row either: nothing was ever tracked to finalize', () => {
+    host.events$.next({
+      kind: 'sync-result',
+      result: {
+        id: 'res-1',
+        chapterId: 'ch-1',
+        type: 'Proofread',
+        resultText: 'ok',
+        createdAt: new Date().toISOString(),
+        analysisType: 'Proofread',
+      },
+    });
+    fixture.detectChanges();
+
+    // The dialog resolves to its own terminal, from the run stream and not from the registry.
+    expect(root().querySelector('.rd-status-pill')!.textContent!.trim()).toBe('הסתיים');
+    // The other two surfaces never learned this run existed, and still do not.
+    expect(root().querySelectorAll('.ac-row').length).toBe(0);
+    expect(root().querySelector('.jpi-track')).toBeNull();
+  });
+});
+
+/**
  * c02 (2026-08-03): the SAME fence, asked PER KIND.
  *
  * `totalChunks` is one wire field with a different UNIT per producer, measured at the call sites:
