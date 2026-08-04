@@ -279,7 +279,13 @@
   flex-wrap: wrap;
 }
 
-.rd-minimize {
+/* The labelled row actions share one rule set on purpose: `.rd-minimize` in state (b) and `.rd-close`
+   in states (a) AND (c) occupy the same slot and must be the same control to the eye. A third selector
+   for the terminal state would let the three drift apart for no reason. Every property
+   here is direction-agnostic (flex + logical spacing tokens, no left/right), so the row mirrors with
+   `[dir]` on the host and needs no RTL branch. */
+.rd-minimize,
+.rd-close {
   flex: 0 0 auto;
   padding: var(--pd-space-2) var(--pd-space-4);
   border: 1px solid var(--pd-border);
@@ -293,11 +299,13 @@
   transition: background var(--pd-dur-fast) var(--pd-ease);
 }
 
-.rd-minimize:hover {
+.rd-minimize:hover,
+.rd-close:hover {
   background: var(--pd-surface-sunken);
 }
 
-.rd-minimize:focus-visible {
+.rd-minimize:focus-visible,
+.rd-close:focus-visible {
   outline: none;
   box-shadow: var(--pd-ring);
 }
