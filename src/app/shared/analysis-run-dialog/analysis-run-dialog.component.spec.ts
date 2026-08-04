@@ -25,6 +25,7 @@
  * real root service (and its five transitive deps) is NOT injected.
  */
 import { ComponentFixture, TestBed, fakeAsync, flush, tick } from '@angular/core/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { By } from '@angular/platform-browser';
 import { BehaviorSubject, NEVER, Observable, Subject, Subscription } from 'rxjs';
 import { distinctUntilChanged, map } from 'rxjs/operators';
@@ -1691,6 +1692,79 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       expect(el('.rd-message')!.textContent!.trim())
         .withContext('a server error is not provisional; widening the retraction to every terminal would '
           + 'be the d1 item 6 violation the narrow flag exists to avoid')
+        .toBe('boom');
+      flush();
+    }));
+
+    it('a genuine error that lands AFTER the budget expired retracts the expiry terminal', fakeAsync(() => {
+      // The MIRROR of the retraction above, and the same defect class in the failure direction. The
+      // expiry says the server never answered; a late `error` off the same still-live subscription says
+      // it answered and the run failed. Both cannot be true of one run. Left dropped by single-resolve,
+      // the panel's banner carries the real failure while the card above it keeps the timeout copy - two
+      // surfaces contradicting each other about one run, which is exactly what this mechanism exists to
+      // remove. Reachable because `withStartTimeout` merges the expiry with a stream that stays LIVE:
+      // only the expiry completes, so the run goes on and its `catchError` still composes an `error`.
+      //
+      // Driven through the REAL sync path, with the analyze response a Subject held OPEN across the
+      // expiry, so the error is composed by the service rather than hand-fed to the dialog.
+      const analyze$ = new Subject<AnalysisResultDto>();
+      const service = orchestrationThatNeverAnswers({
+        run: () => analyze$.asObservable() as unknown as Observable<never>,
+      });
+      const hot = new Subject<AnalysisRunEvent>();
+      const sub = startRealRun(service, hot, runContext());
+      expect(component.state).toBe('starting');
+
+      tick(RUN_START_BUDGET_MS);
+      fixture.detectChanges();
+
+      expect(component.state).withContext('the budget must actually have expired').toBe('terminal');
+      expect(el('.rd-message')!.textContent!.trim())
+        .withContext('precondition: the card is reporting that the run never started')
+        .toBe(runString('he', 'runStartTimedOut', { type: 'הגהה' }));
+
+      // The run answers late, and badly.
+      analyze$.error(new HttpErrorResponse({ status: 500, statusText: 'Server Error' }));
+      fixture.detectChanges();
+
+      const shown = el('.rd-message')!.textContent!.trim();
+      expect(shown)
+        .withContext('the server DID answer and the run failed; the card must stop claiming the server '
+          + 'never responded, or the real failure only ever reaches the panel banner')
+        .not.toBe(runString('he', 'runStartTimedOut', { type: 'הגהה' }));
+      expect(shown)
+        .withContext('and what replaces it is the run\'s own failure message, composed by the service')
+        .toBe(runString('he', 'analysisFailed'));
+      expect(component.state)
+        .withContext('correcting the card must not reopen the run: it stays resolved, just truthfully')
+        .toBe('terminal');
+      expect(document.querySelectorAll('[inert]').length)
+        .withContext('the modality was released at the expiry and must NOT be re-engaged')
+        .toBe(0);
+
+      sub.unsubscribe();
+      flush();
+    }));
+
+    it('a genuine error terminal is never retracted by a LATER error either', fakeAsync(() => {
+      // The fence on the arm just widened. Only a terminal latched FROM an expiry is provisional; once a
+      // real failure is on the card, single-resolve holds absolutely, including against another error.
+      const hot = new Subject<AnalysisRunEvent>();
+      fixture.componentRef.setInput('bookLanguage', 'he');
+      fixture.componentRef.setInput('analysisType', 'Proofread');
+      fixture.componentRef.setInput('runEvents', hot);
+      fixture.componentRef.setInput('open', true);
+      fixture.detectChanges();
+
+      hot.next({ kind: 'error', message: 'boom' });
+      fixture.detectChanges();
+      expect(el('.rd-message')!.textContent!.trim()).toBe('boom');
+
+      hot.next({ kind: 'error', message: 'second boom' });
+      fixture.detectChanges();
+
+      expect(el('.rd-message')!.textContent!.trim())
+        .withContext('a server error is not provisional, so nothing after it may rewrite the card')
         .toBe('boom');
       flush();
     }));

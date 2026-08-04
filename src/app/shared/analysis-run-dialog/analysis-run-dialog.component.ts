@@ -1072,8 +1072,13 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
       case 'error':
         // (a) -> (c). While tracked, (b) -> (c) is the registry's call alone (d1 item 6).
         if (!this.registryOwnsRun) {
-          // c02: remember whether THIS terminal is the provisional one. Set before the latch and only on
-          // the branch that actually latches, so it can never describe a terminal some other arm wrote.
+          // A GENUINE error retracts a provisional expiry exactly as a result does. The expiry says the
+          // server never answered; this says it answered and the run failed. Both cannot be true of one
+          // run, and this one is the statement with the server behind it.
+          this.retractExpiredStartBudgetTerminal();
+          // c02: remember whether THIS terminal is the provisional one. Set AFTER the retraction above
+          // (which clears the flag) and only on the branch that actually latches, so it can never
+          // describe a terminal some other arm wrote.
           this.terminalIsExpiredStartBudget = event.startBudgetExpired === true;
           this.latchTerminal('failed', event.message, null);
         }
@@ -1169,9 +1174,34 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
    *    terminal being retracted - not a second, competing authority;
    *  - it only ever retracts `startBudgetExpired`, an error this client composed because it stopped
    *    WAITING. It is the one terminal here that was never a statement about the run.
-   * A genuine server error stays permanent: the flag is absent, this returns false. It could not be
-   * retracted anyway - on the sync route those come from `catchError`, which completes the stream - but
-   * the fence is the flag, not that accident.
+   * A terminal latched from a genuine server error stays permanent: the flag is absent, this returns
+   * false on the very first line, whatever arrives next. Note the flag is fenced TWICE - here and in
+   * {@link retractExpiredStartBudgetTerminal} - so removing either copy alone leaves the behaviour
+   * intact and the specs green. That is deliberate belt-and-braces on a contract exception, but it
+   * means any mutation testing of this fence has to take both copies together.
+   *
+   * ── Which events may supersede, and why the other seven may not ───────────────────────────────────
+   * Every kind on {@link AnalysisRunEvent} was walked against a provisional terminal, because the class
+   * here is "an event carrying the run's real outcome is dropped while the card shows a guess":
+   *  - `sync-result` / `job-result` / `streaming-complete` - the run answered and SUCCEEDED. Retract.
+   *  - `error` WITHOUT `startBudgetExpired` - the run answered and FAILED. Retract: the expiry says the
+   *    server never answered and this says it did, so leaving the expiry copy up would put the real
+   *    failure in the panel's banner and the timeout copy on the card above it, which is the same
+   *    two-surfaces-contradicting-each-other defect this whole mechanism exists to remove, mirrored.
+   *    (An expiry cannot supersede an expiry: the timer fires once, and this returns false for a flagged
+   *    error anyway, so the provisional terminal can never be re-latched as provisional.)
+   *  - `status` - client-composed and emitted before a byte leaves the browser; it is exactly what
+   *    {@link provesServerAnswered} refuses to treat as life. Allowing it would rewrite the message
+   *    under a resolved card on the say-so of the one event that proves nothing.
+   *  - `progress` - deliberately ignored on every path in this component, terminal or not.
+   *  - `run-finished` - the PANEL saying it stopped listening, not the server reporting an outcome. It
+   *    latches `canceled` with an empty message, so honoring it would replace the expiry's actionable
+   *    copy ("close this and try again") with strictly less information.
+   *  - `result-dropped` - the panel saying the context moved on. The editor's per-context reconcile
+   *    already closes this dialog at a context switch, so there is no stranded card for it to rescue.
+   *  - `job-started` - not a terminal. {@link state} returns `'terminal'` for as long as a terminal is
+   *    latched, so attaching an id could not change what is on screen without a retraction this event
+   *    has no outcome to justify.
    *
    * ── Why it has to exist ───────────────────────────────────────────────────────────────────────────
    * The expiry does NOT cancel the run (there is no cancel endpoint), and c02 MEASURED the budget
@@ -1185,7 +1215,8 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
     if (!this.terminalIsExpiredStartBudget || this.registryOwnsRun) return false;
     return event.kind === 'sync-result'
       || event.kind === 'job-result'
-      || event.kind === 'streaming-complete';
+      || event.kind === 'streaming-complete'
+      || (event.kind === 'error' && event.startBudgetExpired !== true);
   }
 
   /** Drop a provisional start-budget terminal so the real outcome can be latched over it (c02). */
