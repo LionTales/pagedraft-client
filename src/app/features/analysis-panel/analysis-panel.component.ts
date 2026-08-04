@@ -92,7 +92,17 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     return this.panelLang === 'en' ? 'ltr' : 'rtl';
   }
 
-  /** Localized panel chrome strings (he default, en when the book is English). Keeps he/en parity. */
+  /**
+   * Localized panel chrome strings (he default, en when the book is English). Keeps he/en parity.
+   *
+   * NOTE for anyone adding or removing a key: `key` is a plain `string`, NOT a closed union like the
+   * sibling `RunDialogLabelKey` / `DashboardLabelKey`, and the two maps are independent
+   * `Record<string, string>` literals with `?? key` as the miss fallback. So nothing - not the compiler,
+   * not a parity spec - catches a key added to one language and forgotten in the other, or a key left
+   * behind after its only caller is deleted. Both maps must be edited together, by hand. `runStreaming`
+   * and `streaming` were removed this way (f02 + the closing review): both belonged to `runStreaming()`,
+   * which has no template caller.
+   */
   panelLabel(key: string): string {
     const he: Record<string, string> = {
       title: 'ניתוח',
@@ -101,8 +111,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       saveAsTemplate: 'שמור כתבנית',
       run: 'הרץ ניתוח',
       running: 'מריץ...',
-      runStreaming: 'הרץ עם הזרמה',
-      streaming: 'מזרים...',
       highlight: 'הדגש מילים מוצעות במסמך',
       tabRun: 'ריצה',
       tabHistory: 'היסטוריה',
@@ -118,8 +126,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       saveAsTemplate: 'Save as template',
       run: 'Run analysis',
       running: 'Running...',
-      runStreaming: 'Run with streaming',
-      streaming: 'Streaming...',
       highlight: 'Highlight suggestion words in document',
       tabRun: 'Run',
       tabHistory: 'History',
@@ -1715,6 +1721,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       });
   }
 
+  /**
+   * Deliberately outside the c01 start budget (`withStartTimeout` in `analysis-run-orchestration.service.ts`):
+   * `doRunStreaming` is unbounded because this method has no template caller today. Before wiring this to any
+   * control, it needs its own start-budget decision - it is not covered by inheriting c01's.
+   */
   runStreaming(): void {
     if (!this.bookId || !this.chapterId || !this.canRun || this.isRunningForCurrentContext) return;
     const pending = this.getPendingSuggestionCountForActive();
