@@ -1893,6 +1893,22 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
           // Persist that this run is an async job with an active banner so returning to the origin
           // context after a mid-run navigation reconstructs the banner (see ngOnChanges reconcile).
           this.asyncBannerActiveForRun = true;
+        } else {
+          // c03 OBSERVABILITY. This is the ONE branch on which the server has started a real job and NO
+          // client surface picks it up: no registry row, so no Activity Center entry, no in-page banner,
+          // and (before c03's fence change in the run dialog) a card the run's own stream could no longer
+          // resolve. The run itself is unaffected and the async start already succeeded, so nothing here
+          // throws and no HTTP error exists to correlate against - which is exactly why a decline must
+          // not be silent. Bracketed-tag console.warn is the convention the c01 budget expiry and the c02
+          // dismissal seam already use; no ids and no document text.
+          //
+          // It is not reachable today: `bookId` is an @Input fed only by `EditorPageComponent.bookId`,
+          // which is written only from the `books/:bookId` route params, and `runAnalysis()` refuses to
+          // start without it. It is logged rather than asserted because the guard's whole purpose is to
+          // survive a future call site that CAN decline.
+          console.warn('[AnalysisRun] job-started with no bookId: the job was not published to the registry', {
+            analysisType: this.runOriginAnalysisType,
+          });
         }
         break;
       case 'streaming-token':
