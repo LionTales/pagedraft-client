@@ -870,4 +870,113 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       expect((component as any).visibleModelName).toBeUndefined();
     });
   });
+
+  // =========================================================================
+  // 11. c06: the character-register staleness marker.
+  //     `characterRegisterStale` is the server's INFORMATIONAL d1 section 4
+  //     signal, computed at read time and reaching the client only on a
+  //     read-back route (getHistory / getByJob), which is exactly what feeds
+  //     this tab. It says the register CHANGED after the result was produced;
+  //     it must never assert the result is wrong, and nothing re-runs.
+  // =========================================================================
+
+  describe('c06: character-register staleness marker', () => {
+    const MARKER = '[data-testid="history-register-stale"]';
+
+    function makeResult(overrides: Partial<AnalysisResultDto> = {}): AnalysisResultDto {
+      return {
+        id: 'r-stale',
+        chapterId: 'chap-1',
+        jobId: null,
+        type: 'Proofread',
+        analysisType: 'Proofread',
+        resultText: 'a past proofread',
+        createdAt: new Date().toISOString(),
+        scope: 'Chapter',
+        structuredResult: null,
+        sceneId: null,
+        bookId: 'book-1',
+        language: 'he',
+        status: 'Active',
+        proofreadNoChangesHint: false,
+        suggestions: [],
+        ...overrides,
+      };
+    }
+
+    it('renders NOTHING when the server did not flag the result (control)', () => {
+      component.bookLanguage = 'he';
+      loadResult(makeResult({ characterRegisterStale: false }));
+
+      expect(fixture.debugElement.query(By.css(MARKER))).toBeNull();
+    });
+
+    it('renders NOTHING when the field is absent entirely (a pre-flag result / a synthetic run)', () => {
+      component.bookLanguage = 'he';
+      loadResult(makeResult());
+
+      expect(fixture.debugElement.query(By.css(MARKER))).toBeNull();
+    });
+
+    it('renders the Hebrew note when flagged on a Hebrew book (bookLanguage default)', () => {
+      component.bookLanguage = null;
+      loadResult(makeResult({ characterRegisterStale: true }));
+
+      const marker = fixture.debugElement.query(By.css(MARKER));
+      expect(marker).not.toBeNull();
+      const text = (marker.nativeElement.textContent || '').trim();
+      expect(text).toBe(component.histLabel('characterRegisterStale'));
+      // Book language drives the copy, so a Hebrew book must not see the English sentence.
+      expect(text).toContain('מאגר הדמויות');
+      expect(text).not.toContain('character register');
+    });
+
+    it('renders the English note when the BOOK language is English (he/en parity, book-scoped)', () => {
+      component.bookLanguage = 'en';
+      loadResult(makeResult({ characterRegisterStale: true, language: 'en' }));
+
+      const marker = fixture.debugElement.query(By.css(MARKER));
+      expect(marker).not.toBeNull();
+      const text = (marker.nativeElement.textContent || '').trim();
+      expect(text).toContain('character register changed after this analysis ran');
+      expect(text).not.toContain('מאגר הדמויות');
+    });
+
+    it('is TYPE-AGNOSTIC in the template: the server owns the type gate, the client does not re-copy it', () => {
+      // A Synopsis result also reads the register server-side. If the template re-gated on
+      // analysisType it would become a fourth hand-maintained copy of the register-reading type set
+      // (the exact defect c04 removed), so the marker must follow the flag alone.
+      component.bookLanguage = 'en';
+      loadResult(makeResult({ analysisType: 'Synopsis', type: 'Synopsis', characterRegisterStale: true }));
+
+      expect(fixture.debugElement.query(By.css(MARKER))).not.toBeNull();
+    });
+
+    it('sets no dir attribute, matching every other chrome string on this surface', () => {
+      component.bookLanguage = 'he';
+      loadResult(makeResult({ characterRegisterStale: true }));
+
+      const marker = fixture.debugElement.query(By.css(MARKER));
+      expect(marker.nativeElement.getAttribute('dir')).toBeNull();
+    });
+
+    it('is INFORMATIONAL in both languages: never asserts the result is wrong, and carries no em-dash', () => {
+      const he = ((): string => { component.bookLanguage = 'he'; return component.histLabel('characterRegisterStale'); })();
+      const en = ((): string => { component.bookLanguage = 'en'; return component.histLabel('characterRegisterStale'); })();
+
+      // Parity: the key resolves in BOTH maps (histLabel echoes the key back when a map misses it).
+      expect(he).not.toBe('characterRegisterStale');
+      expect(en).not.toBe('characterRegisterStale');
+      expect(he).not.toBe(en);
+
+      // No verdict language: the flag reports a timeline fact, and nothing re-runs because of it.
+      for (const word of ['wrong', 'invalid', 'incorrect', 'unreliable', 're-run', 'rerun', 'שגוי', 'לא נכון']) {
+        expect(he.toLowerCase()).not.toContain(word);
+        expect(en.toLowerCase()).not.toContain(word);
+      }
+      // Standing convention: no em-dash in any user-facing string.
+      expect(he).not.toContain('—');
+      expect(en).not.toContain('—');
+    });
+  });
 });

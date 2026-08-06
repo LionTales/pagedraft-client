@@ -151,3 +151,9 @@
   color: #666;
   font-size: 0.85rem;
 }
+/* Informational register-staleness note under the result heading. Logical (block) margins only, so it
+   spaces identically in RTL and LTR; no color escalation, because it is not a warning. */
+.register-stale-hint {
+  margin-block: 0 0.5rem;
+  line-height: 1.4;
+}
