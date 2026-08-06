@@ -79,6 +79,21 @@
   font-size: var(--pd-text-caption);
 }
 
+/**
+ * Coverage: one quiet line of fact, made of whole sentences. Flex + wrap (not inline text) so each
+ * sentence stays a unit and wraps as a unit at a narrow viewport instead of breaking mid-clause, and
+ * so the reading order follows [dir] automatically with no mirrored rule to keep in sync.
+ */
+.cr-coverage {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+}
+
 /* ── Provenance badges ─────────────────────────────────────────────────────── */
 .cr-badge {
   display: inline-flex;

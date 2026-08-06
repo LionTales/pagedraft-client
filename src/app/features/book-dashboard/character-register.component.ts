@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { Subscription } from 'rxjs';
 import {
+  CharacterRegisterCoverageDto,
   CharacterRegisterDto,
   CharacterRegisterEditDto,
   CharacterRegisterEntryDto,
@@ -35,6 +36,16 @@ export type CharacterRegisterLabelKey =
   | 'badgeAuthorAdded'
   | 'attentionNone'
   | 'attentionSome'
+  // coverage: how much of the book the register reflects (server truth, be-c03)
+  | 'coverageCounts'
+  | 'coverageGrows'
+  | 'coveragePreLedger'
+  | 'coverageComplete'
+  | 'coverageNothingToRead'
+  | 'coverageNoChapters'
+  | 'coverageStale'
+  | 'coverageUnscannable'
+  | 'coverageLastScanned'
   // fields
   | 'fieldGender'
   | 'fieldAliases'
@@ -94,6 +105,24 @@ export const CHARACTER_REGISTER_LABELS_HE: Record<CharacterRegisterLabelKey, str
   attentionNone: 'כל הערכים אושרו על ידכם.',
   attentionSome: 'ערכים שעדיין לא אושרו:',
 
+  // DRAFT (Hebrew), and shipping that way BY DECISION (2026-08-06): the nine coverage strings below
+  // have not had a native-speaker pass on wording or word-order, and the author chose to ship them and
+  // correct them from QA and POC-user feedback instead of blocking on one. So this marker is a standing
+  // invitation to improve the copy, NOT an unmet release gate - do not read it as work that was missed.
+  // `{covered}` / `{total}` / `{stale}` / `{unscannable}` are filled with the SERVER's numbers; they sit
+  // inside the sentence so each language keeps its own word order, and any rewrite must preserve them
+  // verbatim (a spec pins he/en placeholder parity).
+  coverageCounts: 'פרקים שהמאגר משקף: {covered} מתוך {total}.',
+  coverageGrows: 'המאגר מתמלא ככל שמריצים את הניתוחים שקוראים אותו.',
+  coveragePreLedger:
+    'עדיין לא נספר אף פרק. מה שכבר יש במאגר נרשם לפני שהתחילה הספירה לפי פרקים, ומכאן והלאה הפרקים נספרים ככל שמריצים את הניתוחים שקוראים את המאגר.',
+  coverageComplete: 'כל פרק שיש בו טקסט כבר תרם למאגר.',
+  coverageNothingToRead: 'אין בספר פרק שיש בו טקסט שהניתוח יכול לקרוא, ולכן אין עדיין מה לשקף במאגר.',
+  coverageNoChapters: 'אין עדיין פרקים בספר, ולכן אין מה לשקף במאגר.',
+  coverageStale: 'פרקים שהשתנו מאז שנקראו: {stale}. כל אחד מהם ייקרא שוב בניתוח הבא שקורא את המאגר.',
+  coverageUnscannable: 'פרקים שאין בהם טקסט לקריאה: {unscannable}.',
+  coverageLastScanned: 'נקרא לאחרונה',
+
   fieldGender: 'מגדר',
   fieldAliases: 'כינויים',
   fieldRole: 'תפקיד',
@@ -151,6 +180,19 @@ export const CHARACTER_REGISTER_LABELS_EN: Record<CharacterRegisterLabelKey, str
   badgeAuthorAdded: 'Added by you',
   attentionNone: 'Every value has been confirmed by you.',
   attentionSome: 'Values not confirmed yet:',
+
+  coverageCounts: 'Chapters reflected in the register: {covered} of {total}.',
+  coverageGrows: 'It fills in as you run the analyses that read the register.',
+  coveragePreLedger:
+    'No chapter has been counted yet. What the register already holds was recorded before this per-chapter count began, and chapters are counted from here on as you run the analyses that read the register.',
+  coverageComplete: 'Every chapter that holds text has contributed to the register.',
+  coverageNothingToRead:
+    'No chapter in this book holds text an analysis can read, so there is nothing for the register to reflect yet.',
+  coverageNoChapters: 'This book has no chapters yet, so there is nothing for the register to reflect.',
+  coverageStale:
+    'Chapters changed since they were read: {stale}. Each one is read again the next time an analysis that reads the register runs on it.',
+  coverageUnscannable: 'Chapters holding no text to read: {unscannable}.',
+  coverageLastScanned: 'Last read',
 
   fieldGender: 'Gender',
   fieldAliases: 'Aliases',
@@ -222,6 +264,18 @@ const GENDER_OPTIONS = ['male', 'female', 'unknown'] as const;
  * PRESENT one means "set AND confirm", so this component omits a field it is not editing rather than
  * sending it unchanged. `hasRegister: false` (a 200) is the server's own "never built" answer and is
  * never inferred from an empty list.
+ *
+ * ── Coverage (automatic-coverage plan, c01) ──────────────────────────────────────────────────────
+ * The card also states how much of the book the register actually reflects, because a silent
+ * automatic mechanism that quietly covers 3 of 40 chapters is worse than a manual one the author can
+ * see. It is a LINE OF FACT, not a control panel: coverage grows one chapter at a time, at the pace
+ * the author runs the analyses that read the register (Proofread, LiteraryAnalysis, QA, Synopsis,
+ * per `PromptFactory.RendersCharacterRegister` on the server; the other analysis types never scan),
+ * and the copy says so rather than implying the register is complete or about to be. There is no scan
+ * button, deliberately (d1 did not conclude one is needed), and no chapter identities are listed,
+ * because a list of chapters still to scan is a work queue.
+ * Every number comes from `register.coverage` (the server's own count off its scan ledger) and NONE is
+ * re-derived from `characters`: that list says who was found, not which chapters were read.
  *
  * he/en parity, `[dir]` from the BOOK language (not the app chrome), no em-dash.
  */
@@ -435,6 +489,139 @@ export class CharacterRegisterComponent implements OnChanges, OnDestroy {
   /** Localized, timezone-aware "updated ..." for the register stamp (never a raw `| date`). */
   get updatedLabel(): string {
     return formatRelativeTime(this.register?.updatedAt, this.langKey);
+  }
+
+  // ── Coverage: how much of the book the register reflects ───────────────────────
+  //
+  // SERVER TRUTH ONLY. Every number rendered below is read straight off `register.coverage`, which the
+  // server computes from the persisted scan ledger. NOTHING here is derived from `characters`,
+  // `activeCharacters` or any other client-side list: the character list answers "who was found", the
+  // coverage answers "which chapters were read", and a client that inferred one from the other would be
+  // inventing an answer it cannot have (a chapter can be read and contribute no new character at all).
+  //
+  // What it says is deliberately a line of FACT, not an instruction and not a control panel: coverage
+  // grows ONE chapter at a time, at the pace the author runs the analyses that read the register
+  // (Proofread, LiteraryAnalysis, QA, Synopsis; see `PromptFactory.RendersCharacterRegister` on the
+  // server), so a long book can stay partly reflected for a long time even after many other analyses
+  // have run on it. Nothing here may imply the register is complete, or about to be. There is no scan
+  // button, by design.
+  //
+  // It may not UNDERstate itself either, which is the other half of the same honesty. The scan ledger
+  // is newer than the registers it counts, so a register built before per-chapter tracking existed
+  // reports zero covered chapters while listing the characters it found in that book, and the two read
+  // as a contradiction. `coverageStatusLabel` gives that state its own sentence rather than letting the
+  // generic "it fills in" stand beside a zero it does not explain; the closed-set table on that getter
+  // is what keeps the new cell from stealing a neighbour's.
+
+  /** The server's coverage block, or null when no register answer is on screen. Never re-derived. */
+  get coverage(): CharacterRegisterCoverageDto | null {
+    return this.register?.coverage ?? null;
+  }
+
+  /**
+   * "Chapters reflected in the register: 3 of 40." Rendered only when the book HAS chapters, since
+   * "0 of 0" is a count of nothing (that state gets `coverageNoChapters` instead).
+   */
+  get coverageCountsLabel(): string {
+    const c = this.coverage;
+    if (!c) return '';
+    return this.fill('coverageCounts', { covered: c.coveredChapters, total: c.totalChapters });
+  }
+
+  /**
+   * The one sentence that says what the numbers mean. Five mutually exclusive states, each an honest
+   * reading of a state the server can genuinely report:
+   *   - no chapters at all: there is nothing to reflect yet (the server calls this NOT complete).
+   *   - a register exists and the LEDGER IS EMPTY: nothing has contributed, but the register is not
+   *     empty either. This is the pre-ledger state - every register that predates per-chapter tracking
+   *     lands here - and without its own sentence the card opens by UNDERstating itself to "0 of 80"
+   *     directly above the characters it found in that very book. It says what is true: no chapter has
+   *     been counted yet, what is already held was recorded before the count began, and counting runs
+   *     from here on.
+   *   - not complete, otherwise: it fills in as the author runs analyses that read the register. The
+   *     default, and the one that must not be dressed up as nearly-done.
+   *   - complete with something covered: every chapter that CAN contribute has, up to the extraction
+   *     pre-pass's word cap on its current text (not necessarily the whole chapter for a long one).
+   *   - complete with nothing covered: every chapter is unscannable, so completeness here means there
+   *     is nothing to read, not that the register is full. Saying "every chapter contributed" would be
+   *     a plain falsehood on this state.
+   *
+   * ── THE CLOSED SET ───────────────────────────────────────────────────────────────────────────────
+   * This surface has already shipped one missing-cell bug (an all-suppressed register rendering "every
+   * value has been confirmed by you"), so the cross of the five booleans this getter can branch on is
+   * materialized here rather than argued informally. H = `hasRegister`, T0 = `totalChapters === 0`,
+   * IC = `isComplete`, C0 = `coveredChapters === 0`, S0 = `staleChapters === 0`. 32 cells; 10 are
+   * reachable, and the other 22 are UNREACHABLE BY CONSTRUCTION on the server (deliberate no-ops, not
+   * oversights). The three structural facts that kill them, all from
+   * `CharacterRegisterCoverage.Summarize` and `CharacterRegisterService.GetAsync`:
+   *   (i)   `isComplete = total > 0 && pending == 0 && stale == 0`, so T0 forces !IC, and IC forces S0.
+   *   (ii)  `hasRegister:false` is answered with a NULL register, so the ledger is empty: !H forces
+   *         C0 and S0.
+   *   (iii) T0 means there are no chapters to classify at all: T0 forces C0 and S0.
+   *
+   * | H | T0 | IC | C0 | S0 | state | branch |
+   * |---|----|----|----|----|-------|--------|
+   * | T | T  | F  | T  | T  | register exists, book has no chapters | `coverageNoChapters` |
+   * | F | T  | F  | T  | T  | never built, book has no chapters     | `coverageNoChapters` |
+   * | T | F  | T  | F  | T  | complete, something covered           | `coverageComplete` |
+   * | T | F  | T  | T  | T  | complete, every chapter unscannable   | `coverageNothingToRead` |
+   * | F | F  | T  | T  | T  | never built, every chapter unscannable | `coverageNothingToRead` |
+   * | T | F  | F  | F  | F  | partly covered, some chapters edited  | `coverageGrows` |
+   * | T | F  | F  | F  | T  | partly covered (the ordinary mid-book state) | `coverageGrows` |
+   * | T | F  | F  | T  | F  | nothing covered but the ledger HAS lines (all scanned chapters were since edited) | `coverageGrows` |
+   * | F | F  | F  | T  | T  | never built, chapters outstanding     | `coverageGrows` |
+   * | T | F  | F  | T  | T  | **register exists, ledger empty**     | `coveragePreLedger` (new) |
+   *
+   * Unreachable (no branch, and none needed): every T0 cell with IC, !C0 or !S0 (14, by (i)+(iii));
+   * every IC cell with !S0 (4 more, by (i)); every !H cell with !C0 or !S0 (4 more, by (ii)).
+   *
+   * WHAT THE NEW CELL MUST NOT STEAL, and why it does not:
+   *   - `coverageNoChapters` (T0) satisfies C0 && S0 too, so the T0 test stays FIRST and wins.
+   *   - `coverageNothingToRead` (IC && C0) satisfies C0 && S0 too, so the new test lives strictly
+   *     inside the `!isComplete` arm and can never reach it. On an all-unscannable book "counted from
+   *     here on" would be a promise the server can never keep.
+   *   - the ordinary mid-book state is held off by `coveredChapters === 0`, and a ledger that has lines
+   *     but no fresh ones by `staleChapters === 0`. Both are SERVER fields.
+   *
+   * `hasRegister` is read off `register`, which is the server's answer. Nothing here consults
+   * `characters` / `characters.length`: "who was found" is a different question from "what has been
+   * counted", and deriving one from the other is the defect the whole coverage block exists to avoid.
+   */
+  get coverageStatusLabel(): string {
+    const c = this.coverage;
+    if (!c) return '';
+    if (c.totalChapters === 0) return this.label('coverageNoChapters');
+    if (!c.isComplete) {
+      const ledgerEmpty = c.coveredChapters === 0 && c.staleChapters === 0;
+      return this.register?.hasRegister === true && ledgerEmpty
+        ? this.label('coveragePreLedger')
+        : this.label('coverageGrows');
+    }
+    return c.coveredChapters > 0
+      ? this.label('coverageComplete')
+      : this.label('coverageNothingToRead');
+  }
+
+  /** "Chapters changed since they were read: 2." Rendered only when the server reports some. */
+  get coverageStaleLabel(): string {
+    const c = this.coverage;
+    if (!c) return '';
+    return this.fill('coverageStale', { stale: c.staleChapters });
+  }
+
+  /**
+   * "Chapters holding no text to read: 1." Named rather than omitted, so the four buckets visibly add
+   * up to the total and an author is never left wondering why the count stopped moving.
+   */
+  get coverageUnscannableLabel(): string {
+    const c = this.coverage;
+    if (!c) return '';
+    return this.fill('coverageUnscannable', { unscannable: c.unscannableChapters });
+  }
+
+  /** Localized, timezone-aware last-scan stamp (the same helper as `updatedLabel`, never `| date`). */
+  get coverageLastScannedLabel(): string {
+    return formatRelativeTime(this.coverage?.lastScannedAt, this.langKey);
   }
 
   // ── Row editing ────────────────────────────────────────────────────────────────
@@ -709,5 +896,20 @@ export class CharacterRegisterComponent implements OnChanges, OnDestroy {
 
   label(key: CharacterRegisterLabelKey): string {
     return (this.langKey === 'he' ? CHARACTER_REGISTER_LABELS_HE : CHARACTER_REGISTER_LABELS_EN)[key];
+  }
+
+  /**
+   * Localized label with `{name}` placeholders filled in.
+   *
+   * The alternative (concatenating a label fragment, a number and a second fragment in the template)
+   * fixes ONE word order for every language, which is wrong the moment Hebrew and English disagree
+   * about where the number belongs. Keeping the placeholder inside the string lets each language own
+   * its own sentence. An unknown placeholder is left standing rather than replaced with "undefined",
+   * so a typo shows up as itself; the spec pins he/en placeholder parity.
+   */
+  private fill(key: CharacterRegisterLabelKey, values: Record<string, number | string>): string {
+    return this.label(key).replace(/\{(\w+)\}/g, (token, name: string) =>
+      name in values ? String(values[name]) : token
+    );
   }
 }
