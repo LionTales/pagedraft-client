@@ -18,6 +18,15 @@
   </nav>
   <article class="result-view" *ngIf="history.length && currentHistoryItem as current">
     <h4>{{ analysisTypeLabel(current.analysisType || current.type) }}</h4>
+    <!-- Character register changed after this result was produced (d1 section 4). INFORMATIONAL: it
+         reports a fact about the register's timeline, never a verdict on the result. Deliberately
+         type-agnostic here because the SERVER already gates the flag to the types that read the
+         register; re-gating it in the template would be a second copy of that type set. No dir
+         attribute: every other chrome string on this surface inherits direction from the document
+         root, and the sibling unreliable-proofread hint sets none either. -->
+    <p class="register-stale-hint muted" *ngIf="current.characterRegisterStale" data-testid="history-register-stale">
+      {{ histLabel('characterRegisterStale') }}
+    </p>
     <!-- Proofread (history): unreliable result shows only the warning (no cards, no raw resultText) -->
     <div class="suggestions-block" *ngIf="(current.analysisType || current.type) === 'Proofread' && current.proofreadResultUnreliable">
       <p class="proofread-length-hint muted">{{ histLabel('unreliableProofread') }}</p>

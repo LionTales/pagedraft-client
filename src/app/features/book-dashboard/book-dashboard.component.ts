@@ -18,6 +18,7 @@ import { BookReviewState, BookReviewStatusRowComponent } from './book-review-sta
 import { BookReviewFindingsComponent } from './book-review-findings.component';
 import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
+import { CharacterRegisterComponent } from './character-register.component';
 import { FunnelStepperComponent } from './funnel-stepper.component';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 
@@ -137,6 +138,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     BookReviewFindingsComponent,
     BookStoryBibleComponent,
     BookChapterSummariesComponent,
+    CharacterRegisterComponent,
     FunnelStepperComponent,
     TierToggleComponent,
   ],
@@ -404,6 +406,24 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           }
         </section>
       }
+
+      <!-- character-register-editing c2: the author's EDITABLE character register.
+           Mounted here, on the book dashboard, rather than in the per-chapter editor because the register
+           is BOOK-scoped: one register per book, read by every chapter's analysis, so a per-chapter mount
+           would imply a per-chapter thing and force the author to pick an arbitrary chapter to correct a
+           book-level fact. This page is already the book-level intelligence + settings area (profile,
+           summaries, review, book-default tier), and this section sits directly after the READ-ONLY
+           profile "Characters" card, which shows the same domain from the other side (what the profile
+           extracted) - adjacency is the point: what you can read is followed by what you can correct.
+           Deliberately OUTSIDE the profile guard above: the register exists independently of the book
+           profile, so it must still render (including its never-built empty state) for a book that has no
+           profile yet. -->
+      <section class="card character-register-card">
+        <app-character-register
+          [bookId]="bookId"
+          [bookLanguage]="bookLanguage">
+        </app-character-register>
+      </section>
 
       <!-- tier-ux-rework c3: the BOOK DEFAULT tier, demoted from the dashboard hero position to a small
            settings row at the foot of the page. The decision that matters is now per edit type, made on the

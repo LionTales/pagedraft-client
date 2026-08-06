@@ -1,0 +1,340 @@
+/**
+ * Character register (c2). Layout is direction-agnostic on purpose: flex + logical properties, so the
+ * SAME rules lay out correctly under [dir="rtl"] (Hebrew book) and [dir="ltr"] (English book) with no
+ * mirrored overrides to keep in sync.
+ *
+ * The confirmed/guessed distinction is carried by TEXT + a glyph in the badge; the colours below only
+ * reinforce it, so the surface still reads correctly without colour.
+ */
+.cr {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--pd-font-ui);
+  color: var(--pd-text);
+}
+
+.cr-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cr-title {
+  margin: 0;
+  font-size: var(--pd-text-h5);
+  line-height: var(--pd-lh-h5);
+  font-weight: 700;
+}
+
+.cr-subtitle,
+.cr-hint,
+.cr-muted {
+  margin: 0;
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+}
+
+.cr-error {
+  margin: 0;
+  color: var(--pd-cut);
+  background: var(--pd-cut-bg);
+  border: 1px solid var(--pd-cut-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+}
+
+/* Informational, not a failure: same shape as .cr-error, deliberately not its alarm colours. */
+.cr-notice {
+  margin: 0;
+  color: var(--pd-text-muted);
+  background: var(--pd-surface-sunken);
+  border: 1px solid var(--pd-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+}
+
+.cr-attention {
+  margin: 0;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+}
+
+.cr-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cr-stamp {
+  color: var(--pd-text-muted);
+  font-size: var(--pd-text-caption);
+}
+
+/* ── Provenance badges ─────────────────────────────────────────────────────── */
+.cr-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: var(--pd-text-caption);
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.cr-badge-confirmed {
+  background: var(--pd-keep-bg);
+  border-color: var(--pd-keep-border);
+  color: var(--pd-keep);
+  font-weight: 600;
+}
+
+/* Guessed: a dashed outline so the "not yet blessed" state is legible in greyscale too. */
+.cr-badge-extracted {
+  background: var(--pd-improve-bg);
+  border-color: var(--pd-improve-border);
+  border-style: dashed;
+  color: var(--pd-improve);
+}
+
+.cr-badge-author {
+  background: var(--pd-info-bg);
+  border-color: var(--pd-primary-200);
+  color: var(--pd-primary-700);
+}
+
+/* ── List ──────────────────────────────────────────────────────────────────── */
+.cr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cr-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--pd-border);
+  border-radius: 8px;
+  background: var(--pd-surface);
+}
+
+.cr-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cr-name {
+  font-weight: 700;
+  font-size: var(--pd-text-body-sm);
+}
+
+.cr-role {
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-caption);
+}
+
+.cr-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cr-field-view {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: var(--pd-text-caption);
+  /* The start-edge marker follows the reading direction automatically (logical property). */
+  border-inline-start: 3px solid transparent;
+  padding-inline-start: 6px;
+}
+
+.cr-field-view.cr-confirmed {
+  border-inline-start-color: var(--pd-keep);
+}
+
+.cr-field-view.cr-extracted {
+  border-inline-start-color: var(--pd-improve);
+}
+
+.cr-field-label {
+  color: var(--pd-text-secondary);
+}
+
+.cr-field-value {
+  font-weight: 600;
+}
+
+/* ── Edit / add forms ──────────────────────────────────────────────────────── */
+.cr-edit,
+.cr-add {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cr-add {
+  padding-top: 6px;
+  border-top: 1px solid var(--pd-divider);
+}
+
+.cr-add-title,
+.cr-suppressed-title {
+  margin: 0;
+  font-size: var(--pd-text-body-sm);
+  font-weight: 700;
+}
+
+.cr-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: var(--pd-text-caption);
+}
+
+.cr-input {
+  flex: 1 1 180px;
+  min-width: 0; /* narrow-viewport: let the field shrink instead of overflowing the card */
+  max-width: 100%;
+  padding: 4px 8px;
+  border: 1px solid var(--pd-border-strong);
+  border-radius: 6px;
+  font: inherit;
+  font-size: var(--pd-text-caption);
+  background: var(--pd-surface);
+  color: var(--pd-text);
+}
+
+.cr-input:disabled {
+  background: var(--pd-neutral-100);
+  color: var(--pd-neutral-400);
+}
+
+/* ── Actions ───────────────────────────────────────────────────────────────── */
+.cr-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cr-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--pd-border-strong);
+  border-radius: 6px;
+  background: var(--pd-surface);
+  color: var(--pd-text);
+  font: inherit;
+  font-size: var(--pd-text-caption);
+  cursor: pointer;
+}
+
+.cr-btn:hover:not(:disabled) {
+  background: var(--pd-neutral-100);
+}
+
+.cr-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.cr-btn-primary {
+  background: var(--pd-primary);
+  border-color: var(--pd-primary);
+  color: var(--pd-on-primary);
+}
+
+.cr-btn-primary:hover:not(:disabled) {
+  background: var(--pd-primary-hover);
+}
+
+.cr-btn-quiet {
+  background: transparent;
+  border-color: var(--pd-border);
+  color: var(--pd-text-secondary);
+}
+
+.cr-btn-danger {
+  border-color: var(--pd-cut-border);
+  color: var(--pd-cut);
+}
+
+.cr-btn-link {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: var(--pd-text-link);
+  text-decoration: underline;
+}
+
+/* ── Empty + suppressed ────────────────────────────────────────────────────── */
+.cr-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border: 1px dashed var(--pd-border-strong);
+  border-radius: 8px;
+  background: var(--pd-surface-sunken);
+}
+
+.cr-empty-title {
+  margin: 0;
+  font-weight: 700;
+  font-size: var(--pd-text-body-sm);
+}
+
+.cr-suppressed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--pd-divider);
+}
+
+.cr-row-suppressed {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text-secondary);
+}
+
+.cr-row-suppressed .cr-name {
+  text-decoration: line-through;
+  font-weight: 600;
+}
+
+/* Narrow viewport: stack the row header and the actions rather than letting them squeeze. */
+@media (max-width: 480px) {
+  .cr-field,
+  .cr-field-view {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .cr-input {
+    flex-basis: 100%;
+    width: 100%;
+  }
+}

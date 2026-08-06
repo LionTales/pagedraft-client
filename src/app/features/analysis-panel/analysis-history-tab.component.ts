@@ -85,6 +85,8 @@ export class AnalysisHistoryTabComponent implements OnChanges {
       pending: 'ממתין',
       consistencyIssues: 'בעיות עקביות',
       unreliableProofread: 'לא הצלחנו להפיק הגהה אמינה עבור קטע זה. נסו קטע קצר יותר (למשל סצנה אחת) והריצו שוב.',
+      // DRAFT (Hebrew): verify wording/word-order with the user before sign-off.
+      characterRegisterStale: 'מאגר הדמויות של הספר השתנה אחרי שהניתוח הזה רץ, ולכן ייתכן שפרטי הדמויות שהוא קיבל אינם מעודכנים.',
       noHistoryScene: 'אין עדיין היסטוריית ניתוח לסצנה זו.',
       noHistoryChapter: 'אין עדיין היסטוריית ניתוח לפרק זה.',
     };
@@ -98,6 +100,7 @@ export class AnalysisHistoryTabComponent implements OnChanges {
       pending: 'Pending',
       consistencyIssues: 'Consistency issues',
       unreliableProofread: 'We could not produce a reliable proofread for this section. Try a shorter section (for example, one scene) and run it again.',
+      characterRegisterStale: 'The book character register changed after this analysis ran, so the character details it was given may be out of date.',
       noHistoryScene: 'No analysis history yet for this scene.',
       noHistoryChapter: 'No analysis history yet for this chapter.',
     };

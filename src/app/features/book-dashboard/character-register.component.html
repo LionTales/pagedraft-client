@@ -1,0 +1,310 @@
+<section class="cr" [attr.dir]="dir" data-testid="character-register">
+  <div class="cr-title-row">
+    <h4 class="cr-title">{{ label('title') }}</h4>
+    <button
+      type="button"
+      class="cr-btn cr-btn-quiet"
+      data-testid="cr-reload"
+      [disabled]="loading || saving"
+      (click)="load()">
+      {{ loading ? label('reloading') : label('reload') }}
+    </button>
+  </div>
+
+  <p class="cr-subtitle">{{ label('subtitle') }}</p>
+
+  @if (loading) {
+    <p class="cr-muted" data-testid="cr-loading">{{ label('loading') }}</p>
+  } @else if (loadError) {
+    <p class="cr-error" data-testid="cr-load-error">{{ label('loadError') }}</p>
+  } @else if (register) {
+    <!-- The save-failure banner. A rejected batch wrote NOTHING, so the list above it is already back
+         to the server's truth; this only has to say so. -->
+    @if (saveError) {
+      <p class="cr-error" role="alert" data-testid="cr-save-error">{{ label('saveFailed') }}</p>
+    }
+
+    <!-- Saved an untouched edit. Not an error, so not role="alert": it is a nudge toward Confirm, which
+         is the only thing that turns a guess into a confirmed value. -->
+    @if (noChangeHint) {
+      <p class="cr-notice" role="status" data-testid="cr-no-change-hint">{{ label('nothingChanged') }}</p>
+    }
+
+    <!-- The legend IS the feature: it names the two provenance states before the list uses them. -->
+    <div class="cr-legend" data-testid="cr-legend">
+      <span class="cr-badge cr-badge-confirmed"><span aria-hidden="true">✓</span> {{ label('legendConfirmed') }}</span>
+      <span class="cr-badge cr-badge-extracted"><span aria-hidden="true">?</span> {{ label('legendExtracted') }}</span>
+      @if (register.updatedAt) {
+        <span class="cr-stamp" data-testid="cr-updated">{{ label('updated') }} {{ updatedLabel }}</span>
+      }
+    </div>
+
+    @if (neverBuilt) {
+      <!-- NEVER BUILT (the server's own hasRegister:false, a 200). Deliberately NOT rendered as a bare
+           empty list, which would read as "this book has no characters". -->
+      <div class="cr-empty" data-testid="cr-empty-never-built">
+        <p class="cr-empty-title">{{ label('emptyNeverBuiltTitle') }}</p>
+        <p class="cr-muted">{{ label('emptyNeverBuiltBody') }}</p>
+      </div>
+    } @else if (builtButEmpty) {
+      <p class="cr-muted" data-testid="cr-empty-built">{{ label('emptyBuiltNoCharacters') }}</p>
+    } @else if (activeCharacters.length === 0) {
+      <!-- BUILT, NOT EMPTY, AND NOTHING ACTIVE: every entry is suppressed. Its own branch because the
+           attention line below cannot describe it. "Values not confirmed yet: 0" counts over an EMPTY
+           list, so it renders as "every value has been confirmed by you" - a claim about editable
+           values the author never confirmed, above a list with nothing in it. The suppressed block
+           further down still lists every name with its Restore, which is the way out of this state. -->
+      <p class="cr-muted" data-testid="cr-empty-all-suppressed">{{ label('emptyAllSuppressed') }}</p>
+    } @else {
+      <p class="cr-attention" data-testid="cr-attention">
+        @if (unconfirmedCount === 0) {
+          {{ label('attentionNone') }}
+        } @else {
+          {{ label('attentionSome') }} {{ unconfirmedCount }}
+        }
+      </p>
+
+      <!-- TRACK BY $index, not by entry.name. A register can hold two entries with the same name (a
+           legacy payload was written straight from the model with no de-duplication of entries), and a
+           name key made Angular emit NG0955 "duplicated keys" on every change-detection pass. The
+           server now collapses duplicates, but the row surface must DEGRADE rather than warn if one
+           ever reaches it, and $index is the only key that is unique BY CONSTRUCTION - it needs no
+           invariant about the data to hold. Row-edit identity does not ride on this key: it is a
+           reference to the entry object (see `editingEntry`). -->
+      <ul class="cr-list" data-testid="cr-list">
+        @for (entry of activeCharacters; track $index) {
+          <li class="cr-row" [attr.data-testid]="'cr-row-' + entry.name">
+            <div class="cr-row-head">
+              <span class="cr-name">{{ entry.name }}</span>
+              @if (entry.isAuthorAdded) {
+                <span class="cr-badge cr-badge-author" [attr.data-testid]="'cr-author-added-' + entry.name">
+                  {{ label('badgeAuthorAdded') }}
+                </span>
+              }
+              <span class="cr-role">{{ label('fieldRole') }}: {{ entry.role || label('noRole') }}</span>
+            </div>
+
+            @if (isEditing(entry)) {
+              <div class="cr-edit" [attr.data-testid]="'cr-edit-' + entry.name">
+                <label class="cr-field">
+                  <span class="cr-field-label">{{ label('fieldGender') }}</span>
+                  <select
+                    class="cr-input"
+                    [attr.data-testid]="'cr-gender-select-' + entry.name"
+                    [(ngModel)]="genderDraft"
+                    [disabled]="saving">
+                    <option value="">{{ label('genderClear') }}</option>
+                    @for (option of genderChoicesFor(entry.gender || ''); track option) {
+                      <option [value]="option">{{ genderLabel(option) }}</option>
+                    }
+                  </select>
+                </label>
+
+                <label class="cr-field">
+                  <span class="cr-field-label">{{ label('fieldAliases') }}</span>
+                  <input
+                    type="text"
+                    class="cr-input"
+                    [attr.data-testid]="'cr-aliases-input-' + entry.name"
+                    [placeholder]="label('aliasesPlaceholder')"
+                    [(ngModel)]="aliasesDraft"
+                    [disabled]="saving">
+                </label>
+                <p class="cr-hint">{{ label('aliasesHint') }}</p>
+
+                <div class="cr-actions">
+                  <button
+                    type="button"
+                    class="cr-btn cr-btn-primary"
+                    [attr.data-testid]="'cr-save-' + entry.name"
+                    [disabled]="saving"
+                    (click)="saveEdit(entry)">
+                    {{ saving ? label('saving') : label('save') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="cr-btn cr-btn-quiet"
+                    [attr.data-testid]="'cr-cancel-' + entry.name"
+                    [disabled]="saving"
+                    (click)="cancelEdit()">
+                    {{ label('cancel') }}
+                  </button>
+                </div>
+              </div>
+            } @else {
+              <div class="cr-fields">
+                <!-- Gender + its provenance. The badge carries the meaning in TEXT (plus a glyph), so the
+                     confirmed/guessed distinction survives without colour. -->
+                <div
+                  class="cr-field-view"
+                  [class.cr-confirmed]="entry.genderConfirmed"
+                  [class.cr-extracted]="!entry.genderConfirmed"
+                  [attr.data-testid]="'cr-gender-' + entry.name">
+                  <span class="cr-field-label">{{ label('fieldGender') }}</span>
+                  <span class="cr-field-value">{{ genderLabel(entry.gender) }}</span>
+                  @if (entry.genderConfirmed) {
+                    <span class="cr-badge cr-badge-confirmed" [attr.data-testid]="'cr-gender-confirmed-' + entry.name">
+                      <span aria-hidden="true">✓</span> {{ label('badgeConfirmed') }}
+                    </span>
+                  } @else {
+                    <span class="cr-badge cr-badge-extracted" [attr.data-testid]="'cr-gender-extracted-' + entry.name">
+                      <span aria-hidden="true">?</span> {{ label('badgeExtracted') }}
+                    </span>
+                    <button
+                      type="button"
+                      class="cr-btn cr-btn-link"
+                      [attr.data-testid]="'cr-confirm-gender-' + entry.name"
+                      [disabled]="saving"
+                      (click)="confirmGender(entry)">
+                      {{ label('confirmGender') }}
+                    </button>
+                  }
+                </div>
+
+                <div
+                  class="cr-field-view"
+                  [class.cr-confirmed]="entry.aliasesConfirmed"
+                  [class.cr-extracted]="!entry.aliasesConfirmed"
+                  [attr.data-testid]="'cr-aliases-' + entry.name">
+                  <span class="cr-field-label">{{ label('fieldAliases') }}</span>
+                  <span class="cr-field-value">
+                    {{ entry.aliases.length ? entry.aliases.join(', ') : label('noAliases') }}
+                  </span>
+                  @if (entry.aliasesConfirmed) {
+                    <span class="cr-badge cr-badge-confirmed" [attr.data-testid]="'cr-aliases-confirmed-' + entry.name">
+                      <span aria-hidden="true">✓</span> {{ label('badgeConfirmed') }}
+                    </span>
+                  } @else {
+                    <span class="cr-badge cr-badge-extracted" [attr.data-testid]="'cr-aliases-extracted-' + entry.name">
+                      <span aria-hidden="true">?</span> {{ label('badgeExtracted') }}
+                    </span>
+                    <button
+                      type="button"
+                      class="cr-btn cr-btn-link"
+                      [attr.data-testid]="'cr-confirm-aliases-' + entry.name"
+                      [disabled]="saving"
+                      (click)="confirmAliases(entry)">
+                      {{ label('confirmAliases') }}
+                    </button>
+                  }
+                </div>
+              </div>
+
+              <div class="cr-actions">
+                <button
+                  type="button"
+                  class="cr-btn"
+                  [attr.data-testid]="'cr-edit-btn-' + entry.name"
+                  [disabled]="saving"
+                  (click)="startEdit(entry)">
+                  {{ label('edit') }}
+                </button>
+                <button
+                  type="button"
+                  class="cr-btn cr-btn-danger"
+                  [attr.data-testid]="'cr-suppress-' + entry.name"
+                  [disabled]="saving"
+                  (click)="suppress(entry)">
+                  {{ label('notACharacter') }}
+                </button>
+              </div>
+            }
+          </li>
+        }
+      </ul>
+    }
+
+    <!-- Suppressed entries stay VISIBLE: suppression is permanent by design (a re-extraction may never
+         resurrect one), which only works if the author can still see and undo it. -->
+    @if (suppressedCharacters.length > 0) {
+      <div class="cr-suppressed" data-testid="cr-suppressed">
+        <h5 class="cr-suppressed-title">{{ label('suppressedTitle') }}</h5>
+        <p class="cr-hint">{{ label('suppressedHint') }}</p>
+        <ul class="cr-list">
+          <!-- Same key choice and same reason as the active list above. -->
+          @for (entry of suppressedCharacters; track $index) {
+            <li class="cr-row cr-row-suppressed" [attr.data-testid]="'cr-suppressed-row-' + entry.name">
+              <span class="cr-name">{{ entry.name }}</span>
+              <button
+                type="button"
+                class="cr-btn"
+                [attr.data-testid]="'cr-restore-' + entry.name"
+                [disabled]="saving"
+                (click)="restore(entry)">
+                {{ label('restore') }}
+              </button>
+            </li>
+          }
+        </ul>
+      </div>
+    }
+
+    <!-- Add stays available in EVERY state, including "never built": the first author-added character
+         creates the register. -->
+    <div class="cr-add">
+      @if (!addOpen) {
+        <button
+          type="button"
+          class="cr-btn cr-btn-primary"
+          data-testid="cr-add-open"
+          [disabled]="saving"
+          (click)="openAdd()">
+          {{ label('addOpen') }}
+        </button>
+      } @else {
+        <h5 class="cr-add-title">{{ label('addTitle') }}</h5>
+        <label class="cr-field">
+          <span class="cr-field-label">{{ label('addName') }}</span>
+          <input
+            type="text"
+            class="cr-input"
+            data-testid="cr-add-name"
+            [placeholder]="label('addNamePlaceholder')"
+            [(ngModel)]="addName"
+            [disabled]="saving">
+        </label>
+        <label class="cr-field">
+          <span class="cr-field-label">{{ label('fieldGender') }}</span>
+          <select class="cr-input" data-testid="cr-add-gender" [(ngModel)]="addGender" [disabled]="saving">
+            <option value="">{{ label('noGender') }}</option>
+            @for (option of genderOptions; track option) {
+              <option [value]="option">{{ genderLabel(option) }}</option>
+            }
+          </select>
+        </label>
+        <label class="cr-field">
+          <span class="cr-field-label">{{ label('fieldAliases') }}</span>
+          <input
+            type="text"
+            class="cr-input"
+            data-testid="cr-add-aliases"
+            [placeholder]="label('aliasesPlaceholder')"
+            [(ngModel)]="addAliases"
+            [disabled]="saving">
+        </label>
+        <p class="cr-hint">{{ label('aliasesHint') }}</p>
+        @if (addNameError) {
+          <p class="cr-error" role="alert" data-testid="cr-add-name-error">{{ label('addNameRequired') }}</p>
+        }
+        <div class="cr-actions">
+          <button
+            type="button"
+            class="cr-btn cr-btn-primary"
+            data-testid="cr-add-submit"
+            [disabled]="saving"
+            (click)="submitAdd()">
+            {{ saving ? label('saving') : label('addSubmit') }}
+          </button>
+          <button
+            type="button"
+            class="cr-btn cr-btn-quiet"
+            data-testid="cr-add-cancel"
+            [disabled]="saving"
+            (click)="closeAdd()">
+            {{ label('cancel') }}
+          </button>
+        </div>
+      }
+    </div>
+  }
+</section>

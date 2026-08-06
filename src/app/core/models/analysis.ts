@@ -24,6 +24,18 @@ export interface AnalysisResultDto {
   proofreadNoChangesHint?: boolean;
   /** True when the proofread result is untrustworthy (model returned empty or content unrelated to input). Drives the Run-tab "unreliable result" warning; clean text leaves this false. */
   proofreadResultUnreliable?: boolean;
+  /**
+   * INFORMATIONAL only (character-register-editing d1 section 4): this result was produced BEFORE the
+   * book's character register was last changed, so the character facts the model was given may since
+   * have been corrected. Never means the result is wrong, and nothing on the server re-runs, archives
+   * or invalidates anything because of it.
+   *
+   * Server-computed at READ time (`register.UpdatedAt` vs `result.CreatedAt`) and gated to the analysis
+   * types that actually pull the register into their prompt, so any other type reports false. It also
+   * reports false on a FRESHLY produced result (`POST .../analyze`), which is correct: the run just saw
+   * the current register. It becomes true only on a read-back route, i.e. `getHistory` and `getByJob`.
+   */
+  characterRegisterStale?: boolean;
   /** Active/Archived status of this analysis result. */
   status?: string | null;
   /** Server-side suggestions for this analysis run (Proofread and Line Edit). */

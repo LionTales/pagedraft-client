@@ -25,6 +25,7 @@ import { BookSummaryService } from '../../core/services/book-summary.service';
 import { BookReviewService } from '../../core/services/book-review.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { ChapterSummaryService } from '../../core/services/chapter-summary.service';
+import { CharacterRegisterService } from '../../core/services/character-register.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
@@ -89,6 +90,17 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
             rederiveChapterSummary: () => NEVER,
           },
         },
+        // Transitive dep of the hosted character-register child (character-register-editing c2)
+        // (NullInjector guard): the register section fetches on init, so without this stub EVERY test in
+        // this suite fails with "No provider for HttpClient", naming the transitive dep rather than the
+        // component that introduced it.
+        {
+          provide: CharacterRegisterService,
+          useValue: {
+            getRegister: () => NEVER,
+            applyEdits: () => NEVER,
+          },
+        },
         // Transitive dep of the hosted tier toggles (tier-ux-rework c3): the book-default row at the foot of
         // the dashboard AND the one inside the hosted review status row (NullInjector guard). Without this
         // every test in this suite fails with "No provider for HttpClient", naming the transitive dep rather
@@ -144,6 +156,22 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       (fixture.nativeElement as HTMLElement).querySelectorAll('.book-dashboard > section')
     );
     expect(sections[sections.length - 1].classList).toContain('book-tier-default-card');
+  });
+
+  /**
+   * character-register-editing c2. The register is BOOK-scoped, so it mounts on the book-level
+   * intelligence/settings page (here), not in the per-chapter editor. It must render OUTSIDE the profile
+   * guard: this suite's default BookService stub returns NEVER for getProfile, so `profile` is null and
+   * anything inside that guard would be absent - which is exactly the case a book with no profile hits.
+   */
+  it('mounts the book-scoped character register, outside the profile guard, with the book context', () => {
+    const registers = fixture.debugElement.queryAll(
+      By.css('.book-dashboard > .character-register-card app-character-register')
+    );
+    expect(component.profile).toBeNull();
+    expect(registers.length).toBe(1);
+    expect(registers[0].componentInstance.bookId).toBe('book-1');
+    expect(registers[0].componentInstance.bookLanguage).toBe('he');
   });
 
   it('forwards bookId + bookLanguage to both hosted status rows', () => {
@@ -806,6 +834,8 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
             rederiveChapterSummary: () => NEVER,
           },
         },
+        // Transitive dep of the hosted character-register child (character-register-editing c2).
+        { provide: CharacterRegisterService, useValue: { getRegister: () => NEVER, applyEdits: () => NEVER } },
         {
           provide: AiTierService,
           useValue: {
@@ -924,6 +954,8 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
           provide: ChapterSummaryService,
           useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
         },
+        // Transitive dep of the hosted character-register child (character-register-editing c2).
+        { provide: CharacterRegisterService, useValue: { getRegister: () => NEVER, applyEdits: () => NEVER } },
         {
           provide: AiTierService,
           useValue: {
@@ -1080,6 +1112,8 @@ describe('BookDashboardComponent threads the book language into its server calls
           provide: ChapterSummaryService,
           useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
         },
+        // Transitive dep of the hosted character-register child (character-register-editing c2).
+        { provide: CharacterRegisterService, useValue: { getRegister: () => NEVER, applyEdits: () => NEVER } },
         {
           provide: AiTierService,
           useValue: {
@@ -1220,6 +1254,8 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
           provide: ChapterSummaryService,
           useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
         },
+        // Transitive dep of the hosted character-register child (character-register-editing c2).
+        { provide: CharacterRegisterService, useValue: { getRegister: () => NEVER, applyEdits: () => NEVER } },
         {
           provide: AiTierService,
           useValue: {
@@ -1519,6 +1555,8 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
           provide: ChapterSummaryService,
           useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
         },
+        // Transitive dep of the hosted character-register child (character-register-editing c2).
+        { provide: CharacterRegisterService, useValue: { getRegister: () => NEVER, applyEdits: () => NEVER } },
         {
           provide: AiTierService,
           useValue: {
