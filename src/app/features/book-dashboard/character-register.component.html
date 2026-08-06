@@ -39,6 +39,34 @@
       }
     </div>
 
+    <!-- COVERAGE: a quiet line of fact, deliberately not a control panel and deliberately no scan
+         button. It says how much of the book the register reflects and that it fills in, one chapter
+         at a time, as the author runs the analyses that read the register (not every analysis type
+         does). Every number is the SERVER's (register.coverage, computed from
+         the scan ledger); none is re-derived from the character list, which answers a different
+         question. Rendered ABOVE the empty states on purpose: "0 of 40" is the honest answer on a
+         never-built register too, and it is the number that makes the empty state's "it is built on
+         the first analysis run that needs it" concrete. -->
+    @if (coverage; as cov) {
+      <p class="cr-coverage" data-testid="cr-coverage">
+        @if (cov.totalChapters > 0) {
+          <span data-testid="cr-coverage-counts">{{ coverageCountsLabel }}</span>
+        }
+        <span data-testid="cr-coverage-status">{{ coverageStatusLabel }}</span>
+        @if (cov.staleChapters > 0) {
+          <span data-testid="cr-coverage-stale">{{ coverageStaleLabel }}</span>
+        }
+        @if (cov.unscannableChapters > 0) {
+          <span data-testid="cr-coverage-unscannable">{{ coverageUnscannableLabel }}</span>
+        }
+        @if (cov.lastScannedAt) {
+          <span class="cr-stamp" data-testid="cr-coverage-scanned">
+            {{ label('coverageLastScanned') }} {{ coverageLastScannedLabel }}
+          </span>
+        }
+      </p>
+    }
+
     @if (neverBuilt) {
       <!-- NEVER BUILT (the server's own hasRegister:false, a 200). Deliberately NOT rendered as a bare
            empty list, which would read as "this book has no characters". -->

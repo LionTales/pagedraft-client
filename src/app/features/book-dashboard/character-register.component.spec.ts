@@ -5,6 +5,8 @@
  *  - every edit path (add, suppress, restore, edit gender, edit aliases, plus the two confirm-as-is paths);
  *  - the confirmed-vs-extracted rendering (the feature: text badges, not colour alone);
  *  - the never-built empty state (the server's hasRegister:false 200), kept distinct from "built and empty";
+ *  - the coverage line (automatic-coverage c01): the SERVER's counts, the four states it can report,
+ *    and that no number on it can be produced from the character list;
  *  - save-failure reconciliation (a rejected batch writes NOTHING, so the optimistic patch must roll back);
  *  - the server's answer winning over the client's optimistic guess even when they disagree;
  *  - RTL (Hebrew book) and LTR (English book), and he/en label parity with no em-dash.
@@ -23,9 +25,30 @@ import {
 } from './character-register.component';
 import { CharacterRegisterService } from '../../core/services/character-register.service';
 import {
+  CharacterRegisterCoverageDto,
   CharacterRegisterDto,
   CharacterRegisterEntryDto,
 } from '../../core/models/character-register';
+
+/**
+ * A coverage block. The default is the ordinary mid-book state (partly covered, still growing), which
+ * is what most specs want in the background. The server guarantees
+ * `covered + pending + stale + unscannable === total`, so every override below keeps that sum.
+ */
+function makeCoverage(
+  overrides: Partial<CharacterRegisterCoverageDto> = {}
+): CharacterRegisterCoverageDto {
+  return {
+    totalChapters: 40,
+    coveredChapters: 3,
+    pendingChapters: 37,
+    staleChapters: 0,
+    unscannableChapters: 0,
+    isComplete: false,
+    lastScannedAt: '2026-08-05T09:00:00Z',
+    ...overrides,
+  };
+}
 
 function makeEntry(overrides: Partial<CharacterRegisterEntryDto> = {}): CharacterRegisterEntryDto {
   return {
@@ -49,6 +72,7 @@ function makeRegister(overrides: Partial<CharacterRegisterDto> = {}): CharacterR
     hasRegister: true,
     updatedAt: '2026-08-05T09:00:00Z',
     characters: [makeEntry()],
+    coverage: makeCoverage(),
     ...overrides,
   };
 }
@@ -388,7 +412,19 @@ describe('CharacterRegisterComponent (character-register-editing c2)', () => {
 
   it('explains a NEVER-BUILT register instead of rendering a blank list that reads as "no characters"', () => {
     service.getRegister.and.returnValue(
-      of(makeRegister({ hasRegister: false, updatedAt: null, characters: [] }))
+      of(
+        makeRegister({
+          hasRegister: false,
+          updatedAt: null,
+          characters: [],
+          // The server sends coverage on the never-built state too, and it reads "0 of 40".
+          coverage: makeCoverage({
+            coveredChapters: 0,
+            pendingChapters: 40,
+            lastScannedAt: null,
+          }),
+        })
+      )
     );
     mount();
 
@@ -400,6 +436,12 @@ describe('CharacterRegisterComponent (character-register-editing c2)', () => {
     expect(el('cr-empty-built')).toBeNull();
     // The author can still seed the register by hand from the empty state.
     expect(el('cr-add-open')).not.toBeNull();
+
+    // The coverage line joins the never-built state rather than replacing it: "0 of 40" is the honest
+    // answer here, and nothing has been scanned yet so there is no last-read stamp to show.
+    expect(text('cr-coverage-counts')).toBe('פרקים שהמאגר משקף: 0 מתוך 40.');
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_HE.coverageGrows);
+    expect(el('cr-coverage-scanned')).toBeNull();
   });
 
   it('distinguishes "built but holds no characters" from "never built"', () => {
@@ -461,6 +503,308 @@ describe('CharacterRegisterComponent (character-register-editing c2)', () => {
     expect(el('cr-empty-all-suppressed')).toBeNull();
     expect(text('cr-attention')).toContain(CHARACTER_REGISTER_LABELS_HE.attentionSome);
     expect(text('cr-attention')).toContain('1');
+  });
+
+  // ── Coverage: how much of the book the register reflects (automatic-coverage c01) ─────────────
+  //
+  // The line is a statement of FACT, not a control panel: it says how much of the book the register
+  // reflects and that it fills in one chapter at a time, as the author runs the analyses that read
+  // the register. It must never read as "nearly done", and there is deliberately no scan button to
+  // assert the absence of.
+
+  it('renders the coverage the SERVER reported, and says the register is still filling in', () => {
+    service.getRegister.and.returnValue(
+      of(makeRegister({ coverage: makeCoverage({ coveredChapters: 3, pendingChapters: 37 }) }))
+    );
+    mount();
+
+    expect(el('cr-coverage')).not.toBeNull();
+    expect(text('cr-coverage-counts')).toBe('פרקים שהמאגר משקף: 3 מתוך 40.');
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_HE.coverageGrows);
+    // Not complete, so it must not claim every chapter contributed.
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_HE.coverageComplete);
+    // ...and it is NOT the pre-ledger state: three chapters have contributed. This is the cell the
+    // pre-ledger branch is most likely to steal, so the exclusion is asserted rather than assumed.
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_HE.coveragePreLedger);
+    // A quiet line of fact, not an instruction: nothing here offers to trigger a scan.
+    expect(el('cr-coverage')!.querySelectorAll('button').length).toBe(0);
+  });
+
+  it('reports the SERVER coverage even when the character list would suggest another number', () => {
+    // The anti-derivation assertion. The character list answers "who was found", coverage answers
+    // "which chapters were read", and inferring one from the other is exactly the defect this pins:
+    // seven characters are on screen while the server says three chapters of forty have contributed,
+    // and 3/40 is what must be rendered. A client-side count of characters (7), of rows, or of
+    // anything else in `characters` cannot produce this line.
+    const many = ['Dana', 'Noam', 'Yael', 'Gil', 'Roni', 'Tal', 'Adi'].map((name) =>
+      makeEntry({ name })
+    );
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          characters: many,
+          coverage: makeCoverage({ coveredChapters: 3, pendingChapters: 37 }),
+        })
+      )
+    );
+    mount();
+
+    expect(component.activeCharacters.length).toBe(7);
+    expect(text('cr-coverage-counts')).toBe('פרקים שהמאגר משקף: 3 מתוך 40.');
+    expect(component.coverage).toBe(component.register!.coverage);
+  });
+
+  it('says every chapter that holds text has contributed once the server calls coverage complete', () => {
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          coverage: makeCoverage({
+            coveredChapters: 40,
+            pendingChapters: 0,
+            isComplete: true,
+          }),
+        })
+      )
+    );
+    mount();
+
+    expect(text('cr-coverage-counts')).toBe('פרקים שהמאגר משקף: 40 מתוך 40.');
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_HE.coverageComplete);
+    // ...and stops saying it is still filling in.
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_HE.coverageGrows);
+  });
+
+  it('a book whose chapters are ALL unscannable reads as nothing to read, never as fully covered', () => {
+    // The server calls this state COMPLETE with zero covered (there is genuinely nothing left to
+    // scan). Rendering the ordinary complete sentence here would claim every chapter contributed to a
+    // register that read no chapter at all.
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          coverage: makeCoverage({
+            totalChapters: 3,
+            coveredChapters: 0,
+            pendingChapters: 0,
+            unscannableChapters: 3,
+            isComplete: true,
+            lastScannedAt: null,
+          }),
+        })
+      )
+    );
+    mount();
+
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_HE.coverageNothingToRead);
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_HE.coverageComplete);
+    // Zero covered and zero stale describes this state too, so the pre-ledger branch must not reach
+    // it: nothing here will EVER be counted, and "counted from here on" would be a false promise.
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_HE.coveragePreLedger);
+    expect(text('cr-coverage-counts')).toBe('פרקים שהמאגר משקף: 0 מתוך 3.');
+    expect(text('cr-coverage-unscannable')).toBe('פרקים שאין בהם טקסט לקריאה: 3.');
+  });
+
+  it('a book with no chapters says so instead of counting "0 of 0"', () => {
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          coverage: makeCoverage({
+            totalChapters: 0,
+            coveredChapters: 0,
+            pendingChapters: 0,
+            isComplete: false,
+            lastScannedAt: null,
+          }),
+        })
+      )
+    );
+    mount();
+
+    expect(el('cr-coverage-counts')).toBeNull();
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_HE.coverageNoChapters);
+    // A book with no chapters also has zero covered and zero stale. The no-chapters test runs FIRST
+    // for exactly that reason, so the pre-ledger sentence must not appear here.
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_HE.coveragePreLedger);
+  });
+
+  it('names stale and unscannable chapters only when the server reports some', () => {
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          coverage: makeCoverage({
+            totalChapters: 40,
+            coveredChapters: 30,
+            pendingChapters: 7,
+            staleChapters: 2,
+            unscannableChapters: 1,
+          }),
+        })
+      )
+    );
+    mount();
+
+    expect(text('cr-coverage-stale')).toContain('2');
+    expect(text('cr-coverage-stale')).toContain('פרקים שהשתנו מאז שנקראו');
+    expect(text('cr-coverage-unscannable')).toBe('פרקים שאין בהם טקסט לקריאה: 1.');
+  });
+
+  it('omits the stale and unscannable clauses when both are zero', () => {
+    service.getRegister.and.returnValue(
+      of(makeRegister({ coverage: makeCoverage({ staleChapters: 0, unscannableChapters: 0 }) }))
+    );
+    mount();
+
+    expect(el('cr-coverage-stale')).toBeNull();
+    expect(el('cr-coverage-unscannable')).toBeNull();
+  });
+
+  it('renders the last-read stamp through the timezone-aware helper, never a raw date pipe', () => {
+    service.getRegister.and.returnValue(
+      of(makeRegister({ coverage: makeCoverage({ lastScannedAt: new Date().toISOString() }) }))
+    );
+    mount();
+
+    expect(text('cr-coverage-scanned')).toContain(CHARACTER_REGISTER_LABELS_HE.coverageLastScanned);
+    expect(text('cr-coverage-scanned')).toContain('הרגע');
+    expect(text('cr-coverage-scanned')).not.toContain('T');
+  });
+
+  it('renders the English coverage copy for an English book', () => {
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          coverage: makeCoverage({
+            coveredChapters: 3,
+            pendingChapters: 36,
+            staleChapters: 1,
+            unscannableChapters: 0,
+          }),
+        })
+      )
+    );
+    mount('book-1', 'en');
+
+    expect(text('cr-coverage-counts')).toBe('Chapters reflected in the register: 3 of 40.');
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_EN.coverageGrows);
+    expect(text('cr-coverage-stale')).toContain('Chapters changed since they were read: 1.');
+    expect(text('cr-coverage-scanned')).toContain(CHARACTER_REGISTER_LABELS_EN.coverageLastScanned);
+    expect(el('character-register')!.getAttribute('dir')).toBe('ltr');
+  });
+
+  // ── The pre-ledger state (coverage-fixes c01) ──────────────────────────────────────────────────
+  //
+  // The scan ledger is newer than the registers it counts, so EVERY register that predates it reports
+  // zero covered chapters while listing the characters it found in that very book. Reproduced from the
+  // real Hebrew book that exposed it: hasRegister true, nine characters, 0 of 80 covered, nothing
+  // stale. Without its own sentence the card understates itself to zero with the contradicting
+  // evidence rendered a few lines below.
+
+  it('a register that exists with an EMPTY ledger says nothing has been counted yet, not just "it fills in"', () => {
+    const nine = ['Dana', 'Noam', 'Yael', 'Gil', 'Roni', 'Tal', 'Adi', 'Omer', 'Shira'].map((name) =>
+      makeEntry({ name })
+    );
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          hasRegister: true,
+          characters: nine,
+          coverage: makeCoverage({
+            totalChapters: 80,
+            coveredChapters: 0,
+            pendingChapters: 80,
+            staleChapters: 0,
+            unscannableChapters: 0,
+            isComplete: false,
+            lastScannedAt: null,
+          }),
+        })
+      )
+    );
+    mount();
+
+    // The server's own numbers still render unchanged: this fix explains the zero, it does not hide it.
+    expect(text('cr-coverage-counts')).toBe('פרקים שהמאגר משקף: 0 מתוך 80.');
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_HE.coveragePreLedger);
+    // The generic sentence would leave "0 of 80" standing beside nine characters found in this book.
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_HE.coverageGrows);
+    // Chosen from SERVER fields only. Nine characters are on screen and none of them picked the branch.
+    expect(component.activeCharacters.length).toBe(9);
+  });
+
+  it('renders the English pre-ledger sentence for an English book', () => {
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          hasRegister: true,
+          characters: [makeEntry({ name: 'Mira' }), makeEntry({ name: 'Devlin' })],
+          coverage: makeCoverage({
+            totalChapters: 1,
+            coveredChapters: 0,
+            pendingChapters: 1,
+            staleChapters: 0,
+            unscannableChapters: 0,
+            isComplete: false,
+            lastScannedAt: null,
+          }),
+        })
+      )
+    );
+    mount('book-1', 'en');
+
+    expect(text('cr-coverage-counts')).toBe('Chapters reflected in the register: 0 of 1.');
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_EN.coveragePreLedger);
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_EN.coverageGrows);
+  });
+
+  it('a NEVER-BUILT register keeps the ordinary filling-in sentence, never the pre-ledger one', () => {
+    // The neighbouring cell, and the reason the branch tests `hasRegister` rather than only the counts:
+    // a never-built register reports zero covered and zero stale too (the server answers it with a null
+    // register, so its ledger is empty by construction). Saying "what the register already holds" about
+    // a register that does not exist would be a new falsehood in place of the old one.
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          hasRegister: false,
+          updatedAt: null,
+          characters: [],
+          coverage: makeCoverage({
+            coveredChapters: 0,
+            pendingChapters: 40,
+            staleChapters: 0,
+            lastScannedAt: null,
+          }),
+        })
+      )
+    );
+    mount();
+
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_HE.coverageGrows);
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_HE.coveragePreLedger);
+  });
+
+  it('a ledger with lines but nothing fresh still reads as filling in, not as an empty ledger', () => {
+    // The other neighbouring cell, and the reason the branch tests `staleChapters` as well as
+    // `coveredChapters`: every chapter that contributed has since been edited, so covered is zero while
+    // the ledger plainly HAS lines. "No chapter has been counted yet" would be false here.
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          hasRegister: true,
+          coverage: makeCoverage({
+            totalChapters: 40,
+            coveredChapters: 0,
+            pendingChapters: 35,
+            staleChapters: 5,
+            unscannableChapters: 0,
+            isComplete: false,
+          }),
+        })
+      )
+    );
+    mount();
+
+    expect(text('cr-coverage-status')).toBe(CHARACTER_REGISTER_LABELS_HE.coverageGrows);
+    expect(text('cr-coverage')).not.toContain(CHARACTER_REGISTER_LABELS_HE.coveragePreLedger);
+    expect(text('cr-coverage-stale')).toContain('5');
   });
 
   // ── Edit paths ───────────────────────────────────────────────────────────────
@@ -885,6 +1229,26 @@ describe('CharacterRegisterComponent (character-register-editing c2)', () => {
       expect(CHARACTER_REGISTER_LABELS_HE[key]).not.toContain('—');
       expect(CHARACTER_REGISTER_LABELS_EN[key]).not.toContain('—');
     }
+  });
+
+  it('keeps he/en PLACEHOLDER parity, so no language silently drops a number', () => {
+    // Label parity above proves both records hold the same KEYS. It cannot see that the Hebrew
+    // `coverageCounts` still carries {covered} and {total}: a translation that dropped one would keep
+    // its key, stay non-empty, pass every check above, and render a sentence with a number missing.
+    const placeholders = (s: string) => (s.match(/\{(\w+)\}/g) ?? []).sort();
+
+    for (const key of Object.keys(CHARACTER_REGISTER_LABELS_HE) as CharacterRegisterLabelKey[]) {
+      expect(placeholders(CHARACTER_REGISTER_LABELS_HE[key]))
+        .withContext(`placeholder mismatch on "${key}"`)
+        .toEqual(placeholders(CHARACTER_REGISTER_LABELS_EN[key]));
+    }
+
+    // Non-vacuity: at least one key really does carry placeholders, so the loop above is not
+    // comparing empty arrays for every single key.
+    expect(placeholders(CHARACTER_REGISTER_LABELS_HE.coverageCounts)).toEqual([
+      '{covered}',
+      '{total}',
+    ]);
   });
 
   it('localizes a non-standard stored gender by echoing it rather than blanking it', () => {
