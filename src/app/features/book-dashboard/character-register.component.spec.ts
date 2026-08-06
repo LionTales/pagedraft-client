@@ -412,6 +412,57 @@ describe('CharacterRegisterComponent (character-register-editing c2)', () => {
     expect(text('cr-empty-built')).toBe(CHARACTER_REGISTER_LABELS_HE.emptyBuiltNoCharacters);
   });
 
+  it('says the register is ALL SUPPRESSED rather than claiming every value is confirmed', () => {
+    // The attention line counts over the ACTIVE list, so an all-suppressed register scored zero
+    // unconfirmed values and rendered "every value has been confirmed by you" above an empty list -
+    // a claim about editable values the author never confirmed. Neither existing empty state covers
+    // this: the register HAS been built and it DOES hold entries.
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          hasRegister: true,
+          characters: [
+            makeEntry({ name: 'Dana', isCharacter: false, isCharacterConfirmed: true }),
+            makeEntry({ name: 'Noam', isCharacter: false, isCharacterConfirmed: true }),
+          ],
+        })
+      )
+    );
+    mount();
+
+    expect(component.neverBuilt).toBeFalse();
+    expect(component.builtButEmpty).toBeFalse();
+    expect(component.activeCharacters.length).toBe(0);
+    expect(text('cr-empty-all-suppressed')).toBe(CHARACTER_REGISTER_LABELS_HE.emptyAllSuppressed);
+    expect(el('cr-attention')).toBeNull();
+
+    // The way out of the state stays on screen: both names are still listed as suppressed, each with
+    // its Restore.
+    expect(el('cr-suppressed')).not.toBeNull();
+    expect(el('cr-restore-Dana')).not.toBeNull();
+    expect(el('cr-restore-Noam')).not.toBeNull();
+  });
+
+  it('still shows the attention line when even ONE character is active', () => {
+    // The guard is "no active entries", not "any entry is suppressed" - a register with one of each
+    // must keep counting.
+    service.getRegister.and.returnValue(
+      of(
+        makeRegister({
+          characters: [
+            makeEntry({ name: 'Dana' }),
+            makeEntry({ name: 'Noam', isCharacter: false, isCharacterConfirmed: true }),
+          ],
+        })
+      )
+    );
+    mount();
+
+    expect(el('cr-empty-all-suppressed')).toBeNull();
+    expect(text('cr-attention')).toContain(CHARACTER_REGISTER_LABELS_HE.attentionSome);
+    expect(text('cr-attention')).toContain('1');
+  });
+
   // ── Edit paths ───────────────────────────────────────────────────────────────
 
   it('edit gender: sends ONLY the gender and reconciles from the server answer', () => {

@@ -48,6 +48,13 @@
       </div>
     } @else if (builtButEmpty) {
       <p class="cr-muted" data-testid="cr-empty-built">{{ label('emptyBuiltNoCharacters') }}</p>
+    } @else if (activeCharacters.length === 0) {
+      <!-- BUILT, NOT EMPTY, AND NOTHING ACTIVE: every entry is suppressed. Its own branch because the
+           attention line below cannot describe it. "Values not confirmed yet: 0" counts over an EMPTY
+           list, so it renders as "every value has been confirmed by you" - a claim about editable
+           values the author never confirmed, above a list with nothing in it. The suppressed block
+           further down still lists every name with its Restore, which is the way out of this state. -->
+      <p class="cr-muted" data-testid="cr-empty-all-suppressed">{{ label('emptyAllSuppressed') }}</p>
     } @else {
       <p class="cr-attention" data-testid="cr-attention">
         @if (unconfirmedCount === 0) {

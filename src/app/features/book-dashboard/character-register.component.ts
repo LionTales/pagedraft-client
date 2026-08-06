@@ -67,6 +67,7 @@ export type CharacterRegisterLabelKey =
   | 'emptyNeverBuiltTitle'
   | 'emptyNeverBuiltBody'
   | 'emptyBuiltNoCharacters'
+  | 'emptyAllSuppressed'
   | 'suppressedTitle'
   | 'suppressedHint'
   | 'saveFailed'
@@ -125,6 +126,8 @@ export const CHARACTER_REGISTER_LABELS_HE: Record<CharacterRegisterLabelKey, str
   emptyNeverBuiltBody:
     'המאגר נבנה אוטומטית בריצת הניתוח הראשונה שזקוקה לו. אפשר גם להוסיף דמות כאן כבר עכשיו.',
   emptyBuiltNoCharacters: 'המאגר נבנה, אך אין בו דמויות.',
+  // DRAFT (Hebrew): verify wording/word-order with the user before sign-off.
+  emptyAllSuppressed: 'כל השמות במאגר מסומנים כלא דמויות, ולכן אין כרגע דמויות פעילות. אפשר להחזיר שם מהרשימה שלמטה.',
   suppressedTitle: 'סומנו כלא דמויות',
   suppressedHint: 'שמות אלה לא נשלחים לניתוח, וריצה חדשה לא תחזיר אותם.',
   saveFailed: 'השמירה נכשלה. השינוי לא נשמר והרשימה חזרה למצב שבשרת.',
@@ -181,6 +184,8 @@ export const CHARACTER_REGISTER_LABELS_EN: Record<CharacterRegisterLabelKey, str
   emptyNeverBuiltBody:
     'It is built automatically on the first analysis run that needs it. You can also add a character here right now.',
   emptyBuiltNoCharacters: 'The register was built, but it holds no characters.',
+  emptyAllSuppressed:
+    'Every name in this register is marked as not a character, so there are no active characters right now. You can restore one from the list below.',
   suppressedTitle: 'Marked as not characters',
   suppressedHint: 'These names are kept out of the analysis, and a new run will not bring them back.',
   saveFailed: 'The save failed. Nothing was changed and the list is back to what the server holds.',
