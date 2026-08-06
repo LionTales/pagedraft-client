@@ -29,6 +29,47 @@ export interface CharacterRegisterEntryDto {
 }
 
 /**
+ * How much of the book the register actually reflects (automatic-coverage plan, be-c03).
+ *
+ * Coverage is automatic and invisible: a chapter contributes to the register the first time an
+ * analysis that reads the register runs against it (server-side: Proofread, LiteraryAnalysis, QA,
+ * Synopsis, per `PromptFactory.RendersCharacterRegister`). Other analysis types (LineEdit,
+ * LinguisticAnalysis, Summarization, StoryAnalysis) never scan, so a book whose author only runs
+ * those sees this count never move. That is an accepted product tradeoff, not a bug, and it is
+ * exactly why these numbers are reported rather than implied.
+ *
+ * EVERY number here is the SERVER's, computed from the persisted scan ledger. None of it may be
+ * re-derived from `characters` on the client: the character list says who was found, not which
+ * chapters were read, and the two answer different questions.
+ *
+ * THE FOUR BUCKETS ARE EXCLUSIVE AND EXHAUSTIVE:
+ * `covered + pending + stale + unscannable === total`, always.
+ */
+export interface CharacterRegisterCoverageDto {
+  /** Chapters in the book. */
+  totalChapters: number;
+  /**
+   * Contributed, from up to a fixed word cap of the chapter's CURRENT text, not necessarily the
+   * whole chapter for a long one (the extraction pre-pass truncates; see the server DTO doc).
+   */
+  coveredChapters: number;
+  /** Never contributed; will on its next analysis. */
+  pendingChapters: number;
+  /** Contributed, then the chapter was edited, so it re-contributes on its next analysis. */
+  staleChapters: number;
+  /** Has no text an analysis could read (empty, or only a Syncfusion trial watermark). */
+  unscannableChapters: number;
+  /**
+   * True when the book HAS chapters and nothing is outstanding (`pending === 0 && stale === 0`).
+   * Two server-side edges the surface has to render honestly: a book with NO chapters is not
+   * complete, and a book whose chapters are ALL unscannable IS complete with zero covered.
+   */
+  isComplete: boolean;
+  /** ISO UTC stamp of the most recent scan; null before anything has been scanned. */
+  lastScannedAt: string | null;
+}
+
+/**
  * The server's FULL register. Every write returns one of these, and it is the ONLY thing the surface
  * may render after a save: a rejected PATCH batch writes nothing at all, so any client-side guess
  * about what landed is either redundant or wrong.
@@ -45,6 +86,11 @@ export interface CharacterRegisterDto {
   updatedAt: string | null;
   /** Includes SUPPRESSED entries (`isCharacter: false`), so they stay visible and restorable. */
   characters: CharacterRegisterEntryDto[];
+  /**
+   * Never null on the wire, INCLUDING the never-built state (it reads "0 of N" there): how much of
+   * the book the register reflects is a question with an honest answer before any register exists.
+   */
+  coverage: CharacterRegisterCoverageDto;
 }
 
 /**
