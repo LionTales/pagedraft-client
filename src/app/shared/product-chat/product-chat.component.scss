@@ -1,0 +1,508 @@
+/*
+ * Product assistant styles: the ASSISTANT TAB BODY of the app dock (phase A, c2; merged in A.1, w1).
+ * Uses --pd-* design tokens throughout. No em-dash in user-facing strings.
+ *
+ * This file no longer positions anything and no longer reserves anything. The launcher, the backdrop,
+ * the drawer shell, its edge, its slide and its z rungs all moved to `app-dock.component.scss` when the
+ * two overlays were merged into one tabbed drawer. `--pc-bell-reserve` went with them: it existed to
+ * keep this drawer from ever covering the Activity Center BELL, and there is no bell any more.
+ */
+
+:host {
+  /* A non-layout container: it must not add a box between the dock's flex column and this pane, or the
+     transcript could not scroll independently of the composer. */
+  display: contents;
+}
+
+/* ── Pane ─────────────────────────────────────────────────────────────────── */
+
+/* Fills the dock's tab slot: a scrolling transcript above a composer that stays put. */
+.pc-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Start over bar (A.1, w2) ─────────────────────────────────────────────── */
+
+/* A quiet strip above the transcript, aligned to the inline-END side, which is where this surface
+   already puts its actions (the send button sits at the same edge, a panel-height away). Only present
+   once there is a conversation to clear, so the empty state has nothing to mis-click. Deliberately
+   understated: it is an escape hatch, not a primary action, and the primary action is Send. */
+.pc-conversation-bar {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--pd-space-2);
+  padding: var(--pd-space-2) var(--pd-space-6) 0;
+}
+
+.pc-new {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  padding: var(--pd-space-2) var(--pd-space-3);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-surface);
+  color: var(--pd-text-secondary);
+  cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+
+.pc-new:hover:not(:disabled) {
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text);
+}
+
+.pc-new:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pc-new:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.pc-new-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* The armed state. Louder than the trigger on purpose: the author is being asked to confirm losing a
+   conversation nothing is keeping a copy of. */
+.pc-reset-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--pd-space-2);
+  font-family: var(--pd-font-ui);
+}
+
+.pc-reset-question {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text);
+}
+
+.pc-reset-yes,
+.pc-reset-no {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  padding: var(--pd-space-2) var(--pd-space-3);
+  border-radius: var(--pd-radius-sm);
+  cursor: pointer;
+}
+
+.pc-reset-yes {
+  border: 1px solid var(--pd-cut-border);
+  background: var(--pd-cut-bg);
+  color: var(--pd-cut);
+}
+
+.pc-reset-yes:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.pc-reset-no {
+  border: 1px solid var(--pd-border);
+  background: var(--pd-surface);
+  color: var(--pd-text-secondary);
+}
+
+.pc-reset-yes:hover:not(:disabled),
+.pc-reset-no:hover {
+  filter: brightness(0.97);
+}
+
+.pc-reset-yes:focus-visible,
+.pc-reset-no:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+/* ── Transcript body ──────────────────────────────────────────────────────── */
+
+.pc-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--pd-space-5) var(--pd-space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-5);
+}
+
+/* ── Empty state ──────────────────────────────────────────────────────────── */
+
+.pc-empty {
+  margin: auto 0;
+  text-align: center;
+  font-family: var(--pd-font-ui);
+}
+
+.pc-empty-icon {
+  font-size: 30px;
+  line-height: 1;
+  margin-block-end: var(--pd-space-4);
+}
+
+.pc-empty-title {
+  margin: 0 0 var(--pd-space-3);
+  font-size: var(--pd-text-h5);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text);
+}
+
+.pc-empty-body {
+  margin: 0 0 var(--pd-space-6);
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+  color: var(--pd-text-secondary);
+}
+
+.pc-empty-examples-title {
+  margin: 0 0 var(--pd-space-3);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text-muted);
+}
+
+.pc-examples {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-2);
+}
+
+.pc-example {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  text-align: start;
+  padding: var(--pd-space-3) var(--pd-space-4);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text-link);
+  cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+
+.pc-example:hover {
+  background: var(--pd-surface-brand);
+}
+
+.pc-example:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+/* ── Turns ────────────────────────────────────────────────────────────────── */
+
+.pc-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-2);
+  max-width: 92%;
+}
+
+/* The author's turn hugs the inline-END side, the assistant's the inline-START side, so the two
+   speakers are told apart by position as well as by colour and role label. */
+.pc-turn--user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.pc-turn--assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.pc-role {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text-muted);
+}
+
+.pc-bubble {
+  padding: var(--pd-space-4) var(--pd-space-5);
+  border-radius: var(--pd-radius-lg);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.pc-bubble--user {
+  background: var(--pd-primary-600);
+  color: var(--pd-on-primary);
+  border-start-end-radius: var(--pd-radius-sm);
+}
+
+.pc-bubble--assistant {
+  background: var(--pd-surface-sunken);
+  border: 1px solid var(--pd-border);
+  color: var(--pd-text);
+  border-start-start-radius: var(--pd-radius-sm);
+  /* app-markdown-text supplies its own block spacing. */
+  white-space: normal;
+}
+
+/* Carries the ANSWER's own direction (from the server's `language`), so the prose reads correctly
+   whichever language it came back in. Scoped here rather than on the bubble so the citation beneath
+   it keeps the CHROME direction. Note that `app-markdown-text` additionally sets `dir="auto"` on its
+   own root, which agrees with this in every real case (an answer's script matches its language) and
+   is what ultimately lays out the prose; this attribute is the declared contract and governs
+   everything else inside `.pc-answer`. */
+.pc-answer {
+  text-align: start;
+}
+
+/* ── Citation ─────────────────────────────────────────────────────────────── */
+
+/* Inside the answer card, above the fold of the next turn, and never smaller than caption size: the
+   citation is how an author learns the guides exist, so it is styled as a component of the answer
+   rather than as a de-emphasised footnote. */
+.pc-citation {
+  margin-block-start: var(--pd-space-4);
+  padding-block-start: var(--pd-space-3);
+  border-block-start: 1px solid var(--pd-border);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pd-space-2);
+}
+
+.pc-citation-label {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text-secondary);
+}
+
+.pc-citation-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pd-space-2);
+}
+
+.pc-citation-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--pd-space-3);
+  border: 1px solid var(--pd-primary-200);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-info-bg);
+  color: var(--pd-primary-700);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  line-height: 18px;
+}
+
+/* ── In-flight ────────────────────────────────────────────────────────────── */
+
+.pc-bubble--pending {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-3);
+  color: var(--pd-text-secondary);
+}
+
+.pc-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.pc-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-primary-400);
+  animation: pc-dot 1.2s var(--pd-ease) infinite;
+}
+
+.pc-dots i:nth-child(2) { animation-delay: 0.15s; }
+.pc-dots i:nth-child(3) { animation-delay: 0.30s; }
+
+@keyframes pc-dot {
+  0%, 60%, 100% { opacity: 0.25; }
+  30%           { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pc-dots i { animation: none; opacity: 0.6; }
+}
+
+.pc-pending-text {
+  font-size: var(--pd-text-body-sm);
+}
+
+/* ── Honest failure ───────────────────────────────────────────────────────── */
+
+/* Deliberately NOT a bubble and NOT aligned with the assistant's turns: full width, warning-tinted,
+   with no role label. A fail-safe is the assistant declining to answer, and it must not be readable
+   as an answer it gave. */
+.pc-fault {
+  align-self: stretch;
+  display: flex;
+  gap: var(--pd-space-3);
+  padding: var(--pd-space-4) var(--pd-space-5);
+  border: 1px solid var(--pd-cut-border);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-cut-bg);
+}
+
+.pc-fault-icon {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: var(--pd-lh-body-sm);
+  color: var(--pd-cut);
+}
+
+.pc-fault-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--pd-font-ui);
+}
+
+.pc-fault-title {
+  margin: 0 0 var(--pd-space-2);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-cut);
+}
+
+.pc-fault-reason {
+  margin: 0 0 var(--pd-space-3);
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+  color: var(--pd-text);
+}
+
+.pc-retry {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  padding: var(--pd-space-2) var(--pd-space-4);
+  border: 1px solid var(--pd-cut-border);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-cut);
+  cursor: pointer;
+}
+
+.pc-retry:hover:not(:disabled) {
+  background: var(--pd-surface-sunken);
+}
+
+.pc-retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.pc-retry:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+/* ── Composer ─────────────────────────────────────────────────────────────── */
+
+.pc-composer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--pd-space-3);
+  padding: var(--pd-space-4) var(--pd-space-6) var(--pd-space-3);
+  border-block-start: 1px solid var(--pd-divider);
+}
+
+.pc-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  padding: var(--pd-space-3) var(--pd-space-4);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-surface);
+  color: var(--pd-text);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+}
+
+.pc-input::placeholder {
+  color: var(--pd-neutral-500);
+}
+
+.pc-input:focus-visible {
+  outline: none;
+  border-color: var(--pd-primary-400);
+  box-shadow: var(--pd-ring);
+}
+
+.pc-input:disabled {
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text-muted);
+}
+
+.pc-send {
+  flex: 0 0 auto;
+  padding: var(--pd-space-3) var(--pd-space-5);
+  border: 1px solid transparent;
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-primary-600);
+  color: var(--pd-on-primary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-medium);
+  cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+
+.pc-send:hover:not(:disabled) {
+  background: var(--pd-primary-500);
+}
+
+.pc-send:disabled {
+  background: var(--pd-neutral-300);
+  color: var(--pd-neutral-600);
+  cursor: default;
+}
+
+.pc-send:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.pc-grounding-note {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 var(--pd-space-6) var(--pd-space-4);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  color: var(--pd-text-muted);
+}
+
+/* ── Utility ──────────────────────────────────────────────────────────────── */
+
+.pc-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
