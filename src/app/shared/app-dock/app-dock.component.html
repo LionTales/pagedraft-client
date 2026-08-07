@@ -1,0 +1,119 @@
+<!--
+  The app dock (chatbot phase A.1, w1): ONE launcher, ONE drawer, two tabs.
+
+  Structure, and why it is shaped this way:
+    - the launcher is a single small control at the BOTTOM inline-start corner, carrying the live job
+      badge. There is deliberately no second, top-corner affordance: the Activity Center bell that used
+      to live there is what overlapped the assistant's own title in Hebrew.
+    - the drawer is always in the DOM and is SHOWN by `.dock-drawer--is-open`. Its two tab bodies stay
+      mounted so a tab switch (or a close) cannot throw away the chat transcript; each body renders its
+      own content only while its tab is showing, so nothing leaks between tabs.
+-->
+
+<!-- Launcher. Not rendered while the drawer is open: the drawer covers this corner, and the drawer
+     carries its own close button, backdrop and Escape. -->
+@if (!isOpen) {
+  <button
+    class="dock-launcher"
+    type="button"
+    [attr.aria-label]="launcherAria$ | async"
+    [attr.aria-expanded]="false"
+    aria-controls="dock-drawer"
+    (click)="openDock()">
+    <span class="dock-launcher-icon" aria-hidden="true">💬</span>
+    <!-- The badge NAMES what it counts (c02). A bare number on a speech bubble reads as unread
+         messages in every product that ships one, and this number is the opposite: background jobs
+         running. The `⟳` mark is what says "running" rather than "waiting to be read", and the
+         accessible name says the same thing in words ("..., 3 משימות פעילות"), which is why the badge
+         itself stays aria-hidden. The number lives in its own span so a spec can read it alone. -->
+    @if ((activeCount$ | async) ?? 0; as count) {
+      <span class="dock-badge" aria-hidden="true">
+        <span class="dock-badge-mark">⟳</span>
+        <span class="dock-badge-count">{{ count }}</span>
+      </span>
+    }
+  </button>
+}
+
+@if (isOpen) {
+  <!-- Backdrop: click-outside closes, and it sits BELOW the drawer on the shared overlay rung. -->
+  <div class="dock-backdrop" (click)="close()"></div>
+}
+
+<aside
+  id="dock-drawer"
+  class="dock-drawer"
+  [class.dock-drawer--is-open]="isOpen"
+  [class.dock-drawer--wide]="expanded"
+  role="dialog"
+  aria-modal="false"
+  [attr.aria-label]="label('dockTitle')">
+
+  @if (isOpen) {
+    <header class="dock-header">
+      <!-- The tab strip IS the header title: each tab is named by the surface it opens. -->
+      <div class="dock-tabs" role="tablist" [attr.aria-label]="label('tabsLabel')">
+        <button
+          class="dock-tab"
+          [class.dock-tab--active]="activeTab === 'assistant'"
+          type="button"
+          role="tab"
+          [id]="tabId('assistant')"
+          [attr.aria-selected]="activeTab === 'assistant'"
+          [attr.aria-controls]="panelId('assistant')"
+          (click)="select('assistant')">{{ tabLabel('assistant') }}</button>
+
+        <button
+          class="dock-tab"
+          [class.dock-tab--active]="activeTab === 'activity'"
+          type="button"
+          role="tab"
+          [id]="tabId('activity')"
+          [attr.aria-selected]="activeTab === 'activity'"
+          [attr.aria-controls]="panelId('activity')"
+          (click)="select('activity')">
+          <span class="dock-tab-label">{{ tabLabel('activity') }}</span>
+          <!-- The live count again, because the launcher that normally carries it is not rendered
+               while the drawer is open. Losing sight of a running job mid-run is the regression the
+               merge could most easily have introduced. Same mark and same colour as the launcher's
+               badge: it is the SAME number, so it must not change appearance when the drawer opens. -->
+          @if ((activeCount$ | async) ?? 0; as count) {
+            <span class="dock-tab-badge" aria-hidden="true">
+              <span class="dock-badge-mark">⟳</span>
+              <span class="dock-badge-count">{{ count }}</span>
+            </span>
+          }
+        </button>
+      </div>
+
+      <div class="dock-actions">
+        <!-- The glyph points the way the drawer will GROW, which is toward the inline-end edge. The
+             arrow characters are physical, so `.dock-expand-icon` is mirrored in RTL by the SCSS. -->
+        <button
+          class="dock-icon-btn"
+          type="button"
+          [attr.aria-label]="expanded ? label('collapse') : label('expand')"
+          [attr.aria-pressed]="expanded"
+          (click)="toggleExpanded()">
+          <span class="dock-expand-icon" aria-hidden="true">{{ expanded ? '⇤' : '⇥' }}</span>
+        </button>
+        <button
+          class="dock-icon-btn"
+          type="button"
+          [attr.aria-label]="label('close')"
+          (click)="close()">&#x2715;</button>
+      </div>
+    </header>
+  }
+
+  <!-- The tab panel. Both bodies are mounted for the life of the app; each renders only while its own
+       tab is showing, so this element holds exactly one surface's content at a time. -->
+  <div
+    class="dock-panel"
+    role="tabpanel"
+    [id]="panelId(activeTab)"
+    [attr.aria-labelledby]="tabId(activeTab)">
+    <app-product-chat />
+    <app-activity-center />
+  </div>
+</aside>

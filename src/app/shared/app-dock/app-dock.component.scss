@@ -1,0 +1,335 @@
+/*
+ * App dock styles (chatbot phase A.1, w1).
+ * Uses --pd-* design tokens throughout. No em-dash in user-facing strings.
+ *
+ * HOSTING EDGE (full rationale in app-dock.component.ts):
+ *   Launcher: BOTTOM inline-start corner. Drawer: the inline-START edge.
+ *   inline-start is the PHYSICAL RIGHT in Hebrew (the app default, which is the side the owner asked
+ *   for) and the physical LEFT in English (where Activity Center users already reach for it). Nothing
+ *   here hard-codes a physical side; the browser resolves it from the host's `dir`.
+ *
+ *   There is deliberately NO top-corner control. The Activity Center bell used to sit at
+ *   `top/inset-inline-start: var(--pd-space-5)`, which in Hebrew is the exact corner the drawer's own
+ *   header occupies, and it overlapped the word "עוזר". It is gone, not restyled.
+ *
+ * Z RUNGS:
+ *   backdrop  --pd-z-overlay        (100)
+ *   drawer    --pd-z-overlay + 5    (105)
+ *   launcher  --pd-z-overlay + 10   (110), and not rendered while the drawer is open
+ */
+
+:host {
+  /* Non-layout container; children are fixed-positioned. */
+  display: contents;
+
+  --dock-width:      400px;
+  --dock-width-wide: 760px;
+}
+
+/* ── Launcher ─────────────────────────────────────────────────────────────── */
+
+.dock-launcher {
+  position: fixed;
+  bottom: var(--pd-space-5);
+  inset-inline-start: var(--pd-space-5);
+  z-index: calc(var(--pd-z-overlay) + 10);
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--pd-primary-200);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-surface);
+  box-shadow: var(--pd-shadow-3);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    transform var(--pd-dur-fast) var(--pd-ease),
+    background var(--pd-dur-fast) var(--pd-ease),
+    box-shadow var(--pd-dur-fast) var(--pd-ease);
+}
+
+.dock-launcher:hover {
+  background: var(--pd-surface-brand);
+  box-shadow: var(--pd-shadow-4);
+  transform: translateY(-2px);
+}
+
+.dock-launcher:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.dock-launcher-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-launcher:hover {
+    transform: none;
+  }
+}
+
+/*
+ * The live job count (c02).
+ *
+ * TWO deliberate departures from the badge the Activity Center bell used to carry, both because this
+ * launcher is not that bell - it also opens the assistant, and its glyph is a speech bubble:
+ *
+ *   1. The badge carries a `⟳` MARK beside the number. A bare number on a chat glyph reads as unread
+ *      messages; the mark is what says the number counts work that is RUNNING. The accessible name
+ *      (`launcherAriaLabel`) says the same thing in words, which is why the badge is aria-hidden.
+ *   2. The fill is `--pd-primary-600`, not `--pd-cut`. Red is this app's FAILURE colour - the Activity
+ *      Center paints `.status-failed` with it - while running work is painted `--pd-primary-600`
+ *      (`.ac-progress-fill--det` / `--indet`). This badge counts NON-TERMINAL jobs, so it now wears
+ *      the colour of the progress bars belonging to the very rows it is counting.
+ *
+ * `inset-inline-end` (never `right`) keeps the badge on the outer corner in both directions.
+ */
+.dock-badge {
+  position: absolute;
+  top: -4px;
+  inset-inline-end: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--pd-space-2);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-primary-600);
+  color: var(--pd-on-primary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-bold);
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+
+  /* Flex, so the whitespace between the mark and the count in the template collapses to nothing
+     (a flex container drops whitespace-only children) and the gap is the token instead. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pd-space-1);
+}
+
+/* The "running" mark. Slightly smaller than the digit so the COUNT still reads first. */
+.dock-badge-mark {
+  font-size: 11px;
+  font-weight: var(--pd-weight-regular);
+  line-height: 1;
+}
+
+.dock-badge-count {
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Backdrop ─────────────────────────────────────────────────────────────── */
+
+.dock-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--pd-z-overlay);
+  background: transparent;
+}
+
+/* ── Drawer ───────────────────────────────────────────────────────────────── */
+
+/*
+ * Always in the DOM, shown by `--is-open`.
+ *
+ * That is not a styling preference: the chat transcript lives in the tab body component for the life
+ * of the session, so the body must not be destroyed by a close or a tab switch. Hiding rather than
+ * unmounting is what preserves it. While closed the drawer is `visibility: hidden`, which also takes
+ * it out of the accessibility tree and out of the tab order, and its two bodies render nothing at all
+ * (each gates its own content on "my tab is showing").
+ */
+.dock-drawer {
+  position: fixed;
+  top: 0;
+  inset-inline-start: 0;
+  width: min(var(--dock-width), 92vw);
+  height: 100dvh;
+  z-index: calc(var(--pd-z-overlay) + 5);
+
+  display: flex;
+  flex-direction: column;
+  background: var(--pd-surface);
+  border-inline-end: 1px solid var(--pd-border);
+  box-shadow: var(--pd-shadow-4);
+
+  /* Closed: parked off the inline-start edge. LTR default; the RTL override is below. */
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(-100%);
+  transition:
+    transform var(--pd-dur-base) var(--pd-ease),
+    visibility var(--pd-dur-base) var(--pd-ease),
+    width var(--pd-dur-base) var(--pd-ease);
+}
+
+/* RTL: inline-start is the RIGHT edge, so "off the edge" is the other way. */
+:host([dir='rtl']) .dock-drawer {
+  transform: translateX(100%);
+}
+
+.dock-drawer--is-open,
+:host([dir='rtl']) .dock-drawer--is-open {
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+/* "Expandable toward the side panel", per the owner's shape. */
+.dock-drawer--wide {
+  width: min(var(--dock-width-wide), 96vw);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dock-drawer {
+    transition: none;
+  }
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+
+.dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--pd-space-3);
+  padding: var(--pd-space-4) var(--pd-space-5);
+  border-block-end: 1px solid var(--pd-divider);
+  flex-shrink: 0;
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────────────────── */
+
+.dock-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.dock-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  padding: var(--pd-space-2) var(--pd-space-4);
+  border: 1px solid transparent;
+  border-radius: var(--pd-radius-pill);
+  background: none;
+  cursor: pointer;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text-secondary);
+  white-space: nowrap;
+  min-width: 0;
+  transition:
+    background var(--pd-dur-fast) var(--pd-ease),
+    color var(--pd-dur-fast) var(--pd-ease);
+}
+
+.dock-tab:hover {
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text);
+}
+
+.dock-tab:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.dock-tab--active {
+  background: var(--pd-surface-brand);
+  border-color: var(--pd-primary-200);
+  color: var(--pd-primary-700);
+  font-weight: var(--pd-weight-bold);
+}
+
+.dock-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The same number, so deliberately the same treatment as `.dock-badge`: mark, fill and gap all match,
+   because this badge takes over from the launcher's the moment the drawer opens. */
+.dock-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--pd-space-1);
+  min-width: 18px;
+  height: 18px;
+  padding: 0 var(--pd-space-2);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-primary-600);
+  color: var(--pd-on-primary);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-bold);
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Header actions ───────────────────────────────────────────────────────── */
+
+.dock-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  flex: 0 0 auto;
+}
+
+.dock-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--pd-radius-sm);
+  background: none;
+  cursor: pointer;
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-body);
+  line-height: 1;
+  transition: background var(--pd-dur-fast) var(--pd-ease), color var(--pd-dur-fast) var(--pd-ease);
+}
+
+.dock-icon-btn:hover {
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text);
+}
+
+.dock-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+/* The expand arrow is a PHYSICAL character, so it is mirrored for RTL: the drawer grows toward the
+   inline-END edge, which is the right in LTR and the left in RTL. */
+.dock-expand-icon {
+  display: inline-block;
+  line-height: 1;
+}
+
+:host([dir='rtl']) .dock-expand-icon {
+  transform: scaleX(-1);
+}
+
+/* ── Tab panel ────────────────────────────────────────────────────────────── */
+
+/* The one slot both tab bodies render into. `min-height: 0` lets a scrolling body shrink inside the
+   flex column instead of pushing the composer off the bottom of the drawer. */
+.dock-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}

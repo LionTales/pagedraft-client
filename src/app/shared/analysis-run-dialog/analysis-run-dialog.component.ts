@@ -415,12 +415,12 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
 
   /**
    * The minimize gesture. Fires ONLY from state (b), so a listener can assume a live tracked job.
-   * c2 hooks the fly-to-bell transition here.
+   * c2 hooks the fly-to-the-dock-launcher transition here.
    *
    * c02 AUDITED this promise rather than widening it and hoping. The consumer is exactly one:
    * `EditorPageComponent.onRunDialogMinimize`, bound in `editor-page.component.html`, which calls
-   * `flyToActivityCenter(event.originRect)` UNCONDITIONALLY - it does not re-check that a bell row
-   * exists, and `resolveMinimizeTarget` falls back to a computed corner when the bell cannot be
+   * `flyToActivityCenter(event.originRect)` UNCONDITIONALLY - it does not re-check that an activity
+   * row exists, and `resolveMinimizeTarget` falls back to a computed corner when the launcher cannot be
    * measured, so an emit from a state with no tracked job would animate a card into an empty corner and
    * `event.jobId` would have nothing behind it. The promise is therefore load-bearing and is kept: a
    * state-(a) close dismisses without emitting. See {@link minimize} for why a sync run is not made
@@ -783,7 +783,7 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
    *     id the server never minted 404s, whose error channel is `finalize(jobId, 'failed')`. That is
    *     the very trap the d1 contract above already records about the sync response's `result.jobId`.
    *
-   * So there is nothing to hand over, and a flight toward a bell with no row in it would be a lie told
+   * So there is nothing to hand over, and a flight toward a launcher with no row behind it would be a lie told
    * with an animation. State (a) gets a real labelled CLOSE (c01) instead, and its hint is the weaker,
    * true one. `minimizeRequested` is therefore UNWIDENED: it still fires only from here, only in state
    * (b), and its docblock promise still holds for `EditorPageComponent.onRunDialogMinimize`, which is

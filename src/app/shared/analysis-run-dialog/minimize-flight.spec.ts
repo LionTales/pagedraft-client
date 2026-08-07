@@ -1,22 +1,27 @@
 /**
- * Wave 1d (c2): the minimize transition.
+ * Wave 1d (c2): the minimize transition. Re-aimed at the app dock's launcher in chatbot phase A.1 (w1),
+ * when the Activity Center bell this used to fly to was removed by the two-overlay merge.
  *
- * The load-bearing claim under test is the RTL one. The Activity Center bell is pinned with
- * `inset-inline-start`, so it is physically on the RIGHT in Hebrew (the app default) and on the LEFT in
- * English. An animation aimed at a hardcoded corner would fly the wrong way for most users. These specs
- * therefore mount a REAL element carrying the SAME logical property the real bell uses and let the
- * browser resolve it, in both directions - a stubbed rect could not prove that.
+ * The load-bearing claim under test is the RTL one. The launcher is pinned with `inset-inline-start`,
+ * so it is physically on the RIGHT in Hebrew (the app default) and on the LEFT in English. An animation
+ * aimed at a hardcoded corner would fly the wrong way for most users. These specs therefore mount a REAL
+ * element carrying the SAME logical property the real launcher uses and let the browser resolve it, in
+ * both directions - a stubbed rect could not prove that.
+ *
+ * The planted stand-ins use `top` rather than `bottom` on purpose: what is under test on the block axis
+ * is only "the target follows the element", which the live-measurement spec drives by moving it. The
+ * block corner the FALLBACK aims at is asserted separately, and it is a bottom corner now.
  */
 import {
-  ACTIVITY_CENTER_BELL_SELECTOR,
-  ACTIVITY_CENTER_HOST_SELECTOR,
+  DOCK_LAUNCHER_SELECTOR,
+  DOCK_HOST_SELECTOR,
   MINIMIZE_FADE_MS,
   MINIMIZE_FALLBACK_INSET,
   MINIMIZE_FLIGHT_MS,
   MINIMIZE_GHOST_CLASS,
   buildFlightKeyframes,
   flyToActivityCenter,
-  resolveBellSideDirection,
+  resolveLauncherSideDirection,
   resolveDocumentDirection,
   resolveMinimizeTarget,
 } from './minimize-flight';
@@ -26,42 +31,42 @@ describe('minimize flight (Wave 1d c2)', () => {
   let planted: HTMLElement[] = [];
 
   /**
-   * Mount a stand-in for the Activity Center bell inside a container with an explicit `dir`, using the
-   * bell's OWN positioning properties (`top` + `inset-inline-start`) so the browser resolves the physical
-   * corner exactly as it does in the app.
+   * Mount a stand-in for the dock launcher inside a container with an explicit `dir`, using the
+   * launcher's OWN inline positioning property (`inset-inline-start`) so the browser resolves the
+   * physical side exactly as it does in the app.
    */
-  function plantBell(dir: 'rtl' | 'ltr', inset = 20): HTMLElement {
+  function plantLauncher(dir: 'rtl' | 'ltr', inset = 20): HTMLElement {
     const container = document.createElement('div');
     container.setAttribute('dir', dir);
-    const bell = document.createElement('button');
-    bell.className = ACTIVITY_CENTER_BELL_SELECTOR.slice(1);
-    bell.style.position = 'fixed';
-    bell.style.top = `${inset}px`;
-    bell.style.setProperty('inset-inline-start', `${inset}px`);
-    bell.style.width = '40px';
-    bell.style.height = '40px';
-    container.appendChild(bell);
+    const launcher = document.createElement('button');
+    launcher.className = DOCK_LAUNCHER_SELECTOR.slice(1);
+    launcher.style.position = 'fixed';
+    launcher.style.top = `${inset}px`;
+    launcher.style.setProperty('inset-inline-start', `${inset}px`);
+    launcher.style.width = '40px';
+    launcher.style.height = '40px';
+    container.appendChild(launcher);
     document.body.appendChild(container);
     planted.push(container);
-    return bell;
+    return launcher;
   }
 
   /**
-   * Mount a stand-in for the REAL Activity Center: the host element (which owns the app-level `dir`)
-   * wrapping a bell that uses the bell's own logical positioning. This is the shape the running app has,
-   * and the shape `plantBell` above deliberately does not have (it uses a bare `div` container).
+   * Mount a stand-in for the REAL dock: the host element (which owns the app-level `dir`) wrapping a
+   * launcher that uses the launcher's own logical positioning. This is the shape the running app has,
+   * and the shape `plantLauncher` above deliberately does not have (it uses a bare `div` container).
    */
-  function plantActivityCenterHost(dir: 'rtl' | 'ltr', inset = 16): HTMLElement {
-    const host = document.createElement(ACTIVITY_CENTER_HOST_SELECTOR);
+  function plantDockHost(dir: 'rtl' | 'ltr', inset = 16): HTMLElement {
+    const host = document.createElement(DOCK_HOST_SELECTOR);
     host.setAttribute('dir', dir);
-    const bell = document.createElement('button');
-    bell.className = ACTIVITY_CENTER_BELL_SELECTOR.slice(1);
-    bell.style.position = 'fixed';
-    bell.style.top = `${inset}px`;
-    bell.style.setProperty('inset-inline-start', `${inset}px`);
-    bell.style.width = '40px';
-    bell.style.height = '40px';
-    host.appendChild(bell);
+    const launcher = document.createElement('button');
+    launcher.className = DOCK_LAUNCHER_SELECTOR.slice(1);
+    launcher.style.position = 'fixed';
+    launcher.style.top = `${inset}px`;
+    launcher.style.setProperty('inset-inline-start', `${inset}px`);
+    launcher.style.width = '40px';
+    launcher.style.height = '40px';
+    host.appendChild(launcher);
     document.body.appendChild(host);
     planted.push(host);
     return host;
@@ -89,7 +94,7 @@ describe('minimize flight (Wave 1d c2)', () => {
 
   describe('resolveMinimizeTarget flips with direction', () => {
     it('RTL: the target lands on the INLINE-START side, which is physically the RIGHT', () => {
-      plantBell('rtl');
+      plantLauncher('rtl');
 
       const target = resolveMinimizeTarget();
 
@@ -100,7 +105,7 @@ describe('minimize flight (Wave 1d c2)', () => {
     });
 
     it('LTR: the SAME logical property resolves to the physical LEFT', () => {
-      plantBell('ltr');
+      plantLauncher('ltr');
 
       const target = resolveMinimizeTarget();
 
@@ -109,12 +114,12 @@ describe('minimize flight (Wave 1d c2)', () => {
     });
 
     it('the two directions really do resolve to OPPOSITE sides (same inset, mirrored x)', () => {
-      plantBell('rtl');
+      plantLauncher('rtl');
       const rtl = resolveMinimizeTarget();
       planted.forEach(el => el.remove());
       planted = [];
 
-      plantBell('ltr');
+      plantLauncher('ltr');
       const ltr = resolveMinimizeTarget();
 
       // Mirror images about the viewport centre. The tolerance absorbs the scrollbar gutter, which the
@@ -122,28 +127,30 @@ describe('minimize flight (Wave 1d c2)', () => {
       expect(Math.abs((window.innerWidth - rtl.x) - ltr.x)).toBeLessThan(24);
     });
 
-    it('measures the bell LIVE, so moving it moves the target', () => {
-      const bell = plantBell('ltr', 20);
+    it('measures the launcher LIVE, so moving it moves the target', () => {
+      const launcher = plantLauncher('ltr', 20);
       const before = resolveMinimizeTarget();
 
-      bell.style.top = '200px';
+      launcher.style.top = '200px';
       const after = resolveMinimizeTarget();
 
       expect(after.y - before.y).toBeCloseTo(180, 0);
     });
   });
 
-  describe('resolveMinimizeTarget fallback (bell missing or collapsed)', () => {
-    it('with NO bell in the document and dir=rtl, still aims at the inline-start (right) corner', () => {
+  describe('resolveMinimizeTarget fallback (launcher missing or collapsed)', () => {
+    it('with NO launcher in the document and dir=rtl, still aims at the inline-start (right) corner', () => {
       document.documentElement.setAttribute('dir', 'rtl');
 
       const target = resolveMinimizeTarget();
 
       expect(target.x).toBeCloseTo(window.innerWidth - MINIMIZE_FALLBACK_INSET, 0);
-      expect(target.y).toBe(MINIMIZE_FALLBACK_INSET);
+      expect(target.y)
+        .withContext('the dock launcher is a BOTTOM-corner affordance, unlike the bell it replaced')
+        .toBe(window.innerHeight - MINIMIZE_FALLBACK_INSET);
     });
 
-    it('with NO bell and dir=ltr, aims at the inline-start (left) corner', () => {
+    it('with NO launcher and dir=ltr, aims at the inline-start (left) corner', () => {
       document.documentElement.setAttribute('dir', 'ltr');
 
       const target = resolveMinimizeTarget();
@@ -151,63 +158,63 @@ describe('minimize flight (Wave 1d c2)', () => {
       expect(target.x).toBeCloseTo(MINIMIZE_FALLBACK_INSET, 0);
     });
 
-    it('a bell hidden with display:none (the panel-open case) falls back instead of aiming at 0,0', () => {
+    it('a launcher hidden with display:none (the drawer-open case) falls back instead of aiming at 0,0', () => {
       document.documentElement.setAttribute('dir', 'ltr');
-      const bell = plantBell('ltr');
-      bell.style.display = 'none';
+      const launcher = plantLauncher('ltr');
+      launcher.style.display = 'none';
 
       const target = resolveMinimizeTarget();
 
       // A zero rect would have produced {0, 0}; the fallback inset proves we rejected it.
       expect(target.x).toBeCloseTo(MINIMIZE_FALLBACK_INSET, 0);
-      expect(target.y).toBe(MINIMIZE_FALLBACK_INSET);
+      expect(target.y).toBe(window.innerHeight - MINIMIZE_FALLBACK_INSET);
     });
 
     /**
      * c3 live-browser regression. Reproduces the REAL app configuration measured in the running client:
-     * the document resolves to `ltr`, but the Activity Center host carries its own app-level `dir="rtl"`,
-     * so the bell is pinned on the physical RIGHT. Keying the fallback on the document (the previous
-     * behaviour) aimed at the physical LEFT - the opposite side of the viewport from the real bell.
+     * the document resolves to `ltr`, but the dock host carries its own app-level `dir="rtl"`,
+     * so the launcher is pinned on the physical RIGHT. Keying the fallback on the document (the previous
+     * behaviour) aimed at the physical LEFT - the opposite side of the viewport from the real launcher.
      */
-    it('keys the fallback on the Activity Center HOST direction, not the document (c3 regression)', () => {
+    it('keys the fallback on the DOCK HOST direction, not the document (c3 regression)', () => {
       document.documentElement.setAttribute('dir', 'ltr');
-      const host = plantActivityCenterHost('rtl');
-      const bell = host.querySelector<HTMLElement>(ACTIVITY_CENTER_BELL_SELECTOR)!;
+      const host = plantDockHost('rtl');
+      const launcher = host.querySelector<HTMLElement>(DOCK_LAUNCHER_SELECTOR)!;
 
-      // Where the bell really is while it is still visible: the physical RIGHT.
-      const visibleBellX = bell.getBoundingClientRect().left;
-      expect(visibleBellX).toBeGreaterThan(window.innerWidth / 2);
+      // Where the launcher really is while it is still visible: the physical RIGHT.
+      const visibleLauncherX = launcher.getBoundingClientRect().left;
+      expect(visibleLauncherX).toBeGreaterThan(window.innerWidth / 2);
 
-      // Panel opens -> the bell (and only the bell) is hidden -> the fallback runs.
-      bell.style.display = 'none';
+      // The drawer opens -> the launcher stops being rendered -> the fallback runs.
+      launcher.style.display = 'none';
       const target = resolveMinimizeTarget();
 
       expect(target.x).toBeCloseTo(window.innerWidth - MINIMIZE_FALLBACK_INSET, 0);
       expect(target.x).toBeGreaterThan(window.innerWidth / 2);
     });
 
-    it('an LTR Activity Center host still falls back to the physical LEFT', () => {
+    it('an LTR dock host still falls back to the physical LEFT', () => {
       document.documentElement.setAttribute('dir', 'rtl');
-      const host = plantActivityCenterHost('ltr');
-      host.querySelector<HTMLElement>(ACTIVITY_CENTER_BELL_SELECTOR)!.style.display = 'none';
+      const host = plantDockHost('ltr');
+      host.querySelector<HTMLElement>(DOCK_LAUNCHER_SELECTOR)!.style.display = 'none';
 
       expect(resolveMinimizeTarget().x).toBeCloseTo(MINIMIZE_FALLBACK_INSET, 0);
     });
   });
 
-  describe('resolveBellSideDirection', () => {
-    it('prefers the Activity Center host over the document', () => {
+  describe('resolveLauncherSideDirection', () => {
+    it('prefers the dock host over the document', () => {
       document.documentElement.setAttribute('dir', 'ltr');
-      plantActivityCenterHost('rtl');
+      plantDockHost('rtl');
 
-      expect(resolveBellSideDirection()).toBe('rtl');
+      expect(resolveLauncherSideDirection()).toBe('rtl');
       expect(resolveDocumentDirection()).toBe('ltr');
     });
 
-    it('falls back to the document when no Activity Center host is mounted', () => {
+    it('falls back to the document when no dock host is mounted', () => {
       document.documentElement.setAttribute('dir', 'rtl');
 
-      expect(resolveBellSideDirection()).toBe('rtl');
+      expect(resolveLauncherSideDirection()).toBe('rtl');
     });
   });
 
@@ -227,7 +234,7 @@ describe('minimize flight (Wave 1d c2)', () => {
     const origin = rect({ left: 800, top: 600, width: 400, height: 200 });
 
     it('translates by the PHYSICAL delta between the two measured centres', () => {
-      // Card centre (1000, 700) -> bell centre (40, 40): dx = -960, dy = -660.
+      // Card centre (1000, 700) -> launcher centre (40, 40): dx = -960, dy = -660.
       const frames = buildFlightKeyframes(origin, { x: 40, y: 40 }, false);
 
       expect(frames.length).toBe(2);

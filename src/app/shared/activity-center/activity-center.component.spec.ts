@@ -1,8 +1,10 @@
 /**
- * rf-f01: ActivityCenterComponent spec.
+ * rf-f01: ActivityCenterComponent spec. Re-pointed at the dock's ACTIVITY TAB in chatbot phase A.1 (w1):
+ * the bell and its badge are gone, so their coverage moved to the dock spec and everything that is
+ * about this panel's CONTENT stayed here, driven through the same `panelOpen` seam as before.
  *
  * Covers:
- *  - badge count: zero -> hidden, N -> shows N
+ *  - the panel shows only while the activity tab is the one showing (and nothing leaks the other way)
  *  - panel renders running row (determinate bar), completed/done row, failed row from mocked jobs$
  *  - newest-first ordering
  *  - 'view' link present only when resultRoute is set
@@ -21,6 +23,7 @@ import { provideRouter } from '@angular/router';
 
 import { ActivityCenterComponent, LABELS_HE, LABELS_EN } from './activity-center.component';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 
@@ -96,61 +99,47 @@ describe('ActivityCenterComponent (rf-f01)', () => {
   });
 
   // ── Badge count ─────────────────────────────────────────────────────────────
+  //
+  // The live-count badge (and the pluralized accessible name that went with it) moved to the dock's
+  // single launcher when the two overlays were merged, because that is the affordance the author sees
+  // while this panel is closed. Its coverage moved with it, unchanged in substance, to
+  // `shared/app-dock/app-dock.component.spec.ts`.
 
-  describe('bell badge', () => {
-    it('should not render the badge when there are zero active jobs', () => {
-      stub.setJobs([]);
-      fixture.detectChanges();
+  // ── Panel showing / hiding ──────────────────────────────────────────────────
 
-      const badge = fixture.debugElement.query(By.css('.ac-badge'));
-      expect(badge).toBeNull();
-    });
-
-    it('should render the badge with correct count when there are active jobs', () => {
-      stub.setJobs([
-        makeJob({ id: 'j1', status: 'running' }),
-        makeJob({ id: 'j2', status: 'running' }),
-      ]);
-      fixture.detectChanges();
-
-      const badge = fixture.debugElement.query(By.css('.ac-badge'));
-      expect(badge).not.toBeNull();
-      expect(badge.nativeElement.textContent.trim()).toBe('2');
-    });
-
-    it('should hide the badge when all jobs are terminal', () => {
-      stub.setJobs([
-        makeJob({ id: 'j1', status: 'succeeded' }),
-        makeJob({ id: 'j2', status: 'failed' }),
-      ]);
-      // Active stub tracks only running/pending
-      stub.setActive([]);
-      fixture.detectChanges();
-
-      const badge = fixture.debugElement.query(By.css('.ac-badge'));
-      expect(badge).toBeNull();
-    });
-  });
-
-  // ── Panel open/close ────────────────────────────────────────────────────────
-
-  describe('panel toggle', () => {
+  describe('tab showing', () => {
     it('should not show the panel initially', () => {
       expect(fixture.debugElement.query(By.css('.ac-panel'))).toBeNull();
     });
 
-    it('should show the panel after clicking the bell', () => {
-      fixture.debugElement.query(By.css('.ac-bell')).nativeElement.click();
+    it('should show the panel when the activity tab is selected', () => {
+      // Driven through the shared service, which is the seam this component subscribes to: there is no
+      // bell to click any more, and the dock owns the launcher that opens this tab.
+      TestBed.inject(AppOverlayService).openTab('activity');
       fixture.detectChanges();
 
       expect(fixture.debugElement.query(By.css('.ac-panel'))).not.toBeNull();
     });
 
-    it('should hide the panel after a second click', () => {
+    it('should show NOTHING once the other tab takes the dock (no leak between tabs)', () => {
+      component.panelOpen = true;
+      fixture.detectChanges();
+      expect(fixture.debugElement.query(By.css('.ac-panel')))
+        .withContext('non-vacuity: it really was on screen first')
+        .not.toBeNull();
+
+      TestBed.inject(AppOverlayService).openTab('assistant');
+      fixture.detectChanges();
+
+      expect(fixture.debugElement.query(By.css('.ac-panel'))).toBeNull();
+      expect(component.panelOpen).toBeFalse();
+    });
+
+    it('should hide the panel when the dock closes', () => {
       component.panelOpen = true;
       fixture.detectChanges();
 
-      fixture.debugElement.query(By.css('.ac-bell')).nativeElement.click();
+      component.panelOpen = false;
       fixture.detectChanges();
 
       expect(fixture.debugElement.query(By.css('.ac-panel'))).toBeNull();
@@ -371,7 +360,7 @@ describe('ActivityCenterComponent (rf-f01)', () => {
 
     it('should have a non-empty Hebrew label for every key that has an English equivalent', () => {
       const keys = [
-        'panelTitle', 'emptyState', 'view', 'activeCount',
+        'panelTitle', 'emptyState', 'view',
         'running', 'pending', 'succeeded', 'failed', 'canceled',
         'summary', 'review', 'proofread', 'style-baseline', 'whole-book-analysis',
       ];
@@ -513,43 +502,9 @@ describe('ActivityCenterComponent (rf-f01)', () => {
     });
   });
 
-  // ── Bell aria-label pluralization ────────────────────────────────────────────
-
-  describe('bell aria-label pluralization', () => {
-    it('should use the singular form when there is exactly 1 active job (Hebrew)', async () => {
-      stub.setJobs([makeJob({ id: 'j1', status: 'running' })]);
-      fixture.detectChanges();
-
-      // Read the resolved label from the observable directly.
-      const label = await new Promise<string>(resolve => {
-        component.bellAriaLabel$.subscribe(v => resolve(v)).unsubscribe();
-      });
-      // Hebrew singular: "1 משימה פעילה" (not the plural "משימות פעילות")
-      expect(label).toBe('1 משימה פעילה');
-      expect(label).not.toContain('משימות');
-    });
-
-    it('should use the plural form when there are 2+ active jobs (Hebrew)', async () => {
-      stub.setJobs([
-        makeJob({ id: 'j1', status: 'running' }),
-        makeJob({ id: 'j2', status: 'running' }),
-      ]);
-      fixture.detectChanges();
-
-      const label = await new Promise<string>(resolve => {
-        component.bellAriaLabel$.subscribe(v => resolve(v)).unsubscribe();
-      });
-      expect(label).toBe('2 משימות פעילות');
-    });
-
-    it('should use the panel title as label when there are 0 active jobs', async () => {
-      stub.setJobs([]);
-      fixture.detectChanges();
-
-      const label = await new Promise<string>(resolve => {
-        component.bellAriaLabel$.subscribe(v => resolve(v)).unsubscribe();
-      });
-      expect(label).toBe('מרכז פעילות');
-    });
-  });
+  // ── Launcher aria-label pluralization ───────────────────────────────────────
+  //
+  // Moved to the dock spec with the launcher that carries it, unchanged in substance: the singular /
+  // plural Hebrew forms and the zero case are all still asserted, against
+  // shared/app-dock/app-dock.component.spec.ts's launcher instead of a bell that no longer exists.
 });

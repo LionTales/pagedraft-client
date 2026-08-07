@@ -1,2 +1,9 @@
-<app-activity-center />
+<!--
+  App-level chrome, mounted once for every route.
+
+  ONE dock: a single launcher at the bottom inline-start corner and a single tabbed drawer on the
+  inline-start edge (the physical right in Hebrew, the app default). It hosts both the product
+  assistant and the Activity Center as tabs; see app-dock.component.ts for the hosting-edge decision.
+-->
+<app-dock />
 <router-outlet />
