@@ -1,11 +1,11 @@
 import { Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
-import { ActivityCenterComponent } from './shared/activity-center/activity-center.component';
+import { AppDockComponent } from './shared/app-dock/app-dock.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, ActivityCenterComponent],
+  imports: [RouterOutlet, AppDockComponent],
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss'
 })

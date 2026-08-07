@@ -1,180 +1,29 @@
 /*
- * Activity Center overlay styles.
+ * Activity Center styles: the ACTIVITY TAB BODY of the app dock (merged in chatbot phase A.1, w1).
  * Uses --pd-* design tokens throughout. No em-dash in user-facing strings.
- * Physical layout (not content-dir) for RTL: inset-inline-start/end logical props + dir-sensitive
- * transform via the host [dir] attribute.
  *
- * Bell sits in the top inline-start corner (inline-start = right in RTL, left in LTR).
- * Panel slides in from inline-start (right edge in RTL, left edge in LTR).
+ * This file no longer positions anything. The bell (top inline-start), its badge, the backdrop and the
+ * fixed slide-over shell all belonged to a standalone overlay and are GONE: the dock owns the launcher,
+ * the drawer's edge and its slide, and this panel simply fills the tab it is shown in. The bell is
+ * removed rather than restyled because its corner is the one the assistant's own header occupies in
+ * Hebrew, where it overlapped the assistant's title.
  */
 
 :host {
-  /* The host is a non-layout container; children are fixed/absolute-positioned. */
+  /* A non-layout container: it must not add a box between the dock's flex column and this panel, or
+     the panel could not fill (and scroll inside) the drawer. */
   display: contents;
 }
 
-/* ── Bell button ──────────────────────────────────────────────────────────── */
+/* ── Panel ────────────────────────────────────────────────────────────────── */
 
-.ac-bell {
-  position: fixed;
-  /* Top inline-start corner: physical right in RTL, physical left in LTR */
-  top: var(--pd-space-5);
-  inset-inline-start: var(--pd-space-5);
-  z-index: calc(var(--pd-z-overlay) + 10);
-
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--pd-border);
-  border-radius: var(--pd-radius-pill);
-  background: var(--pd-surface);
-  box-shadow: var(--pd-shadow-2);
-  cursor: pointer;
-  padding: 0;
-  transition:
-    background var(--pd-dur-fast) var(--pd-ease),
-    box-shadow var(--pd-dur-fast) var(--pd-ease);
-}
-
-/* Hidden while the panel is open so the fixed bell does not overlap the panel header title. */
-.ac-bell--is-hidden {
-  display: none;
-}
-
-.ac-bell:hover {
-  background: var(--pd-surface-sunken);
-  box-shadow: var(--pd-shadow-3);
-}
-
-.ac-bell:focus-visible {
-  outline: none;
-  box-shadow: var(--pd-ring);
-}
-
-.ac-bell-icon {
-  font-size: 18px;
-  line-height: 1;
-}
-
-/* ── Badge ────────────────────────────────────────────────────────────────── */
-
-.ac-badge {
-  position: absolute;
-  top: -4px;
-  inset-inline-end: -4px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 var(--pd-space-2);
-  border-radius: var(--pd-radius-pill);
-  background: var(--pd-cut);
-  color: var(--pd-neutral-0);
-  font-family: var(--pd-font-ui);
-  font-size: var(--pd-text-caption);
-  font-weight: var(--pd-weight-bold);
-  line-height: 18px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
-/* ── Backdrop ─────────────────────────────────────────────────────────────── */
-
-.ac-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: var(--pd-z-overlay);
-  background: transparent;
-}
-
-/* ── Slide-over panel ─────────────────────────────────────────────────────── */
-
+/* Fills the dock's tab slot. min-height:0 is what lets .ac-panel-body scroll instead of growing the
+   drawer past the viewport. */
 .ac-panel {
-  position: fixed;
-  top: 0;
-  /* Panel attaches to the inline-start edge (right side in RTL) */
-  inset-inline-start: 0;
-  width: min(360px, 92vw);
-  height: 100dvh;
-  z-index: calc(var(--pd-z-overlay) + 5);
-
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--pd-surface);
-  border-inline-end: 1px solid var(--pd-border);
-  box-shadow: var(--pd-shadow-4);
-
-  /* Slide in from inline-start */
-  animation: ac-slide-in var(--pd-dur-base) var(--pd-ease) both;
-}
-
-@keyframes ac-slide-in {
-  from {
-    transform: translateX(-100%);
-  }
-  to {
-    transform: translateX(0);
-  }
-}
-
-/* In RTL the panel slides in from the right; flip the animation direction */
-:host([dir='rtl']) .ac-panel {
-  animation-name: ac-slide-in-rtl;
-}
-
-@keyframes ac-slide-in-rtl {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
-  }
-}
-
-/* ── Panel header ─────────────────────────────────────────────────────────── */
-
-.ac-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--pd-space-5) var(--pd-space-6);
-  border-block-end: 1px solid var(--pd-divider);
-  flex-shrink: 0;
-}
-
-.ac-panel-title {
-  font-family: var(--pd-font-ui);
-  font-size: var(--pd-text-h5);
-  font-weight: var(--pd-weight-bold);
-  color: var(--pd-text);
-  line-height: var(--pd-lh-h5);
-}
-
-.ac-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid transparent;
-  border-radius: var(--pd-radius-sm);
-  background: none;
-  cursor: pointer;
-  color: var(--pd-text-secondary);
-  font-size: var(--pd-text-body);
-  line-height: 1;
-  transition: background var(--pd-dur-fast) var(--pd-ease), color var(--pd-dur-fast) var(--pd-ease);
-}
-
-.ac-close:hover {
-  background: var(--pd-surface-sunken);
-  color: var(--pd-text);
-}
-
-.ac-close:focus-visible {
-  outline: none;
-  box-shadow: var(--pd-ring);
 }
 
 /* ── Panel body ───────────────────────────────────────────────────────────── */
@@ -323,13 +172,10 @@
   100% { transform: translateX(150%); }
 }
 
-/* Respect user's reduced-motion preference: disable all keyframe animations. */
+/* Respect user's reduced-motion preference: disable all keyframe animations. The panel's own slide is
+   no longer here (the dock animates the drawer, and honours the same preference). */
 @media (prefers-reduced-motion: reduce) {
   .ac-progress-fill--indet {
-    animation: none;
-  }
-
-  .ac-panel {
     animation: none;
   }
 }

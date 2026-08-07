@@ -26,6 +26,7 @@ import { AnalysisRunDialogComponent } from './analysis-run-dialog.component';
 import { JobProgressInlineComponent } from '../job-progress-inline/job-progress-inline.component';
 import { ActivityCenterComponent } from '../activity-center/activity-center.component';
 import { JobKind, JobRegistryService } from '../../core/services/job-registry.service';
+import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { AnalysisProgressDto } from '../../core/models/analysis';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
@@ -173,9 +174,10 @@ describe('three-surface parity over ONE registry job (Wave 1d c2)', () => {
     host.events$.next({ kind: 'job-started', jobId: JOB_ID });
     fixture.detectChanges();
 
-    // Open the Activity Center panel so its row is actually rendered. Click the real bell rather than
-    // calling togglePanel(): the Activity Center is OnPush, so only a bound event marks it dirty.
-    (root().querySelector('.ac-bell') as HTMLButtonElement).click();
+    // Open the Activity Center panel so its row is actually rendered. Driven through AppOverlayService,
+    // the seam the tab body subscribes to: it marks the OnPush component for check, which a bare field
+    // write would not. (There is no bell to click any more; the merged dock owns the launcher.)
+    TestBed.inject(AppOverlayService).openTab('activity');
     fixture.detectChanges();
   });
 
@@ -406,7 +408,7 @@ describe('a SYNC run is on none of the three surfaces (c02)', () => {
     host.events$.next({ kind: 'status', message: 'מריץ הגהה...' });
     fixture.detectChanges();
 
-    (root().querySelector('.ac-bell') as HTMLButtonElement).click();
+    TestBed.inject(AppOverlayService).openTab('activity');
     fixture.detectChanges();
   });
 
@@ -525,7 +527,7 @@ describe('the bare chunk COUNTS are scoped by job KIND (c02)', () => {
     host.events$.next({ kind: 'job-started', jobId: JOB_ID });
     fixture.detectChanges();
 
-    (root().querySelector('.ac-bell') as HTMLButtonElement).click();
+    TestBed.inject(AppOverlayService).openTab('activity');
     fixture.detectChanges();
   }
 

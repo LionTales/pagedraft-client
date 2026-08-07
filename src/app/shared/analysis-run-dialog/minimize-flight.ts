@@ -1,31 +1,38 @@
 /**
  * Wave 1d: the minimize transition of the analysis run dialog.
  *
- * The dialog card "flies" toward the Activity Center bell, which is where the job stays visible after
- * the dialog is dismissed.
+ * The dialog card "flies" toward the app dock's launcher, which is where the job stays visible after
+ * the dialog is dismissed (its badge carries the live count, and its activity tab carries the row).
+ *
+ * ── The target moved with the merge (chatbot phase A.1, w1) ────────────────────────────────────────
+ * It used to be the Activity Center BELL, at `top/inset-inline-start`. That bell no longer exists: the
+ * two app-level overlays were merged into one tabbed dock with a single launcher at the BOTTOM
+ * inline-start corner. This module had to follow, because a target selector that matches nothing does
+ * not fail loudly - it silently falls through to the fallback corner, which would have aimed every
+ * minimize at an empty corner of the screen.
  *
  * ── Why the target is measured, never hardcoded ────────────────────────────────────────────────────
- * The bell is pinned with `inset-inline-start` (activity-center.component.scss `.ac-bell`), which is
+ * The launcher is pinned with `inset-inline-start` (app-dock.component.scss `.dock-launcher`), which is
  * PHYSICALLY on the right in RTL and on the left in LTR. Hebrew is the app default, so a flight aimed at
  * a hardcoded physical corner would fly the wrong way for most users. `resolveMinimizeTarget` therefore
- * reads the bell's LIVE `getBoundingClientRect()`: the browser has already resolved the logical property
- * for the current direction, so the target flips for free and stays correct if the bell ever moves.
+ * reads the launcher's LIVE `getBoundingClientRect()`: the browser has already resolved the logical
+ * property for the current direction, so the target flips for free and stays correct if it ever moves.
  *
- * Only when the bell element is unavailable (not yet mounted, or `display:none` while the Activity Center
- * panel is open, which yields an all-zero rect) do we fall back to a computed corner, and even then the
- * side is derived from a resolved `direction`, never assumed.
+ * Only when the launcher is unavailable (not yet mounted, or not rendered while the dock drawer is open,
+ * which leaves nothing to measure) do we fall back to a computed corner, and even then the side is
+ * derived from a resolved `direction`, never assumed.
  *
- * ── Which direction the FALLBACK must read (c3 live-browser finding) ───────────────────────────────
- * NOT the document's. The Activity Center is APP-LEVEL chrome whose language is Hebrew-default and
- * independent of both the book language and the document: `ActivityCenterComponent` hardcodes
- * `appLang = 'he'` and binds `[attr.dir]="'rtl'"` on its own host, so `.ac-bell`'s `inset-inline-start`
- * resolves against THAT host, not against `<body>`. Measured live in the running app: the bell sits at
- * x ~ 1444 of a 1500px viewport (physical RIGHT) while `getComputedStyle(document.body).direction` is
- * `ltr`. A fallback keyed on the document therefore aimed at x = 40 (physical LEFT) - the opposite side
- * of the screen from the real bell - exactly the wrong-way flight this module exists to prevent, and it
- * triggered on a real path (minimizing while the Activity Center panel is open hides the bell).
- * The fallback now probes the Activity Center HOST's resolved direction, which survives the bell being
- * `display:none` because only the bell is hidden, never the host.
+ * ── Which direction the FALLBACK must read (c3 live-browser finding, still binding) ────────────────
+ * NOT the document's. The dock is APP-LEVEL chrome whose language is Hebrew-default and independent of
+ * both the book language and the document: `AppDockComponent` hardcodes `appLang = 'he'` and binds
+ * `[attr.dir]` on its own host, so `.dock-launcher`'s `inset-inline-start` resolves against THAT host,
+ * not against `<body>`. Measured live in the running app when this bit as the bell: the affordance sat
+ * at x ~ 1444 of a 1500px viewport (physical RIGHT) while `getComputedStyle(document.body).direction`
+ * was `ltr`. A fallback keyed on the document therefore aimed at the opposite side of the screen -
+ * exactly the wrong-way flight this module exists to prevent - and it triggered on a real path
+ * (minimizing while the panel is open, which is when the launcher is not rendered). The fallback probes
+ * the dock HOST's resolved direction, which survives the launcher being absent because only the
+ * launcher goes, never the host.
  *
  * The flight itself is expressed as a PHYSICAL pixel delta between two measured points, so it needs no
  * direction awareness of its own.
@@ -33,7 +40,7 @@
  * ── Why c03 (the centred modal) needed no change here ──────────────────────────────────────────────
  * VERIFIED, not assumed. Both ends of the flight are MEASURED at gesture time: the origin is the card's
  * live `getBoundingClientRect()` (taken in `AnalysisRunDialogComponent.minimize()` before anything
- * moves) and the target is the bell's live rect. Neither end encodes where the card sits, so moving the
+ * moves) and the target is the launcher's live rect. Neither end encodes where the card sits, so moving the
  * card from the block-end/inline-end corner to the viewport centre changes only the numbers. The ghost
  * is appended to `document.body` at `z-index: 2147483000`, far above the dialog's own backdrop
  * (`--pd-z-dialog`, 200), so it animates OVER the scrim; and the dialog releases its modality (backdrop
@@ -55,24 +62,29 @@ export interface FlightPoint {
 /** Class stamped on the transient ghost element, so a spec (or a debugger) can find it. */
 export const MINIMIZE_GHOST_CLASS = 'rd-minimize-ghost';
 
-/** Selector of the Activity Center bell: the surface the minimized job remains visible on. */
-export const ACTIVITY_CENTER_BELL_SELECTOR = '.ac-bell';
+/** Selector of the dock launcher: the affordance the minimized job remains visible on. */
+export const DOCK_LAUNCHER_SELECTOR = '.dock-launcher';
 
 /**
- * Selector of the Activity Center HOST. Its own resolved `direction` (app-level, Hebrew-default) is what
- * `.ac-bell`'s `inset-inline-start` is laid out against, so it is the only correct input to the fallback
- * corner. The host stays in the DOM (and keeps its direction) while the bell itself is `display:none`.
+ * Selector of the app dock HOST. Its own resolved `direction` (app-level, Hebrew-default) is what
+ * `.dock-launcher`'s `inset-inline-start` is laid out against, so it is the only correct input to the
+ * fallback corner. The host stays in the DOM (and keeps its direction) while the launcher itself is not
+ * rendered, which is exactly the case the fallback exists for.
  */
-export const ACTIVITY_CENTER_HOST_SELECTOR = 'app-activity-center';
+export const DOCK_HOST_SELECTOR = 'app-dock';
 
 /** Flight duration (ms) with motion allowed, and the shorter cross-fade used under reduced motion. */
 export const MINIMIZE_FLIGHT_MS = 320;
 export const MINIMIZE_FADE_MS = 140;
 
 /**
- * Distance from the viewport's inline-start edge to the FALLBACK target's centre, used only when the bell
- * cannot be measured. Approximates the bell's own `top/inset-inline-start: var(--pd-space-5)` plus half of
- * its 40px box.
+ * Distance from the viewport's inline-start and BLOCK-END edges to the FALLBACK target's centre, used
+ * only when the launcher cannot be measured. Approximates the launcher's own
+ * `bottom/inset-inline-start: var(--pd-space-5)` plus half of its 48px box.
+ *
+ * The block axis flipped with the merge: the old bell was a TOP-corner affordance, the dock launcher is
+ * a BOTTOM one. A fallback still aimed at the top would send the ghost to a corner that has held nothing
+ * since the two overlays became one.
  */
 export const MINIMIZE_FALLBACK_INSET = 40;
 
@@ -114,15 +126,15 @@ export function resolveDocumentDirection(doc: Document = document, win: Window =
 }
 
 /**
- * Resolve the direction the BELL is pinned against: the Activity Center host's own resolved direction.
+ * Resolve the direction the LAUNCHER is pinned against: the app dock host's own resolved direction.
  *
- * This is deliberately NOT the document's direction. The Activity Center sets `dir` on its own host from
- * its app-level (Hebrew-default) language, so the bell can be on the physical right while the document
+ * This is deliberately NOT the document's direction. The dock sets `dir` on its own host from its
+ * app-level (Hebrew-default) language, so the launcher can be on the physical right while the document
  * resolves to `ltr`. Falls back to the document only when the host is absent (e.g. an isolated spec
- * fixture that plants a bare bell), which keeps the existing planted-element specs meaningful.
+ * fixture that plants a bare launcher), which keeps the existing planted-element specs meaningful.
  */
-export function resolveBellSideDirection(doc: Document = document, win: Window = window): 'rtl' | 'ltr' {
-  const host = doc.querySelector(ACTIVITY_CENTER_HOST_SELECTOR) as HTMLElement | null;
+export function resolveLauncherSideDirection(doc: Document = document, win: Window = window): 'rtl' | 'ltr' {
+  const host = doc.querySelector(DOCK_HOST_SELECTOR) as HTMLElement | null;
   if (host) {
     try {
       const computed = win.getComputedStyle ? win.getComputedStyle(host).direction : '';
@@ -137,26 +149,28 @@ export function resolveBellSideDirection(doc: Document = document, win: Window =
 }
 
 /**
- * Where the minimize flight lands: the centre of the Activity Center bell as it is CURRENTLY laid out.
+ * Where the minimize flight lands: the centre of the dock launcher as it is CURRENTLY laid out.
  *
- * Measuring the live element is what makes this RTL-correct: `.ac-bell` is positioned with
+ * Measuring the live element is what makes this RTL-correct: `.dock-launcher` is positioned with
  * `inset-inline-start`, so its physical x is already the right edge under RTL and the left edge under LTR.
- * The fallback (bell missing or collapsed to a zero rect) derives the same inline-start side from
- * {@link resolveBellSideDirection} - the Activity Center's own direction, not the document's.
+ * The fallback (launcher absent or collapsed to a zero rect) derives the same inline-start side from
+ * {@link resolveLauncherSideDirection} - the dock's own direction, not the document's - and the same
+ * BLOCK-END corner the launcher sits in.
  */
 export function resolveMinimizeTarget(doc: Document = document, win: Window = window): FlightPoint {
-  const bell = doc.querySelector(ACTIVITY_CENTER_BELL_SELECTOR) as HTMLElement | null;
-  if (bell) {
-    const rect = bell.getBoundingClientRect();
+  const launcher = doc.querySelector(DOCK_LAUNCHER_SELECTOR) as HTMLElement | null;
+  if (launcher) {
+    const rect = launcher.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     }
   }
-  const rtl = resolveBellSideDirection(doc, win) === 'rtl';
+  const rtl = resolveLauncherSideDirection(doc, win) === 'rtl';
   const viewportWidth = win.innerWidth || doc.documentElement?.clientWidth || 0;
+  const viewportHeight = win.innerHeight || doc.documentElement?.clientHeight || 0;
   return {
     x: rtl ? viewportWidth - MINIMIZE_FALLBACK_INSET : MINIMIZE_FALLBACK_INSET,
-    y: MINIMIZE_FALLBACK_INSET,
+    y: viewportHeight - MINIMIZE_FALLBACK_INSET,
   };
 }
 

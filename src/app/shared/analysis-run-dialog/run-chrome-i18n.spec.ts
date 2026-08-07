@@ -29,6 +29,7 @@ import { AnalysisRunDialogComponent } from './analysis-run-dialog.component';
 import { JobProgressInlineComponent } from '../job-progress-inline/job-progress-inline.component';
 import { ActivityCenterComponent } from '../activity-center/activity-center.component';
 import { JobRegistryService } from '../../core/services/job-registry.service';
+import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { AnalysisProgressDto } from '../../core/models/analysis';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
@@ -137,9 +138,10 @@ describe('a Hebrew book shows no Latin-script run chrome (c02)', () => {
     fixture.detectChanges();
     host.events$.next({ kind: 'job-started', jobId: JOB_ID });
     fixture.detectChanges();
-
-    // Open the Activity Center panel so its row is genuinely in the DOM (OnPush: click the real bell).
-    (root().querySelector('.ac-bell') as HTMLButtonElement).click();
+    // Show the activity tab so its row is genuinely in the DOM. Driven through AppOverlayService,
+    // the seam the tab body subscribes to: it marks the OnPush component for check, which a bare field
+    // write would not. (There is no bell to click any more; the merged dock owns the launcher.)
+    TestBed.inject(AppOverlayService).openTab('activity');
     fixture.detectChanges();
   }
 

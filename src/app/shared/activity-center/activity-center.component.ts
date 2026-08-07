@@ -1,8 +1,8 @@
 import {
   ChangeDetectionStrategy,
+  ChangeDetectorRef,
   Component,
   HostBinding,
-  HostListener,
   inject,
   OnDestroy,
 } from '@angular/core';
@@ -19,6 +19,7 @@ import {
   isTerminal,
   showsChunkCounts,
 } from '../../core/services/job-registry.service';
+import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 
 // ── i18n label map (app-level chrome: Hebrew-default) ────────────────────────
@@ -28,9 +29,6 @@ export const LABELS_HE: Record<string, string> = {
   panelTitle:          'מרכז פעילות',       // DRAFT he - needs native review
   emptyState:          'אין פעילות כרגע',   // DRAFT he - needs native review
   view:                'צפייה',              // DRAFT he - needs native review
-  close:               'סגירה',             // DRAFT he - needs native review (aria-label)
-  activeCount:         'משימות פעילות',      // DRAFT he - needs native review (aria-label, plural)
-  activeCountSingular: 'משימה פעילה',       // DRAFT he - needs native review (aria-label, singular)
   // status pills
   running:        'בריצה',             // DRAFT he - needs native review
   pending:        'ממתין',             // DRAFT he - needs native review
@@ -49,9 +47,6 @@ export const LABELS_EN: Record<string, string> = {
   panelTitle:          'Activity Center',
   emptyState:          'No activity yet',
   view:                'View',
-  close:               'Close',
-  activeCount:         'active tasks',
-  activeCountSingular: 'active task',
   // status pills
   running:        'Running',
   pending:        'Pending',
@@ -85,15 +80,26 @@ const STATUS_CLASS: Record<JobStatus, string> = {
 };
 
 /**
- * rf-f01: Global Activity Center overlay.
+ * rf-f01: the Activity Center, now the ACTIVITY TAB of the app dock (merged in chatbot phase A.1, w1).
  *
- * Fixed-position bell + slide-over panel that persists across all routes (mounted in AppComponent).
  * Reads job state from JobRegistryService. App-level chrome is Hebrew-default (RTL).
  *
- * RTL approach: the host [dir] attribute is set from the app language (Hebrew -> rtl). The panel
- * slides in from the inline-start side (right in RTL, left in LTR) using physical CSS with `inset-*`
- * logical properties and a `dir`-aware transform. Bell sits in the inline-start corner using logical
- * `inset-inline-start`.
+ * ── What the merge took away, and what it deliberately kept ────────────────────────────────────────
+ * GONE: the fixed bell in the top inline-start corner, its backdrop, and the fixed slide-over shell.
+ * The bell is gone rather than restyled because that corner is where the assistant's own header sits
+ * in Hebrew, and a bell there overlapped the word "עוזר"; a moved-but-still-present second affordance
+ * would have left the overlap one layout change away. The single dock launcher at the bottom carries
+ * the bell's live job badge, which was the bell's reason to exist.
+ *
+ * KEPT, unchanged on purpose: `panelOpen` still routes through {@link AppOverlayService}, exactly the
+ * seam c2 introduced. It now means "the activity TAB is the one showing" rather than "this overlay
+ * won the exclusion", which is the same question from the panel's point of view, so every caller and
+ * every spec that drives `panelOpen` still reads correctly. Gating the content on it is what keeps
+ * this tab's rows out of the assistant tab, and the component stays MOUNTED across tab switches so
+ * neither tab's state is thrown away by the other.
+ *
+ * RTL approach: the host [dir] attribute is set from the app language (Hebrew -> rtl). The dock owns
+ * the drawer's edge and its slide; this component contributes no fixed positioning of its own.
  *
  * Per-row title language: since the Activity Center is app-level chrome (not book-scoped), we do not
  * have a reliable per-row book language at render time. We use the app language (Hebrew by default)
@@ -108,41 +114,12 @@ const STATUS_CLASS: Record<JobStatus, string> = {
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [AsyncPipe, NgClass, RouterLink],
   template: `
-    <!-- Bell button (fixed). Hidden while the panel is open so the fixed pill does not overlap the
-         panel header (the panel has its own close button + backdrop + Escape to dismiss). -->
-    <button
-      class="ac-bell"
-      [class.ac-bell--is-hidden]="panelOpen"
-      type="button"
-      [attr.aria-label]="bellAriaLabel$ | async"
-      [attr.aria-expanded]="panelOpen"
-      [attr.aria-controls]="'ac-panel'"
-      (click)="togglePanel()">
-      <span class="ac-bell-icon" aria-hidden="true">🔔</span>
-      @if ((activeCount$ | async) ?? 0; as count) {
-        @if (count > 0) {
-          <span class="ac-badge" aria-hidden="true">{{ count }}</span>
-        }
-      }
-    </button>
-
-    <!-- Slide-over panel -->
+    <!-- The ACTIVITY TAB BODY of the app dock. No bell, no backdrop, no panel chrome of its own: the
+         dock owns the launcher, the drawer shell, the tab strip (which carries this panel's title) and
+         the close control. What is left here is the content, rendered only while this tab is the one
+         showing, which is what keeps it out of the assistant tab. -->
     @if (panelOpen) {
-      <div
-        id="ac-panel"
-        class="ac-panel"
-        role="dialog"
-        [attr.aria-label]="label('panelTitle')"
-        aria-modal="false">
-        <div class="ac-panel-header">
-          <span class="ac-panel-title">{{ label('panelTitle') }}</span>
-          <button
-            class="ac-close"
-            type="button"
-            [attr.aria-label]="label('close')"
-            (click)="closePanel()">&#x2715;</button>
-        </div>
-
+      <div id="ac-panel" class="ac-panel">
         <div class="ac-panel-body">
           @let jobs = (jobs$ | async) ?? [];
           @if (jobs.length === 0) {
@@ -221,20 +198,48 @@ const STATUS_CLASS: Record<JobStatus, string> = {
           }
         </div>
       </div>
-
-      <!-- Backdrop: clicking outside closes the panel -->
-      <div class="ac-backdrop" (click)="closePanel()"></div>
     }
   `,
   styleUrl: './activity-center.component.scss',
 })
 export class ActivityCenterComponent implements OnDestroy {
   private readonly registry = inject(JobRegistryService);
+  private readonly overlays = inject(AppOverlayService);
+  private readonly cdr = inject(ChangeDetectorRef);
 
   /** Emits once on destroy to tear down all internal subscriptions. */
   private readonly destroy$ = new Subject<void>();
 
-  panelOpen = false;
+  /** Mirror of the shared overlay state, so the OnPush template has a plain field to read. */
+  private panelOpenState = false;
+
+  constructor() {
+    // The open/closed state of this panel is OWNED by AppOverlayService, not by this component
+    // (chatbot phase A, c2; re-pointed at the dock's tab selection in phase A.1, w1). The dock is a
+    // single drawer with two tabs, so "showing" means the activity tab is the selected one. The state
+    // therefore arrives by subscription (the dock, or a sibling tab, can change it) and marks for check.
+    this.overlays
+      .isTabShowing$('activity')
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(showing => {
+        this.panelOpenState = showing;
+        this.cdr.markForCheck();
+      });
+  }
+
+  /**
+   * Whether this panel's content is on screen. Reads the mirrored field; ASSIGNING routes through the
+   * shared service, so `panelOpen = true` still works from a template, a spec, or a handler and still
+   * cannot put two tabs' content on screen at once.
+   */
+  get panelOpen(): boolean {
+    return this.panelOpenState;
+  }
+
+  set panelOpen(open: boolean) {
+    if (open) this.overlays.openTab('activity');
+    else this.overlays.closeTab('activity');
+  }
 
   /**
    * App-level chrome language. Hebrew-default per app-level i18n convention.
@@ -242,7 +247,7 @@ export class ActivityCenterComponent implements OnDestroy {
    */
   private readonly appLang: 'he' | 'en' = 'he';
 
-  /** Dir bound to the host element so the panel and bell follow the app language direction. */
+  /** Dir bound to the host element so the panel follows the app language direction. */
   @HostBinding('attr.dir')
   get dir(): 'rtl' | 'ltr' {
     return this.appLang === 'he' ? 'rtl' : 'ltr';
@@ -267,36 +272,22 @@ export class ActivityCenterComponent implements OnDestroy {
     })),
   );
 
-  /** Non-terminal (active) jobs count for the badge. */
-  readonly activeCount$ = this.registry.activeJobs$.pipe(
-    map(jobs => jobs.length),
-  );
+  // The live job COUNT is not read here any more: it belongs to the dock's single launcher (and to
+  // the activity tab itself while the drawer is open), because that is the affordance the author sees
+  // when this panel is closed. See `AppDockComponent.activeCount$`.
 
-  readonly bellAriaLabel$ = this.activeCount$.pipe(
-    map(count => {
-      if (count === 1) {
-        return `1 ${this.label('activeCountSingular')}`;
-      }
-      if (count > 1) {
-        return `${count} ${this.label('activeCount')}`;
-      }
-      return this.label('panelTitle');
-    }),
-  );
-
-  togglePanel(): void {
-    this.panelOpen = !this.panelOpen;
-  }
-
+  /**
+   * Dismiss this tab's panel (a row's "view" link navigates, so it closes the dock behind itself).
+   *
+   * Guarded by the service against a stale close: if the author has already switched to the assistant
+   * tab, this does nothing rather than closing the drawer out from under them.
+   */
   closePanel(): void {
-    this.panelOpen = false;
+    this.overlays.closeTab('activity');
   }
 
-  /** Close panel on Escape key. */
-  @HostListener('document:keydown.escape')
-  onEscape(): void {
-    if (this.panelOpen) this.closePanel();
-  }
+  // Escape is handled ONCE, by the dock that owns the drawer. A second document-level handler here
+  // would race the dock's for the same gesture and close the same surface twice.
 
   /** Resolve localized label from the app-language map. */
   label(key: string): string {
@@ -349,7 +340,12 @@ export class ActivityCenterComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    // Unsubscribe FIRST, so releasing the tab below cannot call markForCheck on a view that is on its
+    // way out.
     this.destroy$.next();
     this.destroy$.complete();
+    // A destroyed tab body must not leave the app believing this tab is still showing. Scoped to THIS
+    // tab, so tearing it down while the author is reading the assistant tab closes nothing.
+    this.overlays.closeTab('activity');
   }
 }
