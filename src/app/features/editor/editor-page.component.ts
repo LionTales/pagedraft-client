@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, DoCheck, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ImportHandoffCardComponent } from './import-handoff-card/import-handoff-card.component';
-import { ReplaySubject, Subject, Subscription } from 'rxjs';
+import { ReplaySubject, Subject } from 'rxjs';
 import { debounceTime, takeUntil } from 'rxjs/operators';
 import { DocumentEditorContainerComponent, DocumentEditorContainerModule, ToolbarService } from '@syncfusion/ej2-angular-documenteditor';
 import { BookService } from '../../core/services/book.service';
