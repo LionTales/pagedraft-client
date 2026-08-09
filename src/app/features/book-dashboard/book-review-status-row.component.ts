@@ -54,8 +54,29 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
    */
   @Output() tierChanged = new EventEmitter<void>();
 
+  /**
+   * Wave 3 / w2. The raw status DTO, every time it changes (including to null on a context reset).
+   *
+   * The stage spine derives stage 3 from the WHOLE payload: `blocked` from `hasBriefs`, `behind` with its
+   * reason from `staleVsBriefs` / `builtWithDifferentModel`, and the working-through progress from
+   * `resolvedFindingCount` over `findingCount`. The coarse {@link BookReviewState} the sibling output
+   * carries collapses all of that, and the counts are not on it at all. This row is already the single
+   * fetcher of the payload, so the spine reads it here rather than polling the same endpoint again.
+   */
+  @Output() statusChange = new EventEmitter<BookReviewStatusDto | null>();
+
+  /** Backing field for {@link bookReviewStatus}; mutated only via the setter so the change emits. */
+  private _bookReviewStatus: BookReviewStatusDto | null = null;
+
   /** Latest book-review status read for the current book (null while loading / no book). */
-  bookReviewStatus: BookReviewStatusDto | null = null;
+  get bookReviewStatus(): BookReviewStatusDto | null {
+    return this._bookReviewStatus;
+  }
+  set bookReviewStatus(value: BookReviewStatusDto | null) {
+    if (this._bookReviewStatus === value) return;
+    this._bookReviewStatus = value;
+    this.statusChange.emit(value);
+  }
   /** True while a review build job is in flight (drives the BUILDING state). */
   bookReviewBuilding = false;
   /** Live review build progress 0..100 (null = indeterminate). */

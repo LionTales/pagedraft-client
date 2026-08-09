@@ -31,6 +31,8 @@ function makeBookReviewStatus(
     language: 'he',
     hasReview: true,
     findingCount: 12,
+    openFindingCount: 12,
+    resolvedFindingCount: 0,
     lastUpdatedAt: new Date().toISOString(),
     builtWithDifferentModel: false,
     staleVsBriefs: false,

@@ -128,6 +128,8 @@ describe('EditorPageComponent (focused logic)', () => {
           useValue: {
             anyRunningForBook$: () => of(false),
             reattach: jasmine.createSpy('reattach'),
+            // w2: the hosted dashboard reads this for the spine's stage-4 running marks.
+            activeJobs$: of([]),
           },
         },
         { provide: SfdtManipulationService, useValue: sfdtSpy },
@@ -1079,6 +1081,11 @@ class RegistryStub {
   /** c02: per-job snapshot streams, held open for the whole test (see jobById$). */
   private readonly jobs = new Map<string, BehaviorSubject<TrackedJob | null>>();
   reattach = jasmine.createSpy('reattach');
+  /**
+   * Wave 3 / w2: the hosted book dashboard reads this to mark which chapters have a pass in flight in the
+   * stage spine's stage-4 breakdown. Nothing running by default; the spine's own suite covers the marks.
+   */
+  readonly activeJobs$: Observable<TrackedJob[]> = of([]);
 
   private subjectFor(bookId: string): BehaviorSubject<boolean> {
     let s = this.running.get(bookId);
@@ -1998,7 +2005,7 @@ function buildImportTestBed(queryParams: Record<string, string>, navState: Recor
       { provide: AnalysisService, useValue: {} },
       {
         provide: JobRegistryService,
-        useValue: { anyRunningForBook$: () => of(false), reattach: jasmine.createSpy('reattach') },
+        useValue: { anyRunningForBook$: () => of(false), reattach: jasmine.createSpy('reattach'), activeJobs$: of([]) },
       },
       { provide: SfdtManipulationService, useValue: jasmine.createSpyObj('SfdtManipulationService', ['ensureSfdtRtl', 'stripHighlightFromSfdt', 'replacePlainTextInSfdt', 'buildMinimalSfdt', 'applyHighlightRangesToSfdt', 'plainOffsetToSfdtPosition', 'addBookmarkAtRange']) },
       { provide: EditorTextService, useValue: jasmine.createSpyObj('EditorTextService', ['getTextFromSfdt', 'getPlainTextFromEditor', 'refreshDocumentPlainText']) },
@@ -2145,7 +2152,7 @@ describe('EditorPageComponent rf-f03 handoff handlers (focused logic)', () => {
         { provide: SyncService, useValue: { connect: () => Promise.resolve(), joinBook: () => {}, leaveBook: () => {}, chapterUpdated$: EMPTY, chapterCreated$: EMPTY, chapterReordered$: EMPTY, sceneCreated$: EMPTY, sceneUpdated$: EMPTY, sceneDeleted$: EMPTY, scenesCleared$: EMPTY, scenesReordered$: EMPTY } },
         { provide: DocumentVersionService, useValue: { create: () => of({}), list: () => of([]), get: () => EMPTY } },
         { provide: AnalysisService, useValue: {} },
-        { provide: JobRegistryService, useValue: { anyRunningForBook$: () => of(false), reattach: jasmine.createSpy('reattach') } },
+        { provide: JobRegistryService, useValue: { anyRunningForBook$: () => of(false), reattach: jasmine.createSpy('reattach'), activeJobs$: of([]) } },
         { provide: SfdtManipulationService, useValue: jasmine.createSpyObj('SfdtManipulationService', ['stripHighlightFromSfdt', 'replacePlainTextInSfdt', 'buildMinimalSfdt', 'ensureSfdtRtl', 'applyHighlightRangesToSfdt', 'plainOffsetToSfdtPosition', 'addBookmarkAtRange']) },
         { provide: EditorTextService, useValue: jasmine.createSpyObj('EditorTextService', ['getTextFromSfdt', 'getPlainTextFromEditor', 'refreshDocumentPlainText']) },
         { provide: SuggestionAnchorService, useValue: jasmine.createSpyObj('SuggestionAnchorService', ['relocateAll', 'relocateOne']) },
@@ -2208,7 +2215,7 @@ function sharedHandoffProviders(routerVal: object, routeVal: object) {
     { provide: SyncService, useValue: { connect: () => Promise.resolve(), joinBook: () => {}, leaveBook: () => {}, chapterUpdated$: EMPTY, chapterCreated$: EMPTY, chapterReordered$: EMPTY, sceneCreated$: EMPTY, sceneUpdated$: EMPTY, sceneDeleted$: EMPTY, scenesCleared$: EMPTY, scenesReordered$: EMPTY } },
     { provide: DocumentVersionService, useValue: { create: () => of({}), list: () => of([]), get: () => EMPTY } },
     { provide: AnalysisService, useValue: {} },
-    { provide: JobRegistryService, useValue: { anyRunningForBook$: () => of(false), reattach: jasmine.createSpy('reattach') } },
+    { provide: JobRegistryService, useValue: { anyRunningForBook$: () => of(false), reattach: jasmine.createSpy('reattach'), activeJobs$: of([]) } },
     { provide: SfdtManipulationService, useValue: jasmine.createSpyObj('SfdtManipulationService', ['stripHighlightFromSfdt', 'replacePlainTextInSfdt', 'buildMinimalSfdt', 'ensureSfdtRtl', 'applyHighlightRangesToSfdt', 'plainOffsetToSfdtPosition', 'addBookmarkAtRange']) },
     { provide: EditorTextService, useValue: jasmine.createSpyObj('EditorTextService', ['getTextFromSfdt', 'getPlainTextFromEditor', 'refreshDocumentPlainText']) },
     { provide: SuggestionAnchorService, useValue: jasmine.createSpyObj('SuggestionAnchorService', ['relocateAll', 'relocateOne']) },

@@ -38,7 +38,13 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
   let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
 
   beforeEach(async () => {
-    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']);
+    // `activeJobs$` is read by the dashboard itself since Wave 3 / w2 (the spine's stage-4 running marks),
+    // so the spy must carry it or every spec in this file dies on `.subscribe of undefined`.
+    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>(
+      'JobRegistryService',
+      ['track'],
+      { activeJobs$: of([]) },
+    );
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
@@ -628,20 +634,25 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(fixture.debugElement.query(By.css('.overview-card'))).not.toBeNull();
     });
 
-    it('(f) review CTA is present as the primary next action when summary ready + review not built', () => {
-      // When summary briefs are present (reviewState !== needs-summary) but review is not yet built
-      // (reviewState === 'not-built'), the stepper Assess step should have the CTA button.
-      component.onReviewStateChange('not-built'); // briefs present (not needs-summary)
+    it('(f) the review build is the spine\'s offered action when briefs are ready and the review is not built', () => {
+      // Wave 3 / w2: the four-step stepper is gone; the spine derives stage 3 from the review payload.
+      // Briefs present, review never built -> stage 3 is `not-started` and offers the build.
+      component.chapters = [
+        { id: 'ch-1', title: 'One', partName: null, order: 0, wordCount: 120, updatedAt: '2026-01-01T00:00:00Z' },
+      ];
+      component.onReviewStatusChange({
+        bookId: 'book-1', language: 'he', hasReview: false, findingCount: 0, openFindingCount: 0,
+        resolvedFindingCount: 0, lastUpdatedAt: null, builtWithDifferentModel: false, staleVsBriefs: false,
+        hasBriefs: true, activeBuildJobId: null, ready: false, chaptersReviewed: 0, chaptersTotal: 1,
+        windowCount: 0, ranSynthesis: false, ranContinuityReduce: false, failedWindows: 0,
+      });
+      component.onReviewStateChange('not-built');
       fixture.detectChanges();
 
-      // stepperHasBriefs is true for 'not-built' (it is NOT 'needs-summary' or 'unknown').
-      expect(component.stepperHasBriefs).toBeTrue();
-      // stepperReviewReady is false — review has not been built yet.
-      expect(component.stepperReviewReady).toBeFalse();
-      // stepperSummaryReady is true.
-      expect(component.stepperSummaryReady).toBeTrue();
-      // The stepper Assess CTA button must be rendered as the primary next-step.
-      expect(fixture.debugElement.query(By.css('[data-testid="funnel-cta-assess"]'))).not.toBeNull();
+      expect(
+        fixture.debugElement.query(By.css('[data-testid="spine-stage-review"]'))?.nativeElement.dataset.state,
+      ).toBe('not-started');
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-action-review"]'))).not.toBeNull();
     });
 
     it('(f) review is the prominent next action: showFindings is false and the review row Build CTA is the leading action', () => {
@@ -658,73 +669,123 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     });
   });
 
-  // ── rf-f04: Revise CTA behavior — DISTINCT from Assess ──────────────────────
-  // onStepperReviseRequested() must select the Findings sub-tab and scroll to the findings anchor,
-  // NOT just mirror the Assess CTA's status-rows scroll. "Go to findings" / "עבור לממצאים".
+  // ── Wave 3 / w2: the spine's actions land on the mechanisms this page already has ─────────────────
+  //
+  // The spine NAMES an intent; the dashboard maps it. The distinction that has to survive is the one the
+  // retired stepper's two CTAs encoded: going to the BUILD (the status rows) and going to the FINDINGS
+  // (the ledger) are different destinations, and the second one also has to select the Findings tab.
 
-  describe('rf-f04: Revise CTA selects Findings tab and scrolls to findings anchor', () => {
-    it('onStepperReviseRequested sets reviewTab to findings and emits switchToReview', () => {
-      // Pre-condition: the review tab is on the bible tab (simulate user browsed away from findings).
+  describe('w2: spine action dispatch', () => {
+    it('open-findings selects the Findings tab, emits switchToReview and scrolls to the findings anchor', () => {
       component.reviewTab = 'bible';
-
-      component.onStepperReviseRequested();
-
-      // Must snap back to the Findings sub-tab.
-      expect(component.reviewTab).toBe('findings');
-    });
-
-    it('onStepperReviseRequested emits switchToReview (same as Assess)', () => {
       let emitCount = 0;
       component.switchToReview.subscribe(() => emitCount++);
-
-      component.onStepperReviseRequested();
-
-      expect(emitCount).toBe(1);
-    });
-
-    it('onStepperReviseRequested scrolls to the findingsAnchor, NOT the statusRowsAnchor', () => {
-      // Stub the nativeElement scrollIntoView on both anchors to track which is called.
       const findingsScrollSpy = jasmine.createSpy('findingsScroll');
       const statusRowsScrollSpy = jasmine.createSpy('statusRowsScroll');
-
       (component as any).findingsAnchor = { nativeElement: { scrollIntoView: findingsScrollSpy } };
       (component as any).statusRowsAnchor = { nativeElement: { scrollIntoView: statusRowsScrollSpy } };
 
-      component.onStepperReviseRequested();
+      component.onSpineAction({ stage: 'review', action: 'open-findings' });
 
+      expect(component.reviewTab).toBe('findings');
+      expect(emitCount).toBe(1);
       expect(findingsScrollSpy).toHaveBeenCalledOnceWith({ behavior: 'smooth', block: 'start' });
       expect(statusRowsScrollSpy).not.toHaveBeenCalled();
     });
 
-    it('onStepperAssessRequested scrolls to the statusRowsAnchor, NOT the findingsAnchor (Assess unchanged)', () => {
+    it('build-briefs and build-review scroll to the STATUS ROWS and leave the review tab alone', () => {
       const findingsScrollSpy = jasmine.createSpy('findingsScroll');
       const statusRowsScrollSpy = jasmine.createSpy('statusRowsScroll');
-
       (component as any).findingsAnchor = { nativeElement: { scrollIntoView: findingsScrollSpy } };
       (component as any).statusRowsAnchor = { nativeElement: { scrollIntoView: statusRowsScrollSpy } };
+      component.reviewTab = 'bible';
 
-      component.onStepperAssessRequested();
+      component.onSpineAction({ stage: 'briefs', action: 'build-briefs' });
+      component.onSpineAction({ stage: 'review', action: 'build-review' });
+
+      expect(statusRowsScrollSpy).toHaveBeenCalledTimes(2);
+      expect(findingsScrollSpy).not.toHaveBeenCalled();
+      expect(component.reviewTab).toBe('bible');
+    });
+
+    it('a blocked review stage offers build-briefs, and it lands on the briefs row (the fix, not a dead end)', () => {
+      const statusRowsScrollSpy = jasmine.createSpy('statusRowsScroll');
+      (component as any).statusRowsAnchor = { nativeElement: { scrollIntoView: statusRowsScrollSpy } };
+      component.chapters = [
+        { id: 'ch-1', title: 'One', partName: null, order: 0, wordCount: 90, updatedAt: '2026-01-01T00:00:00Z' },
+      ];
+      component.onReviewStatusChange({
+        bookId: 'book-1', language: 'he', hasReview: false, findingCount: 0, openFindingCount: 0,
+        resolvedFindingCount: 0, lastUpdatedAt: null, builtWithDifferentModel: false, staleVsBriefs: false,
+        hasBriefs: false, activeBuildJobId: null, ready: false, chaptersReviewed: 0, chaptersTotal: 1,
+        windowCount: 0, ranSynthesis: false, ranContinuityReduce: false, failedWindows: 0,
+      });
+      fixture.detectChanges();
+
+      const row = fixture.debugElement.query(By.css('[data-testid="spine-stage-review"]'));
+      expect(row.nativeElement.dataset.state).toBe('blocked');
+      const action = fixture.debugElement.query(By.css('[data-testid="spine-action-review"]'));
+      action.nativeElement.click();
 
       expect(statusRowsScrollSpy).toHaveBeenCalledOnceWith({ behavior: 'smooth', block: 'start' });
-      expect(findingsScrollSpy).not.toHaveBeenCalled();
     });
 
-    it('Revise and Assess behaviors are DISTINCT: Revise selects findings tab, Assess does not touch reviewTab', () => {
-      // Set reviewTab to 'bible' before each call.
-      component.reviewTab = 'bible';
-      component.onStepperAssessRequested();
-      // Assess must NOT change the active tab.
-      expect(component.reviewTab).toBe('bible');
+    it('open-import bubbles up rather than routing here (the host owns the Router)', () => {
+      let imports = 0;
+      component.openImport.subscribe(() => imports++);
 
-      component.reviewTab = 'bible';
-      component.onStepperReviseRequested();
-      // Revise MUST reset to findings.
-      expect(component.reviewTab).toBe('findings');
+      component.onSpineAction({ stage: 'import', action: 'open-import' });
+
+      expect(imports).toBe(1);
     });
 
-    it('onStepperReviseRequested is a safe no-op when findingsAnchor is not yet available', () => {
+    it('a chapter picked out of stage 4 is emitted through the EXISTING openChapter seam', () => {
+      const seen: ChapterAnchor[] = [];
+      component.openChapter.subscribe(a => seen.push(a));
+
+      component.onSpineOpenChapter({ chapterId: 'ch-7', title: 'Seven', order: 6, running: false });
+
+      expect(seen).toEqual([{ chapterId: 'ch-7', order: 6, title: 'Seven' }]);
+    });
+
+    it('spine actions are safe no-ops when the anchors are not yet available', () => {
       (component as any).findingsAnchor = undefined;
-      expect(() => component.onStepperReviseRequested()).not.toThrow();
+      (component as any).statusRowsAnchor = undefined;
+      expect(() => component.onSpineAction({ stage: 'review', action: 'open-findings' })).not.toThrow();
+      expect(() => component.onSpineAction({ stage: 'briefs', action: 'build-briefs' })).not.toThrow();
+      expect(() => component.onSpineAction({ stage: 'export', action: 'open-export' })).not.toThrow();
+    });
+  });
+
+  // ── Wave 3 / w2: the live contradiction the brief reproduced, asserted on the HOST ────────────────
+  //
+  // On a book with no chapters the retired strip reported `Structure: Done` and `Revise: Available` and
+  // offered a prominent `Build review`, while the panel one scroll below said the briefs were not built.
+  // That is the single clearest demonstration of why this wave exists, so it is pinned here as well as
+  // in the spine's own suite: it has to be dead through the real host wiring, not only in isolation.
+
+  describe('w2: an empty book contradicts nothing', () => {
+    it('shows Import as the lit stage and the review as blocked, with nothing reading done', () => {
+      component.chapters = [];
+      component.onReviewStatusChange(null);
+      component.onSummaryStatusChange(null);
+      (component as any).rebuildSpineSignals();
+      fixture.detectChanges();
+
+      const stateOf = (id: string) =>
+        fixture.debugElement.query(By.css(`[data-testid="spine-stage-${id}"]`)).nativeElement.dataset.state;
+
+      expect(stateOf('import')).toBe('not-started');
+      expect(stateOf('briefs')).toBe('blocked');
+      expect(stateOf('review')).toBe('blocked');
+      expect(stateOf('chapter-passes')).toBe('blocked');
+      expect(stateOf('export')).toBe('unavailable');
+      // The Import row is the one that opens, and it is the one that offers the action.
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-stage-body-import"]'))).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-action-import"]'))).not.toBeNull();
+      // NOTHING claims readiness anywhere in the spine.
+      const spine = fixture.debugElement.query(By.css('[data-testid="stage-spine"]')).nativeElement as HTMLElement;
+      expect(spine.querySelectorAll('[data-state="ready"]').length).toBe(0);
     });
   });
 });
@@ -777,6 +838,8 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
       language: 'he',
       hasReview: false,
       findingCount: 0,
+      openFindingCount: 0,
+      resolvedFindingCount: 0,
       lastUpdatedAt: null,
       builtWithDifferentModel: false,
       staleVsBriefs: false,
@@ -798,7 +861,7 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -934,7 +997,7 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1092,7 +1155,7 @@ describe('BookDashboardComponent threads the book language into its server calls
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1234,7 +1297,7 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1535,7 +1598,7 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {

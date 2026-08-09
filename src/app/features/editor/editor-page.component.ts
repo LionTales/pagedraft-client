@@ -137,7 +137,7 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
    * in-flight jobs on book load via {@link JobRegistryService.reattach}, so the affordance stays correct while
    * the dashboard is unmounted WITHOUT a second poller. Book-scoped: the subscription is re-created per book so
    * a job for book A can never light book B (the wrong-book guard). The status rows PUBLISH their build to the
-   * registry (track()) on start; the stepper/badge/reopen affordance READS the registry here.
+   * registry (track()) on start; the badge/reopen affordance READS the registry here.
    */
   reviewBuildRunning = false;
   /** Current subscription to the registry's per-book running flag; re-created on each book load, torn down on switch/destroy. */
@@ -309,7 +309,7 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
    * rf-f13: the per-chapter findings checklist emitted switchToReview (user clicked "View" on a finding
    * or "Back to findings"). Switch to review mode (same as any switchToReview path) AND ensure the
    * dashboard lands on the Findings sub-tab rather than whichever tab was last active.
-   * Consistent with how f04's onStepperReviseRequested() selects the Findings tab from within the
+   * Consistent with how the spine's open-findings action selects the Findings tab from within the
    * dashboard itself: here we do the same selection from the outside via the ViewChild reference.
    */
   onChecklistSwitchToReview(): void {
@@ -381,7 +381,7 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
 
   /**
    * rf-c02: (re)subscribe the "review running" affordance to the SINGLE job registry, scoped to the given
-   * book. This is the one truth the stepper/badge/reopen affordance reads; it replaces the dashboard's
+   * book. This is the one truth the badge/reopen affordance reads; it replaces the dashboard's
    * buildRunningChange @Output AND the deleted editor-owned reconcile poll. anyRunningForBook$ stays correct
    * while the dashboard is @if-destroyed (close panel / focus mode / Edit help) because the registry's own
    * reused poll keeps running and {@link JobRegistryService.reattach} (called on book load) re-discovers a

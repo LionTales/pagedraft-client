@@ -20,6 +20,7 @@ function makeStatus(overrides: Partial<BookSummaryStatusDto> = {}): BookSummaryS
     ready: false,
     lastUpdatedAt: null,
     builtWithDifferentModel: false,
+    summaryCoversBuiltChapters: false,
     activeBuildJobId: null,
     chaptersToBuild: 5,
     estimatedSeconds: 120,

@@ -1,9 +1,11 @@
 import { CommonModule } from '@angular/common';
-import { Component, ElementRef, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { BookService } from '../../core/services/book.service';
 import {
   BookProfileDto,
+  ChapterSummaryDto,
   CharacterAnalysisResult,
   StoryAnalysisResult,
   CharacterEntry,
@@ -12,24 +14,44 @@ import {
   ConflictEntry
 } from '../../core/models/book';
 import { AnalysisResultDto } from '../../core/models/analysis';
-import { ChapterAnchor } from '../../core/models/book-review';
+import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
+import { BookSummaryStatusDto } from '../../core/models/book-summary';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
 import { BookReviewState, BookReviewStatusRowComponent } from './book-review-status-row.component';
 import { BookReviewFindingsComponent } from './book-review-findings.component';
 import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
 import { CharacterRegisterComponent } from './character-register.component';
-import { FunnelStepperComponent } from './funnel-stepper.component';
+import { StageActionEvent, StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
+import { ChapterPassSignal, StageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 
 /** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
 type ReviewTab = 'findings' | 'bible';
 
 /**
+ * The spine's starting signals: everything NOT KNOWN. Deliberately all-null rather than all-zero, so the
+ * spine renders "not known yet" on first paint instead of claiming an empty book.
+ */
+function emptySpineSignals(): StageSpineSignals {
+  return {
+    chapters: null,
+    chapterCount: null,
+    chaptersWithText: null,
+    summary: null,
+    review: null,
+    summaryRunning: false,
+    reviewRunning: false,
+    exportSurfaceAvailable: false,
+  };
+}
+
+/**
  * Dashboard chrome strings, keyed for label(). This card region was originally Hebrew-only (the container
  * was hardcoded dir="rtl" and every string was a literal), which broke the book-scoped chrome rule: chrome
  * inside a book follows the BOOK language, so an English book must render English chrome. The child
- * components on this page (funnel stepper, status rows, chapter summaries, Story Bible) always honored that
+ * components on this page (the stage spine, status rows, chapter summaries, Story Bible) always honored that
  * via [bookLanguage]; only this component's own profile card did not, so an English book rendered a
  * half-Hebrew page. Hoisted to module scope rather than rebuilt per call because the template resolves
  * roughly 30 labels on every change-detection tick.
@@ -139,7 +161,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     BookStoryBibleComponent,
     BookChapterSummariesComponent,
     CharacterRegisterComponent,
-    FunnelStepperComponent,
+    StageSpineComponent,
     TierToggleComponent,
   ],
   template: `
@@ -156,25 +178,23 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
         </button>
       </header>
 
-      <!-- rf-f02: funnel stepper — the visible "editing journey" spine pinned above the status rows.
-           Fully presentational: all inputs derived from existing dashboard state so no new polls.
-           NON-BLOCKING: advisory only; never gates the rest of the UI.
-           The [dir] on the stepper itself follows bookLanguage (book-scoped chrome). -->
-      <app-funnel-stepper
+      <!-- Wave 3 / w2: THE STAGE SPINE, replacing the four-step funnel stepper outright. Five stages,
+           one state vocabulary, every state computed from a real payload the rows below already fetch
+           (no new polls). It is also the guided surface: each row explains itself, names its
+           prerequisite when blocked, and offers the next action.
+           NON-BLOCKING: advisory only; it never gates the rest of the UI.
+           The [dir] inside the spine follows bookLanguage (book-scoped chrome). -->
+      <app-stage-spine
         [bookLanguage]="bookLanguage"
-        [summaryRunning]="stepperSummaryRunning"
-        [reviewRunning]="stepperReviewRunning"
-        [summaryReady]="stepperSummaryReady"
-        [reviewReady]="stepperReviewReady"
-        [hasBriefs]="stepperHasBriefs"
-        (assessRequested)="onStepperAssessRequested()"
-        (reviseRequested)="onStepperReviseRequested()">
-      </app-funnel-stepper>
+        [signals]="spineSignals"
+        (stageAction)="onSpineAction($event)"
+        (openChapter)="onSpineOpenChapter($event)">
+      </app-stage-spine>
 
       <!-- Book-scoped status rows (wb3-c01): summary/briefs + developmental review build + status.
            A finished summary build clears the review's "build briefs first" gate, so its terminal
            event refreshes the review row. -->
-      <!-- rf-f02: anchor for the stepper CTA scroll-to. -->
+      <!-- Anchor for the spine's build-briefs action scroll-to. -->
       <div #statusRowsAnchor></div>
       <section class="card book-status-card">
         <app-book-summary-status-row
@@ -182,6 +202,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
           (summaryTerminal)="onSummaryTerminal()"
+          (statusChange)="onSummaryStatusChange($event)"
           (buildingChange)="onSummaryBuildingChange($event)">
         </app-book-summary-status-row>
         <app-book-review-status-row
@@ -189,6 +210,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
           (reviewStateChange)="onReviewStateChange($event)"
+          (statusChange)="onReviewStatusChange($event)"
           (tierChanged)="onTierChanged()">
         </app-book-review-status-row>
 
@@ -685,11 +707,24 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     .citations { font-size: var(--pd-text-caption); color: var(--pd-text-muted); margin-top: var(--pd-space-3); }
   `]
 })
-export class BookDashboardComponent implements OnInit, OnChanges {
+export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   @Input() bookId!: string;
   @Input() bookTitle: string = '';
   /** Book language (e.g. 'he', 'en'); drives the book-scoped status rows' localization + status key. */
   @Input() bookLanguage: string | null = null;
+  /**
+   * Wave 3 / w2. The book's chapters, bound from the host's already-loaded `BookDetailDto.chapters`.
+   *
+   * The spine's stage 1 (Import) and stage 4 (Chapter editing passes) are derived from these, and from
+   * nothing else: `chapterCount === 0` is `not-started` for Import and `blocked` for everything gated on
+   * it, and stage 4 renders the chapters themselves rather than a book-level tick it cannot compute. This
+   * is a BINDING of data the host already holds, deliberately not a fetch: the dashboard adding its own
+   * chapter request would make the spine's stage 1 disagree with the chapter tree beside it.
+   *
+   * Null means the host has not loaded the book yet, which the spine renders as "not known", never as
+   * "empty" - an empty book is `[]`.
+   */
+  @Input() chapters: ChapterSummaryDto[] | null = null;
 
   /**
    * wb3-f01 navigation output: bubbles a chapter-anchor click up to the host (editor-page) so it can
@@ -699,13 +734,18 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   @Output() openChapter = new EventEmitter<ChapterAnchor>();
 
   /**
-   * rf-f02: emitted when the funnel stepper's Assess (or Revise) CTA is clicked. The host
-   * (editor-page) handles it by switching to Review mode (onReviewModeChange('review')) and
-   * scrolling to the status rows anchor. The dashboard itself does not own the mode-switch —
-   * that lives in the editor's SegmentedControl — so it delegates upward via this output,
-   * reusing the EXISTING onReviewModeChange path with no new coupling.
+   * Emitted when a spine stage's action needs the review surfaces in view. The host (editor-page)
+   * handles it by switching to Review mode (onReviewModeChange('review')); the dashboard itself does not
+   * own the mode-switch, that lives in the editor's SegmentedControl, so it delegates upward via this
+   * output and reuses the EXISTING onReviewModeChange path with no new coupling.
    */
   @Output() switchToReview = new EventEmitter<void>();
+
+  /**
+   * Wave 3 / w2: the spine's Import stage asked to go to the import screen. Routing lives on the host
+   * (editor-page owns the Router and already has `goToImport()`); the dashboard only names the intent.
+   */
+  @Output() openImport = new EventEmitter<void>();
 
   /**
    * rf-c02: the "review running" affordance is NO LONGER emitted from here. It is now derived by the editor
@@ -721,7 +761,7 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   /** The hosted summary row; refreshed when a tier change moves the active model (tier-ux-rework fixes c04). */
   @ViewChild('summaryRow') summaryRow?: BookSummaryStatusRowComponent;
 
-  /** rf-f02: anchor element at the top of the status-rows section; scrolled to when a stepper CTA is clicked. */
+  /** Anchor at the top of the status-rows section; scrolled to when a spine build action is pressed. */
   @ViewChild('statusRowsAnchor') statusRowsAnchor?: ElementRef<HTMLElement>;
 
   /** rf-f04: anchor element just above the findings/bible tabs; scrolled to when the Revise CTA is clicked. */
@@ -763,10 +803,21 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   lastAnswer: AnalysisResultDto | null = null;
   citationChapterIds: string[] = [];
 
-  constructor(private bookService: BookService) {}
+  constructor(
+    private bookService: BookService,
+    /** Read ONLY for the spine's stage-4 running marks; the status rows still own their own builds. */
+    private jobRegistry: JobRegistryService,
+  ) {}
 
   ngOnInit(): void {
     this.loadProfile();
+    this.watchRunningChapters();
+    this.rebuildSpineSignals();
+  }
+
+  ngOnDestroy(): void {
+    this.runningChaptersSub?.unsubscribe();
+    this.runningChaptersSub = null;
   }
 
   /**
@@ -797,6 +848,14 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     if (contextChanged) {
       this.resetOwnState();
       this.loadProfile();
+      // The registry watch is filtered by the CURRENT bookId, so a book switch must re-scope it or the
+      // previous book's in-flight chapter runs would keep marking rows in the new book's stage 4.
+      this.watchRunningChapters();
+    }
+    // The chapter list drives stages 1 and 4 directly, so any rebinding of it (including the host's
+    // in-place mutations after a create/delete/reorder, which arrive as a new array) refreshes the spine.
+    if (contextChanged || changes['chapters']) {
+      this.rebuildSpineSignals();
     }
   }
 
@@ -835,6 +894,11 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     this.summaryBuilding = false;
     this.loading = false;
     this.refreshing = false;
+    // The two spine payloads belong to the PREVIOUS book: drop them so the spine renders "not known"
+    // until the rows answer for the new one, rather than describing book A's briefs on book B's page.
+    this.summaryStatus = null;
+    this.reviewStatus = null;
+    this.runningChapterIds = new Set<string>();
   }
 
   /**
@@ -883,6 +947,8 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   onReviewStateChange(state: BookReviewState): void {
     const wasShowing = this.showFindings;
     this.reviewState = state;
+    // The spine reads 'building' as stage 3's `running`, so it has to move with this too.
+    this.rebuildSpineSignals();
     if (this.showFindings && !wasShowing) {
       // Transitioned into a findings-bearing state: force a re-read (covers the build-just-finished case;
       // a fresh mount loads on its own ngOnChanges, but a token bump is harmless and covers re-entry).
@@ -897,6 +963,9 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   onSummaryBuildingChange(building: boolean): void {
     const wasBuilding = this.summaryBuilding;
     this.summaryBuilding = building;
+    // The spine reads this as stage 2's `running` the instant the build POST returns, rather than waiting
+    // a poll interval for `activeBuildJobId` to appear in the next status read.
+    this.rebuildSpineSignals();
     // Build just COMPLETED (true -> false): fan out to EVERY summary-derived surface so none shows stale
     // "no summary yet" for briefs that finished after it mounted (rf-f04). The bump drives the child surfaces
     // that expose a refreshSignal @Input (chapter-summaries + Story Bible) to re-fetch in place; the
@@ -923,75 +992,128 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     return this.summaryBuilding || this.reviewState === 'building';
   }
 
-  // ── rf-f02: funnel stepper inputs (derived from existing dashboard state) ─────
+  // ── Wave 3 / w2: the stage spine ────────────────────────────────────────────
 
   /**
-   * True when the book has usable chapter briefs (hasBriefs). Derived from reviewState:
-   * 'needs-summary' and 'unknown' mean no briefs; all other states mean briefs exist.
-   * The stepper uses this to show the right CTA label on the Assess step.
+   * The signals the spine renders from. Held as a FIELD and rebuilt only when one of its inputs really
+   * changes, rather than assembled in a getter: a getter would hand the spine a fresh object identity on
+   * every change-detection tick, which re-runs its derivation continuously for no reason.
    */
-  get stepperHasBriefs(): boolean {
-    return this.reviewState !== 'needs-summary' && this.reviewState !== 'unknown';
+  spineSignals: StageSpineSignals = emptySpineSignals();
+
+  /** Latest raw briefs status from the hosted summary row. The spine's whole stage 2. */
+  private summaryStatus: BookSummaryStatusDto | null = null;
+  /** Latest raw review status from the hosted review row. The spine's whole stage 3. */
+  private reviewStatus: BookReviewStatusDto | null = null;
+  /** Chapter ids with an analysis job in flight right now; the one thing stage 4 CAN know book-wide. */
+  private runningChapterIds = new Set<string>();
+  /** The job-registry subscription behind {@link runningChapterIds}. */
+  private runningChaptersSub: Subscription | null = null;
+
+  /**
+   * Rebuild {@link spineSignals}. Every field is a payload this page already has: the chapter list bound
+   * from the host, the two status DTOs the rows fetch, and the registry's in-flight chapter jobs. Nothing
+   * here is synthesized, and nothing is fetched a second time.
+   *
+   * `exportSurfaceAvailable` is false until w4 builds the export screen, which makes stage 5 render
+   * `unavailable` WITH its reason instead of a bare grey box. It is a single flag by design: w4 flips it
+   * and the stage becomes real without the spine changing.
+   */
+  private rebuildSpineSignals(): void {
+    const chapters: ChapterPassSignal[] | null = this.chapters
+      ? this.chapters
+          .slice()
+          .sort((a, b) => a.order - b.order)
+          .map(c => ({
+            chapterId: c.id,
+            title: c.title,
+            order: c.order,
+            running: this.runningChapterIds.has(c.id),
+          }))
+      : null;
+    this.spineSignals = {
+      chapters,
+      chapterCount: this.chapters ? this.chapters.length : null,
+      chaptersWithText: this.chapters ? this.chapters.filter(c => c.wordCount > 0).length : null,
+      summary: this.summaryStatus,
+      review: this.reviewStatus,
+      summaryRunning: this.summaryBuilding,
+      reviewRunning: this.reviewState === 'building',
+      exportSurfaceAvailable: false,
+    };
   }
 
   /**
-   * True when the book summary (briefs) is complete enough for the review to be built.
-   * Derived from reviewState: 'needs-summary' means no summary; 'unknown' = loading.
-   * For the stepper, summaryReady = briefs are present (reviewState not needs-summary or unknown).
+   * Track which chapters have an analysis pass in flight, so stage 4's per-chapter breakdown can mark
+   * them. `activeJobs$` is already filtered to non-terminal jobs; the chapter-scoped kinds are the ones
+   * that carry a `chapterId`, and the book filter keeps another book's run out of this book's spine.
    */
-  get stepperSummaryReady(): boolean {
-    return this.stepperHasBriefs;
+  private watchRunningChapters(): void {
+    this.runningChaptersSub?.unsubscribe();
+    this.runningChaptersSub = this.jobRegistry.activeJobs$.subscribe(jobs => {
+      const next = new Set<string>();
+      for (const job of jobs) {
+        if (job.bookId === this.bookId && job.chapterId) next.add(job.chapterId);
+      }
+      this.runningChapterIds = next;
+      this.rebuildSpineSignals();
+    });
+  }
+
+  /** The hosted summary row published a new briefs status payload. */
+  onSummaryStatusChange(status: BookSummaryStatusDto | null): void {
+    this.summaryStatus = status;
+    this.rebuildSpineSignals();
+  }
+
+  /** The hosted review row published a new review status payload. */
+  onReviewStatusChange(status: BookReviewStatusDto | null): void {
+    this.reviewStatus = status;
+    this.rebuildSpineSignals();
   }
 
   /**
-   * True when the whole-book review is ready (reviewState === 'ready').
-   * Drives Assess step: done => Revise becomes the lit next-step.
+   * A spine stage's action was pressed. The spine names the INTENT; this maps it onto the mechanisms the
+   * page already has, so no action opens a second way of doing something the status rows own.
+   *
+   *  - `open-import`    leaves the page, so it goes up to the host, which owns the Router.
+   *  - `build-briefs`   scrolls to the briefs row, which owns the build, its consent and its estimate.
+   *                     This is also the FIX offered by a `blocked` review stage, which is the point:
+   *                     the blocked row names the prerequisite AND hands the user the way to clear it.
+   *  - `build-review`   scrolls to the same status block, where the review row's build lives.
+   *  - `open-findings`  selects the Findings tab and scrolls to the ledger.
+   *  - `open-export`    unreachable until w4 sets `exportSurfaceAvailable`; it is handled here so the
+   *                     stage lights up the moment w4 flips the flag.
    */
-  get stepperReviewReady(): boolean {
-    return this.reviewState === 'ready';
+  onSpineAction(event: StageActionEvent): void {
+    switch (event.action) {
+      case 'open-import':
+        this.openImport.emit();
+        return;
+      case 'build-briefs':
+      case 'build-review':
+        this.switchToReview.emit();
+        this.scrollToStatusRows();
+        return;
+      case 'open-findings':
+        this.switchToReview.emit();
+        this.reviewTab = 'findings';
+        this.scrollToFindings();
+        return;
+      case 'open-export':
+        // w4 owns the destination. Nothing is claimed here until it exists.
+        return;
+    }
   }
 
-  /**
-   * True while a summary job is running (from the summary row's buildingChange output).
-   * The registry also tracks it but the dashboard already has the flag directly.
-   */
-  get stepperSummaryRunning(): boolean {
-    return this.summaryBuilding;
-  }
-
-  /**
-   * True while a review job is running (reviewState === 'building').
-   */
-  get stepperReviewRunning(): boolean {
-    return this.reviewState === 'building';
-  }
-
-  /**
-   * rf-f02: the funnel stepper's Assess (or Revise) CTA was clicked. Bubble up to the host
-   * (editor-page) via @Output() switchToReview so the editor can call onReviewModeChange('review')
-   * and scroll to the status rows. The dashboard is already in review mode when this component is
-   * mounted, so the primary effect is the scroll; the editor's mode-switch is a no-op if already
-   * in review mode but is safe to re-emit.
-   */
-  onStepperAssessRequested(): void {
-    this.switchToReview.emit();
-    this.scrollToStatusRows();
-  }
-
-  /**
-   * rf-f04: Revise CTA clicked — select the Findings sub-tab and scroll to the findings ledger anchor.
-   * This honors the CTA label ("Go to findings" / "עבור לממצאים") rather than just scrolling to the
-   * status-rows header like the Assess CTA does.
-   */
-  onStepperReviseRequested(): void {
-    this.switchToReview.emit();
-    this.reviewTab = 'findings';
-    this.scrollToFindings();
+  /** A chapter was picked out of stage 4's per-chapter breakdown: open it, via the existing seam. */
+  onSpineOpenChapter(chapter: ChapterPassSignal): void {
+    this.openChapter.emit({ chapterId: chapter.chapterId, order: chapter.order, title: chapter.title });
   }
 
   /**
    * Scroll the status-rows anchor into view so the user sees the summary/review rows after
-   * clicking the stepper CTA. Uses the #statusRowsAnchor template ref.
+   * pressing a spine build action. Uses the #statusRowsAnchor template ref.
    */
   private scrollToStatusRows(): void {
     this.statusRowsAnchor?.nativeElement?.scrollIntoView({ behavior: 'smooth', block: 'start' });

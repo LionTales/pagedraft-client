@@ -45,9 +45,29 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
    * the richer summary-status enum the row does not expose directly.
    */
   @Output() buildingChange = new EventEmitter<boolean>();
+  /**
+   * Wave 3 / w2. The raw status DTO, every time it changes (including to null on a context reset).
+   *
+   * The stage spine derives stage 2 from the WHOLE payload - `behind` with its magnitude (`staleCount`)
+   * and its reason (`summaryCoversBuiltChapters` / `builtWithDifferentModel`) - so it cannot be fed from
+   * the coarse `bookSummaryState` enum or from `buildingChange`, both of which throw that away. This row
+   * is already the single fetcher of the payload, so the spine reads it here rather than issuing a
+   * second poll of the same endpoint.
+   */
+  @Output() statusChange = new EventEmitter<BookSummaryStatusDto | null>();
+
+  /** Backing field for {@link bookSummaryStatus}; mutated only via the setter so the change emits. */
+  private _bookSummaryStatus: BookSummaryStatusDto | null = null;
 
   /** Latest book-summary status read for the current book (null while loading / no book). */
-  bookSummaryStatus: BookSummaryStatusDto | null = null;
+  get bookSummaryStatus(): BookSummaryStatusDto | null {
+    return this._bookSummaryStatus;
+  }
+  set bookSummaryStatus(value: BookSummaryStatusDto | null) {
+    if (this._bookSummaryStatus === value) return;
+    this._bookSummaryStatus = value;
+    this.statusChange.emit(value);
+  }
   /** Backing field for {@link bookSummaryBuilding}; mutated only via the setter so the change emits. */
   private _bookSummaryBuilding = false;
   /**

@@ -213,11 +213,16 @@
             </app-chapter-findings-checklist>
           }
         } @else if (reviewMode === 'review' && bookId && book) {
+          <!-- Wave 3 / w2: [chapters] feeds the stage spine's Import and Chapter-editing-passes stages
+               from the book this page has ALREADY loaded, so the spine cannot disagree with the chapter
+               tree beside it and no second request is made for the same list. -->
           <app-book-dashboard
             [bookId]="bookId"
             [bookTitle]="book.title"
             [bookLanguage]="book.language"
+            [chapters]="book.chapters"
             (openChapter)="onOpenChapterFromDashboard($event)"
+            (openImport)="goToImport()"
             (switchToReview)="onReviewModeChange('review')">
           </app-book-dashboard>
         }

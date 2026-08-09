@@ -34,6 +34,7 @@ function makeBookSummaryStatus(
     ready: true,
     lastUpdatedAt: new Date().toISOString(),
     builtWithDifferentModel: false,
+    summaryCoversBuiltChapters: true,
     activeBuildJobId: null,
     chaptersToBuild: 0,
     estimatedSeconds: 0,
