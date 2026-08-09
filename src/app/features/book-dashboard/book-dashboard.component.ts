@@ -24,28 +24,11 @@ import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
 import { CharacterRegisterComponent } from './character-register.component';
 import { StageActionEvent, StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
-import { ChapterPassSignal, StageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
+import { ChapterPassSignal, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 
 /** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
 type ReviewTab = 'findings' | 'bible';
-
-/**
- * The spine's starting signals: everything NOT KNOWN. Deliberately all-null rather than all-zero, so the
- * spine renders "not known yet" on first paint instead of claiming an empty book.
- */
-function emptySpineSignals(): StageSpineSignals {
-  return {
-    chapters: null,
-    chapterCount: null,
-    chaptersWithText: null,
-    summary: null,
-    review: null,
-    summaryRunning: false,
-    reviewRunning: false,
-    exportSurfaceAvailable: false,
-  };
-}
 
 /**
  * Dashboard chrome strings, keyed for label(). This card region was originally Hebrew-only (the container
@@ -999,7 +982,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    * changes, rather than assembled in a getter: a getter would hand the spine a fresh object identity on
    * every change-detection tick, which re-runs its derivation continuously for no reason.
    */
-  spineSignals: StageSpineSignals = emptySpineSignals();
+  spineSignals: StageSpineSignals = emptyStageSpineSignals();
 
   /** Latest raw briefs status from the hosted summary row. The spine's whole stage 2. */
   private summaryStatus: BookSummaryStatusDto | null = null;

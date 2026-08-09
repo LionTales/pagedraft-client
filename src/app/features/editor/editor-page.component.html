@@ -46,18 +46,26 @@
               <button type="button" class="dir-btn" title="Right-to-left (RTL)" (click)="setSelectionRtl()">RTL</button>
               <button type="button" class="dir-btn" title="Left-to-right (LTR)" (click)="setSelectionLtr()">LTR</button>
             </span>
+            <!-- Wave 3 / w3: the COMPACT stage spine, shown exactly when the full spine is off screen
+                 (panel closed, focus mode, or Edit help). It is where the two retired chrome dots' running
+                 signal now lives, in the product's own stage vocabulary instead of a bespoke pulse. It sits
+                 BEFORE the focus button, which is unchanged. -->
+            @if (!fullSpineVisible) {
+              <app-stage-spine
+                class="status-spine"
+                density="compact"
+                [bookLanguage]="book?.language ?? null"
+                [signals]="spineSignals">
+              </app-stage-spine>
+            }
             <button
               type="button"
               class="focus-btn"
               [class.active]="focusMode"
-              [class.review-running]="reviewBuildRunning"
               [attr.aria-pressed]="focusMode"
-              [title]="reviewBuildRunning ? focusModeLabel + ' · ' + reviewRunningLabel : focusModeLabel"
+              [title]="focusModeLabel"
               (click)="toggleFocusMode()">
               {{ focusModeLabel }}
-              @if (reviewBuildRunning) {
-                <span class="review-running-dot" aria-hidden="true"></span>
-              }
             </button>
             <button type="button" class="save-btn" [disabled]="!hasPendingChanges || isSaving" (click)="saveCurrentDocument()">שמור</button>
             <button type="button" class="back-btn" (click)="goBackToBooks()">חזרה לספרים</button>
@@ -212,7 +220,7 @@
               (switchToReview)="onChecklistSwitchToReview()">
             </app-chapter-findings-checklist>
           }
-        } @else if (reviewMode === 'review' && bookId && book) {
+        } @else if (fullSpineVisible && bookId && book) {
           <!-- Wave 3 / w2: [chapters] feeds the stage spine's Import and Chapter-editing-passes stages
                from the book this page has ALREADY loaded, so the spine cannot disagree with the chapter
                tree beside it and no second request is made for the same list. -->
@@ -229,18 +237,27 @@
       </div>
     </aside>
     } @else if (!focusMode) {
-      <button
-        type="button"
-        class="review-reopen"
-        [class.review-running]="reviewBuildRunning"
-        [attr.aria-label]="reviewBuildRunning ? reviewPanelTitle + ' · ' + reviewRunningLabel : reviewPanelTitle"
-        [title]="reviewBuildRunning ? reviewPanelTitle + ' · ' + reviewRunningLabel : reviewPanelTitle"
-        (click)="openReviewPanel()">
-        <span class="review-reopen-label">{{ reviewPanelTitle }}</span>
-        @if (reviewBuildRunning) {
-          <span class="review-running-dot" aria-hidden="true"></span>
+      <div class="review-reopen-zone">
+        <button
+          type="button"
+          class="review-reopen"
+          [attr.aria-label]="reviewPanelTitle"
+          [title]="reviewPanelTitle"
+          (click)="openReviewPanel()">
+          <span class="review-reopen-label">{{ reviewPanelTitle }}</span>
+        </button>
+        <!-- With the panel closed AND no chapter open there is no editor status bar, so the compact spine
+             mounts here instead. The two placements are mutually exclusive by this guard, which is what
+             keeps the running signal in exactly ONE place on this route. -->
+        @if (!selectedChapterId) {
+          <app-stage-spine
+            class="reopen-spine"
+            density="compact"
+            [bookLanguage]="book?.language ?? null"
+            [signals]="spineSignals">
+          </app-stage-spine>
         }
-      </button>
+      </div>
     }
   </div>
   <!-- Wave 1d: the analysis run-progress dialog. A CENTRED MODAL while the run is live (c03): the page

@@ -11,7 +11,7 @@ import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisService } from '../../core/services/analysis.service';
-import { JobRegistryService } from '../../core/services/job-registry.service';
+import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { ReviseContextService } from '../../core/services/revise-context.service';
 import { BookDetailDto, ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
 import { ChapterAnchor } from '../../core/models/book-review';
@@ -26,6 +26,8 @@ import {
   RunDialogMinimizeEvent,
 } from '../../shared/analysis-run-dialog/analysis-run-dialog.component';
 import { flyToActivityCenter } from '../../shared/analysis-run-dialog/minimize-flight';
+import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
+import { StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { LanguageIssue } from '../../core/models/language-engine';
 import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-analysis';
@@ -53,6 +55,7 @@ import { createElement, classList, EventHandler } from '@syncfusion/ej2-base';
     SegmentedControlComponent,
     ImportHandoffCardComponent,
     AnalysisRunDialogComponent,
+    StageSpineComponent,
   ],
   providers: [ToolbarService],
   templateUrl: './editor-page.component.html',
@@ -129,19 +132,25 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
   /** ReviewPanel open-state remembered when entering focus mode, so exiting restores it exactly. */
   private reviewPanelOpenBeforeFocus = true;
 
-  /**
-   * rf-c02: true while a whole-book build (summary briefs OR developmental review) is running FOR THE CURRENT
-   * BOOK. Now DERIVED from the single job registry ({@link JobRegistryService.anyRunningForBook$}) rather than
-   * from the dashboard's buildRunningChange @Output + an editor-owned reconcile poll (both deleted). The
-   * registry survives the dashboard being @if-destroyed (close panel / focus mode / Edit help) and re-discovers
-   * in-flight jobs on book load via {@link JobRegistryService.reattach}, so the affordance stays correct while
-   * the dashboard is unmounted WITHOUT a second poller. Book-scoped: the subscription is re-created per book so
-   * a job for book A can never light book B (the wrong-book guard). The status rows PUBLISH their build to the
-   * registry (track()) on start; the badge/reopen affordance READS the registry here.
-   */
-  reviewBuildRunning = false;
-  /** Current subscription to the registry's per-book running flag; re-created on each book load, torn down on switch/destroy. */
-  private reviewBuildRunningSub: Subscription | null = null;
+  // ── Wave 3 / w3: the compact stage spine, and the home the two chrome dots retired into ─────────
+  //
+  // WHAT MOVED. rf-c02 hung a bespoke pulsing dot on two unrelated controls (the focus toggle and the
+  // panel-reopen button) so a whole-book build stayed visible while the dashboard was @if-destroyed. Both
+  // dots are gone (Q12b). The signal did not go with them: it now renders as the `running` state of the
+  // stage spine, which is the ONE surface that speaks the product's stage vocabulary, and this route shows
+  // the COMPACT density of it exactly when the full spine is off screen - panel closed, focus mode, or
+  // Edit-help mode. Those are the same three cases the dots existed for, which is why the rf-c02 contracts
+  // (survives unmount, book-scoped, one reattach per load) are preserved and re-asserted on the spine.
+  //
+  // WHAT IT READS. The same single job registry, still the only truth, but PER KIND rather than as one
+  // "something is running" flag: a briefs build and a review build are different stages, and one flag
+  // lighting both would claim a stage is running that is not.
+
+  /** The compact spine's signals. A FIELD so the spine gets a stable identity per real change. */
+  spineSignals: StageSpineSignals = emptyStageSpineSignals();
+  /** The registry's latest active-job snapshot. Filtered by the CURRENT bookId at derivation time, which
+   *  is the wrong-book guard: a job for book A cannot light book B because it is never selected. */
+  private activeJobsSnapshot: TrackedJob[] = [];
 
   // ── ReviewPanel resize (draggable inline-start gutter) ─────────────────────
   /** Default right-panel width (px). Raised from the old fixed 320 so the scorecard fits out of the box. */
@@ -374,30 +383,59 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
     return this.reviewPanelIsHebrew ? 'סגור' : 'Close';
   }
 
-  /** Localized accessible label for the "a whole-book build is running" affordance (he default). */
-  get reviewRunningLabel(): string {
-    return this.reviewPanelIsHebrew ? 'סקירה רצה' : 'Review running';
+  /**
+   * Whether the FULL spine is on screen right now. This getter is the single authority for that question:
+   * the template renders the book dashboard (which hosts the full spine) from it, and renders the compact
+   * spine from its negation, so the two densities cannot both be mounted and cannot both be absent. That
+   * is the handoff Q1-D asks for, expressed as one expression rather than two that agree today.
+   *
+   * The three cases where it is false are precisely the three the retired dots existed for: the panel is
+   * closed, focus mode has hidden the panel, or the panel is showing Edit help instead of the review.
+   * Focus mode hiding the full spine is CORRECT, not a bug (owner, 2026-08-09): the compact spine in the
+   * editor's own status bar is the surface that remains, and the focus button and mode are untouched.
+   */
+  get fullSpineVisible(): boolean {
+    return this.reviewPanelOpen
+      && !this.focusMode
+      && !this.showHandoffCard
+      && this.reviewMode === 'review'
+      && !!this.bookId
+      && !!this.book;
   }
 
   /**
-   * rf-c02: (re)subscribe the "review running" affordance to the SINGLE job registry, scoped to the given
-   * book. This is the one truth the badge/reopen affordance reads; it replaces the dashboard's
-   * buildRunningChange @Output AND the deleted editor-owned reconcile poll. anyRunningForBook$ stays correct
-   * while the dashboard is @if-destroyed (close panel / focus mode / Edit help) because the registry's own
-   * reused poll keeps running and {@link JobRegistryService.reattach} (called on book load) re-discovers a
-   * build already in flight for a freshly-loaded book. Re-created per book so a job for book A can never light
-   * book B — the wrong-book guard. distinctUntilChanged already lives inside anyRunningForBook$.
+   * Rebuild {@link spineSignals} from payloads this page ALREADY holds: the loaded book's chapter list and
+   * the registry's active jobs. Nothing is fetched for the spine.
+   *
+   * The two book-level statuses are deliberately `null` here. This page does not hold them - the book
+   * dashboard's status rows do - and fetching them for a compact widget would be the "fetch more" the
+   * standing rule forbids. The compact density renders those two stages as an honest "not known here"
+   * unless a tracked build raises one to `running`, which is the signal this route must not lose.
    */
-  private subscribeReviewBuildRunning(bookId: string): void {
-    this.reviewBuildRunningSub?.unsubscribe();
-    this.reviewBuildRunningSub = this.jobRegistry
-      .anyRunningForBook$(bookId)
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(running => {
-        // Guard against a late emit after the user switched books: only the current book drives the flag.
-        if (this.bookId !== bookId) return;
-        this.reviewBuildRunning = running;
-      });
+  private rebuildSpineSignals(): void {
+    const jobs = this.activeJobsSnapshot.filter(j => j.bookId === this.bookId);
+    const chapters = this.book?.chapters ?? null;
+    const runningChapterIds = new Set(jobs.map(j => j.chapterId).filter((id): id is string => !!id));
+    this.spineSignals = {
+      chapters: chapters
+        ? chapters
+            .slice()
+            .sort((a, b) => a.order - b.order)
+            .map(c => ({
+              chapterId: c.id,
+              title: c.title,
+              order: c.order,
+              running: runningChapterIds.has(c.id),
+            }))
+        : null,
+      chapterCount: chapters ? chapters.length : null,
+      chaptersWithText: chapters ? chapters.filter(c => c.wordCount > 0).length : null,
+      summary: null,
+      review: null,
+      summaryRunning: jobs.some(j => j.kind === 'summary'),
+      reviewRunning: jobs.some(j => j.kind === 'review'),
+      exportSurfaceAvailable: false,
+    };
   }
 
   /** Close the ReviewPanel (header ✕). The registry-derived affordance is unaffected by mount state. */
@@ -680,6 +718,14 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
       });
     }
 
+    // Wave 3 / w3: ONE subscription to the registry for the whole page lifetime. It is not re-created per
+    // book because it is not scoped per book: the derivation filters on the CURRENT bookId every time it
+    // runs, so the wrong-book guard is structural rather than a race between a teardown and a late emit.
+    this.jobRegistry.activeJobs$.pipe(takeUntil(this.destroy$)).subscribe(jobs => {
+      this.activeJobsSnapshot = jobs;
+      this.rebuildSpineSignals();
+    });
+
     this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
       const previousBookId = this.bookId;
       this.bookId = params['bookId'] ?? null;
@@ -704,20 +750,19 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
           this.importedParts = null;
         }
       }
-      // rf-c02: a book switch invalidates the previous book's whole-book-build affordance (it is per-book).
-      // Clear the stale flag and tear down the previous book's registry subscription at once, so a job for the
-      // OLD book can never light the new one before the new subscription re-establishes the true state.
-      this.reviewBuildRunning = false;
-      this.reviewBuildRunningSub?.unsubscribe();
-      this.reviewBuildRunningSub = null;
+      // rf-c02, carried into w3: a book SWITCH invalidates the previous book's spine outright - its chapters
+      // AND its running state are per-book. Dropping the stale book and recomputing at once means a job for
+      // the OLD book can never light the new one, even before the new payload lands. Guarded on a real id
+      // change so a same-book params re-emit never blanks the loaded book out from under the chapter tree.
+      if (this.bookId !== previousBookId) {
+        this.book = null;
+        this.rebuildSpineSignals();
+      }
       if (this.bookId) {
-        // Derive the "review running" affordance from the single job registry, scoped to THIS book. Book-scoped
-        // (not book+language) so it is set the instant the id is known — the registry survives the dashboard
-        // being unmounted, so no editor-owned poll is needed.
-        this.subscribeReviewBuildRunning(this.bookId);
         this.syncService.connect().then(() => this.syncService.joinBook(this.bookId!));
         this.bookService.getById(this.bookId).subscribe(b => {
           this.book = b;
+          this.rebuildSpineSignals();
           this.rebuildReviewModeOptions();
           // Re-discover any build already in flight for the freshly-loaded book (started in another tab/session,
           // or still running after a browser refresh) and re-track it in the registry. THIS is what covers the
@@ -886,8 +931,6 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
     if (this.bookId) this.syncService.leaveBook(this.bookId);
     if (this._scrollSettleTimer) clearTimeout(this._scrollSettleTimer);
     this.destroyCustomToolbar();
-    this.reviewBuildRunningSub?.unsubscribe();
-    this.reviewBuildRunningSub = null;
     this.destroy$.next();
     this.destroy$.complete();
   }

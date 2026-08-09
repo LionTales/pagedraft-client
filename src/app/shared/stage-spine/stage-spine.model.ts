@@ -127,6 +127,27 @@ export interface StageSpineSignals {
   chaptersWithText: number | null;
 }
 
+/**
+ * Signals with NOTHING known. The starting value for every host: each stage renders `unknown` (or, for the
+ * two that need no signal, its honest constant) rather than a guess.
+ *
+ * Shared rather than re-declared per host on purpose. Four surfaces now mount a spine, and a per-host copy
+ * of this literal is how one of them eventually seeds `chaptersWithText: 0` instead of `null` and quietly
+ * turns "not known yet" into "no text", which is the exact class of claim the wave exists to remove.
+ */
+export function emptyStageSpineSignals(): StageSpineSignals {
+  return {
+    chapters: null,
+    chapterCount: null,
+    chaptersWithText: null,
+    summary: null,
+    review: null,
+    summaryRunning: false,
+    reviewRunning: false,
+    exportSurfaceAvailable: false,
+  };
+}
+
 /** The derived, language-free status of one stage. Copy is resolved separately, per book language. */
 export interface StageStatus {
   id: SpineStageId;

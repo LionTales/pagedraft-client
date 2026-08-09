@@ -1,14 +1,18 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { BookService } from '../../core/services/book.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookDto } from '../../core/models/book';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
+import { StageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [RouterLink, FormsModule],
+  imports: [RouterLink, FormsModule, StageSpineComponent],
   template: `
     <div class="dashboard" [attr.dir]="dir">
       <header class="dash-header">
@@ -44,6 +48,15 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
               <a [routerLink]="['/books', b.id]">{{ b.title }}</a>
               <span class="meta">{{ b.author || label('noAuthor') }} &middot; {{ relativeTime(b.updatedAt, b.language) }}</span>
             </div>
+            <!-- Wave 3 / w3: the COMPACT spine, one per book. Everything it renders comes from the single
+                 books-list response this page already made plus the in-memory job registry; there is no
+                 per-row request, and where a stage cannot be computed from that it says so rather than
+                 fetching. Language follows THE BOOK, exactly as the title and timestamp above it do. -->
+            <app-stage-spine
+              density="compact"
+              [bookLanguage]="b.language"
+              [signals]="spineSignalsFor(b)">
+            </app-stage-spine>
             <div class="book-actions">
               <button type="button" class="pd-btn pd-btn-ghost" (click)="openBook(b.id)">{{ label('open') }}</button>
               <button type="button" class="pd-btn pd-btn-ghost" (click)="goToImport(b.id)">{{ label('importDocx') }}</button>
@@ -102,6 +115,12 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
       gap: var(--pd-space-3);
       flex-wrap: wrap;
     }
+    /* The compact spine is advisory chrome inside the row: it never competes with the row's own actions
+       for width, and it carries its own [dir] because it follows the BOOK rather than this page. */
+    .book-list li app-stage-spine {
+      display: block;
+      max-inline-size: 100%;
+    }
     .btn-delete {
       color: var(--pd-cut);
       border-color: var(--pd-cut-border);
@@ -150,7 +169,7 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
     }
   `]
 })
-export class DashboardComponent implements OnInit {
+export class DashboardComponent implements OnInit, OnDestroy {
   books: BookDto[] = [];
   showCreateForm = false;
   newBookTitle = '';
@@ -219,10 +238,101 @@ export class DashboardComponent implements OnInit {
     return formatRelativeTime(iso, lang === 'he' ? 'he' : 'en');
   }
 
-  constructor(private bookService: BookService, private router: Router) {}
+  // ── Wave 3 / w3: the compact stage spine, one per book row ────────────────────────────────────
+  //
+  // WHAT COMPACT SHOWS HERE, AND WHY IT IS NOT MORE. The books list makes exactly ONE request
+  // (`GET /api/books`) and this todo did not add a second. That payload carries `chapterCount` and
+  // `chaptersWithTextCount` (Wave 3 / M1), which is the whole of stage 1 and, when a book has no
+  // chapters, the honest `blocked` on the three stages that need one. It carries nothing about the
+  // briefs or the review, and asking would cost one status request PER ROW - so those stages render a
+  // hollow pip that says "not known here". Showing less is the rule; guessing and fetching are both
+  // ruled out.
+  //
+  // The one thing that legitimately upgrades a row past that is the JOB REGISTRY, which is an in-memory
+  // view-model of builds this client already knows about and costs no request at all. It can only ever
+  // say "running", never "not running": a book with no tracked job stays at "not known here" rather
+  // than being claimed idle. `reattach` is deliberately NOT called from this page - it would fan out
+  // four reads per book, which is exactly the N-per-row cost this design exists to avoid.
+
+  /** Signals per book id, rebuilt only when the list or the set of running jobs changes. */
+  private spineSignals = new Map<string, StageSpineSignals>();
+  /**
+   * Book ids with a build in flight right now, PER KIND. Two sets rather than one "something is running"
+   * flag on purpose: a briefs build and a review build are different stages, and lighting both from one
+   * flag would claim a stage is running that is not.
+   */
+  private runningBriefs = new Set<string>();
+  private runningReview = new Set<string>();
+  private jobsSub: Subscription | null = null;
+
+  constructor(
+    private bookService: BookService,
+    private router: Router,
+    private jobRegistry: JobRegistryService,
+  ) {}
 
   ngOnInit(): void {
-    this.bookService.getAll().subscribe(list => this.books = list);
+    this.bookService.getAll().subscribe(list => {
+      this.books = list;
+      this.rebuildSpineSignals();
+    });
+    // No request: activeJobs$ is the registry's in-memory view-model of jobs already being tracked.
+    this.jobsSub = this.jobRegistry.activeJobs$.subscribe(jobs => {
+      const briefs = new Set<string>();
+      const review = new Set<string>();
+      for (const job of jobs) {
+        if (job.kind === 'summary') briefs.add(job.bookId);
+        if (job.kind === 'review') review.add(job.bookId);
+      }
+      this.runningBriefs = briefs;
+      this.runningReview = review;
+      this.rebuildSpineSignals();
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.jobsSub?.unsubscribe();
+    this.jobsSub = null;
+  }
+
+  /**
+   * Rebuild every row's signals. Held in a MAP rather than assembled in the template getter, so a row
+   * hands the spine a stable object identity across change-detection ticks instead of a fresh one that
+   * would re-run the derivation continuously.
+   */
+  private rebuildSpineSignals(): void {
+    const next = new Map<string, StageSpineSignals>();
+    for (const b of this.books) {
+      next.set(b.id, {
+        // No chapter list on this surface, and none is fetched: stage 4 makes no claim at all.
+        chapters: null,
+        chapterCount: b.chapterCount,
+        chaptersWithText: b.chaptersWithTextCount,
+        // The two book-level statuses are not on this payload and are not worth a request per row.
+        summary: null,
+        review: null,
+        // The registry can only raise these, never lower them: see the note above.
+        summaryRunning: this.runningBriefs.has(b.id),
+        reviewRunning: this.runningReview.has(b.id),
+        // No export screen in this build of the client (w4 builds it).
+        exportSurfaceAvailable: false,
+      });
+    }
+    this.spineSignals = next;
+  }
+
+  /** This row's spine signals. Never null once the list has landed; an empty fallback keeps a race safe. */
+  spineSignalsFor(book: BookDto): StageSpineSignals {
+    return this.spineSignals.get(book.id) ?? {
+      chapters: null,
+      chapterCount: null,
+      chaptersWithText: null,
+      summary: null,
+      review: null,
+      summaryRunning: false,
+      reviewRunning: false,
+      exportSurfaceAvailable: false,
+    };
   }
 
   cancelCreate(): void {
@@ -258,6 +368,7 @@ export class DashboardComponent implements OnInit {
     this.bookService.delete(book.id).subscribe({
       next: () => {
         this.books = this.books.filter(b => b.id !== book.id);
+        this.rebuildSpineSignals();
         this.deletingId = null;
       },
       error: () => { this.deletingId = null; }

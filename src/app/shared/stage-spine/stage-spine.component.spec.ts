@@ -447,4 +447,145 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       expect(behind).toContain('rebuild');
     });
   });
+
+  // ── THE COMPACT DENSITY (Wave 3 / w3) ─────────────────────────────────────────────────────────────
+  //
+  // Compact is a DENSITY of this component, not a second component: same derivation, same state
+  // vocabulary, same copy module with the same language argument. What it may do differently is show
+  // LESS - and these tests pin exactly how much less, and that the "less" is stated honestly rather than
+  // guessed, because that is the rule the books list would otherwise break by fetching per row.
+
+  describe('the compact density', () => {
+    /** Render compact. Same inputs as the full density plus the density switch. */
+    function renderCompact(next: StageSpineSignals, bookLanguage: string | null = 'he'): void {
+      fixture.componentRef.setInput('density', 'compact');
+      fixture.componentRef.setInput('bookLanguage', bookLanguage);
+      fixture.componentRef.setInput('signals', next);
+      fixture.detectChanges();
+    }
+
+    function compactRoot(): HTMLElement {
+      return fixture.debugElement.query(By.css('[data-testid="stage-spine-compact"]')).nativeElement as HTMLElement;
+    }
+
+    function pip(id: string): HTMLElement {
+      return fixture.debugElement.query(By.css(`[data-testid="spine-compact-pip-${id}"]`)).nativeElement as HTMLElement;
+    }
+
+    function summaryLine(): string {
+      return (fixture.debugElement.query(By.css('[data-testid="spine-compact-summary"]'))
+        .nativeElement as HTMLElement).textContent!.trim();
+    }
+
+    it('renders the five stages as pips, in canonical order, and NOT the full rows', () => {
+      renderCompact(healthyBook());
+      const pips = fixture.debugElement.queryAll(By.css('[data-testid^="spine-compact-pip-"]'));
+      expect(pips.length).toBe(5);
+      expect(pips.map(p => (p.nativeElement as HTMLElement).dataset['testid']!.replace('spine-compact-pip-', '')))
+        .toEqual([...SPINE_STAGE_ORDER]);
+      // The full density must not be mounted too: one spine, one indicator.
+      expect(fixture.debugElement.query(By.css('[data-testid="stage-spine"]'))).toBeNull();
+    });
+
+    it('drives stage 1 from the BOOKS-LIST counts alone, with no chapter list at all', () => {
+      // Exactly what GET /api/books gives a row: two numbers and nothing else.
+      renderCompact(signals({ chapters: null, chapterCount: 5, chaptersWithText: 5 }));
+      expect(pip('import').dataset['state']).toBe('ready');
+
+      renderCompact(signals({ chapters: null, chapterCount: 0, chaptersWithText: 0 }));
+      expect(pip('import').dataset['state']).toBe('not-started');
+      // And an empty book still says the three dependent stages cannot start yet. That is computed, not
+      // assumed: with zero chapters a build has nothing to read.
+      expect(pip('briefs').dataset['state']).toBe('blocked');
+      expect(pip('review').dataset['state']).toBe('blocked');
+      expect(pip('chapter-passes').dataset['state']).toBe('blocked');
+    });
+
+    it('says NOT KNOWN HERE for a stage the surface has no signal for, in both languages', () => {
+      // A books-list row: chapters counted, briefs and review never fetched.
+      const listRow = signals({ chapters: null, chapterCount: 5, chaptersWithText: 5 });
+
+      renderCompact(listRow, 'he');
+      expect(pip('briefs').dataset['state']).toBe('unknown');
+      expect(pip('briefs').textContent).toContain('לא ידוע מכאן');
+      // It must NOT claim the stage is loading: on this surface nothing further is coming.
+      expect(pip('briefs').textContent).not.toContain('נטען');
+      // And it must never invent a settled state.
+      expect(pip('briefs').textContent).not.toContain(STATE_LABELS['ready'].he);
+      expect(pip('briefs').textContent).not.toContain(STATE_LABELS['not-started'].he);
+
+      renderCompact(listRow, 'en');
+      expect(pip('briefs').textContent).toContain('Not known here');
+      expect(pip('briefs').textContent).not.toContain('Loading');
+      expect(pip('briefs').textContent).not.toContain(STATE_LABELS['ready'].en);
+    });
+
+    it('carries every pip full stage name and state for assistive technology, never an abbreviation', () => {
+      renderCompact(healthyBook(), 'he');
+      for (const id of SPINE_STAGE_ORDER) {
+        expect(pip(id).textContent).toContain(STAGE_NAMES[id].he);
+      }
+      // Nothing in the compact density carries a tooltip either: the 2.6 rule holds at both densities.
+      expect(compactRoot().querySelectorAll('[title]').length).toBe(0);
+    });
+
+    it('names the FOCUS stage in its one line of text when nothing is running, in both languages', () => {
+      const empty = signals({ chapters: [], chapterCount: 0, chaptersWithText: 0 });
+
+      renderCompact(empty, 'he');
+      expect(summaryLine()).toContain(STAGE_NAMES['import'].he);
+      expect(summaryLine()).toContain(STATE_LABELS['not-started'].he);
+
+      renderCompact(empty, 'en');
+      expect(summaryLine()).toContain(STAGE_NAMES['import'].en);
+      expect(summaryLine()).toContain(STATE_LABELS['not-started'].en);
+    });
+
+    it('a RUNNING stage takes over the line, even when an earlier stage also wants attention', () => {
+      // Stage 1 is not-started (chapters exist, none has text) AND a briefs build is in flight. The
+      // running build wins: carrying that signal on every route is this density's whole job.
+      renderCompact(signals({
+        chapters: chapters(3), chapterCount: 3, chaptersWithText: 0, summaryRunning: true,
+      }), 'he');
+      expect(pip('briefs').dataset['state']).toBe('running');
+      expect(summaryLine()).toContain('בונה עכשיו');
+      expect(summaryLine()).toContain(STAGE_NAMES['briefs'].he);
+
+      renderCompact(signals({
+        chapters: chapters(3), chapterCount: 3, chaptersWithText: 0, reviewRunning: true,
+      }), 'en');
+      expect(summaryLine()).toContain('Building now');
+      expect(summaryLine()).toContain(STAGE_NAMES['review'].en);
+    });
+
+    it('mirrors with the BOOK language, not with the surface it is mounted on', () => {
+      renderCompact(healthyBook(), 'he');
+      expect(compactRoot().getAttribute('dir')).toBe('rtl');
+      renderCompact(healthyBook(), 'en');
+      expect(compactRoot().getAttribute('dir')).toBe('ltr');
+      // Null falls back to Hebrew, the primary language - never to the caller's locale.
+      renderCompact(healthyBook(), null);
+      expect(compactRoot().getAttribute('dir')).toBe('rtl');
+    });
+
+    it('is presentational: no buttons, so it cannot trap a row or a bar that owns its own controls', () => {
+      renderCompact(signals({ chapters: [], chapterCount: 0, chaptersWithText: 0 }));
+      expect(compactRoot().querySelectorAll('button').length).toBe(0);
+      expect(compactRoot().querySelectorAll('a').length).toBe(0);
+    });
+
+    it('uses no em-dash and no en-dash, in either language', () => {
+      for (const lang of ['he', 'en']) {
+        for (const seed of [
+          signals({ chapters: null, chapterCount: 0, chaptersWithText: 0 }),
+          signals({ chapters: null, chapterCount: 5, chaptersWithText: 5 }),
+          signals({ chapters: chapters(3), chapterCount: 3, chaptersWithText: 3, summaryRunning: true }),
+          healthyBook(),
+        ]) {
+          renderCompact(seed, lang);
+          expect(compactRoot().textContent ?? '').not.toMatch(/[–—]/);
+        }
+      }
+    });
+  });
 });

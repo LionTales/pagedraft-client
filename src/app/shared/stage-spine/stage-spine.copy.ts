@@ -232,3 +232,54 @@ export const SPINE_ARIA_LABEL: Bi = { he: 'שלבי העבודה על הספר',
 
 /** Accessible name of a row's expand/collapse control, composed with the stage name by the component. */
 export const DETAILS_TOGGLE_LABEL: Bi = { he: 'פרטים על השלב', en: 'Stage details' };
+
+// ─── Wave 3 / w3: the COMPACT density ──────────────────────────────────────────────────────────────
+//
+// The compact spine renders on surfaces that hold no book payload beyond the books-list row: the books
+// list itself, the import screen, and the editor route whenever the full spine is not on screen. It is a
+// DENSITY of the same component reading the same maps, not a second vocabulary - every string below is
+// either shared with the full spine or exists because compact has less to say, never because it says
+// something different.
+
+/** Accessible name of the compact spine as a whole. */
+export const COMPACT_ARIA_LABEL: Bi = {
+  he: 'שלבי העבודה על הספר, תצוגה מצומצמת',
+  en: 'Book workflow stages, compact view',
+};
+
+/**
+ * THE HONEST "LESS". A stage the compact spine cannot compute from the payload its surface already holds
+ * renders THIS, not the full spine's `Loading…`: on the books list nothing further is coming, because
+ * asking would cost one status request per row and the standing rule is that compact shows less rather
+ * than fetching more. "Not known here" is a statement about this SCREEN, and the fix is to open the book.
+ */
+export const COMPACT_UNKNOWN_LABEL: Bi = { he: 'לא ידוע מכאן', en: 'Not known here' };
+
+/**
+ * The compact spine's one line of readable text. Compact has no room for five names, and truncating them
+ * is forbidden (the 2.6 constraint), so instead of shrinking every name it names exactly ONE stage in full.
+ *
+ * Which one: a RUNNING stage always wins, because carrying the running signal on every route is this
+ * density's job (Q12b, the two chrome dots retired into it). Otherwise it is the focus stage, the first
+ * one in canonical order that wants something from the user.
+ */
+export function compactSummaryLine(
+  stageName: string,
+  stateText: string,
+  running: boolean,
+  lang: SpineLang,
+): string {
+  if (running) {
+    return lang === 'he' ? `בונה עכשיו: ${stageName}` : `Building now: ${stageName}`;
+  }
+  return lang === 'he' ? `הבא: ${stageName}, ${stateText}` : `Next: ${stageName}, ${stateText}`;
+}
+
+/**
+ * One pip's accessible name: the stage's full name and its state, so a screen reader gets from compact
+ * exactly what a sighted user gets from the full spine. The pips themselves carry a number and a colour
+ * only; no name is ever clipped, because no name is ever drawn.
+ */
+export function compactPipLabel(stageName: string, stateText: string): string {
+  return `${stageName}: ${stateText}`;
+}

@@ -17,10 +17,11 @@
  */
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, provideRouter } from '@angular/router';
-import { Subject, of } from 'rxjs';
+import { BehaviorSubject, Subject, of } from 'rxjs';
 import { ImportPageComponent } from './import-page.component';
 import { ImportService } from '../../core/services/import.service';
 import { BookService } from '../../core/services/book.service';
+import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import {
   BookDetailDto,
   ImportPreviewChapterDto,
@@ -72,6 +73,8 @@ describe('ImportPageComponent (c04)', () => {
   let fixture: ComponentFixture<ImportPageComponent>;
   let navigateSpy: jasmine.Spy;
   let book$: Subject<BookDetailDto>;
+  /** Wave 3 / w3: the registry stream the hosted compact spine reads. Empty unless a test pushes a job. */
+  let activeJobs$: BehaviorSubject<TrackedJob[]>;
 
   /**
    * Build the TestBed with a held-open Subject for the book-language fetch (so ngOnInit does not
@@ -80,6 +83,7 @@ describe('ImportPageComponent (c04)', () => {
    */
   async function setup(bookId: string | null = 'book-1'): Promise<void> {
     book$ = new Subject<BookDetailDto>();
+    activeJobs$ = new BehaviorSubject<TrackedJob[]>([]);
 
     await TestBed.configureTestingModule({
       imports: [ImportPageComponent],
@@ -99,6 +103,10 @@ describe('ImportPageComponent (c04)', () => {
           },
         },
         { provide: BookService, useValue: { getById: () => book$.asObservable() } },
+        // Wave 3 / w3: the page hosts the compact stage spine, whose `running` state comes from the job
+        // registry. The stub emits no jobs, which is the honest default: the spine can only ever be
+        // RAISED to running by a tracked build, never claimed idle by the absence of one.
+        { provide: JobRegistryService, useValue: { activeJobs$: activeJobs$.asObservable() } },
       ],
     }).compileComponents();
 
@@ -280,6 +288,7 @@ describe('ImportPageComponent (c04)', () => {
           useValue: { uploadForPreview: () => new Subject(), confirmImport: () => of({}) },
         },
         { provide: BookService, useValue: { getById: () => err$.asObservable() } },
+        { provide: JobRegistryService, useValue: { activeJobs$: of([]) } },
       ],
     }).compileComponents();
 
@@ -360,5 +369,71 @@ describe('ImportPageComponent (c04)', () => {
     const text = component.summaryText;
     expect(text).toContain('3 chapters'); // detected count = all rows
     expect(text).toContain('2 selected'); // selected respects include-filter
+  });
+
+  // ── Wave 3 / w3: the COMPACT stage spine on the import screen ────────────────────────────────────
+  //
+  // This is the second of the two app-level surfaces the compact spine mounts on, and the reason is the
+  // same as the books list: a stage HAPPENS here (Import is this screen) and the product previously showed
+  // no stage indicator on it at all. Its signals come from the book payload the page already loads for its
+  // own language - no request is added - so what it can say is bounded by that payload, and it says the
+  // rest is not known rather than fetching it.
+
+  describe('the compact stage spine (w3)', () => {
+    function compactSpine(): HTMLElement | null {
+      return fixture.nativeElement.querySelector('[data-testid="stage-spine-compact"]');
+    }
+
+    function pipState(stage: string): string {
+      return (compactSpine()!.querySelector(`[data-testid="spine-compact-pip-${stage}"]`) as HTMLElement)
+        .dataset['state'] ?? '';
+    }
+
+    it('renders on the import screen', async () => {
+      await setup('book-1');
+      book$.next(makeBook('he'));
+      fixture.detectChanges();
+      expect(compactSpine()).not.toBeNull();
+    });
+
+    it('computes Import from the loaded book chapters, with NO extra request', async () => {
+      await setup('book-1');
+      book$.next({
+        ...makeBook('he'),
+        chapters: [
+          { id: 'c1', title: 'One', partName: null, order: 0, wordCount: 900, updatedAt: '' },
+          { id: 'c2', title: 'Two', partName: null, order: 1, wordCount: 0, updatedAt: '' },
+        ],
+      });
+      fixture.detectChanges();
+      expect(pipState('import')).toBe('ready');
+      // The book-level statuses are not on that payload and are not worth a request for a widget.
+      expect(pipState('briefs')).toBe('unknown');
+      expect(pipState('review')).toBe('unknown');
+    });
+
+    it('a book with no chapters reads not-started here, which is the action this screen offers', async () => {
+      await setup('book-1');
+      book$.next(makeBook('he')); // chapters: []
+      fixture.detectChanges();
+      expect(pipState('import')).toBe('not-started');
+      // Nothing on the screen may read done: the whole point of the page is that nothing is imported yet.
+      expect(compactSpine()!.querySelectorAll('[data-state="ready"]').length).toBe(0);
+    });
+
+    it('follows the BOOK language, in both languages', async () => {
+      await setup('book-1');
+      book$.next(makeBook('en'));
+      fixture.detectChanges();
+      expect(compactSpine()!.getAttribute('dir')).toBe('ltr');
+      expect(compactSpine()!.textContent).toContain('Import');
+
+      TestBed.resetTestingModule();
+      await setup('book-1');
+      book$.next(makeBook('he'));
+      fixture.detectChanges();
+      expect(compactSpine()!.getAttribute('dir')).toBe('rtl');
+      expect(compactSpine()!.textContent).toContain('ייבוא');
+    });
   });
 });

@@ -4,6 +4,8 @@ import { Component, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChange
 import {
   BEHIND_FALLBACK,
   CHAPTER_RUNNING_LABEL,
+  COMPACT_ARIA_LABEL,
+  COMPACT_UNKNOWN_LABEL,
   DETAILS_TOGGLE_LABEL,
   EXPORT_UNAVAILABLE_REASON,
   PER_CHAPTER_LABEL,
@@ -18,6 +20,8 @@ import {
   behindSentence,
   blockedSentence,
   chapterListToggleLabel,
+  compactPipLabel,
+  compactSummaryLine,
   findingsProgress,
   importDetail,
   spineLang,
@@ -31,6 +35,16 @@ import {
   deriveStageSpine,
   focusStageId,
 } from './stage-spine.model';
+
+/**
+ * How much of the spine is drawn. ONE component, two densities, one derivation - a second component would
+ * be a second place for the state vocabulary to drift, which is the defect this wave removes.
+ *
+ *  - `full`     the five self-explaining rows. Book surfaces, inside the 300-380px panel.
+ *  - `compact`  a five-pip rail plus one line of readable text. App-level surfaces that hold no book
+ *               payload beyond a list row, and the editor route whenever the full spine is off screen.
+ */
+export type SpineDensity = 'full' | 'compact';
 
 /** What the host is being asked to do when a stage row's action is pressed. */
 export interface StageActionEvent {
@@ -84,6 +98,17 @@ export interface StageActionEvent {
  *                           `unicode-bidi: isolate` to keep them from reordering inside Hebrew runs.
  *   - the running spinner   PHYSICALLY FIXED. A rotation has no reading direction.
  *
+ * ── RTL in the COMPACT density (w3), same discipline, per element ──────────────────────────────────
+ *   - root `dir`            MIRRORS, following the BOOK this spine describes (see {@link bookLanguage}).
+ *                           The rail therefore starts at the reading edge: stage 1 is physically
+ *                           rightmost in Hebrew and leftmost in English.
+ *   - the pip rail          MIRRORS. A plain inline flex row, so it reverses with `dir` and the canonical
+ *                           order survives as READING order rather than as a fixed left-to-right one.
+ *   - the pip numbers       PHYSICALLY FIXED (`unicode-bidi: isolate`): digits are LTR glyphs and must not
+ *                           reorder inside a Hebrew run.
+ *   - the summary line      MIRRORS. `text-align: start`.
+ * Nothing in this density is draggable, anchored or animated toward a corner, so nothing needs pinning.
+ *
  * ── The two hard rules ────────────────────────────────────────────────────────────────────────────
  * 1. Nothing is presented as done unless the app computed it. Stage 1 is derived from the chapters (the
  *    old `Structure` was the literal string 'done'), stage 4 makes no book-level claim at all, and
@@ -96,6 +121,34 @@ export interface StageActionEvent {
   standalone: true,
   imports: [CommonModule],
   template: `
+    @if (density === 'compact') {
+      <!-- ── COMPACT ─────────────────────────────────────────────────────────────────────────────────
+           A five-pip rail and ONE line of text. Deliberately non-interactive: it renders inside rows and
+           bars that already own their click targets (the books list row, the editor status bar), and
+           nesting a second set of controls in them would be an a11y trap rather than a feature. The way
+           to "expand" it is the surface's own affordance - open the book, and the full spine is there. -->
+      <div
+        class="spine-compact"
+        data-testid="stage-spine-compact"
+        [attr.dir]="dir"
+        role="group"
+        [attr.aria-label]="text(COMPACT_ARIA_LABEL)">
+        <ol class="compact-rail">
+          @for (stage of stages; track stage.id; let i = $index) {
+            <li
+              class="compact-pip"
+              [attr.data-testid]="'spine-compact-pip-' + stage.id"
+              [attr.data-state]="dataState(stage)">
+              <!-- The number is the only glyph. It is aria-hidden and the full name + state travel in the
+                   visually-hidden span beside it, so nothing is ever abbreviated for a screen reader. -->
+              <span class="compact-pip__num" aria-hidden="true">{{ i + 1 }}</span>
+              <span class="pd-visually-hidden">{{ pipLabel(stage) }}</span>
+            </li>
+          }
+        </ol>
+        <p class="compact-summary" data-testid="spine-compact-summary">{{ compactSummary }}</p>
+      </div>
+    } @else {
     <nav
       class="stage-spine"
       data-testid="stage-spine"
@@ -232,6 +285,7 @@ export interface StageActionEvent {
         }
       </ol>
     </nav>
+    }
   `,
   styles: [`
     :host { display: block; }
@@ -509,14 +563,109 @@ export interface StageActionEvent {
     .stage-action:hover { background: var(--pd-primary-hover); }
     .stage-action:focus-visible { outline: none; box-shadow: var(--pd-ring); }
     .spine-stage--behind .stage-action { background: var(--pd-improve); color: var(--pd-neutral-900); }
+
+    /* ── COMPACT density. Its per-element mirror-or-fixed calls are in the class doc above. ── */
+    .spine-compact {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: var(--pd-space-3);
+      flex-wrap: wrap;
+      font-family: var(--pd-font-ui);
+    }
+
+    .compact-rail {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: inline-flex;
+      flex-direction: row;
+      align-items: center;
+      gap: var(--pd-space-1);
+      flex: 0 0 auto;
+    }
+
+    .compact-pip {
+      inline-size: 16px;
+      block-size: 16px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--pd-border-strong);
+      background: var(--pd-surface);
+      color: var(--pd-text-muted);
+    }
+    .compact-pip__num {
+      font-size: 9px;
+      line-height: 1;
+      font-weight: var(--pd-weight-bold);
+      color: inherit;
+      unicode-bidi: isolate;
+    }
+
+    /* The one state vocabulary, in colour. Same tokens the full rows use, so the two densities cannot
+       disagree about what "behind" looks like. The last group - unavailable, per-chapter and the honest
+       "not known here" - all read as ABSENCE of a claim and are drawn as one hollow pip; what tells them
+       apart is the pip's accessible name. */
+    .compact-pip[data-state='ready'] { color: var(--pd-keep); border-color: currentColor; background: var(--pd-keep-bg); }
+    .compact-pip[data-state='behind'] { color: var(--pd-improve); border-color: currentColor; background: var(--pd-improve-bg); }
+    .compact-pip[data-state='running'] { color: var(--pd-info); border-color: currentColor; background: var(--pd-info-bg); }
+    .compact-pip[data-state='blocked'] { color: var(--pd-secondary-700); border-color: var(--pd-secondary-300); background: var(--pd-secondary-50); }
+    .compact-pip[data-state='not-started'] { color: var(--pd-primary-700); border-color: var(--pd-primary-200); background: var(--pd-primary-50); }
+    .compact-pip[data-state='unavailable'],
+    .compact-pip[data-state='per-chapter'],
+    .compact-pip[data-state='unknown'] { border-style: dashed; border-color: var(--pd-neutral-300); background: transparent; }
+
+    .compact-summary {
+      margin: 0;
+      flex: 1 1 auto;
+      min-inline-size: 0;
+      text-align: start;
+      font-size: var(--pd-text-caption);
+      line-height: var(--pd-lh-caption);
+      color: var(--pd-text-secondary);
+      /* Compact never truncates either. It says less instead: exactly one stage name, in full. */
+      white-space: normal;
+      overflow-wrap: break-word;
+    }
+
+    /* Visually hidden but present for assistive technology. Local to this component so the compact spine
+       carries its own full names wherever it is mounted. */
+    .pd-visually-hidden {
+      position: absolute;
+      inline-size: 1px;
+      block-size: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+      border: 0;
+    }
   `],
 })
 export class StageSpineComponent implements OnInit, OnChanges {
   /**
-   * The book language. BOOK-SCOPED: an English book renders English chrome left to right, even for a
-   * Hebrew-speaking user. Null falls back to Hebrew, the primary language.
+   * The book language. BOOK-SCOPED IN BOTH DENSITIES, which is the w3 language decision stated in one
+   * place: the spine always speaks the language of the BOOK IT DESCRIBES, never the language of the
+   * surface it is mounted on.
+   *
+   * The brief warns about a rule switch here - app-level chrome is Hebrew-default while the full spine is
+   * book-scoped - and this is how that switch is resolved so a user never sees the spine flip languages
+   * while navigating: the app-level Hebrew default governs the surface AROUND the compact spine (the books
+   * list header, its buttons, its empty state, all unchanged), and the compact spine itself, which never
+   * renders without a book, keeps following that book. A row for an English book therefore reads English
+   * on the list and English again inside the book. The books list already does exactly this for the two
+   * other per-book strings it renders - the title and the relative timestamp, which is passed `b.language`
+   * today - so the compact spine is joining an established rule rather than inventing one.
+   *
+   * Null falls back to Hebrew, the primary language.
    */
   @Input() bookLanguage: string | null = null;
+
+  /** Which density to draw. See {@link SpineDensity}. */
+  @Input() density: SpineDensity = 'full';
 
   /** Everything the spine renders from. Replaced wholesale by the host on every change. */
   @Input() signals: StageSpineSignals = {
@@ -553,6 +702,7 @@ export class StageSpineComponent implements OnInit, OnChanges {
 
   // Template-visible copy constants (Angular templates cannot import).
   readonly SPINE_ARIA_LABEL = SPINE_ARIA_LABEL;
+  readonly COMPACT_ARIA_LABEL = COMPACT_ARIA_LABEL;
   readonly DETAILS_TOGGLE_LABEL = DETAILS_TOGGLE_LABEL;
   readonly EXPORT_UNAVAILABLE_REASON = EXPORT_UNAVAILABLE_REASON;
   readonly CHAPTER_RUNNING_LABEL = CHAPTER_RUNNING_LABEL;
@@ -666,5 +816,41 @@ export class StageSpineComponent implements OnInit, OnChanges {
 
   onChapterClick(chapter: ChapterPassSignal): void {
     this.openChapter.emit(chapter);
+  }
+
+  // ── COMPACT density ──────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * The state word a pip announces. The `data-state` hook is shared with the full spine ({@link dataState}),
+   * but what `unknown` MEANS differs by density and only the WORD may differ: in the full spine the signals
+   * are still on their way, while the compact spine is mounted on surfaces where they are never coming, so
+   * it says "not known here" rather than "loading". Neither ever guesses a state.
+   */
+  compactStateText(stage: StageStatus): string {
+    if (stage.state) return STATE_LABELS[stage.state][this.lang];
+    if (stage.perChapter) return PER_CHAPTER_LABEL[this.lang];
+    return COMPACT_UNKNOWN_LABEL[this.lang];
+  }
+
+  /** One pip's accessible name: the stage's FULL name plus its state. Nothing is abbreviated here. */
+  pipLabel(stage: StageStatus): string {
+    return compactPipLabel(this.stageName(stage.id), this.compactStateText(stage));
+  }
+
+  /**
+   * The compact spine's single line of visible text. A running stage wins, because carrying the running
+   * signal on every route is this density's job (the two chrome dots retired into it); otherwise it is the
+   * focus stage. Empty only before the first derivation, which cannot happen in a rendered view.
+   */
+  get compactSummary(): string {
+    if (!this.stages.length) return '';
+    const running = this.stages.find(s => s.state === 'running');
+    const stage = running ?? this.stages.find(s => s.id === this.focus) ?? this.stages[0];
+    return compactSummaryLine(
+      this.stageName(stage.id),
+      this.compactStateText(stage),
+      stage.state === 'running',
+      this.lang,
+    );
   }
 }

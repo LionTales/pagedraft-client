@@ -23,6 +23,7 @@ import { ReviseContextService } from '../../core/services/revise-context.service
 import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { AnalysisResultDto } from '../../core/models/analysis';
 import { AnalysisRunDialogComponent, RUN_DIALOG_LABELS_HE } from '../../shared/analysis-run-dialog/analysis-run-dialog.component';
+import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
 import { runString } from '../../core/i18n/run-strings';
 
 describe('EditorPageComponent (focused logic)', () => {
@@ -1071,33 +1072,30 @@ class StubImportHandoffCardComponent {
 }
 
 /**
- * rf-c02: controllable JobRegistryService stub. `anyRunningForBook$(bookId)` returns a per-book
- * BehaviorSubject so a test can push the running flag for a SPECIFIC book (proving book-scoping: a job for
- * book A must not light book B). `reattach` is a spy so the "reattach once per book load, no second poller"
- * contract can be asserted.
+ * rf-c02, migrated by Wave 3 / w3: controllable JobRegistryService stub.
+ *
+ * The editor no longer reads a per-book boolean (`anyRunningForBook$` is gone from this page along with
+ * the two chrome dots it fed). It reads `activeJobs$` and derives the stage spine's per-kind running state
+ * from it, filtered by the CURRENT bookId - so this stub now drives the SAME surface the product drives:
+ * a real tracked job, for a named book, of a named kind. `setRunning(bookId, running)` keeps the old
+ * shorthand for "a whole-book review build is in flight for this book", which is what every rf-c02 test
+ * means. `reattach` stays a spy so the "reattach once per book load, no second poller" contract holds.
  */
 class RegistryStub {
-  private readonly running = new Map<string, BehaviorSubject<boolean>>();
   /** c02: per-job snapshot streams, held open for the whole test (see jobById$). */
   private readonly jobs = new Map<string, BehaviorSubject<TrackedJob | null>>();
   reattach = jasmine.createSpy('reattach');
   /**
-   * Wave 3 / w2: the hosted book dashboard reads this to mark which chapters have a pass in flight in the
-   * stage spine's stage-4 breakdown. Nothing running by default; the spine's own suite covers the marks.
+   * Wave 3: the ONE stream the editor and the hosted book dashboard both read. Held open for the life of
+   * the test so a running build can start and finish inside one spec.
    */
-  readonly activeJobs$: Observable<TrackedJob[]> = of([]);
+  private readonly active = new BehaviorSubject<TrackedJob[]>([]);
+  readonly activeJobs$: Observable<TrackedJob[]> = this.active.asObservable();
 
-  private subjectFor(bookId: string): BehaviorSubject<boolean> {
-    let s = this.running.get(bookId);
-    if (!s) {
-      s = new BehaviorSubject<boolean>(false);
-      this.running.set(bookId, s);
-    }
-    return s;
-  }
-
-  anyRunningForBook$(bookId: string): Observable<boolean> {
-    return this.subjectFor(bookId).asObservable();
+  /** Push (or clear) a whole-book REVIEW build for one book, leaving every other book's jobs alone. */
+  setRunning(bookId: string, running: boolean, kind: 'summary' | 'review' = 'review'): void {
+    const others = this.active.value.filter(j => !(j.bookId === bookId && j.kind === kind));
+    this.active.next(running ? [...others, makeTrackedJob(bookId, kind)] : others);
   }
 
   /**
@@ -1113,11 +1111,6 @@ class RegistryStub {
     return this.jobSubjectFor(jobId).asObservable();
   }
 
-  /** Test hook: set the running flag for a specific book. */
-  setRunning(bookId: string, running: boolean): void {
-    this.subjectFor(bookId).next(running);
-  }
-
   /** Test hook: push a registry snapshot for one job (the ONLY owner of a tracked run's percent/status). */
   setJob(jobId: string, job: TrackedJob | null): void {
     this.jobSubjectFor(jobId).next(job);
@@ -1131,6 +1124,26 @@ class RegistryStub {
     }
     return s;
   }
+}
+
+/** A minimal in-flight TrackedJob. Only the fields the spine derivation reads carry meaning. */
+function makeTrackedJob(bookId: string, kind: 'summary' | 'review'): TrackedJob {
+  return {
+    id: `${kind}-${bookId}`,
+    kind,
+    bookId,
+    scopeLabel: 'Whole book',
+    titleHe: 'בנייה',
+    titleEn: 'Build',
+    status: 'running',
+    percent: 10,
+    completedChunks: null,
+    totalChunks: null,
+    chunkClock: EMPTY_CHUNK_CLOCK,
+    message: '',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 /**
@@ -1245,6 +1258,9 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
             StubBookDashboardComponent,
             StubSegmentedControlComponent,
             StubImportHandoffCardComponent,
+            // Wave 3 / w3: NOT stubbed. The compact spine IS the running indicator now, so the rf-c02
+            // contracts are asserted on its real rendered output rather than on a stub's inputs.
+            StageSpineComponent,
             // c01: NOT stubbed. The defect is that the run terminal never crosses from the `@if`-mounted
             // panel to the dialog, so the dialog's own state machine has to be the real one for the
             // assertion to mean anything.
@@ -1414,25 +1430,50 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
     expect(has('app-issue-panel')).toBe(false);
   });
 
-  // ── 4. rf-c02: "review running" affordance derived from the job registry, survives dashboard unmount ──
+  // ── 4. rf-c02 (migrated by Wave 3 / w3): the whole-book "running" signal, now IN THE SPINE ──────────
   //
-  // The affordance is NO LONGER emitted by the dashboard. It is derived by the editor from
-  // jobRegistry.anyRunningForBook$(bookId): the status rows publish their build to the registry (track()),
-  // the registry's own reused poll survives the dashboard being @if-destroyed (close panel / focus mode /
-  // Edit help), and reattach (called once on book load) re-discovers a build already in flight. So the
-  // affordance stays correct while the dashboard is unmounted WITHOUT the old editor-owned reconcile poll.
-  // These tests drive the real ngOnInit -> route -> subscribeReviewBuildRunning flow and push the registry
-  // running flag PER BOOK (proving book-scoping), then assert the reopen button / focus toggle affordance.
-  describe('rf-c02 "review running" affordance (registry-derived, survives close/focus/Edit-help)', () => {
-    /** Drive the real book-load flow so the editor subscribes anyRunningForBook$(bookId) + calls reattach. */
+  // WHAT CHANGED, AND WHAT DID NOT. rf-c02's contract is unchanged: a whole-book build stays visible on
+  // this route while the book dashboard is @if-destroyed - panel closed, focus mode, or Edit help - and it
+  // is derived from the ONE job registry rather than from a dashboard @Output or an editor-owned poll.
+  // What changed is WHERE it renders. The two bespoke pulsing dots (on the focus toggle and on the reopen
+  // button) are gone (Q12b); the signal is now the `running` state of the COMPACT stage spine, which this
+  // route mounts exactly when the full spine is off screen. So these tests assert the same three unmount
+  // cases, the same book-scoping, and the same single reattach - against the surface that replaced them.
+  //
+  // THE FOCUS BUTTON IS UNTOUCHED by all of this (owner keeper decision): it still renders, still toggles,
+  // and `describe('toggleFocusMode (ds-c05)')` above pins its behavior unchanged.
+  describe('rf-c02/w3 whole-book running signal (spine-carried, survives close/focus/Edit-help)', () => {
+    /**
+     * Drive the real book-load flow so the editor derives spine signals for the book and calls reattach.
+     *
+     * The book has ONE chapter with text on purpose. A whole-book build is only reachable on a book that
+     * has a manuscript, and the spine says so: on a book with zero chapters stages 2 and 3 are `blocked`
+     * by Import, which outranks everything else because a build there would have nothing to read. Seeding
+     * an empty book here would test a state the product cannot reach.
+     */
     function loadBook(id = 'book-1'): void {
       component.reviewMode = 'review';
       component.reviewPanelOpen = true;
       component.focusMode = false;
-      fixture.detectChanges();            // ngOnInit subscribes to route params
-      routeParams$.next({ bookId: id });  // subscribeReviewBuildRunning(id) + getById(id)
-      bookLoad$.next({ ...BOOK, id });    // book resolves -> reattach(id) called once
+      fixture.detectChanges();            // ngOnInit subscribes to route params + activeJobs$
+      routeParams$.next({ bookId: id });  // getById(id)
+      bookLoad$.next({
+        ...BOOK,
+        id,
+        chapters: [{ id: 'chap-1', title: 'Chapter one', partName: null, order: 0, wordCount: 900, updatedAt: '' }],
+      });                                 // book resolves -> reattach(id) called once
       fixture.detectChanges();
+    }
+
+    /** The compact spine's rendered stage-3 (developmental review) state, or null when no spine is shown. */
+    function compactReviewState(): string | null {
+      const pip = el().querySelector('[data-testid="spine-compact-pip-review"]');
+      return pip ? pip.getAttribute('data-state') : null;
+    }
+
+    /** Every compact spine currently mounted on the route. The running signal must live in exactly one. */
+    function compactSpines(): NodeListOf<Element> {
+      return el().querySelectorAll('[data-testid="stage-spine-compact"]');
     }
 
     it('reattaches to in-flight jobs exactly ONCE on book load (no second poller)', () => {
@@ -1441,36 +1482,103 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       expect(registryStub.reattach).toHaveBeenCalledWith('book-1', 'he');
     });
 
-    it('sets reviewBuildRunning while a tracked job runs with the dashboard UNMOUNTED, and holds it on the reopen button', () => {
+    // ── THE DENSITY HANDOFF (Q1-D) ────────────────────────────────────────────────────────────────
+    //
+    // On a book route the FULL spine is the surface, and the compact density exists only to cover the
+    // states where the full one is off screen. These four cases are the whole rule, and asserting the
+    // COUNT (never zero, never two) is what makes "the running indicator lives in exactly one place" a
+    // fact rather than a claim: two mounted spines would be the old two-dots defect in a new costume.
+
+    it('shows the FULL spine and no compact one while the panel is showing the review', () => {
       loadBook('book-1');
+      component.selectedChapterId = 'chap-1';
+      fixture.detectChanges();
+      expect(component.fullSpineVisible).toBe(true);
+      expect(has('app-book-dashboard')).toBe(true);
+      expect(compactSpines().length).toBe(0);
+    });
+
+    it('hands off to exactly one compact spine when the panel is CLOSED', () => {
+      loadBook('book-1');
+      component.selectedChapterId = 'chap-1';
+      component.reviewPanelOpen = false;
+      fixture.detectChanges();
+      expect(component.fullSpineVisible).toBe(false);
+      expect(has('app-book-dashboard')).toBe(false);
+      expect(compactSpines().length).toBe(1);
+    });
+
+    it('hands off to exactly one compact spine in FOCUS MODE', () => {
+      loadBook('book-1');
+      component.selectedChapterId = 'chap-1';
+      component.toggleFocusMode();
+      fixture.detectChanges();
+      expect(component.fullSpineVisible).toBe(false);
+      expect(compactSpines().length).toBe(1);
+    });
+
+    it('hands off to exactly one compact spine in EDIT HELP mode', () => {
+      loadBook('book-1');
+      component.selectedChapterId = 'chap-1';
+      component.onReviewModeChange('edit');
+      fixture.detectChanges();
+      expect(component.fullSpineVisible).toBe(false);
+      expect(compactSpines().length).toBe(1);
+    });
+
+    it('still shows exactly one compact spine with the panel closed and NO chapter open', () => {
+      loadBook('book-1');
+      component.selectedChapterId = null;
+      component.reviewPanelOpen = false;
+      fixture.detectChanges();
+      // No editor status bar exists in this state, so the reopen zone carries it instead - and carries
+      // it exactly once, which is what the two placements' mutually exclusive guards buy.
+      expect(el().querySelector('.review-reopen')).not.toBeNull();
+      expect(compactSpines().length).toBe(1);
+    });
+
+    it('the compact spine follows the BOOK language, so entering a book never flips it', () => {
+      component.reviewMode = 'review';
+      component.reviewPanelOpen = false;
+      component.focusMode = false;
+      fixture.detectChanges();
+      routeParams$.next({ bookId: 'book-en' });
+      bookLoad$.next({ ...BOOK, id: 'book-en', language: 'en', chapters: [] });
+      component.selectedChapterId = 'chap-1';
+      fixture.detectChanges();
+
+      const spine = el().querySelector('[data-testid="stage-spine-compact"]') as HTMLElement;
+      expect(spine.getAttribute('dir')).toBe('ltr');
+      expect(spine.textContent).toContain('Import');
+    });
+
+    it('carries a running build on the compact spine with the dashboard UNMOUNTED (panel closed)', () => {
+      loadBook('book-1');
+      component.selectedChapterId = 'chap-1';
 
       // A tracked job for book-1 starts running (published by a status row's track() -> registry).
       registryStub.setRunning('book-1', true);
       fixture.detectChanges();
-      expect(component.reviewBuildRunning).toBe(true);
 
-      // User closes the panel: the dashboard is @if-destroyed. The registry keeps tracking, so the flag holds.
+      // User closes the panel: the dashboard is @if-destroyed. The registry keeps tracking, so it holds.
       component.reviewPanelOpen = false;
       fixture.detectChanges();
       expect(has('app-book-dashboard')).toBe(false);
+      expect(compactReviewState()).toBe('running');
+      // The signal lives in exactly ONE place: one compact spine, and no full spine beside it.
+      expect(compactSpines().length).toBe(1);
+      expect(el().querySelector('[data-testid="stage-spine"]')).toBeNull();
 
-      // The reopen button shows the running affordance (dot + accessible label) even with the dashboard gone.
-      const reopen = el().querySelector('.review-reopen') as HTMLElement;
-      expect(reopen).not.toBeNull();
-      expect(reopen.classList.contains('review-running')).toBe(true);
-      expect(reopen.querySelector('.review-running-dot')).not.toBeNull();
-      expect(reopen.getAttribute('aria-label')).toContain('סקירה רצה');
-
-      // The build finishes (terminal): the registry emits false and the affordance clears - dashboard still
+      // The build finishes (terminal): the registry drops it and the state clears - dashboard still
       // unmounted, proving the registry (not the dashboard) drives it.
       registryStub.setRunning('book-1', false);
       fixture.detectChanges();
-      expect(component.reviewBuildRunning).toBe(false);
+      expect(compactReviewState()).not.toBe('running');
     });
 
-    it('shows the running affordance on the focus-mode toggle while in focus mode (panel + dashboard unmounted)', () => {
+    it('carries a running build while in FOCUS MODE (panel + dashboard unmounted), and the focus button still works', () => {
       loadBook('book-1');
-      // A chapter must be selected for the editor toolbar (focus button) to render.
+      // A chapter must be selected for the editor status bar (and its focus button) to render.
       component.selectedChapterId = 'chap-1';
 
       // A tracked job is in flight; entering focus unmounts the dashboard but the registry keeps driving it.
@@ -1480,85 +1588,108 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
 
       expect(component.focusMode).toBe(true);
       expect(component.reviewPanelOpen).toBe(false);
-      // In focus mode neither the panel NOR the reopen button is shown.
+      // In focus mode neither the panel NOR the reopen button is shown - unchanged, and correct.
       expect(el().querySelector('.review-reopen')).toBeNull();
       expect(has('app-book-dashboard')).toBe(false);
-
-      // The focus toggle carries the running affordance so the user still sees the build is going.
+      // The focus BUTTON is still there and is still a focus toggle. Only its dot went away.
       const focusBtn = el().querySelector('.focus-btn') as HTMLElement;
       expect(focusBtn).not.toBeNull();
-      expect(focusBtn.classList.contains('review-running')).toBe(true);
-      expect(focusBtn.querySelector('.review-running-dot')).not.toBeNull();
-      expect(focusBtn.getAttribute('title')).toContain('סקירה רצה');
+      expect(focusBtn.getAttribute('aria-pressed')).toBe('true');
+      expect(focusBtn.querySelector('.review-running-dot')).toBeNull();
+
+      // The compact spine in the status bar is the surface that remains, and it carries the build.
+      expect(compactSpines().length).toBe(1);
+      expect(compactReviewState()).toBe('running');
 
       // The build finishes while still in focus mode: the registry clears it (no remount needed).
       registryStub.setRunning('book-1', false);
       fixture.detectChanges();
-      expect(component.reviewBuildRunning).toBe(false);
-      const focusBtnAfter = el().querySelector('.focus-btn') as HTMLElement;
-      expect(focusBtnAfter.classList.contains('review-running')).toBe(false);
-      expect(focusBtnAfter.querySelector('.review-running-dot')).toBeNull();
+      expect(compactReviewState()).not.toBe('running');
     });
 
-    it('does NOT show the affordance when no build is running', () => {
+    it('does NOT show a running state when no build is running', () => {
       loadBook('book-1');
-      expect(component.reviewBuildRunning).toBe(false);
+      component.selectedChapterId = 'chap-1';
       component.reviewPanelOpen = false;
       fixture.detectChanges();
       const reopen = el().querySelector('.review-reopen') as HTMLElement;
       expect(reopen).not.toBeNull();
-      expect(reopen.classList.contains('review-running')).toBe(false);
+      // The dot is gone from the reopen button for good.
       expect(reopen.querySelector('.review-running-dot')).toBeNull();
+      expect(compactReviewState()).not.toBe('running');
     });
 
-    it('clears the affordance when a build FINISHES while in Edit help mode (dashboard unmounted, registry drives it)', () => {
+    it('clears the running state when a build FINISHES while in Edit help mode (dashboard unmounted)', () => {
       loadBook('book-1');
+      component.selectedChapterId = 'chap-1';
       registryStub.setRunning('book-1', true);
       fixture.detectChanges();
-      expect(component.reviewBuildRunning).toBe(true);
+      // Panel open in review mode: the FULL spine owns the signal, so no compact spine is mounted at all.
+      // That is the handoff working, and it is why the compact assertions below start after the switch.
+      expect(compactSpines().length).toBe(0);
+      expect(has('app-book-dashboard')).toBe(true);
 
       // User switches to Edit help: the dashboard is @if-destroyed. The registry (single reused poll) keeps
-      // driving the flag, so when the build finishes the affordance clears with no dashboard mounted.
+      // driving it, so the compact spine takes over and when the build finishes the state clears with no
+      // dashboard mounted.
       component.onReviewModeChange('edit');
       fixture.detectChanges();
       expect(has('app-book-dashboard')).toBe(false);
+      expect(compactSpines().length).toBe(1);
+      expect(compactReviewState()).toBe('running');
 
       registryStub.setRunning('book-1', false);
       fixture.detectChanges();
-      expect(component.reviewBuildRunning).toBe(false);
+      expect(compactReviewState()).not.toBe('running');
     });
 
-    it('KEEPS the affordance while in Edit help when the build is still running (registry does not over-clear)', () => {
+    it('KEEPS the running state while in Edit help when the build is still running (no over-clear)', () => {
       loadBook('book-1');
+      component.selectedChapterId = 'chap-1';
       registryStub.setRunning('book-1', true);
       component.onReviewModeChange('edit');
       fixture.detectChanges();
 
-      // Dashboard is gone, but the registry still reports the build running, so the flag holds.
+      // Dashboard is gone, but the registry still reports the build running, so the state holds.
       expect(has('app-book-dashboard')).toBe(false);
-      expect(component.reviewBuildRunning).toBe(true);
+      expect(compactReviewState()).toBe('running');
     });
 
-    it('book-switch re-scopes the affordance: a job for book A does not light book B (wrong-book guard)', () => {
+    it('a book SUMMARY build lights stage 2 only, never stage 3 (per-kind, not one flag for both)', () => {
+      loadBook('book-1');
+      component.selectedChapterId = 'chap-1';
+      component.reviewPanelOpen = false;
+      registryStub.setRunning('book-1', true, 'summary');
+      fixture.detectChanges();
+
+      expect(el().querySelector('[data-testid="spine-compact-pip-briefs"]')!.getAttribute('data-state'))
+        .toBe('running');
+      expect(compactReviewState()).not.toBe('running');
+    });
+
+    it('book-switch re-scopes the signal: a job for book A does not light book B (wrong-book guard)', () => {
       loadBook('book-A');
+      component.selectedChapterId = 'chap-1';
+      component.reviewPanelOpen = false;
       registryStub.setRunning('book-A', true);
       fixture.detectChanges();
-      expect(component.reviewBuildRunning).toBe(true);
+      expect(compactReviewState()).toBe('running');
 
-      // The user switches to book-B, which has NO build running. The route emits the new id: the editor
-      // re-subscribes anyRunningForBook$('book-B') and drops the stale book-A flag at once.
+      // The user switches to book-B, which has NO build running. The route emits the new id and the
+      // derivation, which filters on the CURRENT bookId, drops the stale book-A state at once.
       routeParams$.next({ bookId: 'book-B' });
-      expect(component.reviewBuildRunning).toBe(false);
+      fixture.detectChanges();
+      expect(compactReviewState()).not.toBe('running');
 
-      // book-A's job is STILL running server-side, but it must not light book-B's affordance.
+      // book-A's job is STILL running server-side, but it must not light book-B.
       registryStub.setRunning('book-A', true);
       fixture.detectChanges();
-      expect(component.reviewBuildRunning).toBe(false);
+      expect(compactReviewState()).not.toBe('running');
 
-      // And book-B's own registry stream drives book-B's affordance.
+      // And book-B's own job does light book-B.
       registryStub.setRunning('book-B', true);
       fixture.detectChanges();
-      expect(component.reviewBuildRunning).toBe(true);
+      expect(compactReviewState()).toBe('running');
     });
   });
 
