@@ -13,7 +13,7 @@ import { ImportService } from '../../core/services/import.service';
 import { BookService } from '../../core/services/book.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
-import { StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
+import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 
 interface ImportChapterView extends ImportPreviewChapterDto {
   include: boolean;
@@ -440,7 +440,8 @@ export class ImportPageComponent implements OnInit, OnDestroy {
       review: null,
       summaryRunning: this.briefsRunning,
       reviewRunning: this.reviewRunning,
-      exportSurfaceAvailable: false,
+      // w4's export screen exists; stage 5 reads the chapter list this page already loaded.
+      exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
     };
   }
 

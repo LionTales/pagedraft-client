@@ -115,9 +115,11 @@ export interface StageSpineSignals {
   /** The same, for the developmental review build. */
   reviewRunning: boolean;
   /**
-   * Whether an export SCREEN exists in this build of the client. False until w4 lands, and while it is
-   * false stage 5 is `unavailable` with the honest reason - the capability is real on the server, the
-   * surface is not. w4 flips this to true and stage 5 starts deriving from the chapters like stage 4.
+   * Whether an export SCREEN exists in this build of the client. Every host now passes
+   * {@link EXPORT_SURFACE_AVAILABLE}, which w4 set to true when it built `/books/:bookId/export`.
+   *
+   * It is a fact about the CLIENT BUILD, not about the book, which is why flipping it is not a hardcoded
+   * "done": with it true, stage 5 still derives its state from the chapters, exactly like stage 1.
    */
   exportSurfaceAvailable: boolean;
   /**
@@ -126,6 +128,18 @@ export interface StageSpineSignals {
    */
   chaptersWithText: number | null;
 }
+
+/**
+ * WHETHER THIS BUILD OF THE CLIENT HAS AN EXPORT SCREEN. w4 built it (`/books/:bookId/export`), so it is
+ * true, and it is a CONSTANT rather than a literal repeated in each host for one reason: four surfaces mount
+ * a spine, and four copies of a boolean is how one of them keeps saying "no export screen" for a release
+ * after the screen shipped - a stage lying in the safe direction is still the class of lie this wave removes.
+ *
+ * It stays a signal rather than being deleted from the model because it is genuinely a build fact: the seam
+ * that lets a spec render stage 5 without a screen is the same seam that would let a deployment ship without
+ * one. What it may never become is a per-book claim.
+ */
+export const EXPORT_SURFACE_AVAILABLE = true;
 
 /**
  * Signals with NOTHING known. The starting value for every host: each stage renders `unknown` (or, for the
@@ -144,7 +158,7 @@ export function emptyStageSpineSignals(): StageSpineSignals {
     review: null,
     summaryRunning: false,
     reviewRunning: false,
-    exportSurfaceAvailable: false,
+    exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
   };
 }
 
@@ -401,10 +415,16 @@ function deriveChapterPasses(
 /**
  * Stage 5, Export. Gated on stage 1 only, and independent of 2, 3 and 4: it consumes nothing they make.
  *
- * While the client has no export screen the stage is `unavailable` WITH the reason - the capability is
- * real on the server, only the surface is missing. That is honest greying, and it is not the permanently
- * grey `Polish` column this wave removed: `Polish` advertised a feature nothing could ever back, and it
- * carried no reason. w4 flips {@link StageSpineSignals.exportSurfaceAvailable} and the stage becomes real.
+ *   no export screen in this build -> unavailable. Unreachable in a shipped build since w4
+ *                                     ({@link EXPORT_SURFACE_AVAILABLE}), and kept as the build-fact seam.
+ *   chapterCount unknown           -> unknown. The screen exists but this surface cannot say if there is
+ *                                     anything to put in a file.
+ *   no chapters                    -> blocked by Import. This is exactly the server's own 409 answer
+ *                                     (`noChapters`), said before the user spends a click on it.
+ *   otherwise                      -> ready, and the action opens the export screen.
+ *
+ * `ready` here means "there is something to download and a screen to download it from", which is a fact
+ * about chapters, not a claim that the author is finished: nothing about export is ever "done".
  */
 function deriveExport(surfaceAvailable: boolean, chapterCount: number | null): StageStatus {
   const base = emptyStatus('export');

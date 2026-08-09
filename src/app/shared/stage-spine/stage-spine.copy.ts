@@ -199,15 +199,10 @@ export function findingsProgress(status: StageStatus, lang: SpineLang): string |
     : `${base}, ${open} still open.`;
 }
 
-/**
- * Stage 5's honest reason while the export screen does not exist. It names the gap (no screen) rather
- * than the capability (which is real), because a stage greyed with no reason is the defect the
- * permanently grey `Polish` column shipped for a year.
- */
-export const EXPORT_UNAVAILABLE_REASON: Bi = {
-  he: 'עדיין אין מסך ייצוא באפליקציה. היכולת קיימת בשרת, והשלב ייפתח כאן ברגע שהמסך ייבנה.',
-  en: 'There is no export screen in the app yet. The capability exists on the server, and this stage opens here once the screen is built.',
-};
+// Stage 5 used to carry an EXPORT_UNAVAILABLE_REASON here: the sentence that explained, honestly, that the
+// server could export but the app had no screen for it. w4 built the screen (`/books/:bookId/export`), so
+// the gap that sentence described is gone and the sentence went with it. Stage 5 now reads `ready`,
+// `blocked` (no chapters, which is the server's own 409) or `unknown`, like any other computed stage.
 
 /**
  * The `behind` magnitude, rendered as its own short badge beside the sentence. `behind` is the state

@@ -147,9 +147,26 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
       expect(pipState(0, 'import')).toBe('not-started');
     });
 
-    it('Export reads unavailable on every row until an export screen exists (w4)', () => {
+    // w4: Export became REAL on this surface for free. It is derived from `chapterCount` alone, which the
+    // books-list payload already carries, so the books list needed no new request to stop saying "no
+    // export screen" - and it says something different per row, which a constant never could.
+    it('Export reads ready on a row with chapters, now that the export screen exists (w4)', () => {
       load([book({ id: 'b', chapterCount: 12, chaptersWithTextCount: 12 })]);
-      expect(pipState(0, 'export')).toBe('unavailable');
+      expect(pipState(0, 'export')).toBe('ready');
+    });
+
+    it('Export reads blocked on an EMPTY book row: there is nothing to put in a file', () => {
+      load([book({ id: 'a', chapterCount: 0, chaptersWithTextCount: 0 })]);
+      expect(pipState(0, 'export')).toBe('blocked');
+    });
+
+    it('never reads unavailable on any row, whatever the counts say', () => {
+      load([
+        book({ id: 'a', chapterCount: 0, chaptersWithTextCount: 0 }),
+        book({ id: 'b', chapterCount: 3, chaptersWithTextCount: 0 }),
+        book({ id: 'c', chapterCount: 9, chaptersWithTextCount: 9 }),
+      ]);
+      [0, 1, 2].forEach(row => expect(pipState(row, 'export')).not.toBe('unavailable'));
     });
   });
 

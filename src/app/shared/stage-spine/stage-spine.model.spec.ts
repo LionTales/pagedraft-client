@@ -2,10 +2,12 @@ import { BookReviewStatusDto } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import {
   ChapterPassSignal,
+  EXPORT_SURFACE_AVAILABLE,
   SPINE_STAGE_ORDER,
   StageSpineSignals,
   StageStatus,
   deriveStageSpine,
+  emptyStageSpineSignals,
   focusStageId,
 } from './stage-spine.model';
 
@@ -79,7 +81,9 @@ function signals(overrides: Partial<StageSpineSignals> = {}): StageSpineSignals 
     review: null,
     summaryRunning: false,
     reviewRunning: false,
-    exportSurfaceAvailable: false,
+    // The SHIPPED build fact (w4 built the export screen). A case that wants the other side of that seam
+    // passes it explicitly, so no test silently asserts a configuration users never get.
+    exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
     ...overrides,
   };
 }
@@ -344,35 +348,63 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
   // ── Stage 5: Export ─────────────────────────────────────────────────────────
 
   describe('stage 5 Export', () => {
-    it('is unavailable while the client has no export screen', () => {
+    it('is ready on a book with chapters, and offers the export screen (w4)', () => {
       const s = stage(deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 3 })), 'export');
-      expect(s.state).toBe('unavailable');
-      expect(s.action).toBeNull();
-    });
-
-    it('becomes real the moment the surface exists, with no other change (w4 flips one flag)', () => {
-      const s = stage(deriveStageSpine(signals({
-        chapters: chapters(3), chaptersWithText: 3, exportSurfaceAvailable: true,
-      })), 'export');
       expect(s.state).toBe('ready');
       expect(s.action).toBe('open-export');
     });
 
-    it('is blocked by Import with no chapters, once the surface exists (the API answers 409 there)', () => {
-      const s = stage(deriveStageSpine(signals({
-        chapters: [], chaptersWithText: 0, exportSurfaceAvailable: true,
-      })), 'export');
+    it('is blocked by Import with no chapters, which is exactly the API 409 said before it is spent', () => {
+      const s = stage(deriveStageSpine(signals({ chapters: [], chaptersWithText: 0 })), 'export');
       expect(s.state).toBe('blocked');
       expect(s.blockedBy).toBe('import');
     });
 
     it('is gated on chapters ONLY, never on the briefs or the review', () => {
       const s = stage(deriveStageSpine(signals({
-        chapters: chapters(3), chaptersWithText: 3, exportSurfaceAvailable: true,
+        chapters: chapters(3), chaptersWithText: 3,
         summary: summary({ hasSummary: false, ready: false }),
         review: review({ hasBriefs: false, hasReview: false, ready: false }),
       })), 'export');
       expect(s.state).toBe('ready');
+    });
+
+    it('says it does not know, rather than ready, while the chapter count has not landed', () => {
+      const s = stage(deriveStageSpine(signals({ chapters: null, chapterCount: null })), 'export');
+      expect(s.unknown).toBeTrue();
+      expect(s.state).toBeNull();
+    });
+
+    // ── The build-fact seam ──────────────────────────────────────────────────
+    //
+    // `exportSurfaceAvailable` is a fact about the CLIENT BUILD, not about the book. It is kept because a
+    // build without the screen is a real (if currently hypothetical) thing; what is asserted here is that
+    // the SHIPPED value can never produce `unavailable`, so no user meets a greyed stage with no reason.
+
+    it('is unavailable only for a build with no export screen, which is not the shipped one', () => {
+      const off = stage(deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 3, exportSurfaceAvailable: false,
+      })), 'export');
+      expect(off.state).toBe('unavailable');
+      expect(off.action).toBeNull();
+      expect(EXPORT_SURFACE_AVAILABLE).toBeTrue();
+    });
+
+    it('never reads unavailable under the shipped constant, whatever the rest of the book says', () => {
+      const seeds: Partial<StageSpineSignals>[] = [
+        {},
+        { chapters: [], chaptersWithText: 0 },
+        { chapters: chapters(2), chaptersWithText: 0 },
+        { chapters: chapters(2), chaptersWithText: 2, summary: summary(), review: review() },
+        { chapters: null, chapterCount: 7, chaptersWithText: 7 },
+      ];
+      for (const seed of seeds) {
+        expect(stage(deriveStageSpine(signals(seed)), 'export').state).not.toBe('unavailable');
+      }
+    });
+
+    it('the shared empty signals carry the shipped build fact, so no host can seed a stale false', () => {
+      expect(emptyStageSpineSignals().exportSurfaceAvailable).toBe(EXPORT_SURFACE_AVAILABLE);
     });
   });
 
@@ -385,7 +417,9 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       expect(stage(all, 'briefs').state).toBe('blocked');
       expect(stage(all, 'review').state).toBe('blocked');
       expect(stage(all, 'chapter-passes').state).toBe('blocked');
-      expect(stage(all, 'export').state).toBe('unavailable');
+      // w4: stage 5 now says the true thing about THIS BOOK (nothing to put in a file) rather than about
+      // the app (no screen). Both are honest; only one of them is still true.
+      expect(stage(all, 'export').state).toBe('blocked');
       expect(all.filter(s => s.state === 'ready')).toEqual([]);
       expect(focusStageId(all)).toBe('import');
     });

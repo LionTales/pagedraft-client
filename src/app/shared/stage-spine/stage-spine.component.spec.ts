@@ -5,7 +5,7 @@ import { BookReviewStatusDto } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { StageActionEvent, StageSpineComponent } from './stage-spine.component';
 import { STAGE_NAMES, STATE_LABELS } from './stage-spine.copy';
-import { ChapterPassSignal, SPINE_STAGE_ORDER, StageSpineSignals } from './stage-spine.model';
+import { ChapterPassSignal, EXPORT_SURFACE_AVAILABLE, SPINE_STAGE_ORDER, StageSpineSignals } from './stage-spine.model';
 
 /**
  * Wave 3 / w2 - the spine as rendered.
@@ -47,7 +47,8 @@ function chapters(count: number, running: string[] = []): ChapterPassSignal[] {
 function signals(overrides: Partial<StageSpineSignals> = {}): StageSpineSignals {
   return {
     chapters: null, chaptersWithText: null, summary: null, review: null,
-    summaryRunning: false, reviewRunning: false, exportSurfaceAvailable: false, ...overrides,
+    // The SHIPPED build fact, so every case below renders the spine the way users get it (w4).
+    summaryRunning: false, reviewRunning: false, exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE, ...overrides,
   };
 }
 
@@ -208,7 +209,9 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       expect(stateOf('briefs')).toBe('blocked');
       expect(stateOf('review')).toBe('blocked');
       expect(stateOf('chapter-passes')).toBe('blocked');
-      expect(stateOf('export')).toBe('unavailable');
+      // w4: the screen exists, so stage 5 says the TRUE thing about this book - there is nothing to put in
+      // a file yet - instead of the old "no export screen". Blocked by Import, which is the server's 409.
+      expect(stateOf('export')).toBe('blocked');
       expect(root().querySelectorAll('[data-state="ready"]').length).toBe(0);
     });
 
@@ -238,7 +241,7 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       render(signals({ chapters: [], chaptersWithText: 0 }));
       expect(text('[data-testid="spine-stage-state-import"]')).toBe(STATE_LABELS['not-started'].he);
       expect(text('[data-testid="spine-stage-state-briefs"]')).toBe(STATE_LABELS['blocked'].he);
-      expect(text('[data-testid="spine-stage-state-export"]')).toBe(STATE_LABELS['unavailable'].he);
+      expect(text('[data-testid="spine-stage-state-export"]')).toBe(STATE_LABELS['blocked'].he);
 
       render(signals({
         chapters: chapters(2, ['ch-0']), chaptersWithText: 2,
@@ -275,11 +278,35 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       expect(text('[data-testid="spine-action-briefs"]')).toContain('מחדש');
     });
 
-    it('states the honest reason for the unavailable export stage', () => {
+    // ── w4: stage 5 is a real, computed stage ──────────────────────────────────────────────────────
+    //
+    // It used to render `unavailable` plus a sentence explaining that the app had no export screen. w4 built
+    // the screen, so both the state and the sentence are gone; what replaces them is a state derived from
+    // the chapters exactly like stage 1's, and an action with somewhere to go.
+
+    it('reads ready and offers the export action on a book that has chapters', () => {
       render(healthyBook());
       expand('export');
-      expect(stateOf('export')).toBe('unavailable');
-      expect(text('[data-testid="spine-unavailable-export"]').length).toBeGreaterThan(20);
+      expect(stateOf('export')).toBe('ready');
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-action-export"]'))).not.toBeNull();
+    });
+
+    it('emits open-export when that action is pressed, so the host can route to the screen', () => {
+      render(healthyBook());
+      expand('export');
+      const emitted: StageActionEvent[] = [];
+      component.stageAction.subscribe(e => emitted.push(e));
+      (fixture.debugElement.query(By.css('[data-testid="spine-action-export"]')).nativeElement as HTMLElement).click();
+      expect(emitted).toEqual([{ stage: 'export', action: 'open-export' }]);
+    });
+
+    it('never renders the retired "no export screen" sentence, in either language', () => {
+      for (const lang of ['he', 'en'] as const) {
+        render(healthyBook(), lang);
+        expand('export');
+        expect(fixture.debugElement.query(By.css('[data-testid="spine-unavailable-export"]'))).toBeNull();
+        expect(stateOf('export')).not.toBe('unavailable');
+      }
     });
 
     it('renders the review progress from the two counts, without deriving open from the others', () => {
@@ -355,7 +382,7 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       for (const lang of ['he', 'en'] as const) {
         render(signals({ chapters: [], chaptersWithText: 0 }), lang);
         expect(text('[data-testid="spine-stage-state-briefs"]')).toBe(STATE_LABELS['blocked'][lang]);
-        expect(text('[data-testid="spine-stage-state-export"]')).toBe(STATE_LABELS['unavailable'][lang]);
+        expect(text('[data-testid="spine-stage-state-export"]')).toBe(STATE_LABELS['blocked'][lang]);
       }
     });
   });

@@ -755,6 +755,28 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(() => component.onSpineAction({ stage: 'briefs', action: 'build-briefs' })).not.toThrow();
       expect(() => component.onSpineAction({ stage: 'export', action: 'open-export' })).not.toThrow();
     });
+
+    // ── w4: the two ways to reach the export screen ────────────────────────────────────────────────
+
+    it('the spine Export action leaves the page through the openExport output (the host owns routing)', () => {
+      let exports = 0;
+      component.openExport.subscribe(() => exports++);
+
+      component.onSpineAction({ stage: 'export', action: 'open-export' });
+
+      expect(exports).toBe(1);
+    });
+
+    it('the header Export button raises the SAME output, so both entry points land in one place', () => {
+      let exports = 0;
+      component.openExport.subscribe(() => exports++);
+
+      const btn = fixture.debugElement.query(By.css('[data-testid="dashboard-export-btn"]'));
+      expect(btn).withContext('the dashboard carries its own way to export').not.toBeNull();
+      (btn.nativeElement as HTMLElement).click();
+
+      expect(exports).toBe(1);
+    });
   });
 
   // ── Wave 3 / w2: the live contradiction the brief reproduced, asserted on the HOST ────────────────
@@ -779,7 +801,8 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(stateOf('briefs')).toBe('blocked');
       expect(stateOf('review')).toBe('blocked');
       expect(stateOf('chapter-passes')).toBe('blocked');
-      expect(stateOf('export')).toBe('unavailable');
+      // w4: the export screen exists, so stage 5 states this BOOK's truth (nothing to export yet).
+      expect(stateOf('export')).toBe('blocked');
       // The Import row is the one that opens, and it is the one that offers the action.
       expect(fixture.debugElement.query(By.css('[data-testid="spine-stage-body-import"]'))).not.toBeNull();
       expect(fixture.debugElement.query(By.css('[data-testid="spine-action-import"]'))).not.toBeNull();

@@ -231,6 +231,7 @@
             [chapters]="book.chapters"
             (openChapter)="onOpenChapterFromDashboard($event)"
             (openImport)="goToImport()"
+            (openExport)="goToExport()"
             (switchToReview)="onReviewModeChange('review')">
           </app-book-dashboard>
         }

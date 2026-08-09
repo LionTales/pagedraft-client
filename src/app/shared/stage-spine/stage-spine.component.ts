@@ -7,7 +7,6 @@ import {
   COMPACT_ARIA_LABEL,
   COMPACT_UNKNOWN_LABEL,
   DETAILS_TOGGLE_LABEL,
-  EXPORT_UNAVAILABLE_REASON,
   PER_CHAPTER_LABEL,
   SPINE_ARIA_LABEL,
   STAGE_EXPLANATION,
@@ -33,6 +32,7 @@ import {
   StageSpineSignals,
   StageStatus,
   deriveStageSpine,
+  emptyStageSpineSignals,
   focusStageId,
 } from './stage-spine.model';
 
@@ -112,7 +112,7 @@ export interface StageActionEvent {
  * ── The two hard rules ────────────────────────────────────────────────────────────────────────────
  * 1. Nothing is presented as done unless the app computed it. Stage 1 is derived from the chapters (the
  *    old `Structure` was the literal string 'done'), stage 4 makes no book-level claim at all, and
- *    stage 5 is `unavailable` WITH a reason until w4 builds its screen.
+ *    stage 5 reads the chapters too - `blocked` when there are none, which is the server's own 409.
  * 2. Tokens only (`--pd-*`), no em-dash or en-dash in any user-facing string, no model or provider
  *    identity anywhere including in the `behind` reasons, and Syncfusion is not touched.
  */
@@ -230,11 +230,6 @@ export interface StageActionEvent {
                 <!-- Stage 3's working-through progress, straight off the two counts. -->
                 @if (progressText(stage); as progress) {
                   <p class="stage-line" data-testid="spine-progress-review">{{ progress }}</p>
-                }
-
-                <!-- Stage 5's honest reason while no export screen exists. -->
-                @if (stage.id === 'export' && stage.state === 'unavailable') {
-                  <p class="stage-line" data-testid="spine-unavailable-export">{{ text(EXPORT_UNAVAILABLE_REASON) }}</p>
                 }
 
                 <!-- Stage 4: the ENTRY POINT into the per-chapter breakdown. Never a book-level tick. -->
@@ -667,16 +662,14 @@ export class StageSpineComponent implements OnInit, OnChanges {
   /** Which density to draw. See {@link SpineDensity}. */
   @Input() density: SpineDensity = 'full';
 
-  /** Everything the spine renders from. Replaced wholesale by the host on every change. */
-  @Input() signals: StageSpineSignals = {
-    chapters: null,
-    chaptersWithText: null,
-    summary: null,
-    review: null,
-    summaryRunning: false,
-    reviewRunning: false,
-    exportSurfaceAvailable: false,
-  };
+  /**
+   * Everything the spine renders from. Replaced wholesale by the host on every change.
+   *
+   * The default is the SHARED empty-signals factory rather than a literal: a local literal is how a copy of
+   * this object eventually drifts from the real one (it already lacked `chapterCount`, and it pinned the
+   * export build flag to a stale `false`).
+   */
+  @Input() signals: StageSpineSignals = emptyStageSpineSignals();
 
   /** A stage row's action was pressed. The host owns what each action actually does. */
   @Output() stageAction = new EventEmitter<StageActionEvent>();
@@ -704,7 +697,6 @@ export class StageSpineComponent implements OnInit, OnChanges {
   readonly SPINE_ARIA_LABEL = SPINE_ARIA_LABEL;
   readonly COMPACT_ARIA_LABEL = COMPACT_ARIA_LABEL;
   readonly DETAILS_TOGGLE_LABEL = DETAILS_TOGGLE_LABEL;
-  readonly EXPORT_UNAVAILABLE_REASON = EXPORT_UNAVAILABLE_REASON;
   readonly CHAPTER_RUNNING_LABEL = CHAPTER_RUNNING_LABEL;
 
   /**

@@ -7,7 +7,7 @@ import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookDto } from '../../core/models/book';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
-import { StageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
+import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 
 @Component({
   selector: 'app-dashboard',
@@ -314,8 +314,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
         // The registry can only raise these, never lower them: see the note above.
         summaryRunning: this.runningBriefs.has(b.id),
         reviewRunning: this.runningReview.has(b.id),
-        // No export screen in this build of the client (w4 builds it).
-        exportSurfaceAvailable: false,
+        // w4's export screen exists, and stage 5 needs nothing this row does not already have: it derives
+        // from `chapterCount` alone (the M1 count), so it is REAL on the books list for free - ready when
+        // there are chapters, blocked by Import when there are none.
+        exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
       });
     }
     this.spineSignals = next;
@@ -323,16 +325,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   /** This row's spine signals. Never null once the list has landed; an empty fallback keeps a race safe. */
   spineSignalsFor(book: BookDto): StageSpineSignals {
-    return this.spineSignals.get(book.id) ?? {
-      chapters: null,
-      chapterCount: null,
-      chaptersWithText: null,
-      summary: null,
-      review: null,
-      summaryRunning: false,
-      reviewRunning: false,
-      exportSurfaceAvailable: false,
-    };
+    // The shared empty-signals factory, not a literal: a second copy of this object is how the export
+    // build flag drifts on one surface only, and the race path is exactly where nobody would look.
+    return this.spineSignals.get(book.id) ?? emptyStageSpineSignals();
   }
 
   cancelCreate(): void {

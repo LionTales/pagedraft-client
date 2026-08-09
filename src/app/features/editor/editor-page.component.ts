@@ -27,7 +27,7 @@ import {
 } from '../../shared/analysis-run-dialog/analysis-run-dialog.component';
 import { flyToActivityCenter } from '../../shared/analysis-run-dialog/minimize-flight';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
-import { StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
+import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { LanguageIssue } from '../../core/models/language-engine';
 import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-analysis';
@@ -434,7 +434,8 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
       review: null,
       summaryRunning: jobs.some(j => j.kind === 'summary'),
       reviewRunning: jobs.some(j => j.kind === 'review'),
-      exportSurfaceAvailable: false,
+      // w4's export screen exists; stage 5 reads the chapter list this route already holds.
+      exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
     };
   }
 
@@ -1362,6 +1363,20 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
   goToImport(): void {
     if (!this.bookId) return;
     this.router.navigate(['/books', this.bookId, 'import']);
+  }
+
+  /**
+   * Wave 3 / w4: go to the export screen. Raised by the book dashboard, from either of its two entry points
+   * (the spine's Export stage and the header button).
+   *
+   * Deliberately does NOT save first, unlike {@link goBackToBooks}: the export reads what is SAVED on the
+   * server, and silently writing the open document on the way to a download would make the file the user
+   * gets depend on which route they took to it. The editor's own canDeactivate guard still asks about
+   * unsaved work, which is the right place for that question.
+   */
+  goToExport(): void {
+    if (!this.bookId) return;
+    this.router.navigate(['/books', this.bookId, 'export']);
   }
 
   onEditorCreated(): void {

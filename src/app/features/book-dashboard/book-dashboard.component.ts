@@ -24,7 +24,7 @@ import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
 import { CharacterRegisterComponent } from './character-register.component';
 import { StageActionEvent, StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
-import { ChapterPassSignal, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
+import { ChapterPassSignal, EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 
 /** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
@@ -52,7 +52,8 @@ export type DashboardLabelKey =
   | 'plotStructure' | 'setup' | 'risingAction' | 'climax' | 'fallingAction' | 'resolution'
   | 'pacing' | 'conflicts' | 'storyUnparseable' | 'noStory'
   | 'ask' | 'askPlaceholder' | 'asking' | 'citations'
-  | 'profileLoadError' | 'profileRefreshError' | 'askFailed' | 'chapter';
+  | 'profileLoadError' | 'profileRefreshError' | 'askFailed' | 'chapter'
+  | 'export';
 
 export const DASHBOARD_LABELS_HE: Record<DashboardLabelKey, string> = {
   title: 'לוח ספר',
@@ -91,6 +92,7 @@ export const DASHBOARD_LABELS_HE: Record<DashboardLabelKey, string> = {
   profileRefreshError: 'שגיאה ברענון הפרופיל',
   askFailed: 'שגיאה בשאלה',
   chapter: 'פרק',
+  export: 'ייצוא',
 };
 
 export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
@@ -130,6 +132,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
   profileRefreshError: 'Could not refresh the profile',
   askFailed: 'Could not answer the question',
   chapter: 'Chapter',
+  export: 'Export',
 };
 
 @Component({
@@ -151,14 +154,27 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     <div class="book-dashboard" [attr.dir]="bookDir">
       <header class="dashboard-header">
         <h3 class="dashboard-title">{{ label('title') }}: {{ bookTitle }}</h3>
-        <button
-          type="button"
-          class="refresh-btn"
-          [disabled]="refreshing"
-          (click)="onRefresh()"
-          [title]="label('refresh')">
-          {{ refreshing ? '…' : '⟳' }}
-        </button>
+        <div class="header-actions">
+          <!-- Wave 3 / w4: the second way to reach export, beside the spine's own stage-5 action. It
+               raises the SAME output, so both land on /books/:bookId/export. Always enabled: the export
+               screen states the no-chapters case itself, and a disabled button here would need a reason
+               tooltip to be honest, which the 2.6 constraint rules out. -->
+          <button
+            type="button"
+            class="pd-btn pd-btn-ghost export-btn"
+            data-testid="dashboard-export-btn"
+            (click)="openExport.emit()">
+            {{ label('export') }}
+          </button>
+          <button
+            type="button"
+            class="refresh-btn"
+            [disabled]="refreshing"
+            (click)="onRefresh()"
+            [title]="label('refresh')">
+            {{ refreshing ? '…' : '⟳' }}
+          </button>
+        </div>
       </header>
 
       <!-- Wave 3 / w2: THE STAGE SPINE, replacing the four-step funnel stepper outright. Five stages,
@@ -472,6 +488,16 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
       font-weight: var(--pd-weight-bold);
       color: var(--pd-text);
     }
+    /* The header's action cluster. A plain flex row, so it MIRRORS with the header's [dir] and the two
+       buttons keep their reading order in Hebrew without a physical left/right anywhere. */
+    .header-actions {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: var(--pd-space-2);
+      flex: 0 0 auto;
+    }
+    .export-btn { white-space: nowrap; }
     .refresh-btn {
       padding: var(--pd-space-2) var(--pd-space-4);
       border: 1px solid var(--pd-border);
@@ -729,6 +755,13 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    * (editor-page owns the Router and already has `goToImport()`); the dashboard only names the intent.
    */
   @Output() openImport = new EventEmitter<void>();
+
+  /**
+   * Wave 3 / w4: go to the export screen. Raised by the spine's Export stage AND by the header button, for
+   * the same reason `openImport` exists: the Router lives on the host, and the dashboard only names intent.
+   * One output for both entry points, so the two cannot drift to different destinations.
+   */
+  @Output() openExport = new EventEmitter<void>();
 
   /**
    * rf-c02: the "review running" affordance is NO LONGER emitted from here. It is now derived by the editor
@@ -998,9 +1031,9 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    * from the host, the two status DTOs the rows fetch, and the registry's in-flight chapter jobs. Nothing
    * here is synthesized, and nothing is fetched a second time.
    *
-   * `exportSurfaceAvailable` is false until w4 builds the export screen, which makes stage 5 render
-   * `unavailable` WITH its reason instead of a bare grey box. It is a single flag by design: w4 flips it
-   * and the stage becomes real without the spine changing.
+   * `exportSurfaceAvailable` is the shared build fact ({@link EXPORT_SURFACE_AVAILABLE}), true since w4
+   * built `/books/:bookId/export`. Stage 5 is therefore computed from this page's chapter list like every
+   * other stage: `blocked` by Import with no chapters (the server's own 409), `ready` otherwise.
    */
   private rebuildSpineSignals(): void {
     const chapters: ChapterPassSignal[] | null = this.chapters
@@ -1022,7 +1055,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
       review: this.reviewStatus,
       summaryRunning: this.summaryBuilding,
       reviewRunning: this.reviewState === 'building',
-      exportSurfaceAvailable: false,
+      exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
     };
   }
 
@@ -1065,8 +1098,9 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    *                     the blocked row names the prerequisite AND hands the user the way to clear it.
    *  - `build-review`   scrolls to the same status block, where the review row's build lives.
    *  - `open-findings`  selects the Findings tab and scrolls to the ledger.
-   *  - `open-export`    unreachable until w4 sets `exportSurfaceAvailable`; it is handled here so the
-   *                     stage lights up the moment w4 flips the flag.
+   *  - `open-export`    leaves the page for `/books/:bookId/export`, so like `open-import` it goes up to the
+   *                     host, which owns the Router. The spine and the header button raise the SAME output,
+   *                     so the two ways to reach export cannot land in different places.
    */
   onSpineAction(event: StageActionEvent): void {
     switch (event.action) {
@@ -1084,7 +1118,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
         this.scrollToFindings();
         return;
       case 'open-export':
-        // w4 owns the destination. Nothing is claimed here until it exists.
+        this.openExport.emit();
         return;
     }
   }
