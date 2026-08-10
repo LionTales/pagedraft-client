@@ -184,6 +184,98 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     expect(text.nativeElement.textContent).toContain('Summary of one.');
   });
 
+  // ── f05: skip the self-fetch when the host supplies `chapters` at first mount ──────
+  // wave3-spine-fixes f05: this component used to always re-fetch the book detail itself
+  // (BookService.getById), duplicating the SAME book detail the host (book-dashboard, and its own host
+  // editor-page) already holds. Measured live as one of the "GET /api/books/{id} fires twice" duplicates.
+  // The `chapters` @Input is optional and additive: every test above never binds it, so `component.chapters`
+  // stays `null` and the original getById fetch runs exactly as before (pinned by 'renders one row per
+  // chapter...' above still passing unchanged).
+  describe('f05: host-supplied chapters @Input', () => {
+    it('builds rows straight from `chapters` on first mount WITHOUT calling BookService.getById', () => {
+      const getSpy = spyOn(bookServiceMock, 'getById');
+      component.chapters = makeBookDetail().chapters;
+      component.ngOnChanges({
+        bookId: new SimpleChange(null, 'book-1', true),
+        chapters: new SimpleChange(null, component.chapters, true),
+      });
+      fixture.detectChanges();
+
+      expect(getSpy).not.toHaveBeenCalled();
+      expect(query('[data-testid="cs-list-loading"]')).toBeNull();
+      const rows = queryAll('.cs-row');
+      expect(rows.length).toBe(2);
+      expect(query('[data-testid="cs-row-ch-1"]')).not.toBeNull();
+      expect(query('[data-testid="cs-row-ch-2"]')).not.toBeNull();
+    });
+
+    it('still loads each row summary after building rows from `chapters`', () => {
+      component.chapters = [makeBookDetail().chapters[0]];
+      component.ngOnChanges({
+        bookId: new SimpleChange(null, 'book-1', true),
+        chapters: new SimpleChange(null, component.chapters, true),
+      });
+      fixture.detectChanges();
+
+      getSummarySubjects.get('ch-1')!.next(makeView({ chapterId: 'ch-1', summaryText: 'From host chapters.' }));
+      fixture.detectChanges();
+      expandRow('ch-1');
+
+      const row1 = query('[data-testid="cs-row-ch-1"]');
+      const text = row1.query(By.css('[data-testid="cs-summary-text"]'));
+      expect(text.nativeElement.textContent).toContain('From host chapters.');
+    });
+
+    it('renders the empty state (no getById fallback) when the host supplies an EMPTY chapters array', () => {
+      const getSpy = spyOn(bookServiceMock, 'getById');
+      component.chapters = [];
+      component.ngOnChanges({
+        bookId: new SimpleChange(null, 'book-1', true),
+        chapters: new SimpleChange(null, [], true),
+      });
+      fixture.detectChanges();
+
+      expect(getSpy).not.toHaveBeenCalled();
+      expect(query('[data-testid="cs-empty"]')).not.toBeNull();
+    });
+
+    it('falls back to the self-fetch on a LATER book switch even with chapters bound (unchanged path)', () => {
+      const getSpy = spyOn(bookServiceMock, 'getById').and.callThrough();
+      // First mount, fast path: no fetch.
+      component.chapters = makeBookDetail().chapters;
+      component.ngOnChanges({
+        bookId: new SimpleChange(null, 'book-1', true),
+        chapters: new SimpleChange(null, component.chapters, true),
+      });
+      fixture.detectChanges();
+
+      // A later book switch (this dashboard instance stays open): the host clears chapters to null while
+      // its own reload is in flight, same as the real editor-page/book-dashboard sequence.
+      component.bookId = 'book-2';
+      component.chapters = null;
+      component.ngOnChanges({
+        bookId: new SimpleChange('book-1', 'book-2', false),
+        chapters: new SimpleChange(makeBookDetail().chapters, null, false),
+      });
+      fixture.detectChanges();
+
+      expect(getSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('takes the original self-fetch path when chapters is never bound (every pre-existing caller)', () => {
+      // No chapters assignment at all - component.chapters stays at its default (null), and `changes` never
+      // carries a 'chapters' key, matching every spec above this describe block.
+      triggerInit();
+      expect(query('[data-testid="cs-list-loading"]')).not.toBeNull();
+
+      getByIdSubject.next(makeBookDetail());
+      getByIdSubject.complete();
+      fixture.detectChanges();
+
+      expect(queryAll('.cs-row').length).toBe(2);
+    });
+  });
+
   // ── Refresh on build completion (rf-f04 / build-complete fan-out) ─────────────────
 
   it('re-fetches summaries IN PLACE when refreshSignal changes, replacing a stale "no summary" state', () => {

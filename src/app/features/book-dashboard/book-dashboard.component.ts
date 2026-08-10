@@ -235,6 +235,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
             <app-book-chapter-summaries
               [bookId]="bookId"
               [bookLanguage]="bookLanguage"
+              [chapters]="chapters"
               [refreshSignal]="summaryDerivedRefresh">
             </app-book-chapter-summaries>
           </app-collapsible-section>

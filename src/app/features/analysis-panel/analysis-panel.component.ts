@@ -1153,8 +1153,17 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       // Switching book invalidates the baseline status read. w5: there is no build or poll to tear down
       // here any more (both moved to the dashboard row), so the reset is just dropping the previous book's
       // snapshot and cancelling any status GET still in flight for it.
+      //
+      // wave3-spine-fixes f05: the (re)load used to sit in an UNGUARDED `if (this.bookId)` below this
+      // block, so it re-ran on every chapterId/sceneId-only change too (this outer `if` also opens on
+      // those) - a same-book, same-language chapter switch cannot change the book-wide baseline status,
+      // so that was a pure duplicate GET, measured live as one of the three style-baseline reads firing
+      // before any interaction. Scoped to `changes['bookId']` (paired with the reset right above) so the
+      // (re)load runs exactly when the snapshot it feeds was just invalidated: the initial mount and a
+      // real book switch, not a chapter/scene navigation within the same book.
       if (changes['bookId']) {
         this.resetStyleBaselineStatus();
+        this.loadStyleBaselineStatus();
       }
       if (this.bookId && this.chapterId) {
         this.loadTemplates();
@@ -1163,9 +1172,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         // version-related helpers (isVersionReverted / isVersionLocked)
         // have up-to-date data regardless of the currently active sub-tab.
         this.loadVersions();
-      }
-      if (this.bookId) {
-        this.loadStyleBaselineStatus();
       }
     }
     if (changes['bookLanguage'] && this.bookId && this.chapterId) {

@@ -13,6 +13,7 @@ import { BookService } from '../../core/services/book.service';
 import { ChapterSummaryService } from '../../core/services/chapter-summary.service';
 import { ChapterSummaryViewDto } from '../../core/models/chapter-summary';
 import { StructuredChunkSummaryData } from '../../core/models/analysis-context';
+import { ChapterSummaryDto } from '../../core/models/book';
 
 /**
  * One chapter row in the summaries list: the chapter identity (id + title) plus its loaded dual-surface
@@ -67,9 +68,16 @@ interface ChapterSummaryRow {
  * the structured brief SEEDED with the edited summary, so the whole-book review reflects the change. The
  * re-derive is synchronous (one chapter, one model call); its running + terminal state is reflected per row.
  *
- * Self-contained: it fetches the chapter list itself (BookService.getById) and each chapter's summary
- * (ChapterSummaryService), mirroring how the sibling dashboard children own their own data fetch. Full he/en
- * parity + RTL ([dir] follows bookLanguage, not the dashboard chrome).
+ * Fetches each chapter's summary itself (ChapterSummaryService) - that per-row read has no other source.
+ * The CHAPTER LIST is different: wave3-spine-fixes f05 found this surface re-fetching the same book detail
+ * (BookService.getById) the host already holds and passes down as far as `book-dashboard`'s own `chapters`
+ * @Input, one of the "GET /api/books/{id} fires twice" duplicates measured live. `chapters` below is that
+ * same host-supplied list, forwarded one level further; when it is present at FIRST mount this component
+ * builds its rows from it instead of re-fetching. A LATER context switch (a book swap while this dashboard
+ * instance stays open) keeps the original self-contained fetch: the host clears `chapters` to null while
+ * its own reload for the new book is in flight, so there is nothing fresh to adopt at that moment, and folding
+ * that path in too was judged out of scope for the trigger this fix targets. A caller that never binds
+ * `chapters` at all (every existing spec) sees `this.chapters` stay `null` and the original fetch, unchanged.
  */
 @Component({
   selector: 'app-book-chapter-summaries',
@@ -433,6 +441,13 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
    * chapters whose briefs finished after mount (see plan rf-f04 / build-complete fan-out).
    */
   @Input() refreshSignal = 0;
+  /**
+   * wave3-spine-fixes f05. The host's already-loaded chapter list (book-dashboard's own `chapters` @Input,
+   * bound straight through). Optional and display-scoped only: used to skip this component's OWN
+   * `BookService.getById` on first mount when present (see the class docstring). Left `null` by every
+   * caller that does not bind it, which preserves the original self-contained fetch for them exactly.
+   */
+  @Input() chapters: ChapterSummaryDto[] | null = null;
 
   rows: ChapterSummaryRow[] = [];
   loadingList = false;
@@ -462,6 +477,16 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['bookId'] || changes['bookLanguage']) {
+      const bookIdChange = changes['bookId'];
+      // f05: first mount with the host's chapter list already in hand (see the class docstring) - build
+      // straight from it instead of re-fetching the same book detail the host already holds. Angular sets
+      // every bound @Input before calling ngOnChanges once with all of them, so `this.chapters` already
+      // holds the host's array here if it was bound at all. `isFirstChange()` keeps this to the mount only;
+      // a later book switch (this dashboard instance stays open) falls through to the unchanged fetch below.
+      if (bookIdChange?.isFirstChange() && this.bookId && this.chapters) {
+        this.buildRowsFromChapters(this.chapters);
+        return;
+      }
       this.loadChapterList();
       return;
     }
@@ -506,28 +531,7 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
       this.bookService.getById(bookId).subscribe({
         next: (detail) => {
           if (this.bookId !== bookId) return;
-          this.rows = (detail.chapters ?? [])
-            .slice()
-            .sort((a, b) => a.order - b.order)
-            .map((c) => ({
-              chapterId: c.id,
-              title: c.title,
-              order: c.order,
-              view: null,
-              loading: false,
-              loadError: false,
-              editing: false,
-              draft: '',
-              saving: false,
-              saveError: false,
-              offerRederive: false,
-              rederiving: false,
-              rederiveResult: null,
-              collapsed: true,
-            }));
-          this.loadingList = false;
-          this.cdr.detectChanges();
-          this.rows.forEach((r) => this.loadRowSummary(r));
+          this.buildRowsFromChapters(detail.chapters ?? []);
         },
         error: () => {
           if (this.bookId !== bookId) return;
@@ -537,6 +541,38 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
         },
       })
     );
+  }
+
+  /**
+   * f05: build `rows` directly from an already-known chapter list (either the host-supplied `chapters`
+   * @Input at first mount, or `detail.chapters` from this component's own `loadChapterList` fetch) and
+   * kick off each row's own summary load - the one part no chapter list, host-supplied or fetched, carries.
+   * Extracted so both sources share exactly one row-shape and one "then load every summary" step.
+   */
+  private buildRowsFromChapters(chapters: ChapterSummaryDto[]): void {
+    this.rows = chapters
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .map((c) => ({
+        chapterId: c.id,
+        title: c.title,
+        order: c.order,
+        view: null,
+        loading: false,
+        loadError: false,
+        editing: false,
+        draft: '',
+        saving: false,
+        saveError: false,
+        offerRederive: false,
+        rederiving: false,
+        rederiveResult: null,
+        collapsed: true,
+      }));
+    this.loadingList = false;
+    this.listError = false;
+    this.cdr.detectChanges();
+    this.rows.forEach((r) => this.loadRowSummary(r));
   }
 
   /**

@@ -1571,6 +1571,42 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect((component as any).pollStyleBaselineBuild).toBeUndefined();
       expect((component as any).styleBaselineBuilding).toBeUndefined();
     });
+
+    // wave3-spine-fixes f05: `loadStyleBaselineStatus()` used to sit in an ngOnChanges branch keyed on
+    // `changes['bookId'] || changes['chapterId'] || changes['sceneId']`, so a same-book chapter switch
+    // re-fired it even though the book-wide baseline it reads cannot have changed - measured live as one
+    // of three style-baseline GETs firing before any interaction. Pinning the fix at the READ boundary
+    // (bookId is already set from the outer beforeEach) rather than the network layer.
+    it('does NOT re-read the style baseline status on a chapterId-only change (same book, same language)', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const getSpy = spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(of(baselineStatus()));
+
+      component.chapterId = 'chap-2';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
+
+      expect(getSpy).not.toHaveBeenCalled();
+    });
+
+    it('does NOT re-read the style baseline status on a sceneId-only change (same book, same language)', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const getSpy = spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(of(baselineStatus()));
+
+      component.sceneId = 'scene-2';
+      component.ngOnChanges({ sceneId: new SimpleChange('scene-1', 'scene-2', false) });
+
+      expect(getSpy).not.toHaveBeenCalled();
+    });
+
+    it('DOES re-read the style baseline status on a real bookId change', () => {
+      const styleSvc = TestBed.inject(StyleBaselineService);
+      const getSpy = spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(of(baselineStatus()));
+
+      component.bookId = 'book-2';
+      component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
+
+      expect(getSpy).toHaveBeenCalledTimes(1);
+      expect(getSpy).toHaveBeenCalledWith('book-2', 'he');
+    });
   });
 
   // Bug 1 (rf-c01): starting an async chapter Proofread/Line Edit run must publish the job to the
