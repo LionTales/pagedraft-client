@@ -43,7 +43,7 @@ import {
  * ── Why a ROUTE and not a dialog ──────────────────────────────────────────────────────────────────
  * `/books/:bookId/export`, a sibling of `/books/:bookId/import`, for three reasons:
  *   1. the spine's Export stage needs a real destination it can send the user to, and "open a dialog on
- *      whatever screen you happen to be on" is not one - the spine is mounted on four surfaces now;
+ *      whatever screen you happen to be on" is not one - the spine is mounted on five surfaces now;
  *   2. the guides are user-visible runtime content and w6 links stages to guide sections, so export has to
  *      be a URL that a guide can name; a dialog has no address;
  *   3. import, the stage at the other end of the same workflow, is already a route. One shape for the two

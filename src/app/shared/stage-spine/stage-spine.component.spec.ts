@@ -59,6 +59,23 @@ function healthyBook(): StageSpineSignals {
   });
 }
 
+/**
+ * NIT 48. `healthyBook()` alone only ever renders `ready`, so the 300px contract never measured the
+ * elements that ONLY appear on the other states: the `behind` action button carries the longest label in
+ * the whole vocabulary ("בנייה מחדש של התקצירים" / "Rebuild the briefs"), the `blocked` row carries the
+ * blocked sentence, and the `behind` row carries the magnitude badge and reason line. One book that is
+ * simultaneously `ready` (import, export), `behind` (briefs, with a magnitude and a reason) and `blocked`
+ * (review, on the missing briefs) exercises all three in a single render.
+ */
+function mixedStatesBook(): StageSpineSignals {
+  return signals({
+    chapters: chapters(4),
+    chaptersWithText: 4,
+    summary: summary({ ready: false, staleCount: 2 }),
+    review: review({ hasBriefs: false }),
+  });
+}
+
 describe('StageSpineComponent (Wave 3 / w2)', () => {
   let fixture: ComponentFixture<StageSpineComponent>;
   let component: StageSpineComponent;
@@ -128,6 +145,29 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       );
     }
 
+    /** Every stage's state-chip element, in canonical order. Always in the DOM (part of the row head). */
+    function stateEls(): HTMLElement[] {
+      return SPINE_STAGE_ORDER.map(
+        id => fixture.debugElement.query(By.css(`[data-testid="spine-stage-state-${id}"]`)).nativeElement as HTMLElement,
+      );
+    }
+
+    /**
+     * NIT 48. The five clipping/ellipsis/zero-size checks the Hebrew name test always ran, factored out so
+     * every element this contract measures - name, state chip, action button, blocked sentence, behind
+     * block - gets the SAME checks in BOTH languages, including the zero-size guard the English name test
+     * used to skip (a box that trivially satisfies "no clipping" by rendering nothing).
+     */
+    function assertFits(el: HTMLElement, ctx: string): void {
+      expect(el.scrollWidth).withContext(`${ctx} horizontal clip`).toBeLessThanOrEqual(el.clientWidth + 1);
+      expect(el.scrollHeight).withContext(`${ctx} vertical clip`).toBeLessThanOrEqual(el.clientHeight + 1);
+      const style = getComputedStyle(el);
+      expect(style.textOverflow).withContext(`${ctx} text-overflow`).not.toBe('ellipsis');
+      expect(style.whiteSpace).withContext(`${ctx} white-space`).not.toBe('nowrap');
+      expect(el.getBoundingClientRect().width).withContext(`${ctx} width`).toBeGreaterThan(8);
+      expect(el.getBoundingClientRect().height).withContext(`${ctx} height`).toBeGreaterThan(6);
+    }
+
     it('shows all five HEBREW names IN FULL at 300px, with no clipping and no ellipsis', () => {
       at300('he');
 
@@ -136,19 +176,9 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
 
       nameEls().forEach((el, i) => {
         const ctx = `stage name "${expected[i]}"`;
-        // 1. The WHOLE name is in the DOM, character for character.
+        // The WHOLE name is in the DOM, character for character, before the shared shape checks below.
         expect(el.textContent!.trim()).withContext(ctx).toBe(expected[i]);
-        // 2. Nothing is cut off horizontally: the text fits inside its own box (it wraps if it must).
-        expect(el.scrollWidth).withContext(`${ctx} horizontal clip`).toBeLessThanOrEqual(el.clientWidth + 1);
-        // 3. Nothing is cut off vertically either, which is how a wrapped name gets hidden instead.
-        expect(el.scrollHeight).withContext(`${ctx} vertical clip`).toBeLessThanOrEqual(el.clientHeight + 1);
-        // 4. The two mechanisms the brief FORBIDS are absent, not merely unused at this width.
-        const style = getComputedStyle(el);
-        expect(style.textOverflow).withContext(`${ctx} text-overflow`).not.toBe('ellipsis');
-        expect(style.whiteSpace).withContext(`${ctx} white-space`).not.toBe('nowrap');
-        // 5. And the name is genuinely rendered, not a zero-size box that trivially satisfies the above.
-        expect(el.getBoundingClientRect().width).withContext(`${ctx} width`).toBeGreaterThan(8);
-        expect(el.getBoundingClientRect().height).withContext(`${ctx} height`).toBeGreaterThan(6);
+        assertFits(el, ctx);
       });
     });
 
@@ -156,12 +186,81 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       at300('en');
       const expected = SPINE_STAGE_ORDER.map(id => STAGE_NAMES[id].en);
       nameEls().forEach((el, i) => {
-        expect(el.textContent!.trim()).toBe(expected[i]);
-        expect(el.scrollWidth).toBeLessThanOrEqual(el.clientWidth + 1);
-        expect(el.scrollHeight).toBeLessThanOrEqual(el.clientHeight + 1);
-        expect(getComputedStyle(el).textOverflow).not.toBe('ellipsis');
-        expect(getComputedStyle(el).whiteSpace).not.toBe('nowrap');
+        const ctx = `stage name "${expected[i]}"`;
+        expect(el.textContent!.trim()).withContext(ctx).toBe(expected[i]);
+        assertFits(el, ctx);
       });
+    });
+
+    it('shows the state chip in full at 300px, across ready/behind/blocked/per-chapter, in both languages', () => {
+      for (const lang of ['he', 'en']) {
+        const host = fixture.nativeElement as HTMLElement;
+        host.style.width = '300px';
+        host.style.boxSizing = 'border-box';
+        render(mixedStatesBook(), lang);
+
+        // Sanity: this fixture really does exercise four distinct chip words, not four copies of "ready".
+        expect(stateOf('import')).toBe('ready');
+        expect(stateOf('briefs')).toBe('behind');
+        expect(stateOf('review')).toBe('blocked');
+        expect(stateOf('chapter-passes')).toBe('per-chapter');
+        expect(stateOf('export')).toBe('ready');
+
+        stateEls().forEach((el, i) => {
+          assertFits(el, `${lang} state chip "${SPINE_STAGE_ORDER[i]}" (${el.textContent!.trim()})`);
+        });
+      }
+    });
+
+    it('shows the longest action-button label ("Rebuild the briefs") in full at 300px, in both languages', () => {
+      for (const lang of ['he', 'en']) {
+        const host = fixture.nativeElement as HTMLElement;
+        host.style.width = '300px';
+        host.style.boxSizing = 'border-box';
+        render(mixedStatesBook(), lang);
+        expand('briefs');
+
+        const expected = lang === 'he' ? 'בנייה מחדש של התקצירים' : 'Rebuild the briefs';
+        const el = fixture.debugElement.query(By.css('[data-testid="spine-action-briefs"]'))
+          .nativeElement as HTMLElement;
+        expect(el.textContent!.trim()).withContext(`${lang} action label`).toBe(expected);
+        assertFits(el, `${lang} action button`);
+      }
+    });
+
+    it('shows the blocked sentence in full at 300px, in both languages', () => {
+      for (const lang of ['he', 'en']) {
+        const host = fixture.nativeElement as HTMLElement;
+        host.style.width = '300px';
+        host.style.boxSizing = 'border-box';
+        render(mixedStatesBook(), lang);
+        expand('review');
+
+        const el = fixture.debugElement.query(By.css('[data-testid="spine-blocked-review"]'))
+          .nativeElement as HTMLElement;
+        expect(el.textContent!.trim().length).withContext(`${lang} blocked sentence non-empty`).toBeGreaterThan(0);
+        assertFits(el, `${lang} blocked sentence`);
+      }
+    });
+
+    it('shows the behind block (magnitude badge + reason) in full at 300px, in both languages', () => {
+      for (const lang of ['he', 'en']) {
+        const host = fixture.nativeElement as HTMLElement;
+        host.style.width = '300px';
+        host.style.boxSizing = 'border-box';
+        render(mixedStatesBook(), lang);
+        expand('briefs');
+
+        const block = fixture.debugElement.query(By.css('[data-testid="spine-behind-briefs"]'))
+          .nativeElement as HTMLElement;
+        assertFits(block, `${lang} behind block`);
+
+        const magnitude = fixture.debugElement.query(By.css('[data-testid="spine-behind-magnitude-briefs"]'))
+          .nativeElement as HTMLElement;
+        expect(magnitude.textContent!.trim().length).withContext(`${lang} behind magnitude non-empty`)
+          .toBeGreaterThan(0);
+        assertFits(magnitude, `${lang} behind magnitude`);
+      }
     });
 
     it('is a VERTICAL STACK, not a five-column strip: rows descend and each takes the full width', () => {
@@ -180,6 +279,18 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
         at300(lang);
         const el = root();
         expect(el.scrollWidth).withContext(`${lang} horizontal overflow`).toBeLessThanOrEqual(el.clientWidth + 1);
+      }
+    });
+
+    it('the COMPACT density never overflows the 300px panel horizontally either, in either language', () => {
+      for (const lang of ['he', 'en']) {
+        const host = fixture.nativeElement as HTMLElement;
+        host.style.width = '300px';
+        host.style.boxSizing = 'border-box';
+        fixture.componentRef.setInput('density', 'compact');
+        render(mixedStatesBook(), lang);
+        const el = fixture.debugElement.query(By.css('[data-testid="stage-spine-compact"]')).nativeElement as HTMLElement;
+        expect(el.scrollWidth).withContext(`${lang} compact horizontal overflow`).toBeLessThanOrEqual(el.clientWidth + 1);
       }
     });
 

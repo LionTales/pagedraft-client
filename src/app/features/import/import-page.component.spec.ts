@@ -22,11 +22,20 @@ import { ImportPageComponent } from './import-page.component';
 import { ImportService } from '../../core/services/import.service';
 import { BookService } from '../../core/services/book.service';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import {
   BookDetailDto,
   ImportPreviewChapterDto,
   ImportPreviewResponseDto,
 } from '../../core/models/book';
+
+function makeJob(overrides: Partial<TrackedJob> = {}): TrackedJob {
+  return {
+    id: 'j', kind: 'proofread', bookId: 'book-1', scopeLabel: 'פרק', titleHe: 'הגהה', titleEn: 'Proofread',
+    status: 'running', percent: 10, completedChunks: null, totalChunks: null, chunkClock: EMPTY_CHUNK_CLOCK,
+    message: '', startedAt: '', updatedAt: '', ...overrides,
+  };
+}
 
 function makeChapter(overrides: Partial<ImportPreviewChapterDto> = {}): ImportPreviewChapterDto {
   return {
@@ -434,6 +443,60 @@ describe('ImportPageComponent (c04)', () => {
       fixture.detectChanges();
       expect(compactSpine()!.getAttribute('dir')).toBe('rtl');
       expect(compactSpine()!.textContent).toContain('ייבוא');
+    });
+  });
+
+  // ── NIT 51: the per-chapter `running` mark is read from the registry, not hardcoded ─────────────────
+  //
+  // `rebuildSpineSignals` used to set `running: false` on every chapter signal unconditionally - the one
+  // shape `StageSpineSignals` forbids ("nothing here may be synthesized by the host"). It now mirrors
+  // book-dashboard's and editor-page's `CHAPTER_SCOPED_KINDS` idiom.
+
+  describe('finding 51: the chapter breakdown reads real running state from the registry', () => {
+    it('marks a chapter running when a CHAPTER_SCOPED_KINDS job (proofread) targets it', async () => {
+      await setup('book-1');
+      book$.next({
+        ...makeBook('he'),
+        chapters: [
+          { id: 'c1', title: 'One', partName: null, order: 0, wordCount: 10, updatedAt: '' },
+          { id: 'c2', title: 'Two', partName: null, order: 1, wordCount: 10, updatedAt: '' },
+        ],
+      });
+      fixture.detectChanges();
+
+      activeJobs$.next([makeJob({ id: 'j-1', kind: 'proofread', bookId: 'book-1', chapterId: 'c1' })]);
+      fixture.detectChanges();
+
+      expect(component.spineSignals.chapters?.find((c) => c.chapterId === 'c1')?.running).toBeTrue();
+      expect(component.spineSignals.chapters?.find((c) => c.chapterId === 'c2')?.running).toBeFalse();
+    });
+
+    it('does not mark a chapter running for a kind outside CHAPTER_SCOPED_KINDS', async () => {
+      await setup('book-1');
+      book$.next({
+        ...makeBook('he'),
+        chapters: [{ id: 'c1', title: 'One', partName: null, order: 0, wordCount: 10, updatedAt: '' }],
+      });
+      fixture.detectChanges();
+
+      activeJobs$.next([makeJob({ id: 'j-2', kind: 'style-baseline', bookId: 'book-1', chapterId: 'c1' })]);
+      fixture.detectChanges();
+
+      expect(component.spineSignals.chapters?.find((c) => c.chapterId === 'c1')?.running).toBeFalse();
+    });
+
+    it('does not mark a chapter running for a job scoped to a DIFFERENT book', async () => {
+      await setup('book-1');
+      book$.next({
+        ...makeBook('he'),
+        chapters: [{ id: 'c1', title: 'One', partName: null, order: 0, wordCount: 10, updatedAt: '' }],
+      });
+      fixture.detectChanges();
+
+      activeJobs$.next([makeJob({ id: 'j-3', kind: 'proofread', bookId: 'other-book', chapterId: 'c1' })]);
+      fixture.detectChanges();
+
+      expect(component.spineSignals.chapters?.find((c) => c.chapterId === 'c1')?.running).toBeFalse();
     });
   });
 });

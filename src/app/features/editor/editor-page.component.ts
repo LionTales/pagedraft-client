@@ -311,8 +311,8 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
     if (value === 'edit' || value === 'review') {
       this.reviewMode = value;
       // rf-c02: no reconcile to re-evaluate. The "review running" affordance is derived from the job registry
-      // ({@link reviewBuildRunningSub}), which is independent of whether the dashboard is mounted, so switching
-      // modes cannot strand a stale flag.
+      // (the page-lifetime `jobRegistry.activeJobs$` subscription in {@link ngOnInit}), which is independent
+      // of whether the dashboard is mounted, so switching modes cannot strand a stale flag.
     }
   }
 

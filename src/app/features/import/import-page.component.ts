@@ -11,7 +11,7 @@ import {
 } from '../../core/models/book';
 import { ImportService } from '../../core/services/import.service';
 import { BookService } from '../../core/services/book.service';
-import { JobRegistryService } from '../../core/services/job-registry.service';
+import { CHAPTER_SCOPED_KINDS, JobRegistryService } from '../../core/services/job-registry.service';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
 import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 
@@ -384,6 +384,13 @@ export class ImportPageComponent implements OnInit, OnDestroy {
   private loadedChapters: ChapterSummaryDto[] | null = null;
   private briefsRunning = false;
   private reviewRunning = false;
+  /**
+   * NIT 51: chapter-scoped jobs in flight for THIS book, so stage 4's per-chapter breakdown can mark a
+   * running chapter the same way book-dashboard and editor-page do (the `CHAPTER_SCOPED_KINDS` idiom).
+   * This page hardcoded `running: false` on every chapter signal, the one shape the model file forbids -
+   * "nothing here may be synthesized by the host".
+   */
+  private runningChapterIds = new Set<string>();
   private jobsSub: Subscription | null = null;
 
   constructor(
@@ -416,6 +423,11 @@ export class ImportPageComponent implements OnInit, OnDestroy {
     this.jobsSub = this.jobRegistry.activeJobs$.subscribe((jobs) => {
       this.briefsRunning = jobs.some((j) => j.bookId === this.bookId && j.kind === 'summary');
       this.reviewRunning = jobs.some((j) => j.bookId === this.bookId && j.kind === 'review');
+      this.runningChapterIds = new Set(
+        jobs
+          .filter((j) => j.bookId === this.bookId && CHAPTER_SCOPED_KINDS.has(j.kind) && j.chapterId)
+          .map((j) => j.chapterId as string),
+      );
       this.rebuildSpineSignals();
     });
   }
@@ -432,7 +444,12 @@ export class ImportPageComponent implements OnInit, OnDestroy {
         ? chapters
             .slice()
             .sort((a, b) => a.order - b.order)
-            .map((c) => ({ chapterId: c.id, title: c.title, order: c.order, running: false }))
+            .map((c) => ({
+              chapterId: c.id,
+              title: c.title,
+              order: c.order,
+              running: this.runningChapterIds.has(c.id),
+            }))
         : null,
       chapterCount: chapters ? chapters.length : null,
       chaptersWithText: chapters ? chapters.filter((c) => c.wordCount > 0).length : null,

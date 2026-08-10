@@ -9,6 +9,24 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
 import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 
+/**
+ * NIT 52. `spineSignalsFor`'s fallback runs on every change-detection tick for any row not yet in the
+ * map (the brief race between the list rendering and `rebuildSpineSignals` landing). Calling the factory
+ * there handed the spine a NEW object identity on every such tick, which re-runs `deriveStageSpine`
+ * continuously for no reason - exactly the class of waste `rebuildSpineSignals`'s own doc comment already
+ * calls out for the map itself. One frozen instance, read-only, shared across every row that needs it.
+ */
+const EMPTY_SPINE_SIGNALS: Readonly<StageSpineSignals> = Object.freeze(emptyStageSpineSignals());
+
+/**
+ * NIT 53. Every bookId whose membership differs between two snapshots of a running-job set, added into
+ * `into` (a shared accumulator, so the briefs diff and the review diff land in one set together).
+ */
+function collectChangedIds(previous: ReadonlySet<string>, next: ReadonlySet<string>, into: Set<string>): void {
+  for (const id of previous) if (!next.has(id)) into.add(id);
+  for (const id of next) if (!previous.has(id)) into.add(id);
+}
+
 @Component({
   selector: 'app-dashboard',
   standalone: true,
@@ -274,6 +292,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.bookService.getAll().subscribe(list => {
       this.books = list;
+      // The list itself changed (rows added/removed/reordered): every row's signals are candidates.
       this.rebuildSpineSignals();
     });
     // No request: activeJobs$ is the registry's in-memory view-model of jobs already being tracked.
@@ -284,9 +303,16 @@ export class DashboardComponent implements OnInit, OnDestroy {
         if (job.kind === 'summary') briefs.add(job.bookId);
         if (job.kind === 'review') review.add(job.bookId);
       }
+      // NIT 53: a registry emission fires on every job tick, not only when a book's OWN running flag
+      // flips - most emissions change nothing for most books. Diff the two running sets against their
+      // previous values and rebuild only the bookIds whose membership actually moved, so an unrelated
+      // book's spine keeps the exact same signals object (and does not re-derive) on every unrelated tick.
+      const affected = new Set<string>();
+      collectChangedIds(this.runningBriefs, briefs, affected);
+      collectChangedIds(this.runningReview, review, affected);
       this.runningBriefs = briefs;
       this.runningReview = review;
-      this.rebuildSpineSignals();
+      if (affected.size > 0) this.rebuildSpineSignals(affected);
     });
   }
 
@@ -296,13 +322,21 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Rebuild every row's signals. Held in a MAP rather than assembled in the template getter, so a row
-   * hands the spine a stable object identity across change-detection ticks instead of a fresh one that
-   * would re-run the derivation continuously.
+   * Rebuild the given rows' signals (every row when `bookIds` is omitted, which is right for a books-list
+   * change). Held in a MAP rather than assembled in the template getter, so a row hands the spine a STABLE
+   * object identity across change-detection ticks instead of a fresh one that would re-run the derivation
+   * continuously - and, per NIT 53, an untouched row keeps its EXISTING object reference rather than being
+   * reallocated alongside whichever row actually changed.
    */
-  private rebuildSpineSignals(): void {
-    const next = new Map<string, StageSpineSignals>();
-    for (const b of this.books) {
+  private rebuildSpineSignals(bookIds?: ReadonlySet<string>): void {
+    const next = new Map<string, StageSpineSignals>(this.spineSignals);
+    const ids = bookIds ?? new Set(this.books.map(b => b.id));
+    for (const id of ids) {
+      const b = this.books.find(x => x.id === id);
+      if (!b) {
+        next.delete(id);
+        continue;
+      }
       next.set(b.id, {
         // No chapter list on this surface, and none is fetched: stage 4 makes no claim at all.
         chapters: null,
@@ -325,9 +359,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   /** This row's spine signals. Never null once the list has landed; an empty fallback keeps a race safe. */
   spineSignalsFor(book: BookDto): StageSpineSignals {
-    // The shared empty-signals factory, not a literal: a second copy of this object is how the export
-    // build flag drifts on one surface only, and the race path is exactly where nobody would look.
-    return this.spineSignals.get(book.id) ?? emptyStageSpineSignals();
+    // NIT 52: the SHARED frozen instance, not a call to the factory - a fresh object here on every
+    // change-detection tick is how a race-window row re-derives its spine continuously for no reason.
+    return this.spineSignals.get(book.id) ?? EMPTY_SPINE_SIGNALS;
   }
 
   cancelCreate(): void {

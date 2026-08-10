@@ -38,7 +38,12 @@ export const SPINE_STAGE_ORDER: readonly SpineStageId[] = [
  *  - `behind`       built, but what it was built from has moved. NOT an error, and it has a magnitude
  *                   and a reason (see {@link BehindReason}).
  *  - `ready`        built and current.
- *  - `unavailable`  no surface exists for this stage yet. Honest greying, WITH the reason.
+ *  - `unavailable`  no surface exists for this stage yet. Honest greying, WITH the reason. NIT 54: since
+ *                   w4 shipped the export screen ({@link EXPORT_SURFACE_AVAILABLE} is `true`), no stage
+ *                   in a shipped build can currently reach this state - it stays in the vocabulary as the
+ *                   deliberate build-fact seam {@link EXPORT_SURFACE_AVAILABLE} documents, so one of the
+ *                   six states here is presently unreachable rather than dead: a future stage without a
+ *                   screen yet, or a build flag flipped back, would use it again.
  */
 export type StageState = 'blocked' | 'not-started' | 'running' | 'behind' | 'ready' | 'unavailable';
 
@@ -131,8 +136,9 @@ export interface StageSpineSignals {
 
 /**
  * WHETHER THIS BUILD OF THE CLIENT HAS AN EXPORT SCREEN. w4 built it (`/books/:bookId/export`), so it is
- * true, and it is a CONSTANT rather than a literal repeated in each host for one reason: four surfaces mount
- * a spine, and four copies of a boolean is how one of them keeps saying "no export screen" for a release
+ * true, and it is a CONSTANT rather than a literal repeated in each host for one reason: five surfaces mount
+ * a spine (the books-list dashboard, the book dashboard, the editor, the import page and the export page
+ * itself), and five copies of a boolean is how one of them keeps saying "no export screen" for a release
  * after the screen shipped - a stage lying in the safe direction is still the class of lie this wave removes.
  *
  * It stays a signal rather than being deleted from the model because it is genuinely a build fact: the seam
@@ -145,7 +151,7 @@ export const EXPORT_SURFACE_AVAILABLE = true;
  * Signals with NOTHING known. The starting value for every host: each stage renders `unknown` (or, for the
  * two that need no signal, its honest constant) rather than a guess.
  *
- * Shared rather than re-declared per host on purpose. Four surfaces now mount a spine, and a per-host copy
+ * Shared rather than re-declared per host on purpose. Five surfaces now mount a spine, and a per-host copy
  * of this literal is how one of them eventually seeds `chaptersWithText: 0` instead of `null` and quietly
  * turns "not known yet" into "no text", which is the exact class of claim the wave exists to remove.
  */
@@ -548,8 +554,13 @@ function emptyStatus(id: SpineStageId): StageStatus {
  * the FIRST stage in canonical order that wants something from them. `ready`, `unavailable` and the
  * still-loading stages want nothing.
  *
- * When every stage is settled the focus falls to stage 4, because that is where the ongoing work lives
- * once the book-level builds are current. It is a default, not a claim: stage 4 still shows no tick.
+ * When every stage is GENUINELY SETTLED the focus falls to stage 4, because that is where the ongoing
+ * work lives once the book-level builds are current. It is a default, not a claim: stage 4 still shows no
+ * tick. That default is guarded to fire only on real settlement, not merely on "nothing wants attention
+ * yet" - the signals not having landed also produces a `find` miss (every stage reads `unknown`, `state`
+ * is `null` on all five), and defaulting to stage 4 there would open "Chapter editing passes" on first
+ * paint and then visibly jump to whichever stage actually wants attention the instant real data lands.
+ * While any stage is still `unknown`, this lands on stage 1 instead: the neutral, canonical starting point.
  */
 export function focusStageId(statuses: StageStatus[]): SpineStageId {
   const wants: ReadonlySet<StageState> = new Set<StageState>([
@@ -559,5 +570,7 @@ export function focusStageId(statuses: StageStatus[]): SpineStageId {
     'behind',
   ]);
   const found = statuses.find(s => s.state !== null && wants.has(s.state));
-  return found ? found.id : 'chapter-passes';
+  if (found) return found.id;
+  const stillLoading = statuses.some(s => s.unknown);
+  return stillLoading ? 'import' : 'chapter-passes';
 }

@@ -182,6 +182,10 @@ export const BEHIND_FALLBACK: Bi = {
  * `chaptersWithText === null` means NOT KNOWN and returns NO sentence. Both sentences below are positive
  * claims about the text in the book, and neither may be made from an absent number - the null used to be
  * coalesced to 0 by the caller, which turned "we have not been told" into "none of them has any text yet".
+ *
+ * NIT 50: both counts here get a singular form, exactly as {@link behindSentence} and
+ * {@link behindMagnitudeLabel} already do for their own counts - a one-chapter book used to render
+ * "1 chapters exist" / "יש 1 פרקים".
  */
 export function importDetail(
   chapterCount: number,
@@ -190,14 +194,27 @@ export function importDetail(
 ): string | null {
   if (chaptersWithText === null) return null;
   if (chapterCount > 0 && chaptersWithText === 0) {
-    return isolateDigits(lang === 'he'
-      ? `יש ${chapterCount} פרקים, אך עדיין אין בהם טקסט.`
+    if (lang === 'he') {
+      return isolateDigits(chapterCount === 1
+        ? 'יש פרק אחד, אך עדיין אין בו טקסט.'
+        : `יש ${chapterCount} פרקים, אך עדיין אין בהם טקסט.`);
+    }
+    return isolateDigits(chapterCount === 1
+      ? 'There is one chapter, but it has no text yet.'
       : `${chapterCount} chapters exist, but none of them has any text yet.`);
   }
   if (chaptersWithText > 0) {
-    return isolateDigits(lang === 'he'
-      ? `${chaptersWithText} מתוך ${chapterCount} פרקים מכילים טקסט.`
-      : `${chaptersWithText} of ${chapterCount} chapters contain text.`);
+    if (lang === 'he') {
+      const withText = chaptersWithText === 1 ? 'פרק אחד' : `${chaptersWithText}`;
+      const ofTotal = chapterCount === 1 ? 'פרק אחד' : `${chapterCount} פרקים`;
+      const verb = chaptersWithText === 1 ? 'מכיל' : 'מכילים';
+      return isolateDigits(`${withText} מתוך ${ofTotal} ${verb} טקסט.`);
+    }
+    const withText = chaptersWithText === 1 ? '1' : `${chaptersWithText}`;
+    const total = chapterCount === 1 ? '1' : `${chapterCount}`;
+    const chapterWord = chapterCount === 1 ? 'chapter' : 'chapters';
+    const verb = chaptersWithText === 1 ? 'contains' : 'contain';
+    return isolateDigits(`${withText} of ${total} ${chapterWord} ${verb} text.`);
   }
   return null;
 }

@@ -226,4 +226,55 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
       expect(component.label('newBook')).toBe('ספר חדש');
     });
   });
+
+  // ── NITs 52/53: the spine signals object identity is stable across ticks ───────────────────────────
+
+  describe('findings 52/53: signals object identity', () => {
+    it('finding 52: the fallback for a book not yet in the map is the SAME shared object every call', () => {
+      load([book({ id: 'a' })]);
+      const ghost = book({ id: 'ghost' });
+      const first = component.spineSignalsFor(ghost);
+      const second = component.spineSignalsFor(ghost);
+      expect(first).toBe(second);
+    });
+
+    it('finding 53: an unrelated row keeps its EXACT signals object when another row\'s job status changes', () => {
+      load([
+        book({ id: 'a', chapterCount: 4, chaptersWithTextCount: 4 }),
+        book({ id: 'b', chapterCount: 4, chaptersWithTextCount: 4 }),
+      ]);
+      const beforeA = component.spineSignalsFor(book({ id: 'a' }));
+
+      activeJobs$.next([runningJob('b', 'summary')]);
+      fixture.detectChanges();
+
+      // Proves the diff actually scoped to 'b': row a's signals are untouched (same reference)...
+      expect(component.spineSignalsFor(book({ id: 'a' }))).toBe(beforeA);
+      // ...while row b, the one that changed, really did move.
+      expect(pipState(1, 'briefs')).toBe('running');
+    });
+
+    it('finding 53: the affected row DOES get a new signals object when its own job status changes', () => {
+      load([book({ id: 'a', chapterCount: 4, chaptersWithTextCount: 4 })]);
+      const before = component.spineSignalsFor(book({ id: 'a' }));
+
+      activeJobs$.next([runningJob('a', 'summary')]);
+      fixture.detectChanges();
+
+      const after = component.spineSignalsFor(book({ id: 'a' }));
+      expect(after).not.toBe(before);
+      expect(after.summaryRunning).toBeTrue();
+    });
+
+    it('finding 53: a registry emission that changes nothing does not reallocate any row', () => {
+      load([book({ id: 'a', chapterCount: 4, chaptersWithTextCount: 4 })]);
+      const before = component.spineSignalsFor(book({ id: 'a' }));
+
+      // Same jobs, re-emitted (e.g. an unrelated percent tick this component does not even read).
+      activeJobs$.next([]);
+      fixture.detectChanges();
+
+      expect(component.spineSignalsFor(book({ id: 'a' }))).toBe(before);
+    });
+  });
 });

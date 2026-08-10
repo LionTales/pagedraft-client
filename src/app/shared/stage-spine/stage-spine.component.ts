@@ -774,6 +774,19 @@ export class StageSpineComponent implements OnInit, OnChanges {
    */
   private userExpanded: SpineStageId | 'none' | null = null;
 
+  /**
+   * The identity `chaptersOpen` / `userExpanded` were last computed for. A host reuses this SAME component
+   * instance across a same-route book switch (Angular does not destroy the component just because a route
+   * PARAM changed), and `[signals]` is replaced wholesale on every rebuild - including rebuilds that are
+   * NOT a book switch (a job-registry tick, a poll landing). Comparing `signals` object identity alone
+   * would reset both fields on every such tick even though the book has not changed, so this prefers the
+   * server id the payload already carries (`summary.bookId` / `review.bookId` - both DTOs are book-scoped)
+   * and only falls back to the `signals` object reference itself when neither is on the wire, which is true
+   * of every compact-density host today (they never fetch `summary` / `review` for a widget) and is also
+   * where this state does not render, so a spurious reset there is harmless.
+   */
+  private lastSpineIdentity: string | StageSpineSignals | null = null;
+
   /** The stage that opens by default: the first one in canonical order that wants something. */
   private focus: SpineStageId = 'import';
 
@@ -793,12 +806,28 @@ export class StageSpineComponent implements OnInit, OnChanges {
   }
 
   ngOnChanges(_changes: SimpleChanges): void {
+    this.resetTransientStateOnIdentityChange();
     this.recompute();
   }
 
   private recompute(): void {
     this.stages = deriveStageSpine(this.signals);
     this.focus = focusStageId(this.stages);
+  }
+
+  /**
+   * Reset the user's expand/collapse state when `signals` starts describing a DIFFERENT book, so an
+   * in-place update to the same book (a poll landing, a job finishing) never wrongly collapses a row the
+   * user just opened. See {@link lastSpineIdentity} for why identity is not simply `signals !== signals`.
+   */
+  private resetTransientStateOnIdentityChange(): void {
+    const identity: string | StageSpineSignals =
+      this.signals.summary?.bookId ?? this.signals.review?.bookId ?? this.signals;
+    if (this.lastSpineIdentity !== null && identity !== this.lastSpineIdentity) {
+      this.chaptersOpen = false;
+      this.userExpanded = null;
+    }
+    this.lastSpineIdentity = identity;
   }
 
   /** he unless the BOOK is English. */
