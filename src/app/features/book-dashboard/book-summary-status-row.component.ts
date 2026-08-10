@@ -668,18 +668,33 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     return map[key] ?? key;
   }
 
-  /** Build estimate sentence for the consent prompt, e.g. "~3 chapters, ~2 min". */
+  /**
+   * Build estimate sentence for the consent prompt, e.g. "~3 chapters, ~2 min".
+   *
+   * NIT 70. Both counts get a singular form (`chapter`/`פרק`, `minute`/`דקה`), the same idiom
+   * `behindSentence` / `behindMagnitudeLabel` / `importDetail` already use in `stage-spine.copy.ts`.
+   *
+   * The minutes floor (`Math.max(1, ...)`) only applies when there is real work to estimate. Found live
+   * on an explicit REBUILD of an already-fresh book: `chaptersToBuild` is genuinely `0` there (confirmed
+   * server-side - `BookSummaryService.BuildBookSummaryAsync` answers that exact state with `NoOp: true`
+   * and issues no model call), so a floor that still claimed "~1 minute" contradicted the "~0 chapters"
+   * beside it. Zero chapters to build means zero minutes; the floor exists only to keep a REAL small build
+   * from rounding down to "~0 min".
+   */
   get bookSummaryConsentEstimate(): string {
     const s = this.bookSummaryStatus;
     if (!s) return '';
     const lang = this.summaryLanguage.toLowerCase().startsWith('en') ? 'en' : 'he';
     const chapters = s.chaptersToBuild;
-    const minutes = Math.max(1, Math.ceil((s.estimatedSeconds || 0) / 60));
+    const minutes = chapters > 0 ? Math.max(1, Math.ceil((s.estimatedSeconds || 0) / 60)) : 0;
     let phrase: string;
     if (lang === 'he') {
-      phrase = `~${chapters} פרקים, ~${minutes} דקות`;
+      const chapterWord = chapters === 1 ? 'פרק' : 'פרקים';
+      const minuteWord = minutes === 1 ? 'דקה' : 'דקות';
+      phrase = `~${chapters} ${chapterWord}, ~${minutes} ${minuteWord}`;
     } else {
-      phrase = `~${chapters} chapters, ~${minutes} min`;
+      const chapterWord = chapters === 1 ? 'chapter' : 'chapters';
+      phrase = `~${chapters} ${chapterWord}, ~${minutes} min`;
     }
     if (s.estimatedUsd != null) {
       phrase += `, ~$${this.formatUsd(s.estimatedUsd)}`;

@@ -70,5 +70,12 @@ export function formatRelativeTime(
     value = Math.floor(diffMs / DAY_MS);
     unit = 'day';
   }
-  return rtf.format(-value, unit);
+  // NIT 71, verified live: this Chrome's he-IL ICU data appends a stray literal-value parenthetical to
+  // the special (non-standard-count) plural forms - `rtf.format(-1, 'minute')` returns "לפני דקה (1)"
+  // and `rtf.format(-2, 'hour')` returns "לפני שעתיים (2)" - while the ordinary plural forms (3+) and
+  // the day unit's own special words ("אתמול", "שלשום") are clean. Node's ICU on the same Intl call does
+  // NOT reproduce it, so this is a browser/ICU quirk in the formatter's output, not a real CLDR phrase -
+  // strip it rather than reformat, so the fix tracks whichever values this Chrome's ICU affects instead
+  // of hand-listing them.
+  return rtf.format(-value, unit).replace(/\s*\(\d+\)\s*$/, '');
 }

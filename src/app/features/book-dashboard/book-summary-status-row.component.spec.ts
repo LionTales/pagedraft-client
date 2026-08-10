@@ -329,6 +329,51 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
     expect(estimate).toContain('$0.15');
   });
 
+  // ── NIT 70: singular Hebrew forms + the genuine-no-op rebuild estimate ──────────────────────────────
+
+  it('CONSENT estimate (he): singular "1 chapter" reads "פרק", never "1 פרקים"', () => {
+    component.bookSummaryStatus = makeBookSummaryStatus({
+      hasSummary: false, ready: false, builtChapters: 0, chaptersToBuild: 1, estimatedSeconds: 30,
+    });
+    expect(component.bookSummaryConsentEstimate).toContain('~1 פרק,');
+    expect(component.bookSummaryConsentEstimate).not.toContain('פרקים');
+  });
+
+  it('CONSENT estimate (he): singular "1 minute" reads "דקה", never "1 דקות"', () => {
+    component.bookSummaryStatus = makeBookSummaryStatus({
+      hasSummary: false, ready: false, builtChapters: 0, chaptersToBuild: 2, estimatedSeconds: 30,
+    });
+    expect(component.bookSummaryConsentEstimate).toContain('~1 דקה');
+    expect(component.bookSummaryConsentEstimate).not.toContain('דקות');
+  });
+
+  it('CONSENT estimate (he): plural counts keep their plural forms', () => {
+    component.bookSummaryStatus = makeBookSummaryStatus({
+      hasSummary: false, ready: false, builtChapters: 0, chaptersToBuild: 3, estimatedSeconds: 90,
+    });
+    expect(component.bookSummaryConsentEstimate).toBe('~3 פרקים, ~2 דקות');
+  });
+
+  it('CONSENT estimate (en): singular counts read "1 chapter" / implicit "min"', () => {
+    component.bookLanguage = 'en';
+    component.bookSummaryStatus = makeBookSummaryStatus({
+      language: 'en', hasSummary: false, ready: false, builtChapters: 0, chaptersToBuild: 1, estimatedSeconds: 30,
+    });
+    expect(component.bookSummaryConsentEstimate).toBe('~1 chapter, ~1 min');
+  });
+
+  it('CONSENT estimate: a genuine REBUILD no-op (chaptersToBuild 0) reads "~0 chapters/פרקים, ~0 min/דקות", not "~1 min"', () => {
+    // Found live: a REBUILD on an already-fresh book returns chaptersToBuild: 0, estimatedSeconds: 0 from
+    // the server (a real no-op - BookSummaryService.BuildBookSummaryAsync answers NoOp: true with no model
+    // call for this exact state). The client's old minutes floor (Math.max(1, ...)) manufactured a false
+    // "~1 minute" for that zero-work state; it must now read zero minutes too.
+    component.bookSummaryStatus = makeBookSummaryStatus({
+      hasSummary: true, ready: true, builtChapters: 5, totalChapters: 5,
+      chaptersToBuild: 0, estimatedSeconds: 0,
+    });
+    expect(component.bookSummaryConsentEstimate).toBe('~0 פרקים, ~0 דקות');
+  });
+
   it('CONSENT: hidden while a build is in flight (prevents duplicate build on lingering confirm)', () => {
     component.bookSummaryStatus = makeBookSummaryStatus({
     ready: false, staleCount: 2, chaptersToBuild: 2, estimatedSeconds: 90,

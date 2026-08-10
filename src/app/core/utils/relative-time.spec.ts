@@ -67,6 +67,42 @@ describe('formatRelativeTime', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // NIT 71, found live: this Chrome's he-IL Intl.RelativeTimeFormat appends a stray literal-value
+  // parenthetical to the special (non-standard-count) plural forms - "לפני דקה (1)", "לפני שעתיים (2)" -
+  // while the ordinary plural forms are clean. Assert no such artifact ever reaches the rendered string,
+  // for every value/unit combination this file's own unit-selection can produce.
+  // ---------------------------------------------------------------------------
+  describe('no stray parenthetical artifact (NIT 71)', () => {
+    it('1 minute ago (he) carries no "(1)" artifact', () => {
+      const out = formatRelativeTime(isoMinutesAgo(1), 'he', NOW);
+      expect(out).not.toMatch(/\(\d+\)/);
+      expect(out).toContain('דקה');
+    });
+
+    it('1 hour ago (he) carries no "(1)" artifact', () => {
+      const out = formatRelativeTime(isoMinutesAgo(60), 'he', NOW);
+      expect(out).not.toMatch(/\(\d+\)/);
+      expect(out).toContain('שעה');
+    });
+
+    it('2 hours ago (he) carries no "(2)" artifact', () => {
+      const out = formatRelativeTime(isoMinutesAgo(120), 'he', NOW);
+      expect(out).not.toMatch(/\(\d+\)/);
+    });
+
+    it('3 minutes ago (he) stays clean (already unaffected, guards the regex is not too broad)', () => {
+      const out = formatRelativeTime(isoMinutesAgo(3), 'he', NOW);
+      expect(out).toBe('לפני 3 דקות');
+    });
+
+    it('4 days ago (he) stays clean (already unaffected)', () => {
+      const out = formatRelativeTime(isoMinutesAgo(4 * 24 * 60), 'he', NOW);
+      expect(out).not.toMatch(/\(\d+\)/);
+      expect(out).toContain('4');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Just-now window (< 60s).
   // ---------------------------------------------------------------------------
   describe('just-now window', () => {

@@ -197,6 +197,39 @@ describe('BookStyleBaselineStatusRowComponent (w5 MOVE-1 + MOVE-2)', () => {
     expect(query('[data-testid="bsb-consent-estimate"]').nativeElement.textContent).toContain('$');
   });
 
+  // ── NIT 70: singular Hebrew forms + the genuine-no-op rebuild estimate ──────────────────────────────
+
+  it('CONSENT estimate (he): singular "1 chapter" reads "פרק", never "1 פרקים"', () => {
+    component.styleBaselineStatus = makeStatus({ ready: false, chaptersToBuild: 1, estimatedSeconds: 30 });
+    expect(component.baselineConsentEstimate).toContain('~1 פרק,');
+    expect(component.baselineConsentEstimate).not.toContain('פרקים');
+  });
+
+  it('CONSENT estimate (he): singular "1 minute" reads "דקה", never "1 דקות"', () => {
+    component.styleBaselineStatus = makeStatus({ ready: false, chaptersToBuild: 2, estimatedSeconds: 30 });
+    expect(component.baselineConsentEstimate).toContain('~1 דקה');
+    expect(component.baselineConsentEstimate).not.toContain('דקות');
+  });
+
+  it('CONSENT estimate (he): plural counts keep their plural forms', () => {
+    component.styleBaselineStatus = makeStatus({ ready: false, chaptersToBuild: 3, estimatedSeconds: 90 });
+    expect(component.baselineConsentEstimate).toBe('~3 פרקים, ~2 דקות');
+  });
+
+  it('CONSENT estimate (en): singular counts read "1 chapter"', () => {
+    component.bookLanguage = 'en';
+    component.styleBaselineStatus = makeStatus({ language: 'en', ready: false, chaptersToBuild: 1, estimatedSeconds: 30 });
+    expect(component.baselineConsentEstimate).toBe('~1 chapter, ~1 min');
+  });
+
+  it('CONSENT estimate: a genuine REBUILD no-op (chaptersToBuild 0) reads "~0 min/דקות", not "~1 min"', () => {
+    // Found live: a REBUILD on an already-fresh baseline returns chaptersToBuild: 0, estimatedSeconds: 0
+    // from the server (a real no-op - StyleBaselineService's build path answers NoOp: true with no model
+    // call for this exact state). The client's old minutes floor manufactured a false "~1 minute" here.
+    component.styleBaselineStatus = makeStatus({ ready: true, chaptersToBuild: 0, estimatedSeconds: 0 });
+    expect(component.baselineConsentEstimate).toBe('~0 פרקים, ~0 דקות');
+  });
+
   it('the paid note names a tier and a third-party provider, never a model or a vendor', () => {
     for (const lang of ['he', 'en']) {
       component.bookLanguage = lang;

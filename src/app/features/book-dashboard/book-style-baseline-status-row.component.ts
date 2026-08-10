@@ -285,15 +285,32 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
     return formatRelativeTime(s.lastUpdatedAt, this.baselineDir === 'ltr' ? 'en' : 'he');
   }
 
-  /** Build estimate for the consent prompt, e.g. "~3 chapters, ~2 min" (+ "~$0.12" when paid). */
+  /**
+   * Build estimate for the consent prompt, e.g. "~3 chapters, ~2 min" (+ "~$0.12" when paid).
+   *
+   * NIT 70. Both counts get a singular form (`chapter`/`פרק`, `minute`/`דקה`), the same idiom
+   * `behindSentence` / `behindMagnitudeLabel` / `importDetail` already use in `stage-spine.copy.ts`.
+   *
+   * The minutes floor (`Math.max(1, ...)`) only applies when there is real work to estimate - see the
+   * matching comment on `BookSummaryStatusRowComponent.bookSummaryConsentEstimate`, which found the
+   * genuine-no-op case live: `chaptersToBuild === 0` on an explicit rebuild is a real no-op
+   * (`StyleBaselineService.ComputeEstimate` answers `(0, null)` for zero chapters and the build service
+   * returns `NoOp: true` with no model call), so the estimate must not claim "~1 minute" for it.
+   */
   get baselineConsentEstimate(): string {
     const s = this.styleBaselineStatus;
     if (!s) return '';
     const chapters = s.chaptersToBuild;
-    const minutes = Math.max(1, Math.ceil((s.estimatedSeconds || 0) / 60));
-    let phrase = this.baselineDir === 'ltr'
-      ? `~${chapters} chapters, ~${minutes} min`
-      : `~${chapters} פרקים, ~${minutes} דקות`;
+    const minutes = chapters > 0 ? Math.max(1, Math.ceil((s.estimatedSeconds || 0) / 60)) : 0;
+    let phrase: string;
+    if (this.baselineDir === 'ltr') {
+      const chapterWord = chapters === 1 ? 'chapter' : 'chapters';
+      phrase = `~${chapters} ${chapterWord}, ~${minutes} min`;
+    } else {
+      const chapterWord = chapters === 1 ? 'פרק' : 'פרקים';
+      const minuteWord = minutes === 1 ? 'דקה' : 'דקות';
+      phrase = `~${chapters} ${chapterWord}, ~${minutes} ${minuteWord}`;
+    }
     if (s.estimatedUsd != null) phrase += `, ~$${this.formatUsd(s.estimatedUsd)}`;
     return phrase;
   }
