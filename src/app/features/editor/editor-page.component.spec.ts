@@ -1,14 +1,15 @@
-import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
+﻿import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { Component, EventEmitter, NO_ERRORS_SCHEMA, OnDestroy, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { By } from '@angular/platform-browser';
 import { ActivatedRoute, Router } from '@angular/router';
 import { BookDetailDto } from '../../core/models/book';
-import { of, EMPTY, throwError, Subject, BehaviorSubject, Observable } from 'rxjs';
+import { of, EMPTY, NEVER, throwError, Subject, BehaviorSubject, Observable } from 'rxjs';
 import { EditorPageComponent } from './editor-page.component';
 import { BookService } from '../../core/services/book.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { BookReviewService } from '../../core/services/book-review.service';
+import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { ChapterService } from '../../core/services/chapter.service';
 import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
@@ -77,6 +78,8 @@ describe('EditorPageComponent (focused logic)', () => {
         { provide: BookService, useValue: { getById: () => EMPTY } },
         // P2-6: the editor reconciles the whole-book build affordance via these when the dashboard is
         // unmounted. Default to "no active build"; individual tests re-stub as needed.
+        // w5 (MOVE-1): transitive dep of the relocated writing-style row hosted by the dashboard.
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
         {
           provide: BookSummaryService,
           useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) },
@@ -935,6 +938,35 @@ describe('EditorPageComponent (focused logic)', () => {
     it('does not throw when dashboardComp is undefined (checklist visible while dashboard is unmounted)', () => {
       (component as any).dashboardComp = undefined;
       expect(() => component.onChecklistSwitchToReview()).not.toThrow();
+    });
+  });
+
+  // ─── w5 / D13 retarget: the per-chapter deviations pointer resolves here ────
+
+  /**
+   * The Linguistic result's "these deviations were measured against a writing style that is missing or out
+   * of date" hint used to open a whole-book consent prompt from a per-chapter surface. Since the build
+   * moved to the dashboard (MOVE-1), the hint points at the new home instead, and the editor is the one
+   * component that owns both halves of that journey: the assistant's mode switch and the dashboard.
+   */
+  describe('onOpenStyleBaselineHome (w5)', () => {
+    it('switches the assistant to Book review, where the relocated build lives', () => {
+      component.reviewMode = 'edit';
+      component.onOpenStyleBaselineHome();
+      expect(component.reviewMode).toBe('review');
+    });
+
+    it('raises the focus token the dashboard passes to the row, so the pointer lands on its target', () => {
+      const before = component.focusBaselineToken;
+      component.onOpenStyleBaselineHome();
+      expect(component.focusBaselineToken).toBe(before + 1);
+    });
+
+    it('raises a NEW token each time, so a second ask re-scrolls rather than being swallowed', () => {
+      component.onOpenStyleBaselineHome();
+      const first = component.focusBaselineToken;
+      component.onOpenStyleBaselineHome();
+      expect(component.focusBaselineToken).toBe(first + 1);
     });
   });
 

@@ -197,6 +197,7 @@
               (showInDocument)="selectRangeInEditor($event)"
               (scrollTargetChange)="onScrollTargetChange($event)"
               (suggestionRangesChange)="applySuggestionHighlights($event)"
+              (openStyleBaselineHome)="onOpenStyleBaselineHome()"
               (revertToVersion)="onRevertToVersion($event)">
             </app-analysis-panel>
           } @else {
@@ -229,6 +230,7 @@
             [bookTitle]="book.title"
             [bookLanguage]="book.language"
             [chapters]="book.chapters"
+            [focusBaselineToken]="focusBaselineToken"
             (openChapter)="onOpenChapterFromDashboard($event)"
             (openImport)="goToImport()"
             (openExport)="goToExport()"

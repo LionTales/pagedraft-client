@@ -1,4 +1,4 @@
-import { CommonModule } from '@angular/common';
+﻿import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnInit, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subject, Subscription, forkJoin } from 'rxjs';
@@ -73,6 +73,14 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   /** Emits a scroll target so the editor stays on this word after the next highlight update (e.g. after dismiss/accept). */
   @Output() scrollTargetChange = new EventEmitter<{ startOffset: number; endOffset: number; originalText?: string }>();
   @Output() revertToVersion = new EventEmitter<string>();
+
+  /**
+   * Wave 3 / w5 (D13 retarget): a Linguistic result asked to be taken to the book-wide writing-style
+   * build, which moved to the book dashboard. Pure pass-through from the run tab to the editor, which owns
+   * both the assistant's mode switch and the dashboard. This panel deliberately does not handle it itself:
+   * the destination is not inside this panel's tab set.
+   */
+  @Output() openStyleBaselineHome = new EventEmitter<void>();
 
   readonly analysisTypes = ANALYSIS_TYPES;
 
@@ -284,33 +292,23 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   /** Server chunk thresholds for analysis-jobs vs sync; set from API so client matches server. */
   chunkThresholds: { proofreadChunkTargetWords: number; lineEditChunkTargetWords: number } | null = null;
 
-  // ── Style baseline (a3/a4) ────────────────────────────────────────────────
-  /** Latest style-baseline status read for the current book/language (null while loading / no book). */
+  // ── Style baseline (a3/a4; READ-ONLY here since w5) ───────────────────────
+  /**
+   * Latest writing-style status read for the current book/language (null while loading / no book).
+   *
+   * The BUILD moved to the book dashboard (MOVE-1 + MOVE-2), so this panel no longer owns a build POST, a
+   * progress poll, a reattach path or a terminal-job loop guard. It keeps this one READ because the
+   * Linguistic result must still be able to say that the thing its deviations were measured against is
+   * missing or out of date, which is the cross-scope pointer the audit keeps in place (D13).
+   */
   styleBaselineStatus: BookStyleBaselineStatusDto | null = null;
-  /** True while a baseline build job is in flight (drives the BUILDING state in the run tab). */
-  styleBaselineBuilding = false;
-  /** Live baseline build progress 0..100 (null = indeterminate). */
-  styleBaselineProgressPercent: number | null = null;
-  /** Stops the active baseline progress poll; nulled when no poll is running. */
-  private styleBaselineProgressStop$: Subject<void> | null = null;
-  /** Active baseline-related subscriptions (status fetch + build + progress); cleared on context change / destroy. */
-  private styleBaselineSub: Subscription | null = null;
   /**
    * The latest in-flight GET status fetch. Held so a newer loadStyleBaselineStatus() call cancels the
    * previous one: without this, two overlapping fetches for the SAME (book, language) can resolve out of
-   * order and a slower OLDER response would overwrite the newer snapshot (and could trigger a stale
-   * reattach to activeBuildJobId). The book/language guard only drops responses after a context SWITCH,
-   * not same-key overlaps. Kept separate from styleBaselineSub (the build POST) so reloading status does
-   * not cancel an in-flight build, and vice versa.
+   * order and a slower OLDER response would overwrite the newer snapshot. The book/language guard only
+   * drops responses after a context SWITCH, not same-key overlaps.
    */
   private styleBaselineStatusSub: Subscription | null = null;
-  /**
-   * Loop guard: the last baseline jobId this component instance already drove to a terminal state. Once a
-   * jobId is recorded here, loadStyleBaselineStatus will NOT reattach to it again even if the server keeps
-   * advertising it as activeBuildJobId (lingering registry entry / race / backend bug). Reset when a NEW
-   * build is started in this tab or the book switches, so a genuine future build can reattach normally.
-   */
-  private styleBaselineHandledTerminalJobId: string | null = null;
   /**
    * Map backend AnalysisSuggestionDto to the unified AnalysisSuggestion shape used in the UI.
    * Offset relocation is handled separately by SuggestionAnchorService in emitSuggestionRanges / onShowInDocument.
@@ -389,15 +387,12 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.runSubscription?.unsubscribe();
     this.orchestrationService.stopProgressPolling();
     this.clearProofreadFinalizeRetryTimer();
-    this.stopStyleBaselineProgress();
-    this.styleBaselineSub?.unsubscribe();
     this.styleBaselineStatusSub?.unsubscribe();
-    this.styleBaselineHandledTerminalJobId = null;
   }
 
-  // ── Style baseline (a3/a4) ────────────────────────────────────────────────
+  // ── The book-wide writing style: STATUS READ ONLY since w5 ────────────────
 
-  /** Effective book language for baseline calls (defaults to 'he'). */
+  /** Effective book language for the status read (defaults to 'he'). */
   private get baselineLanguage(): string {
     return (this.bookLanguage?.trim()) || 'he';
   }
@@ -419,20 +414,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         // Ignore a stale response after the user switched books OR languages (baseline is per (book, language)).
         if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
         this.styleBaselineStatus = status;
-        // If the server already reports it is fresh, we are no longer building.
-        if (status.ready && this.styleBaselineBuilding && this.styleBaselineProgressPercent === 100) {
-          this.styleBaselineBuilding = false;
-        }
-        // DEF-2: a build may already be running (this reload, or another tab/session). Reattach so the row
-        // shows BUILDING + live progress instead of a stale/not-built snapshot. Guard against double-
-        // subscribe: skip when we are already tracking a build in THIS tab (the user just started one) or a
-        // progress poll is already live. Also skip if this exact jobId was already driven to terminal here,
-        // so a lingering/stale activeBuildJobId can never re-trigger poll -> terminal -> reload -> reattach.
-        if (status.activeBuildJobId && status.activeBuildJobId !== this.styleBaselineHandledTerminalJobId && !this.styleBaselineBuilding && !this.styleBaselineProgressStop$) {
-          this.styleBaselineBuilding = true;
-          this.styleBaselineProgressPercent = null;
-          this.pollStyleBaselineBuild(bookId, status.activeBuildJobId, lang);
-        }
+        // w5: the DEF-2 reattach that used to live here went with the build. A build started anywhere
+        // (this tab, another tab, the previous session) is reattached by the dashboard's row, which is the
+        // one surface that can also show its progress and terminate it. This surface only reads.
         this.cdr.detectChanges();
       },
       error: () => {
@@ -456,116 +440,23 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.loadStyleBaselineStatus();
   }
 
-  /** Stop any active baseline progress poll. */
-  private stopStyleBaselineProgress(): void {
-    if (this.styleBaselineProgressStop$) {
-      this.styleBaselineProgressStop$.next();
-      this.styleBaselineProgressStop$.complete();
-      this.styleBaselineProgressStop$ = null;
-    }
-  }
-
   /**
-   * Tear down any in-flight baseline build/poll and reset its UI + loop guard. The baseline is keyed by
-   * (book, language), so this must run on BOTH a book change AND a language change: either invalidates the
-   * current build/poll, which would otherwise keep mutating state for the OLD key.
+   * Drop the current (book, language)'s writing-style snapshot and cancel any status GET still in flight
+   * for it, so a late answer for a superseded context cannot repaint the pointer on the new one.
    */
-  private resetStyleBaselineBuildState(): void {
-    this.stopStyleBaselineProgress();
-    this.styleBaselineSub?.unsubscribe();
+  private resetStyleBaselineStatus(): void {
     this.styleBaselineStatusSub?.unsubscribe();
-    this.styleBaselineBuilding = false;
-    this.styleBaselineProgressPercent = null;
     this.styleBaselineStatus = null;
-    // Forget any handled jobId so a build for the new book/language can reattach.
-    this.styleBaselineHandledTerminalJobId = null;
-  }
-  /**
-   * Consent confirmed in the run tab: start (or no-op) the build, flip to BUILDING, and poll progress.
-   * Reuses AnalysisProgressService for live progress (single progress mechanism, no second SignalR sub).
-   */
-  onBuildStyleBaseline(): void {
-    if (!this.bookId) return;
-    // Guard: a build is already in flight for this book (started here, or reattached via DEF-2 after a
-    // reload / from another tab). Starting another would stop the live progress poll (losing tracking of
-    // the running job) and POST a duplicate build for the same (book, language). The consent prompt is
-    // hidden while BUILDING, but a lingering/late Confirm could still reach here, so refuse it.
-    if (this.styleBaselineBuilding) return;
-    const bookId = this.bookId;
-    const language = this.baselineLanguage;
-    // Defensive: clear any stray progress poll before starting. The guard above already blocks the common
-    // in-flight case (BUILDING); this covers a poll left running while the BUILDING flag is somehow false,
-    // and ensures the no-op path below cannot leave a live poll updating the row after the UI settles.
-    this.stopStyleBaselineProgress();
-    this.styleBaselineBuilding = true;
-    this.styleBaselineProgressPercent = null;
-    // A new build is being started in this tab: clear the loop guard so its (new) jobId can reattach.
-    this.styleBaselineHandledTerminalJobId = null;
-    this.cdr.detectChanges();
-
-    this.styleBaselineSub?.unsubscribe();
-    this.styleBaselineSub = this.styleBaselineService.buildStyleBaseline(bookId, language).subscribe({
-      next: (resp) => {
-        // Drop a stale response after the user switched books OR languages (baseline is per (book, language)).
-        if (this.bookId !== bookId || this.baselineLanguage !== language) return;
-        if (resp.noOp || !resp.jobId) {
-          // Nothing to build (already fresh): clear BUILDING and re-read the fresh status.
-          this.styleBaselineBuilding = false;
-          this.loadStyleBaselineStatus();
-          this.cdr.detectChanges();
-          return;
-        }
-        this.pollStyleBaselineBuild(bookId, resp.jobId, language);
-      },
-      error: () => {
-        if (this.bookId !== bookId || this.baselineLanguage !== language) return;
-        this.styleBaselineBuilding = false;
-        this.cdr.detectChanges();
-      },
-    });
   }
 
-  /** Poll the baseline build job and refresh status when it reaches a terminal state. */
-  private pollStyleBaselineBuild(bookId: string, jobId: string, lang: string): void {
-    // rf-c02: publish this build to the job registry so the editor's "review running" affordance (and the
-    // Activity Center) can read one truth (jobRegistry.anyRunningForBook$). The run tab keeps its OWN detailed
-    // state + poll below; track() is an ADD, not a replacement. track() is idempotent per jobId, so routing
-    // BOTH the fresh-build and DEF-2 reattach paths through this single choke-point cannot double-track.
-    this.jobRegistry.track('style-baseline', bookId, jobId);
-    this.stopStyleBaselineProgress();
-    const stop$ = new Subject<void>();
-    this.styleBaselineProgressStop$ = stop$;
-    this.analysisProgressService.pollStyleBaselineProgress(bookId, jobId, stop$).subscribe({
-      next: (p) => {
-        // Ignore a stale poll emit after the user switched books OR languages (baseline is per (book, language)).
-        if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
-        const status = (p.status ?? '').toLowerCase();
-        this.styleBaselineProgressPercent =
-          status === 'succeeded'
-            ? 100
-            : (Number.isFinite(p.estimatedCompletionPercent)
-                ? Math.max(0, Math.min(100, p.estimatedCompletionPercent))
-                : this.styleBaselineProgressPercent);
-        if (status === 'succeeded' || status === 'failed' || status === 'canceled') {
-          this.styleBaselineBuilding = false;
-          this.stopStyleBaselineProgress();
-          // Mark this jobId handled BEFORE re-reading status so a lingering activeBuildJobId can't loop.
-          this.styleBaselineHandledTerminalJobId = jobId;
-          this.loadStyleBaselineStatus();
-        }
-        this.cdr.detectChanges();
-      },
-      error: () => {
-        if (this.bookId !== bookId || this.baselineLanguage !== lang) return;
-        this.styleBaselineBuilding = false;
-        this.stopStyleBaselineProgress();
-        // Treat a polling error as terminal for this jobId: mark handled so we don't reattach in a loop.
-        this.styleBaselineHandledTerminalJobId = jobId;
-        this.loadStyleBaselineStatus();
-        this.cdr.detectChanges();
-      },
-    });
-  }
+  // w5 (MOVE-1 + MOVE-2): `stopStyleBaselineProgress`, `resetStyleBaselineBuildState`,
+  // `onBuildStyleBaseline` and `pollStyleBaselineBuild` LIVED HERE. They are now on
+  // `BookStyleBaselineStatusRowComponent`, on the book dashboard, unchanged in behaviour: the same
+  // build POST, the same progress poll, the same registry `track()` for the Activity Center entry, and
+  // the same reattach-to-an-in-progress-job path. Only the surface they hang off changed. Do NOT
+  // reintroduce a build entry point here: a book-wide build reachable from a per-chapter panel is the
+  // exact mis-scoping this wave removed.
+
 
   /** Cancel any pending "wait for the run's persisted row" retry and reset its budget. */
   private clearProofreadFinalizeRetryTimer(): void {
@@ -1261,9 +1152,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.versions = [];
       // Reset history filter so we load all types for the new chapter and can restore Proofread state
       this.historyFilterType = null;
-      // Switching book invalidates the baseline status + any in-flight build poll.
+      // Switching book invalidates the baseline status read. w5: there is no build or poll to tear down
+      // here any more (both moved to the dashboard row), so the reset is just dropping the previous book's
+      // snapshot and cancelling any status GET still in flight for it.
       if (changes['bookId']) {
-        this.resetStyleBaselineBuildState();
+        this.resetStyleBaselineStatus();
       }
       if (this.bookId && this.chapterId) {
         this.loadTemplates();
@@ -1287,11 +1180,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.loadChunkThresholds();
     }
     // The style baseline status is per-language; re-read it when the book language changes (independent of
-    // chapter). Tear down the OLD-language build/poll/guard FIRST so a late response for the superseded
-    // language can't bleed into the new language's status. The bookId-change branch above already
-    // resets+reloads it; this covers a language-only change.
+    // chapter). Drop the OLD-language snapshot FIRST so a late response for the superseded language cannot
+    // bleed into the new language's status. The bookId-change branch above already resets+reloads it; this
+    // covers a language-only change.
     if (changes['bookLanguage'] && !changes['bookId'] && this.bookId) {
-      this.resetStyleBaselineBuildState();
+      this.resetStyleBaselineStatus();
       this.loadStyleBaselineStatus();
     }
     if (changes['documentText']) {

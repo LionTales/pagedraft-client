@@ -2,7 +2,6 @@ import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
-import { formatRelativeTime } from '../../core/utils/relative-time';
 import { resolveCardLang } from './card-lang';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { SuggestionCardComponent } from './suggestion-card.component';
@@ -40,16 +39,23 @@ export class AnalysisRunTabComponent implements OnChanges {
   @Input() bookLanguage: string | null = null;
   @Input() sceneId: string | null = null;
 
-  // ── Style baseline (a3/a4) ────────────────────────────────────────────────
-  /** Latest status read for the book's style baseline (null while loading / no book). */
+  // ── Style baseline (a3/a4; the BUILD moved to the book dashboard in w5) ────
+  /**
+   * Latest status read for the book's writing-style baseline (null while loading / no book).
+   *
+   * READ-ONLY here since w5. The build, its consent, its estimate and its paid-tier note moved to the book
+   * dashboard (MOVE-1 + MOVE-2). This surface still needs the STATUS because the Linguistic result has to
+   * be able to say "these deviations were measured against something that is missing or out of date" -
+   * that is the cross-scope pointer the audit keeps (D13). Nothing on this surface may start the build.
+   */
   @Input() styleBaselineStatus: BookStyleBaselineStatusDto | null = null;
-  /** True while a build job is in flight (client-tracked, drives the BUILDING state). */
-  @Input() styleBaselineBuilding = false;
-  /** Live build progress 0..100 (null = indeterminate / not started). */
-  @Input() styleBaselineProgressPercent: number | null = null;
 
-  /** User confirmed the consent prompt -> parent should start the build and flip to BUILDING. */
-  @Output() buildStyleBaseline = new EventEmitter<void>();
+  /**
+   * D13 retarget (w5): the reader asked to go to the writing-style build's new home. The panel forwards
+   * this to the editor, which switches the assistant to Book review and scrolls the row into view. This
+   * component names the intent only; it owns no routing and no longer owns the build.
+   */
+  @Output() openStyleBaselineHome = new EventEmitter<void>();
 
   /**
    * The hosted tier toggle committed a tier change, so the ACTIVE MODEL may have moved (tier-ux-rework fixes
@@ -71,9 +77,6 @@ export class AnalysisRunTabComponent implements OnChanges {
   showRawLineEdit = false;
   lineEditCategoryFilter = 'all';
 
-  /** True while the style-baseline consent prompt (showing the build estimate) is open. */
-  showBaselineConsent = false;
-
   readonly lineEditCategoryOptions: string[] = [
     'all',
     'consistency',
@@ -88,19 +91,9 @@ export class AnalysisRunTabComponent implements OnChanges {
 
   constructor(private lineEditParser: LineEditParserService) {}
 
-  ngOnChanges(changes: SimpleChanges): void {
-    // The baseline is keyed by (book, language) and the panel tears its baseline state down on either
-    // change. Dismiss the consent prompt too: one opened for the PREVIOUS book/language must not linger
-    // and then (now showing the NEW book's estimate) be confirmed into building the wrong book.
-    if (changes['bookId'] || changes['bookLanguage']) {
-      this.showBaselineConsent = false;
-    }
-    // Once a build is in flight (a fresh start OR a DEF-2 reattach surfaced on a status reload), the
-    // consent prompt must not stay open/confirmable - confirming would ask the parent to interrupt the
-    // tracked job and start a duplicate build.
-    if (changes['styleBaselineBuilding']?.currentValue === true) {
-      this.showBaselineConsent = false;
-    }
+  ngOnChanges(_changes: SimpleChanges): void {
+    // w5: the consent-prompt reset that used to live here went with the consent prompt itself. The
+    // relocated row on the book dashboard owns that reset now, keyed on the same (book, language) pair.
   }
 
   private get language(): string {
@@ -153,20 +146,19 @@ export class AnalysisRunTabComponent implements OnChanges {
     return map[value] ?? value;
   }
 
-  // ── Style baseline status row (a3/a4) ──────────────────────────────────────
+  // ── The book-wide writing style, as this per-chapter surface may speak of it ──
 
-  /** 'rtl' for Hebrew (default), 'ltr' for English. Drives [dir] on the status row. */
+  /** 'rtl' for Hebrew (default), 'ltr' for English. Drives [dir] on the pointer and the empty states. */
   get baselineDir(): 'rtl' | 'ltr' {
     return this.language.toLowerCase().startsWith('en') ? 'ltr' : 'rtl';
   }
 
   /**
-   * Derived state for the status row. BUILDING is client-tracked (styleBaselineBuilding) so it wins
-   * over the snapshot read while a job is in flight. Otherwise NOT BUILT / READY / STALE come from
-   * the a3 status fields per the documented state machine.
+   * Derived state, READ-ONLY since w5: this surface no longer starts a build, so it has no client-tracked
+   * BUILDING of its own. NOT BUILT / READY / STALE come from the a3 status fields per the documented state
+   * machine, and only the not-built and stale readings drive anything here (the deviations pointer).
    */
-  get baselineState(): 'building' | 'not-built' | 'ready' | 'stale' | 'unknown' {
-    if (this.styleBaselineBuilding) return 'building';
+  get baselineState(): 'not-built' | 'ready' | 'stale' | 'unknown' {
     const s = this.styleBaselineStatus;
     if (!s) return 'unknown';
     // A cross-model baseline must offer the Refresh affordance even if staleCount somehow reads 0:
@@ -178,13 +170,8 @@ export class AnalysisRunTabComponent implements OnChanges {
     return s.hasBaseline ? 'ready' : 'not-built';
   }
 
-  /**
-   * True when a baseline exists but was built with a different model than the active one (DEF-1).
-   * Drives a small cross-model warning line near the existing stale/Refresh affordance.
-   */
-  get baselineBuiltWithDifferentModel(): boolean {
-    return !!this.styleBaselineStatus?.builtWithDifferentModel;
-  }
+  // The cross-model warning went to the dashboard row with the build (w5): it is a reason to REFRESH the
+  // artifact, and the refresh action no longer exists on this surface.
 
   /** True when the baseline is missing or incomplete (drives the deviations empty-state hint). */
   get baselineMissingOrInsufficient(): boolean {
@@ -192,125 +179,43 @@ export class AnalysisRunTabComponent implements OnChanges {
     return st === 'not-built' || st === 'stale';
   }
 
-  /** Localized "Style baseline" label + per-state copy. he default, en when book language is English. */
+  /**
+   * Localized copy for the cross-scope writing-style POINTER and the run tab's empty states. he default,
+   * en when the book language is English.
+   *
+   * w5: the build's own vocabulary (build / refresh / consent / estimate / paid note / cross-model) went
+   * to the dashboard row with the build. What is left is what a per-chapter surface may honestly say
+   * about a book-level artifact: that the artifact is missing or out of date, and where to go about it.
+   * The user-facing name matches the row's new name, so the pointer and its destination read as one thing.
+   */
   baselineLabel(key: string): string {
     const lang = this.language.toLowerCase().startsWith('en') ? 'en' : 'he';
     const he: Record<string, string> = {
-      title: 'קו בסיס סגנוני',
-      notBuilt: 'טרם נבנה',
-      buildNow: 'בנה עכשיו',
-      building: 'בונה קו בסיס...',
-      refresh: 'רענן',
-      coverage: 'כיסוי',
-      updated: 'עודכן',
-      stalePrefix: 'פרקים שהשתנו:',
-      consentTitle: 'בניית קו בסיס סגנוני',
-      consentBody: 'פעולה זו תנתח את פרקי הספר כדי לבנות קו בסיס סגנוני לזיהוי חריגות.',
+      hintBuild: 'כדי לזהות חריגות סגנון, יש לבנות תחילה את סגנון הכתיבה של הספר.',
+      hintRefresh: 'סגנון הכתיבה של הספר אינו עדכני. רעננו אותו לקבלת תוצאות מדויקות יותר.',
       // DRAFT (Hebrew): verify wording/word-order with the user before sign-off.
-      consentPaidNote: 'הסכום מוצג משום שהספר מוגדר לשכבת חשיבה, שרצה על מודל בענן. טקסט הפרקים יישלח לספק צד שלישי ויוצא מהמחשב הזה. אפשר לשנות זאת בהגדרת שכבת המודל בלוח הספר.',
-      confirm: 'אישור',
-      cancel: 'ביטול',
-      hintBuild: 'כדי לזהות חריגות סגנון, בנו תחילה קו בסיס סגנוני לספר.',
-      hintRefresh: 'קו הבסיס הסגנוני אינו עדכני. רעננו אותו לקבלת תוצאות מדויקות יותר.',
-      // DRAFT (Hebrew): verify wording/word-order with the user before sign-off.
-      crossModelWarning: 'קו הבסיס נבנה עם מודל אחר מהפעיל כעת. רעננו אותו לקבלת תוצאות מדויקות.',
+      hintGoToHome: 'פתחו את לוח הספר',
       noRunYetScene: 'עדיין לא בוצע ניתוח עבור סצנה זו.',
       noRunYetChapter: 'עדיין לא בוצע ניתוח עבור פרק זה.',
-      linguisticNoRunNote: 'הניתוח רץ לכל פרק בנפרד. הריצו ניתוח לפרק זה כדי לראות דוח. קו הבסיס הסגנוני (כיסוי הספר) משמש רק להשוואה ואינו מייצר דוח לפרק.',
+      linguisticNoRunNote: 'הניתוח רץ לכל פרק בנפרד. הריצו ניתוח לפרק זה כדי לראות דוח. סגנון הכתיבה של הספר (הנבנה בלוח הספר) משמש רק להשוואה ואינו מייצר דוח לפרק.',
     };
     const en: Record<string, string> = {
-      title: 'Style baseline',
-      notBuilt: 'Not built',
-      buildNow: 'Build now',
-      building: 'Building baseline...',
-      refresh: 'Refresh',
-      coverage: 'Coverage',
-      updated: 'Updated',
-      stalePrefix: 'Chapters changed:',
-      consentTitle: 'Build style baseline',
-      consentBody: 'This will analyze the book chapters to build a style baseline for deviation detection.',
-      consentPaidNote: 'The amount is shown because this book is set to the thinking tier, which runs on a cloud model. The chapter text is sent to a third-party provider and leaves this machine. You can change this in the model tier setting on the book dashboard.',
-      confirm: 'Confirm',
-      cancel: 'Cancel',
-      hintBuild: 'To detect style deviations, build a style baseline for the book first.',
-      hintRefresh: 'The style baseline is out of date. Refresh it for more accurate results.',
-      crossModelWarning: 'The baseline was built with a different model than the one now active. Refresh it for accurate results.',
+      hintBuild: "To detect style deviations, build your book's writing style first.",
+      hintRefresh: "Your book's writing style is out of date. Refresh it for more accurate results.",
+      hintGoToHome: 'Open the book dashboard',
       noRunYetScene: 'No analysis run yet for this scene.',
       noRunYetChapter: 'No analysis run yet for this chapter.',
-      linguisticNoRunNote: 'Analysis runs per chapter. Run analysis on this chapter to see a report. The style baseline (book coverage) is only the comparison reference and does not create a per-chapter report.',
+      linguisticNoRunNote: "Analysis runs per chapter. Run analysis on this chapter to see a report. Your book's writing style (built on the book dashboard) is only the comparison reference and does not create a per-chapter report.",
     };
     const map = lang === 'he' ? he : en;
     return map[key] ?? key;
   }
 
-  /** Coverage string "N/N" from the status read. */
-  get baselineCoverage(): string {
-    const s = this.styleBaselineStatus;
-    if (!s) return '';
-    return `${s.builtChapters}/${s.totalChapters}`;
-  }
-
-  /** Localized, timezone-aware "updated <relative time>" for the last build. Empty when never built. */
-  get baselineUpdatedRelative(): string {
-    const s = this.styleBaselineStatus;
-    if (!s?.lastUpdatedAt) return '';
-    const lang = this.language.toLowerCase().startsWith('en') ? 'en' : 'he';
-    return formatRelativeTime(s.lastUpdatedAt, lang);
-  }
-
-  /** Build estimate sentence for the consent prompt, e.g. "~3 chapters, ~2 min" (+ "~$0.12" when paid). */
-  get baselineConsentEstimate(): string {
-    const s = this.styleBaselineStatus;
-    if (!s) return '';
-    const lang = this.language.toLowerCase().startsWith('en') ? 'en' : 'he';
-    const chapters = s.chaptersToBuild;
-    const minutes = Math.max(1, Math.ceil((s.estimatedSeconds || 0) / 60));
-    let phrase: string;
-    if (lang === 'he') {
-      phrase = `~${chapters} פרקים, ~${minutes} דקות`;
-    } else {
-      phrase = `~${chapters} chapters, ~${minutes} min`;
-    }
-    // Cost only for paid providers (estimatedUsd != null).
-    if (s.estimatedUsd != null) {
-      phrase += `, ~$${this.formatUsd(s.estimatedUsd)}`;
-    }
-    return phrase;
-  }
-
-  /**
-   * True when the estimate carries a real price, i.e. the build would run on a PAID provider. Server-side
-   * that is exactly the thinking tier today (p3-4): a fast-tier book runs locally and reports a null cost,
-   * so this stays false and the note does not render. Keyed on the same `estimatedUsd != null` predicate the
-   * estimate string uses, so the figure and its explanation can never appear apart.
-   */
-  get baselineConsentIsPaid(): boolean {
-    return this.styleBaselineStatus?.estimatedUsd != null;
-  }
-
-  private formatUsd(usd: number): string {
-    if (!Number.isFinite(usd)) return '0';
-    // Trim trailing zeros but keep at least 2 dp for small amounts.
-    return usd < 1 ? usd.toFixed(2) : usd.toFixed(2).replace(/\.00$/, '');
-  }
-
-  /** Open the consent prompt (the "Build now" / "Refresh" action). */
-  openBaselineConsent(): void {
-    this.showBaselineConsent = true;
-  }
-
-  cancelBaselineConsent(): void {
-    this.showBaselineConsent = false;
-  }
-
-  /** Confirm consent -> close the prompt and ask the parent to start the build. */
-  confirmBaselineBuild(): void {
-    this.showBaselineConsent = false;
-    // Never trigger a build while one is already in flight (e.g. a reattach flipped BUILDING true while
-    // this prompt was open): that would interrupt the tracked job and start a duplicate. Just close.
-    if (this.styleBaselineBuilding) return;
-    this.buildStyleBaseline.emit();
-  }
+  // w5: the consent estimate, its paid-tier predicate, the USD formatter and the whole consent gate
+  // (open / cancel / confirm) moved WITH the build to
+  // `features/book-dashboard/book-style-baseline-status-row.component.ts`. MOVE-2's rule is that consent
+  // for a whole-book spend is asked where the whole-book action lives, so leaving a second copy of the
+  // estimate here would be exactly the duplication the move exists to remove.
 
   get runDisplayText(): string {
     if (this.streamingText) return this.streamingText;

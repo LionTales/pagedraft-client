@@ -1,4 +1,4 @@
-import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
+﻿import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { Component, SimpleChange } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { By } from '@angular/platform-browser';
@@ -1516,8 +1516,13 @@ describe('AnalysisPanelComponent (focused logic)', () => {
   // =========================================================================
   // DEF-2: reattach to an in-progress style-baseline build on status load
   // =========================================================================
-  describe('style baseline reattach (DEF-2)', () => {
-    function makeBaselineStatus(overrides: Partial<BookStyleBaselineStatusDto> = {}): BookStyleBaselineStatusDto {
+  // Wave 3 / w5 (MOVE-1 + MOVE-2). `describe('style baseline reattach (DEF-2)')` LIVED HERE and covered a
+  // build this panel no longer owns: the build POST, its progress poll, its registry track() and its
+  // DEF-2 reattach all moved to `BookStyleBaselineStatusRowComponent` on the book dashboard, and that
+  // coverage moved WITH them (see `book-style-baseline-status-row.component.spec.ts`) rather than being
+  // deleted. What this panel must still be pinned on is the OPPOSITE property: that it only READS.
+  describe('w5: the writing-style build is gone from this per-chapter panel; only the status read remains', () => {
+    function baselineStatus(overrides: Partial<BookStyleBaselineStatusDto> = {}): BookStyleBaselineStatusDto {
       return {
         bookId: 'book-1',
         language: 'he',
@@ -1536,213 +1541,35 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       };
     }
 
-    it('reattaches (BUILDING + polls that jobId) when status has a non-null activeBuildJobId', () => {
+    it('still reads the status, because the Linguistic result pointer needs to know it is missing/stale', () => {
       const styleSvc = TestBed.inject(StyleBaselineService);
-      const progressSvc = TestBed.inject(AnalysisProgressService);
-      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
-        of(makeBaselineStatus({ activeBuildJobId: 'job-running' }))
-      );
-      // Keep the progress stream open so the component stays in BUILDING during the assertion.
-      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
+      const getSpy = spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(of(baselineStatus()));
 
       component.loadStyleBaselineStatus();
 
-      expect(pollSpy).toHaveBeenCalledWith('book-1', 'job-running', jasmine.anything());
-      expect(component.styleBaselineBuilding).toBeTrue();
-      // rf-c02: the reattached build is published to the registry so the editor affordance can read it.
-      expect(jobRegistrySpy.track).toHaveBeenCalledWith('style-baseline', 'book-1', 'job-running');
+      expect(getSpy).toHaveBeenCalledWith('book-1', 'he');
+      expect(component.styleBaselineStatus).not.toBeNull();
     });
 
-    // rf-c02: the run tab PUBLISHES its style-baseline build to the registry on start (track), so the
-    // editor's single "review running" affordance can read it via jobRegistry.anyRunningForBook$.
-    it('rf-c02: tracks the style-baseline build once with kind/bookId/jobId on a fresh build', () => {
-      const styleSvc = TestBed.inject(StyleBaselineService);
-      const progressSvc = TestBed.inject(AnalysisProgressService);
-      spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
-      spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
-      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(NEVER);
-
-      component.bookLanguage = 'he';
-      component.onBuildStyleBaseline();
-
-      expect(jobRegistrySpy.track).toHaveBeenCalledOnceWith('style-baseline', 'book-1', 'job-1');
-    });
-
-    it('rf-c02: does NOT track a NO-OP style-baseline build (no jobId)', () => {
-      const styleSvc = TestBed.inject(StyleBaselineService);
-      spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: null, noOp: true } as any));
-      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(NEVER);
-
-      component.bookLanguage = 'he';
-      component.onBuildStyleBaseline();
-
-      expect(jobRegistrySpy.track).not.toHaveBeenCalled();
-    });
-
-    it('does NOT reattach when activeBuildJobId is null', () => {
+    it('does NOT reattach to (or track) an in-flight build reported by the status read', () => {
       const styleSvc = TestBed.inject(StyleBaselineService);
       const progressSvc = TestBed.inject(AnalysisProgressService);
       spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
-        of(makeBaselineStatus({ activeBuildJobId: null }))
+        of(baselineStatus({ activeBuildJobId: 'job-running' }))
       );
       const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
 
       component.loadStyleBaselineStatus();
 
+      // The dashboard row owns the reattach: it is the only surface that can also show the progress.
       expect(pollSpy).not.toHaveBeenCalled();
-      expect(component.styleBaselineBuilding).toBeFalse();
+      expect(jobRegistrySpy.track).not.toHaveBeenCalledWith('style-baseline', 'book-1', 'job-running');
     });
 
-    it('does NOT double-subscribe when a build is already being tracked in this tab', () => {
-      const styleSvc = TestBed.inject(StyleBaselineService);
-      const progressSvc = TestBed.inject(AnalysisProgressService);
-      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
-        of(makeBaselineStatus({ activeBuildJobId: 'job-running' }))
-      );
-      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
-      // Simulate a build the user just started in THIS tab.
-      component.styleBaselineBuilding = true;
-
-      component.loadStyleBaselineStatus();
-
-      expect(pollSpy).not.toHaveBeenCalled();
-    });
-
-    it('does NOT reattach a second time to a jobId already driven to terminal (loop guard)', () => {
-      const styleSvc = TestBed.inject(StyleBaselineService);
-      const progressSvc = TestBed.inject(AnalysisProgressService);
-      // Server keeps advertising the SAME activeBuildJobId even after the job is terminal (lingering entry).
-      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
-        of(makeBaselineStatus({ activeBuildJobId: 'J' }))
-      );
-      // Controllable progress stream so we can emit a terminal 'succeeded' for 'J'.
-      const progress$ = new Subject<any>();
-      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(progress$.asObservable());
-
-      // First load: reattaches and starts polling 'J'.
-      component.loadStyleBaselineStatus();
-      expect(pollSpy).toHaveBeenCalledTimes(1);
-      expect(pollSpy).toHaveBeenCalledWith('book-1', 'J', jasmine.anything());
-      expect(component.styleBaselineBuilding).toBeTrue();
-
-      // Drive 'J' to terminal. The component records 'J' as handled and re-reads status, which STILL
-      // returns activeBuildJobId 'J' -> must NOT reattach again.
-      progress$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
-
-      expect(pollSpy).toHaveBeenCalledTimes(1);
-      expect(component.styleBaselineBuilding).toBeFalse();
-    });
-
-    it('reattaches to a DIFFERENT new jobId even after a prior jobId was handled (regression)', () => {
-      const styleSvc = TestBed.inject(StyleBaselineService);
-      const progressSvc = TestBed.inject(AnalysisProgressService);
-      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
-      // Pretend 'J' was already driven to terminal in this component instance.
-      (component as any).styleBaselineHandledTerminalJobId = 'J';
-
-      // Status now advertises a genuinely NEW build with a different jobId.
-      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
-        of(makeBaselineStatus({ activeBuildJobId: 'K' }))
-      );
-
-      component.loadStyleBaselineStatus();
-
-      expect(pollSpy).toHaveBeenCalledTimes(1);
-      expect(pollSpy).toHaveBeenCalledWith('book-1', 'K', jasmine.anything());
-      expect(component.styleBaselineBuilding).toBeTrue();
-    });
-
-    it('resets the in-flight build/poll on a bookLanguage change and ignores a stale OLD-language poll emit (c01)', () => {
-      const styleSvc = TestBed.inject(StyleBaselineService);
-      const progressSvc = TestBed.inject(AnalysisProgressService);
-
-      // Build for the CURRENT language ('he'): returns a jobId so the component starts polling.
-      spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: 'job-he', noOp: false } as any));
-      // Hold the 'he' poll open so the component stays in BUILDING with a live poll.
-      const hePoll$ = new Subject<any>();
-      spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(hePoll$.asObservable());
-      // After the language switch, the NEW language ('en') reports no active build.
-      const statusSpy = spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
-        of(makeBaselineStatus({ language: 'en', activeBuildJobId: null }))
-      );
-
-      // Start a build for 'he'.
-      component.bookLanguage = 'he';
-      component.onBuildStyleBaseline();
-      expect(component.styleBaselineBuilding).toBeTrue();
-      expect(progressSvc.pollStyleBaselineProgress).toHaveBeenCalledWith('book-1', 'job-he', jasmine.anything());
-
-      // Switch the book language to 'en' (no bookId change).
-      component.bookLanguage = 'en';
-      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
-
-      // The OLD-language in-flight build/poll must be torn down for the new language.
-      expect(component.styleBaselineBuilding).toBeFalse();
-      expect((component as any).styleBaselineProgressStop$).toBeNull();
-      // The new language re-read its own status.
-      expect(statusSpy).toHaveBeenCalledWith('book-1', 'en');
-
-      // A late emit on the OLD 'he' poll Subject must NOT flip BUILDING back true for the new language.
-      hePoll$.next({ status: 'running', message: 'still going', estimatedCompletionPercent: 50 });
-      expect(component.styleBaselineBuilding).toBeFalse();
-    });
-
-    it('cancels an earlier in-flight status fetch so a slower OLDER response cannot overwrite the newer snapshot (Bug 1)', () => {
-      const styleSvc = TestBed.inject(StyleBaselineService);
-      const progressSvc = TestBed.inject(AnalysisProgressService);
-
-      const olderReq$ = new Subject<BookStyleBaselineStatusDto>();
-      const newerReq$ = new Subject<BookStyleBaselineStatusDto>();
-      // Two overlapping fetches for the SAME (book, language): first call → olderReq$, second → newerReq$.
-      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValues(olderReq$.asObservable(), newerReq$.asObservable());
-      const pollSpy = spyOn(progressSvc, 'pollStyleBaselineProgress').and.returnValue(NEVER);
-
-      component.loadStyleBaselineStatus(); // older, still in flight
-      component.loadStyleBaselineStatus(); // newer, supersedes the older
-
-      // The newer request resolves FIRST with the current snapshot...
-      newerReq$.next(makeBaselineStatus({ builtChapters: 5, activeBuildJobId: null }));
-      // ...then the OLDER request resolves LATE with a now-stale snapshot + a stale active build.
-      olderReq$.next(makeBaselineStatus({ builtChapters: 1, activeBuildJobId: 'stale-job' }));
-
-      // The newer snapshot wins, and the stale older response neither overwrites it nor reattaches a poll.
-      expect(component.styleBaselineStatus?.builtChapters).toBe(5);
-      expect(pollSpy).not.toHaveBeenCalled();
-      expect(component.styleBaselineBuilding).toBeFalse();
-    });
-
-    it('onBuildStyleBaseline does NOT interrupt or duplicate a build already in flight (reattach guard, Bug 1)', () => {
-      const styleSvc = TestBed.inject(StyleBaselineService);
-      const progressSvc = TestBed.inject(AnalysisProgressService);
-
-      // A poll is already reattached (DEF-2) to an in-flight job; the component is BUILDING. Mirror the
-      // real service's takeUntil(stop$) wiring so the poll is a faithful live subscription.
-      const livePoll$ = new Subject<any>();
-      spyOn(progressSvc, 'pollStyleBaselineProgress').and.callFake(
-        (_b: string, _j: string, stop$: any) => livePoll$.asObservable().pipe(takeUntil(stop$))
-      );
-      spyOn(styleSvc, 'getStyleBaselineStatus').and.returnValue(
-        of(makeBaselineStatus({ activeBuildJobId: 'live-job' }))
-      );
-      const buildSpy = spyOn(styleSvc, 'buildStyleBaseline').and.returnValue(of({ jobId: 'dup', noOp: false } as any));
-
-      component.loadStyleBaselineStatus();
-      expect(component.styleBaselineBuilding).toBeTrue();
-      const stopBefore = (component as any).styleBaselineProgressStop$;
-      expect(stopBefore).not.toBeNull();
-
-      // A stray Confirm arrives while the build is in flight (e.g. a lingering consent prompt). It must be
-      // a no-op: NO second build POST, BUILDING stays true, and the live poll keeps tracking the job.
-      component.onBuildStyleBaseline();
-
-      expect(buildSpy).not.toHaveBeenCalled();
-      expect(component.styleBaselineBuilding).toBeTrue();
-      expect((component as any).styleBaselineProgressStop$).toBe(stopBefore);
-
-      // The in-flight poll is still live and still updates progress for the tracked job.
-      livePoll$.next({ status: 'running', message: 'tracked job progressing', estimatedCompletionPercent: 60 });
-      // styleBaselineProgressPercent is updated by the live poll — confirms it was not cancelled.
-      expect(component.styleBaselineProgressPercent).toBe(60);
+    it('exposes no build entry point at all (a book-wide build must not start from a chapter surface)', () => {
+      expect((component as any).onBuildStyleBaseline).toBeUndefined();
+      expect((component as any).pollStyleBaselineBuild).toBeUndefined();
+      expect((component as any).styleBaselineBuilding).toBeUndefined();
     });
   });
 
@@ -2842,13 +2669,29 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
       .toBeTrue();
   });
 
-  it('renders the cross-model warning under the toggle once the re-read lands, with no page reload', () => {
+  /**
+   * w5: the cross-model WARNING moved to the dashboard row with the build, because it is a reason to
+   * refresh the artifact and the refresh action no longer exists on this per-chapter surface (its own
+   * rendering is covered in `book-style-baseline-status-row.component.spec.ts`). What this panel still
+   * owes the reader is the pointer: a re-read that reports the artifact is no longer current must make
+   * the Linguistic result say so, in place, with no page reload. That is the same property this case was
+   * always guarding, asserted on the surface that still carries it.
+   */
+  it('makes the deviations pointer reflect the re-read once it lands, with no page reload', () => {
     runTab().tierChanged.emit();
-    opened[opened.length - 1].subject.next(makeBaselineStatus({ builtWithDifferentModel: true }));
+    opened[opened.length - 1].subject.next(
+      makeBaselineStatus({ hasBaseline: true, ready: false, staleCount: 0, builtWithDifferentModel: true })
+    );
     fixture.detectChanges();
 
-    const warning = fixture.debugElement.query(By.css('[data-testid="sb-cross-model-warning"]'));
-    expect(warning).withContext('the warning row the whole todo exists for').not.toBeNull();
+    expect(component.styleBaselineStatus?.builtWithDifferentModel).toBeTrue();
+    expect(runTab().baselineState)
+      .withContext('a cross-model artifact reads as stale, so the pointer offers the way to fix it')
+      .toBe('stale');
+    expect(runTab().baselineMissingOrInsufficient).toBeTrue();
+    // And the build itself is nowhere on this surface.
+    expect(fixture.debugElement.query(By.css('[data-testid="style-baseline-row"]'))).toBeNull();
+    expect(fixture.debugElement.query(By.css('[data-testid="sb-cross-model-warning"]'))).toBeNull();
   });
 });
 

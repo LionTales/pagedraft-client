@@ -328,6 +328,20 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
     }
   }
 
+  /**
+   * Wave 3 / w5 (D13 retarget). A Linguistic result on the per-chapter surface said its deviations were
+   * measured against a book-wide writing style that is missing or out of date, and the reader asked to do
+   * something about it. That build moved to the book dashboard (MOVE-1), so this switches the assistant to
+   * Book review and raises the focus token the dashboard passes to the relocated row, which scrolls itself
+   * into view. The editor owns the mode switch, so the pointer resolves in exactly one place.
+   */
+  focusBaselineToken = 0;
+
+  onOpenStyleBaselineHome(): void {
+    this.onReviewModeChange('review');
+    this.focusBaselineToken++;
+  }
+
   /** Scope pill text: this chapter (edit mode) vs whole book (review mode). */
   get reviewScopeLabel(): string {
     const he = this.reviewPanelIsHebrew;
