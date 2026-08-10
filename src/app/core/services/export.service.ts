@@ -4,9 +4,12 @@ import { Observable, from, of, throwError } from 'rxjs';
 import { catchError, map, switchMap } from 'rxjs/operators';
 
 import {
+  EXPORT_SKIPPED_CHAPTERS_HEADER,
+  EXPORT_SKIPPED_COUNT_HEADER,
   ExportFailure,
   ExportedFile,
   fileNameFromContentDisposition,
+  skipReportFromHeaders,
 } from '../models/export';
 
 /**
@@ -75,8 +78,12 @@ export class ExportService {
   }
 
   /**
-   * The one transfer. `observe: 'response'` because the filename lives in a HEADER, not in the body, and
+   * The one transfer. `observe: 'response'` because the file's NAME and everything the file is MISSING both
+   * live in headers rather than in the body - a DOCX has nowhere to put metadata - and
    * `responseType: 'blob'` because the body is a DOCX.
+   *
+   * Both header reads are done here, once, for the same reason the transfer is: the two document paths have
+   * drifted before, and a caller that read the skipped-chapter headers itself would be the drift.
    */
   private request(url: string, fallbackName: string): Observable<ExportedFile> {
     return this.http
@@ -85,6 +92,12 @@ export class ExportService {
         map((res: HttpResponse<Blob>) => ({
           blob: res.body ?? new Blob([]),
           fileName: fileNameFromContentDisposition(res.headers.get('Content-Disposition'), fallbackName),
+          // Null when the server said nothing, which is NOT "nothing was skipped" - see
+          // `skipReportFromHeaders`. The screen has a different sentence for each.
+          skipped: skipReportFromHeaders(
+            res.headers.get(EXPORT_SKIPPED_COUNT_HEADER),
+            res.headers.get(EXPORT_SKIPPED_CHAPTERS_HEADER),
+          ),
         })),
         catchError((err: HttpErrorResponse) => this.toFailure(err)),
       );
@@ -96,7 +109,9 @@ export class ExportService {
    * THE BLOB TRAP: because the request asked for a blob, an ERROR body also arrives as a Blob, so the 409's
    * `{ "reason": "noChapters" }` is not readable as an object the way it would be on a JSON request. Reading
    * it costs one async hop, and skipping that hop is how a screen ends up hardcoding "409 means no chapters"
-   * and then saying it for a reason the server has not sent yet.
+   * and then saying it for a reason the server has not sent yet. The server has since learned a SECOND
+   * reason (`nothingWritten`) on both paths, which is exactly the day that shortcut would have started
+   * lying.
    *
    * A body that is missing, empty or unparseable yields `reason: null` rather than a guess; the screen has a
    * truthful sentence for that case.

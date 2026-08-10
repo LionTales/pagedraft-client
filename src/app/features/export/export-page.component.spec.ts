@@ -17,12 +17,17 @@ import { ActivatedRoute, provideRouter } from '@angular/router';
 import { BehaviorSubject, Observable, Subject, throwError } from 'rxjs';
 
 import { BookDetailDto, ChapterSummaryDto } from '../../core/models/book';
-import { ExportFailure, ExportedFile } from '../../core/models/export';
+import {
+  EXPORT_REASON_NOTHING_WRITTEN,
+  ExportFailure,
+  ExportSkipReport,
+  ExportedFile,
+} from '../../core/models/export';
 import { BookService } from '../../core/services/book.service';
 import { ExportService } from '../../core/services/export.service';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { ExportPageComponent } from './export-page.component';
-import { EXPORT_COPY, EXPORT_ERRORS, EXPORT_KINDS } from './export-kinds';
+import { EXPORT_COPY, EXPORT_ERRORS, EXPORT_KINDS, SKIPPED_UNKNOWN } from './export-kinds';
 
 const BOOK_ID = 'book-1';
 
@@ -51,8 +56,12 @@ function book(language: string, chapters: ChapterSummaryDto[]): BookDetailDto {
   };
 }
 
-function file(name: string): ExportedFile {
-  return { blob: new Blob(['x']), fileName: name };
+/**
+ * A landed file. The default skip report is what a current server sends on a complete export: a report of
+ * ZERO, not an absent one - the two are different facts and the screen says something different for each.
+ */
+function file(name: string, skipped: ExportSkipReport | null = { count: 0, chapters: [] }): ExportedFile {
+  return { blob: new Blob(['x']), fileName: name, skipped };
 }
 
 describe('ExportPageComponent (Wave 3 / w4)', () => {
@@ -278,12 +287,150 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       expect(saved.length).toBe(1);
     });
 
+    /**
+     * The server's SECOND 409 token. The book kind and the chapter kind get different sentences on purpose:
+     * a whole book with no writing in it can be filled by an import, a single empty chapter cannot.
+     */
+    it('says the file would have been empty when the BOOK path answers 409 nothingWritten', () => {
+      loadBook();
+      failWith({ status: 409, reason: EXPORT_REASON_NOTHING_WRITTEN }, 'book');
+      click('export-download-book-docx');
+
+      expect(el('export-error-book-docx')!.textContent!.trim()).toBe(EXPORT_ERRORS.nothingWrittenBook.he);
+      // Not the no-chapters sentence: this book HAS chapters, and telling the author to import is wrong.
+      expect(el('export-error-book-docx')!.textContent!.trim()).not.toBe(EXPORT_ERRORS.noChapters.he);
+    });
+
+    it('speaks about the CHAPTER when the chapter path answers 409 nothingWritten, which used to be a 200', () => {
+      loadBook();
+      failWith({ status: 409, reason: EXPORT_REASON_NOTHING_WRITTEN }, 'chapter');
+      click('export-download-chapter-docx');
+
+      expect(el('export-error-chapter-docx')!.textContent!.trim())
+        .toBe(EXPORT_ERRORS.nothingWrittenChapter.he);
+    });
+
+    it('renders the nothingWritten sentences in English on an English book, both kinds', () => {
+      loadBook('en');
+      failWith({ status: 409, reason: EXPORT_REASON_NOTHING_WRITTEN }, 'book');
+      click('export-download-book-docx');
+      expect(el('export-error-book-docx')!.textContent!.trim()).toBe(EXPORT_ERRORS.nothingWrittenBook.en);
+
+      failWith({ status: 409, reason: EXPORT_REASON_NOTHING_WRITTEN }, 'chapter');
+      click('export-download-chapter-docx');
+      expect(el('export-error-chapter-docx')!.textContent!.trim())
+        .toBe(EXPORT_ERRORS.nothingWrittenChapter.en);
+    });
+
     it('leaves an error on the row that produced it, not on the other kind', () => {
       loadBook();
       failWith({ status: 404, reason: null }, 'chapter');
       click('export-download-chapter-docx');
       expect(el('export-error-chapter-docx')).not.toBeNull();
       expect(el('export-error-book-docx')).toBeNull();
+    });
+  });
+
+  // ── What the downloaded file does NOT contain (be-c02's client half) ────────────────────────────
+  //
+  // The exporter leaves out a chapter with nothing written in it. Told nothing, an author who finds a gap
+  // in their own manuscript cannot tell a skip from data loss, so a successful download names what it left
+  // out - from the SERVER's headers, never from a client-side guess at which chapters look empty.
+
+  describe('chapters left out of a downloaded file', () => {
+    it('says nothing extra when the server reports a complete file', () => {
+      loadBook();
+      click('export-download-book-docx');
+      bookFiles.next(file('b.docx', { count: 0, chapters: [] }));
+      fixture.detectChanges();
+
+      expect(el('export-done-book-docx')).not.toBeNull();
+      expect(el('export-skipped-book-docx')).toBeNull();
+    });
+
+    it('names the skipped chapters, numbered as the picker numbers them', () => {
+      loadBook();
+      click('export-download-book-docx');
+      // Raw zero-based orders on the wire; the screen owns display numbering.
+      bookFiles.next(file('b.docx', {
+        count: 2,
+        chapters: [{ order: 1, title: 'הסופה' }, { order: 4, title: 'הלילה הארוך' }],
+      }));
+      fixture.detectChanges();
+
+      const notice = el('export-skipped-book-docx')!.textContent!;
+      expect(notice).toContain('2');
+      expect(notice).toContain('2. הסופה');
+      expect(notice).toContain('5. הלילה הארוך');
+    });
+
+    /**
+     * The server bounds the named list so a long book cannot blow a proxy's header budget: the COUNT is
+     * authoritative and the list may name fewer. The sentence must not read as if the list were all of it.
+     */
+    it('renders the authoritative count when the list names fewer chapters than it', () => {
+      loadBook();
+      click('export-download-book-docx');
+      bookFiles.next(file('b.docx', { count: 25, chapters: [{ order: 0, title: 'A' }] }));
+      fixture.detectChanges();
+
+      const notice = el('export-skipped-book-docx')!.textContent!;
+      expect(notice).toContain('25');
+      expect(notice).toContain('1. A');
+    });
+
+    it('renders the count alone when the server named no chapters at all', () => {
+      loadBook();
+      click('export-download-book-docx');
+      bookFiles.next(file('b.docx', { count: 3, chapters: [] }));
+      fixture.detectChanges();
+
+      expect(el('export-skipped-book-docx')!.textContent).toContain('3');
+    });
+
+    /**
+     * THE ABSENT HEADER. It means "an old server, or a proxy that stripped it", which is not "nothing was
+     * skipped" - so the screen says it does not know rather than implying a complete manuscript.
+     */
+    it('says it was not told, rather than nothing, when the skip report is absent', () => {
+      loadBook();
+      click('export-download-book-docx');
+      bookFiles.next(file('b.docx', null));
+      fixture.detectChanges();
+
+      expect(el('export-skipped-book-docx')!.textContent!.trim()).toBe(SKIPPED_UNKNOWN.he);
+    });
+
+    it('reports skips on the chapter path with the same rendering', () => {
+      loadBook();
+      click('export-download-chapter-docx');
+      chapterFiles.next(file('c.docx', null));
+      fixture.detectChanges();
+
+      expect(el('export-skipped-chapter-docx')!.textContent!.trim()).toBe(SKIPPED_UNKNOWN.he);
+      expect(el('export-skipped-book-docx')).toBeNull();
+    });
+
+    it('renders the notice in English on an English book', () => {
+      loadBook('en');
+      click('export-download-book-docx');
+      bookFiles.next(file('b.docx', { count: 1, chapters: [{ order: 2, title: 'The Storm' }] }));
+      fixture.detectChanges();
+
+      const notice = el('export-skipped-book-docx')!.textContent!;
+      expect(notice).toContain('3. The Storm');
+      expect(notice).toContain('One chapter');
+    });
+
+    it('clears the previous notice when the same kind is exported again', () => {
+      loadBook();
+      click('export-download-book-docx');
+      bookFiles.next(file('b.docx', { count: 2, chapters: [] }));
+      fixture.detectChanges();
+      expect(el('export-skipped-book-docx')).not.toBeNull();
+
+      click('export-download-book-docx');
+      expect(el('export-skipped-book-docx')).toBeNull();
     });
   });
 

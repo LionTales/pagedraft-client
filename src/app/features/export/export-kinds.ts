@@ -140,6 +140,23 @@ export const EXPORT_ERRORS = {
     he: 'אין פרקים לייצוא. ייבוא כתב יד או הוספת פרק, ואז אפשר לנסות שוב.',
     en: 'There are no chapters to export. Import a manuscript or add a chapter, then try again.',
   },
+  /**
+   * 409 with `reason: nothingWritten` on the BOOK path - the book has chapters, but not one of them holds
+   * anything renderable, so the file would be blank. A separate sentence from {@link noChapters} because
+   * the next action is different: there is nothing to import, there is something to write.
+   */
+  nothingWrittenBook: {
+    he: 'יש פרקים בספר, אך עדיין לא נכתב בהם דבר, ולכן הקובץ היה יוצא ריק. אפשר לכתוב באחד הפרקים, או לייבא כתב יד, ואז לנסות שוב.',
+    en: 'The book has chapters, but nothing has been written in them yet, so the file would have come out empty. Write in a chapter, or import a manuscript, then try again.',
+  },
+  /**
+   * 409 with `reason: nothingWritten` on the CHAPTER path. This case used to answer 200 with a valid but
+   * empty .docx, so this sentence is the whole of what the author now learns instead of a blank file.
+   */
+  nothingWrittenChapter: {
+    he: 'עדיין לא נכתב דבר בפרק הזה, ולכן הקובץ היה יוצא ריק. אפשר לכתוב בו, או לבחור פרק אחר, ואז לנסות שוב.',
+    en: 'Nothing has been written in this chapter yet, so the file would have come out empty. Write in it, or pick another chapter, then try again.',
+  },
   /** 404 on the book path. */
   bookNotFound: {
     he: 'הספר לא נמצא. ייתכן שנמחק בחלון אחר.',
@@ -161,6 +178,48 @@ export const EXPORT_ERRORS = {
     en: 'The export did not complete. You can try again.',
   },
 } satisfies Record<string, Bi>;
+
+// ─── What the downloaded file does NOT contain ────────────────────────────────────────────────────
+//
+// The export leaves out a chapter with nothing written in it. Silently, that is indistinguishable from
+// data loss: an author opening their manuscript and finding chapter 7 missing has no way to tell a skip
+// from a corruption. So a successful download says what it left out, from the SERVER's own headers - the
+// client never predicts a skip, because the spine's "empty chapter" (no words) and the exporter's (no
+// renderable block) are deliberately different tests and a guess here would be a third one.
+
+/**
+ * The notice under a completed download that left chapters out.
+ *
+ * THE COUNT AND THE NAMES ARE TWO DIFFERENT FACTS. The server bounds the named list so a long book cannot
+ * blow a proxy's header budget, so it may name fewer chapters than it counted; the count is authoritative
+ * and the names are a courtesy, and this sentence never implies the list is complete when it is not.
+ *
+ * `names` arrive already numbered by the caller, which owns display numbering.
+ */
+export function skippedNotice(count: number, names: string[], lang: ExportLang): string {
+  const head = lang === 'he'
+    ? (count === 1
+      ? 'פרק אחד לא נכלל בקובץ, כי עדיין לא נכתב בו דבר'
+      : `${count} פרקים לא נכללו בקובץ, כי עדיין לא נכתב בהם דבר`)
+    : (count === 1
+      ? 'One chapter is not in this file, because nothing has been written in it yet'
+      : `${count} chapters are not in this file, because nothing has been written in them yet`);
+  if (names.length === 0) return `${head}.`;
+  const list = names.join(', ');
+  if (names.length >= count) return `${head}: ${list}.`;
+  // Fewer names than the count: say so, rather than letting the list read as the whole of it.
+  return lang === 'he' ? `${head}. בהם: ${list}.` : `${head}. Among them: ${list}.`;
+}
+
+/**
+ * The notice under a completed download whose skip headers never arrived: an older server, or a proxy that
+ * stripped them. Rendering nothing here would let the screen imply a complete manuscript it was never told
+ * about, and rendering "0 chapters left out" would be an outright invention.
+ */
+export const SKIPPED_UNKNOWN: Bi = {
+  he: 'לא קיבלנו מהשרת מידע על פרקים שאולי לא נכללו בקובץ הזה, ולכן כדאי לבדוק אותו.',
+  en: 'The server did not tell us whether any chapters were left out of this file, so it is worth checking.',
+};
 
 /** Resolve a bilingual constant. */
 export function pick(bi: Bi, lang: ExportLang): string {

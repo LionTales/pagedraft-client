@@ -186,7 +186,13 @@ export interface StageStatus {
   behindMagnitude: number | null;
   /** The next action this row offers, or null when there is nothing honest to offer. */
   action: StageActionId | null;
-  /** Stage 1 only: how many chapters exist, and how many carry text. Null when not known. */
+  /**
+   * Stages 1 and 5: how many chapters exist, and how many carry text. Null when NOT KNOWN, which readers
+   * must keep distinct from zero - the copy layer renders a sentence off these and an absent fact may not
+   * become the positive claim "none of them has any text".
+   *
+   * Stage 4 also carries {@link chapterCount} for its own gate; only 1 and 5 read the pair.
+   */
   chapterCount: number | null;
   chaptersWithText: number | null;
   /** Stage 3 only: working-through progress, straight off the status payload. Null when no review. */
@@ -212,7 +218,7 @@ export function deriveStageSpine(signals: StageSpineSignals): StageStatus[] {
     deriveBriefs(signals.summary, chapterCount, signals.summaryRunning),
     deriveReview(signals.review, chapterCount, signals.reviewRunning),
     deriveChapterPasses(chapters, chapterCount),
-    deriveExport(signals.exportSurfaceAvailable, chapterCount),
+    deriveExport(signals.exportSurfaceAvailable, chapterCount, chaptersWithText),
   ];
 }
 
@@ -220,9 +226,19 @@ export function deriveStageSpine(signals: StageSpineSignals): StageStatus[] {
  * Stage 1, Import. From the chapter list (inside a book) or `chapterCount` / `chaptersWithTextCount`
  * (on the books list) - the same two numbers either way.
  *
- *   chapterCount === 0        -> not-started, and the action is to import.
+ *   chapterCount === null     -> unknown. The list has not landed.
+ *   chapterCount === 0        -> not-started, and the action is to import. No text is possible with no
+ *                                rows, so this answer needs no second number.
+ *   chaptersWithText === null -> unknown. Rows exist and whether any of them carries text is NOT KNOWN.
  *   chaptersWithText > 0      -> ready.
  *   chapters but no text yet  -> not-started, with a DIFFERENT sentence: something exists, nothing usable.
+ *
+ * WHY THE NULL BRANCH IS ITS OWN CASE, and not `(chaptersWithText ?? 0) > 0`. That coalesce read an
+ * ABSENT fact as the positive fact "zero chapters carry text" and rendered the assertive sentence
+ * "12 chapters exist, but none of them has any text yet" from a payload that had said nothing of the
+ * kind - against this file's own contract at {@link StageSpineSignals} ("null means NOT KNOWN YET, never
+ * empty"). Every host that knows `chapterCount` also knows `chaptersWithText` today (they are computed
+ * from one source), so this branch is a guard on a future host, which is exactly when it would be wrong.
  *
  * There is deliberately NO `running`. Import is a fire-and-forget POST pair with no persisted job, so
  * there is nothing to report and none may be invented.
@@ -235,7 +251,16 @@ function deriveImport(chapterCount: number | null, chaptersWithText: number | nu
     base.unknown = true;
     return base;
   }
-  if ((chaptersWithText ?? 0) > 0) {
+  if (chapterCount === 0) {
+    base.state = 'not-started';
+    base.action = 'open-import';
+    return base;
+  }
+  if (chaptersWithText === null) {
+    base.unknown = true;
+    return base;
+  }
+  if (chaptersWithText > 0) {
     base.state = 'ready';
     return base;
   }
@@ -429,14 +454,39 @@ function deriveChapterPasses(
  *                                     anything to put in a file.
  *   no chapters                    -> blocked by Import. This is exactly the server's own 409 answer
  *                                     (`noChapters`), said before the user spends a click on it.
+ *   chaptersWithText unknown       -> unknown. Rows exist, but whether a file made from them would hold
+ *                                     anything is not known here, and `ready` would be a guess.
+ *   chapters, none with text       -> blocked by Import, with its own sentence. The server's second 409
+ *                                     answer (`nothingWritten`), said before the click.
  *   otherwise                      -> ready, and the action opens the export screen.
  *
- * `ready` here means "there is something to download and a screen to download it from", which is a fact
- * about chapters, not a claim that the author is finished: nothing about export is ever "done".
+ * WHY THIS READS THE SAME SIGNAL AS STAGE 1, and what it cost not to. This stage used to read `ready` off
+ * `chapterCount > 0` alone, so a book whose three chapters were created empty rendered stage 1
+ * `not-started` ("none of them has any text yet") and stage 5 `ready` IN THE SAME COLUMN - and the user
+ * who followed it downloaded a .docx containing nothing, HTTP 200, no error. That is this file's one rule
+ * failing on the one stage whose input was on the wire and unused: `chaptersWithTextCount` was put there
+ * by w1 for exactly this.
+ *
+ * The server now agrees rather than being contradicted: an all-unwritten book answers `409`
+ * `nothingWritten` instead of assembling an empty document. The two are NOT the same test - the spine
+ * counts `WordCount > 0` and the exporter asks whether the stored SFDT holds a renderable block - so this
+ * derivation is a HONEST WARNING, never a prediction of which chapters the file will be missing. Those
+ * come back on the response headers of a successful export and are rendered from the server's answer
+ * (`export.service.ts`); a client-side guess at them would be a third spelling of the same definition.
+ *
+ * `blocked` rather than `not-started`: nothing about export is ever the user's own unstarted work, and
+ * naming a prerequisite the user can walk (Import, the same door every other blocked stage points at on
+ * this book) is what the `blocked` contract is for. `ready` still means only "there is something to
+ * download and a screen to download it from", never that the author is finished.
  */
-function deriveExport(surfaceAvailable: boolean, chapterCount: number | null): StageStatus {
+function deriveExport(
+  surfaceAvailable: boolean,
+  chapterCount: number | null,
+  chaptersWithText: number | null,
+): StageStatus {
   const base = emptyStatus('export');
   base.chapterCount = chapterCount;
+  base.chaptersWithText = chaptersWithText;
   if (!surfaceAvailable) {
     base.state = 'unavailable';
     return base;
@@ -446,6 +496,16 @@ function deriveExport(surfaceAvailable: boolean, chapterCount: number | null): S
     return base;
   }
   if (chapterCount === 0) {
+    base.state = 'blocked';
+    base.blockedBy = 'import';
+    base.action = 'open-import';
+    return base;
+  }
+  if (chaptersWithText === null) {
+    base.unknown = true;
+    return base;
+  }
+  if (chaptersWithText === 0) {
     base.state = 'blocked';
     base.blockedBy = 'import';
     base.action = 'open-import';

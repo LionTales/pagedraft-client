@@ -7,11 +7,17 @@
  * fabricated server-side percentage.
  *
  *   GET /api/document/export/book/{bookId}                -> 200 DOCX | 404 | 409 ExportUnavailableDto
- *   GET /api/document/export/chapter/{bookId}/{chapterId} -> 200 DOCX | 404
+ *   GET /api/document/export/chapter/{bookId}/{chapterId} -> 200 DOCX | 404 | 409 ExportUnavailableDto
  *
  * The 200 carries `Content-Disposition: attachment` with BOTH a plain `filename` and an RFC 5987
  * `filename*=UTF-8''...`; Hebrew titles survive only in the second, which is why this client reads that one
  * first (see {@link fileNameFromContentDisposition}).
+ *
+ * It also carries {@link EXPORT_SKIPPED_COUNT_HEADER} and, when that is not zero,
+ * {@link EXPORT_SKIPPED_CHAPTERS_HEADER}: the export leaves out a chapter with nothing written in it, and
+ * an author must be told which ones rather than discovering a gap in their own manuscript. All three
+ * headers are in the API's CORS `WithExposedHeaders`; none of them is CORS-safelisted, so a missing entry
+ * there makes every read here return null cross-origin while dev, being same-origin, shows nothing.
  */
 
 /** The DOCX media type both endpoints answer with. */
@@ -26,14 +32,98 @@ export interface ExportUnavailableDto {
   reason: string;
 }
 
-/** The one reason token the server sends today: the book has no chapters to put in a file. */
+/** The book has no chapter rows at all, so there is nothing to put in a file. The fix is an import. */
 export const EXPORT_REASON_NO_CHAPTERS = 'noChapters';
+
+/**
+ * There IS something to export in principle, but nothing in it has been written, so the document would be
+ * blank. Distinct from {@link EXPORT_REASON_NO_CHAPTERS} because the next action differs: import versus
+ * write.
+ *
+ * Sent by BOTH paths. The chapter path used to answer 200 with a valid empty .docx for this case, which is
+ * why the screen needs its own sentence for it on the chapter kind too and not only on the book kind.
+ */
+export const EXPORT_REASON_NOTHING_WRITTEN = 'nothingWritten';
+
+/**
+ * A chapter the downloaded file does NOT contain, as the server named it.
+ *
+ * `order` is the RAW zero-based `Chapter.Order`; display numbering belongs to the client (the export
+ * screen renders `order + 1`, like its chapter picker).
+ */
+export interface SkippedChapter {
+  order: number;
+  title: string;
+}
+
+/**
+ * What a successful export left out, read off the response headers.
+ *
+ * THE COUNT IS AUTHORITATIVE AND THE LIST IS A COURTESY: the server bounds the named list so a long book
+ * cannot blow a proxy's header budget and take `Content-Disposition` down with it, so `chapters` may name
+ * FEWER than `count`. Copy that renders both must survive "3 were left out: A, B".
+ */
+export interface ExportSkipReport {
+  count: number;
+  chapters: SkippedChapter[];
+}
+
+/** How many chapters the file does not contain. Always sent on a 200, `"0"` included. */
+export const EXPORT_SKIPPED_COUNT_HEADER = 'X-Export-Skipped-Count';
+/** Which ones, percent-encoded JSON. Sent only when the count is not zero. */
+export const EXPORT_SKIPPED_CHAPTERS_HEADER = 'X-Export-Skipped-Chapters';
+
+/**
+ * Read the skipped-chapter headers off a successful export, or NULL when the server did not say.
+ *
+ * THE NULL IS THE POINT. The count header is written on every 200, zero included, so its absence means
+ * "an old server, or a proxy that stripped it" - which is not the same fact as "nothing was skipped", and
+ * defaulting it to 0 would let a client silently promise a complete manuscript it knows nothing about.
+ * The two are rendered differently by the screen.
+ *
+ * The list is best-effort: a count with an unreadable or absent list still yields a report, with an empty
+ * `chapters`. That is the same asymmetry the server's bound creates, so it needs no second rule.
+ */
+export function skipReportFromHeaders(
+  countHeader: string | null,
+  chaptersHeader: string | null,
+): ExportSkipReport | null {
+  if (countHeader === null) return null;
+  const trimmed = countHeader.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const count = Number(trimmed);
+  if (!Number.isSafeInteger(count)) return null;
+  return { count, chapters: count > 0 ? parseSkippedChapters(chaptersHeader) : [] };
+}
+
+/** `JSON.parse(decodeURIComponent(value))`, defended: a malformed header costs the names, never the count. */
+function parseSkippedChapters(header: string | null): SkippedChapter[] {
+  if (!header) return [];
+  try {
+    const parsed: unknown = JSON.parse(decodeURIComponent(header));
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((e): e is SkippedChapter =>
+        !!e && typeof e === 'object'
+        && typeof (e as SkippedChapter).order === 'number'
+        && typeof (e as SkippedChapter).title === 'string')
+      .map(e => ({ order: e.order, title: e.title }));
+  } catch {
+    return [];
+  }
+}
 
 /** A downloaded file, before it is handed to the browser. */
 export interface ExportedFile {
   blob: Blob;
   /** The server's filename when it sent one, else the caller's fallback. Never empty. */
   fileName: string;
+  /**
+   * What the file does not contain, or null when the server did not say. Required rather than optional so
+   * a new caller has to decide what it does about a partial manuscript instead of inheriting silence - a
+   * chapter missing from an exported book is indistinguishable from data loss to an author.
+   */
+  skipped: ExportSkipReport | null;
 }
 
 /**

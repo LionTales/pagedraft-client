@@ -18,11 +18,15 @@ import { TestBed, fakeAsync, tick } from '@angular/core/testing';
 
 import {
   DOCX_CONTENT_TYPE,
+  EXPORT_REASON_NOTHING_WRITTEN,
   EXPORT_REASON_NO_CHAPTERS,
+  EXPORT_SKIPPED_CHAPTERS_HEADER,
+  EXPORT_SKIPPED_COUNT_HEADER,
   ExportFailure,
   ExportedFile,
   fileNameFromContentDisposition,
   isExportFailure,
+  skipReportFromHeaders,
 } from '../models/export';
 import { ExportService } from './export.service';
 
@@ -164,6 +168,93 @@ describe('ExportService (Wave 3 / w4)', () => {
     });
   });
 
+  // ── What the file does NOT contain (be-c02) ─────────────────────────────────────────────────────
+  //
+  // A chapter with nothing written in it is left out of the assembled document. Silently, that is
+  // indistinguishable from data loss, so the server names the gap on two response headers and this service
+  // is the one place they are read. Both document paths are asserted, as everything else here is.
+
+  describe('the skipped-chapter headers', () => {
+    /** Percent-encoded JSON, exactly as the API writes it. */
+    function skippedHeader(entries: { order: number; title: string }[]): string {
+      return encodeURIComponent(JSON.stringify(entries));
+    }
+
+    it('reports a complete file as a report of zero, not as an absence, on the book path', () => {
+      let got: ExportedFile | undefined;
+      svc.exportBook(BOOK_ID).subscribe(f => (got = f));
+      http.expectOne(BOOK_URL).flush(docx(), {
+        headers: { 'Content-Disposition': disposition('b.docx'), [EXPORT_SKIPPED_COUNT_HEADER]: '0' },
+      });
+      expect(got!.skipped).toEqual({ count: 0, chapters: [] });
+    });
+
+    it('reads the count AND the named chapters, with the raw zero-based order the wire carries', () => {
+      let got: ExportedFile | undefined;
+      svc.exportBook(BOOK_ID).subscribe(f => (got = f));
+      http.expectOne(BOOK_URL).flush(docx(), {
+        headers: {
+          'Content-Disposition': disposition('b.docx'),
+          [EXPORT_SKIPPED_COUNT_HEADER]: '2',
+          [EXPORT_SKIPPED_CHAPTERS_HEADER]: skippedHeader([
+            { order: 1, title: 'הסופה' },
+            { order: 4, title: 'The Long Night' },
+          ]),
+        },
+      });
+      expect(got!.skipped).toEqual({
+        count: 2,
+        chapters: [{ order: 1, title: 'הסופה' }, { order: 4, title: 'The Long Night' }],
+      });
+    });
+
+    it('reads the same headers on the CHAPTER path, where the count is zero by construction', () => {
+      let got: ExportedFile | undefined;
+      svc.exportChapter(BOOK_ID, CHAPTER_ID).subscribe(f => (got = f));
+      http.expectOne(CHAPTER_URL).flush(docx(), {
+        headers: { 'Content-Disposition': disposition('c.docx'), [EXPORT_SKIPPED_COUNT_HEADER]: '0' },
+      });
+      expect(got!.skipped).toEqual({ count: 0, chapters: [] });
+    });
+
+    /**
+     * THE ONE THAT MATTERS. The count is written on every 200, zero included, so its ABSENCE means an old
+     * server or a proxy that stripped it. A client that defaults that to 0 silently promises the author a
+     * complete manuscript it knows nothing about.
+     */
+    it('reports NOT KNOWN, not zero, when the server sent no count header at all', () => {
+      let got: ExportedFile | undefined;
+      svc.exportBook(BOOK_ID).subscribe(f => (got = f));
+      http.expectOne(BOOK_URL).flush(docx(), {
+        headers: { 'Content-Disposition': disposition('b.docx') },
+      });
+      expect(got!.skipped).toBeNull();
+    });
+
+    it('keeps the authoritative count when the list is unreadable, bounded or absent', () => {
+      // The server bounds the list so a long book cannot blow a proxy's header budget, so it may name
+      // FEWER chapters than it counted. A count with no list is a valid answer, not a broken one.
+      expect(skipReportFromHeaders('7', null)).toEqual({ count: 7, chapters: [] });
+      expect(skipReportFromHeaders('7', encodeURIComponent(JSON.stringify([{ order: 0, title: 'A' }]))))
+        .toEqual({ count: 7, chapters: [{ order: 0, title: 'A' }] });
+      expect(skipReportFromHeaders('3', 'not%20json')).toEqual({ count: 3, chapters: [] });
+      expect(skipReportFromHeaders('3', '%E0%A4%A')).toEqual({ count: 3, chapters: [] });
+      expect(skipReportFromHeaders('3', encodeURIComponent(JSON.stringify({ order: 1 }))))
+        .toEqual({ count: 3, chapters: [] });
+      // Entries that are not a chapter shape are dropped; the count still stands.
+      expect(skipReportFromHeaders('2', encodeURIComponent(JSON.stringify([{ order: 'x', title: 'A' }, 3]))))
+        .toEqual({ count: 2, chapters: [] });
+    });
+
+    it('reports NOT KNOWN for a count header that is not a decimal integer', () => {
+      expect(skipReportFromHeaders(null, null)).toBeNull();
+      expect(skipReportFromHeaders('', null)).toBeNull();
+      expect(skipReportFromHeaders('two', null)).toBeNull();
+      expect(skipReportFromHeaders('-1', null)).toBeNull();
+      expect(skipReportFromHeaders('1.5', null)).toBeNull();
+    });
+  });
+
   // ── Failures, normalized ────────────────────────────────────────────────────────────────────────
 
   describe('failures', () => {
@@ -183,6 +274,31 @@ describe('ExportService (Wave 3 / w4)', () => {
       expect(isExportFailure(failure)).toBeTrue();
       expect(failure.status).toBe(409);
       expect(failure.reason).toBe(EXPORT_REASON_NO_CHAPTERS);
+    });
+
+    /**
+     * The SECOND 409 token, and the case that used to be a 200 with a valid empty file on the chapter path.
+     * It is asserted on both paths because both now send it.
+     */
+    it('reads the nothingWritten token out of the 409 blob body, on both paths', async () => {
+      const book = await new Promise<ExportFailure>(resolve => {
+        svc.exportBook(BOOK_ID).subscribe({ error: e => resolve(e as ExportFailure) });
+        http.expectOne(BOOK_URL).flush(
+          new Blob([JSON.stringify({ reason: EXPORT_REASON_NOTHING_WRITTEN })], { type: 'application/json' }),
+          { status: 409, statusText: 'Conflict' },
+        );
+      });
+      expect(book.reason).toBe(EXPORT_REASON_NOTHING_WRITTEN);
+
+      const chapter = await new Promise<ExportFailure>(resolve => {
+        svc.exportChapter(BOOK_ID, CHAPTER_ID).subscribe({ error: e => resolve(e as ExportFailure) });
+        http.expectOne(CHAPTER_URL).flush(
+          new Blob([JSON.stringify({ reason: EXPORT_REASON_NOTHING_WRITTEN })], { type: 'application/json' }),
+          { status: 409, statusText: 'Conflict' },
+        );
+      });
+      expect(chapter.status).toBe(409);
+      expect(chapter.reason).toBe(EXPORT_REASON_NOTHING_WRITTEN);
     });
 
     it('reports a 404 with NO invented reason, on the book path', async () => {
@@ -237,7 +353,7 @@ describe('ExportService (Wave 3 / w4)', () => {
       spyOn(URL, 'createObjectURL').and.returnValue('blob:fake');
       const revoke = spyOn(URL, 'revokeObjectURL');
 
-      svc.saveAs({ blob: docx(), fileName: 'הספר שלי.docx' });
+      svc.saveAs({ blob: docx(), fileName: 'הספר שלי.docx', skipped: null });
 
       expect(click).toHaveBeenCalled();
       // The Hebrew name the SERVER chose, not one this client reconstructed from a title.

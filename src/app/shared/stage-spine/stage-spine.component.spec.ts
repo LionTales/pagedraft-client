@@ -315,6 +315,45 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       expect(emitted).toEqual([{ stage: 'export', action: 'open-export' }]);
     });
 
+    /**
+     * The book with rows and no words. Stage 5 used to render `ready` beside a stage 1 saying "none of them
+     * has any text yet", and the download it offered was an empty file.
+     */
+    it('does not read ready on a book whose chapters are all empty, and says why', () => {
+      render(signals({ chapters: chapters(3), chaptersWithText: 0 }));
+      expand('export');
+      expect(stateOf('export')).toBe('blocked');
+      expect(root().querySelectorAll('[data-state="ready"]').length).toBe(0);
+      // The blocked sentence names the prerequisite; the detail says what is actually missing, so a
+      // blocked row on a book that plainly HAS chapters does not read as the spine being wrong.
+      expect(text('[data-testid="spine-blocked-export"]')).toContain(STAGE_NAMES['import'].he);
+      const detail = text('[data-testid="spine-export-detail"]');
+      expect(detail).toContain('3');
+      expect(detail.length).toBeGreaterThan(10);
+    });
+
+    it('says the same thing in English, and says nothing extra once a chapter carries text', () => {
+      render(signals({ chapters: chapters(3), chaptersWithText: 0 }), 'en');
+      expand('export');
+      expect(text('[data-testid="spine-export-detail"]').toLowerCase()).toContain('empty');
+
+      render(signals({ chapters: chapters(3), chaptersWithText: 1 }), 'en');
+      expand('export');
+      expect(stateOf('export')).toBe('ready');
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-export-detail"]'))).toBeNull();
+    });
+
+    /** Finding 18: `null` is NOT KNOWN, and no sentence may be built from it. */
+    it('renders NO count sentence on either stage when the text count has not landed', () => {
+      render(signals({ chapters: null, chapterCount: 12, chaptersWithText: null }));
+      expand('import');
+      expect(stateOf('import')).toBe('unknown');
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-import-detail"]'))).toBeNull();
+      expand('export');
+      expect(stateOf('export')).toBe('unknown');
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-export-detail"]'))).toBeNull();
+    });
+
     it('never renders the retired "no export screen" sentence, in either language', () => {
       for (const lang of ['he', 'en'] as const) {
         render(healthyBook(), lang);

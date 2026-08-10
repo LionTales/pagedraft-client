@@ -164,8 +164,17 @@ export const BEHIND_FALLBACK: Bi = {
 /**
  * Stage 1's extra line when chapters exist but none carries text: the state token is `not-started`
  * (nothing usable exists) and this sentence keeps that from reading as a contradiction.
+ *
+ * `chaptersWithText === null` means NOT KNOWN and returns NO sentence. Both sentences below are positive
+ * claims about the text in the book, and neither may be made from an absent number - the null used to be
+ * coalesced to 0 by the caller, which turned "we have not been told" into "none of them has any text yet".
  */
-export function importDetail(chapterCount: number, chaptersWithText: number, lang: SpineLang): string | null {
+export function importDetail(
+  chapterCount: number,
+  chaptersWithText: number | null,
+  lang: SpineLang,
+): string | null {
+  if (chaptersWithText === null) return null;
   if (chapterCount > 0 && chaptersWithText === 0) {
     return lang === 'he'
       ? `יש ${chapterCount} פרקים, אך עדיין אין בהם טקסט.`
@@ -202,7 +211,38 @@ export function findingsProgress(status: StageStatus, lang: SpineLang): string |
 // Stage 5 used to carry an EXPORT_UNAVAILABLE_REASON here: the sentence that explained, honestly, that the
 // server could export but the app had no screen for it. w4 built the screen (`/books/:bookId/export`), so
 // the gap that sentence described is gone and the sentence went with it. Stage 5 now reads `ready`,
-// `blocked` (no chapters, which is the server's own 409) or `unknown`, like any other computed stage.
+// `blocked` (no chapters or no text, which are the server's own two 409 answers) or `unknown`, like any
+// other computed stage.
+
+/**
+ * Stage 5's extra line when chapters exist but none of them carries text.
+ *
+ * WHY THIS SENTENCE EXISTS. Without it the row reads `blocked` / "Needs first: Import" on a book that
+ * plainly HAS chapters, which reads as the spine being wrong rather than as the book being empty. The
+ * blocked sentence names the prerequisite; this one says what is actually missing and what the file would
+ * be if it were produced anyway - which is the thing the author cares about, and the thing an empty
+ * download used to tell them only after they had opened it.
+ *
+ * It says what the file WOULD be, never what the server will do: the two definitions of an empty chapter
+ * differ by design (word count here, renderable content there), so this is a warning, not a forecast.
+ * Returns null when there is nothing true to add, including when the count is not known.
+ */
+export function exportNothingWrittenDetail(
+  chapterCount: number | null,
+  chaptersWithText: number | null,
+  lang: SpineLang,
+): string | null {
+  if (chapterCount === null || chaptersWithText === null) return null;
+  if (chapterCount <= 0 || chaptersWithText !== 0) return null;
+  if (lang === 'he') {
+    return chapterCount === 1
+      ? 'יש פרק אחד בספר, אך עדיין לא נכתב בו דבר, ולכן קובץ שייווצר עכשיו יהיה ריק.'
+      : `יש ${chapterCount} פרקים בספר, אך עדיין לא נכתב בהם דבר, ולכן קובץ שייווצר עכשיו יהיה ריק.`;
+  }
+  return chapterCount === 1
+    ? 'The book has one chapter, but nothing has been written in it yet, so a file made now would be empty.'
+    : `The book has ${chapterCount} chapters, but nothing has been written in them yet, so a file made now would be empty.`;
+}
 
 /**
  * The `behind` magnitude, rendered as its own short badge beside the sentence. `behind` is the state

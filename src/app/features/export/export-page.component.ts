@@ -6,8 +6,10 @@ import { Observable, Subscription } from 'rxjs';
 
 import { BookDetailDto, ChapterSummaryDto } from '../../core/models/book';
 import {
+  EXPORT_REASON_NOTHING_WRITTEN,
   EXPORT_REASON_NO_CHAPTERS,
   ExportFailure,
+  ExportSkipReport,
   ExportedFile,
   isExportFailure,
 } from '../../core/models/export';
@@ -27,7 +29,9 @@ import {
   ExportKind,
   ExportKindId,
   ExportLang,
+  SKIPPED_UNKNOWN,
   exportLang,
+  skippedNotice,
 } from './export-kinds';
 
 /**
@@ -177,6 +181,12 @@ import {
                 <p class="kind-done" [attr.data-testid]="'export-done-' + kind.id">
                   {{ t(COPY.downloaded) }} <span class="file-name">{{ fileName }}</span>
                 </p>
+              }
+
+              <!-- ...and what it does NOT contain, from the server's own headers. A chapter missing from an
+                   exported manuscript with no word said about it is indistinguishable from data loss. -->
+              @if (skippedNoticeFor(kind); as notice) {
+                <p class="kind-skipped" [attr.data-testid]="'export-skipped-' + kind.id">{{ notice }}</p>
               }
             }
           </li>
@@ -348,6 +358,14 @@ import {
 
     .kind-error { color: var(--pd-cut); }
     .kind-done { color: var(--pd-keep); }
+    /* Not an error (the file did land) and not a success either. It hugs the reading edge, so it mirrors. */
+    .kind-skipped {
+      padding: var(--pd-space-2) var(--pd-space-3);
+      background: var(--pd-improve-bg);
+      border-inline-start: 3px solid var(--pd-improve);
+      border-radius: var(--pd-radius-sm);
+      color: var(--pd-text);
+    }
     .kind-unavailable { color: var(--pd-text-muted); }
     .file-name { unicode-bidi: isolate; font-family: var(--pd-font-mono); }
   `],
@@ -375,6 +393,15 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   private errors = new Map<ExportKindId, string>();
   /** The last filename handed to the browser per kind, as the SERVER named it. */
   private downloaded = new Map<ExportKindId, string>();
+  /**
+   * What the last download per kind LEFT OUT, straight off the response headers.
+   *
+   * Three distinct values, and the screen says something different for each: no entry (nothing has been
+   * downloaded for this kind), `null` (it downloaded, and the server did not say - an old server or a
+   * proxy that stripped the header), or a report (it downloaded and this is what is missing, `count: 0`
+   * included). The absent-header case may never collapse into "nothing was skipped".
+   */
+  private skipped = new Map<ExportKindId, ExportSkipReport | null>();
 
   /** The compact spine's signals, assembled from the same book payload this page already loads. */
   spineSignals: StageSpineSignals = emptyStageSpineSignals();
@@ -469,7 +496,17 @@ export class ExportPageComponent implements OnInit, OnDestroy {
 
   // ── Row state ───────────────────────────────────────────────────────────────────────────────────
 
-  /** True once the book has landed AND it genuinely has no chapters. Never true while loading. */
+  /**
+   * True once the book has landed AND it genuinely has no chapters. Never true while loading.
+   *
+   * There is deliberately NO companion precondition for "chapters exist but none has text", even though
+   * this page holds the word counts to compute one and the spine's stage 5 renders exactly that state. The
+   * spine is a READOUT and may warn from its own signal; this screen is the place a request is spent, and
+   * the exporter's definition of an empty chapter (no renderable block) is not the word count. Disabling
+   * the button on a client-side guess would refuse a download the server would have honoured. The server's
+   * `nothingWritten` 409 is handled in {@link failureMessage} instead, which is the answer from the one
+   * authority that knows.
+   */
   get noChapters(): boolean {
     return this.chaptersKnown && this.chapters.length === 0;
   }
@@ -504,9 +541,42 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     return this.downloaded.get(kind.id) ?? null;
   }
 
+  /**
+   * What the last download for this kind left out, as a sentence, or null when there is nothing to say
+   * (nothing downloaded yet, or the server reported a complete file).
+   *
+   * The count and the names come from the SERVER. Nothing here derives a skip from the chapter list this
+   * page already holds: the exporter's test for an empty chapter is not this client's, and a prediction
+   * would name the wrong chapters with total confidence.
+   */
+  skippedNoticeFor(kind: ExportKind): string | null {
+    if (!this.downloaded.has(kind.id)) return null;
+    if (!this.skipped.has(kind.id)) return null;
+    const report = this.skipped.get(kind.id) ?? null;
+    if (report === null) return this.t(SKIPPED_UNKNOWN);
+    if (report.count <= 0) return null;
+    const names = report.chapters.map(c => `${this.chapterNumber(c.order)}. ${c.title}`);
+    return skippedNotice(report.count, names, this.lang);
+  }
+
   /** "3. The Long Night" - the order the author sees, one-based, isolated from the surrounding script. */
   chapterOptionLabel(chapter: ChapterSummaryDto): string {
-    return `${chapter.order + 1}. ${chapter.title}`;
+    return `${this.chapterNumber(chapter.order)}. ${chapter.title}`;
+  }
+
+  /**
+   * The number the author sees for a chapter, from the raw zero-based `Chapter.Order` the wire carries -
+   * both in the picker and in the skipped-chapter notice, so this screen cannot call one chapter two
+   * different numbers on the same page.
+   *
+   * FOR c07 (`c07-spine-contract-drift`): that todo owns the cross-surface numbering decision, because two
+   * other surfaces (`book-review-findings`, `book-story-bible`) render the RAW order while this screen and
+   * the spine render `order + 1`. This helper is deliberately the ONLY spelling inside this file, so c07
+   * has one line to change here rather than two, and it should be replaced by the shared helper rather
+   * than left as a third convention.
+   */
+  private chapterNumber(order: number): number {
+    return order + 1;
   }
 
   // ── Running an export ───────────────────────────────────────────────────────────────────────────
@@ -522,6 +592,7 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     if (!this.canRun(kind) || !this.bookId) return;
     this.errors.delete(kind.id);
     this.downloaded.delete(kind.id);
+    this.skipped.delete(kind.id);
     this.busyKindId = kind.id;
 
     switch (kind.id) {
@@ -551,6 +622,8 @@ export class ExportPageComponent implements OnInit, OnDestroy {
       next: (file: ExportedFile) => {
         this.busyKindId = null;
         this.downloaded.set(kind.id, file.fileName);
+        // Recorded even when it is null: "the server did not say" is a state this screen renders.
+        this.skipped.set(kind.id, file.skipped);
         this.exportService.saveAs(file);
       },
       error: (err: unknown) => {
@@ -564,13 +637,20 @@ export class ExportPageComponent implements OnInit, OnDestroy {
    * Turn a failure into this book's language. Every branch is a thing the wire can actually produce, and an
    * unrecognized failure gets the generic sentence rather than an invented cause.
    *
-   * The 409 is keyed on the server's REASON TOKEN, not on the status: the day the server adds a second 409
-   * reason, this says the generic sentence instead of confidently saying the wrong one.
+   * The 409 is keyed on the server's REASON TOKEN, not on the status: the day the server added a second 409
+   * reason, this kept saying a truthful sentence instead of confidently saying the wrong one. That day has
+   * now come (`nothingWritten`), and the second token gets its own sentence PER KIND, because the next
+   * action genuinely differs: the whole book can be filled by an import, a single chapter cannot.
    */
   private failureMessage(kind: ExportKind, err: unknown): string {
     if (!isExportFailure(err)) return this.t(EXPORT_ERRORS.generic);
     const failure: ExportFailure = err;
     if (failure.reason === EXPORT_REASON_NO_CHAPTERS) return this.t(EXPORT_ERRORS.noChapters);
+    if (failure.reason === EXPORT_REASON_NOTHING_WRITTEN) {
+      return kind.scope === 'chapter'
+        ? this.t(EXPORT_ERRORS.nothingWrittenChapter)
+        : this.t(EXPORT_ERRORS.nothingWrittenBook);
+    }
     if (failure.status === 404) {
       return kind.scope === 'chapter'
         ? this.t(EXPORT_ERRORS.chapterNotFound)

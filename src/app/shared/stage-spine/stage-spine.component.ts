@@ -21,6 +21,7 @@ import {
   chapterListToggleLabel,
   compactPipLabel,
   compactSummaryLine,
+  exportNothingWrittenDetail,
   findingsProgress,
   importDetail,
   spineLang,
@@ -225,6 +226,13 @@ export interface StageActionEvent {
                 <!-- Stage 1's honest detail: chapters exist but none has text yet, or the coverage. -->
                 @if (importDetailText(stage); as detail) {
                   <p class="stage-line" data-testid="spine-import-detail">{{ detail }}</p>
+                }
+
+                <!-- Stage 5's honest detail: the chapters are there, the words are not, so the file would
+                     be empty. Without it, a blocked row naming Import on a book that HAS chapters reads
+                     as the spine being wrong rather than as the book being unwritten. -->
+                @if (exportDetailText(stage); as detail) {
+                  <p class="stage-line" data-testid="spine-export-detail">{{ detail }}</p>
                 }
 
                 <!-- Stage 3's working-through progress, straight off the two counts. -->
@@ -773,9 +781,20 @@ export class StageSpineComponent implements OnInit, OnChanges {
     return stage.behindMagnitude === null ? '' : behindMagnitudeLabel(stage.behindMagnitude, this.lang);
   }
 
+  /**
+   * Stage 1's detail line. `chaptersWithText` is passed THROUGH, null and all: a null is "not known yet"
+   * and the copy layer answers it with no sentence. It used to be coalesced to 0 here, which rendered
+   * "12 chapters exist, but none of them has any text yet" from a payload that had not said so.
+   */
   importDetailText(stage: StageStatus): string | null {
     if (stage.id !== 'import' || stage.chapterCount === null) return null;
-    return importDetail(stage.chapterCount, stage.chaptersWithText ?? 0, this.lang);
+    return importDetail(stage.chapterCount, stage.chaptersWithText, this.lang);
+  }
+
+  /** Stage 5's detail line: chapters exist, but a file made from them right now would be empty. */
+  exportDetailText(stage: StageStatus): string | null {
+    if (stage.id !== 'export') return null;
+    return exportNothingWrittenDetail(stage.chapterCount, stage.chaptersWithText, this.lang);
   }
 
   progressText(stage: StageStatus): string | null {

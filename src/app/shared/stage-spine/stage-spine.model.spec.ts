@@ -121,6 +121,25 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       expect(s.chaptersWithText).toBe(0);
     });
 
+    /**
+     * `null` is NOT KNOWN, and the file's own contract says so at {@link StageSpineSignals}. This branch
+     * used to read `(chaptersWithText ?? 0) > 0`, which turned an absent fact into the positive claim
+     * "none of them has any text yet" and rendered that sentence on a book nothing had been said about.
+     */
+    it('is unknown, not not-started, when the chapter count is known and the text count is NOT', () => {
+      const s = stage(deriveStageSpine(signals({ chapters: null, chapterCount: 12, chaptersWithText: null })), 'import');
+      expect(s.unknown).toBeTrue();
+      expect(s.state).toBeNull();
+      // And it offers no action, because it does not know whether one is needed.
+      expect(s.action).toBeNull();
+    });
+
+    it('needs no text count to answer for a book with zero chapters: no rows, no text, a fact', () => {
+      const s = stage(deriveStageSpine(signals({ chapters: null, chapterCount: 0, chaptersWithText: null })), 'import');
+      expect(s.state).toBe('not-started');
+      expect(s.action).toBe('open-import');
+    });
+
     it('is unknown, NOT done, before the chapter list has landed', () => {
       // The retired stepper reported this exact situation as `Structure: Done`, on the reasoning that
       // mounting required a bookId. Mounting never required chapters.
@@ -376,6 +395,47 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       expect(s.state).toBe('ready');
     });
 
+    /**
+     * THE DEFECT THIS STAGE SHIPPED. `ready` was read off `chapterCount > 0` alone, so a book whose three
+     * chapters were created empty rendered stage 1 `not-started` ("none of them has any text yet") and
+     * stage 5 `ready` in the same column, and the user who followed stage 5 downloaded a .docx containing
+     * nothing, HTTP 200, no error. The signal was already on the wire.
+     */
+    it('is NOT ready when chapters exist but none of them carries any text', () => {
+      const all = deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 }));
+      const s = stage(all, 'export');
+      expect(s.state).not.toBe('ready');
+      expect(s.state).toBe('blocked');
+      expect(s.blockedBy).toBe('import');
+      // The action must be one the user can walk from here, exactly as on the empty book.
+      expect(s.action).toBe('open-import');
+      // And it agrees with stage 1 rather than contradicting it in the same column.
+      expect(stage(all, 'import').state).toBe('not-started');
+      expect(all.filter(x => x.state === 'ready')).toEqual([]);
+    });
+
+    it('carries the two counts, so the row can say WHY a file made now would be empty', () => {
+      const s = stage(deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 })), 'export');
+      expect(s.chapterCount).toBe(3);
+      expect(s.chaptersWithText).toBe(0);
+    });
+
+    it('reads the same signal stage 1 reads, whatever the surface: counts with no chapter list', () => {
+      const fromCounts = stage(
+        deriveStageSpine(signals({ chapters: null, chapterCount: 4, chaptersWithText: 0 })), 'export');
+      expect(fromCounts.state).toBe('blocked');
+      const withText = stage(
+        deriveStageSpine(signals({ chapters: null, chapterCount: 4, chaptersWithText: 1 })), 'export');
+      expect(withText.state).toBe('ready');
+    });
+
+    it('says it does not know, rather than ready, when the text count has not landed', () => {
+      const s = stage(deriveStageSpine(signals({ chapters: null, chapterCount: 4, chaptersWithText: null })), 'export');
+      expect(s.unknown).toBeTrue();
+      expect(s.state).toBeNull();
+      expect(s.action).toBeNull();
+    });
+
     it('says it does not know, rather than ready, while the chapter count has not landed', () => {
       const s = stage(deriveStageSpine(signals({ chapters: null, chapterCount: null })), 'export');
       expect(s.unknown).toBeTrue();
@@ -429,6 +489,24 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       expect(stage(all, 'export').state).toBe('blocked');
       expect(all.filter(s => s.state === 'ready')).toEqual([]);
       expect(focusStageId(all)).toBe('import');
+    });
+  });
+
+  // ── The book with rows and no words: where stage 5 used to say ready ────────
+
+  describe('a book whose chapters are all empty', () => {
+    it('claims nothing is ready, and the server agrees: this book answers 409 nothingWritten', () => {
+      const all = deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 }));
+      expect(stage(all, 'import').state).toBe('not-started');
+      expect(stage(all, 'export').state).toBe('blocked');
+      expect(all.filter(s => s.state === 'ready')).toEqual([]);
+      // Stage 4 still refuses a book-level claim; it is gated on rows existing, not on words.
+      expect(stage(all, 'chapter-passes').perChapter).toBeTrue();
+    });
+
+    it('opens on Import, which is the one thing to do about it', () => {
+      expect(focusStageId(deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 }))))
+        .toBe('import');
     });
   });
 
