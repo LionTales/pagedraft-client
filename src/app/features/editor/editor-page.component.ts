@@ -255,6 +255,50 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
   }
 
   /**
+   * Localized document-save status text shown in the editor toolbar (book-scoped, pre-existing i18n
+   * leak fixed by f06 / review findings 35+36: this was hardcoded Hebrew-only regardless of book
+   * language, so an English book showed Hebrew status text beside the English Focus button).
+   */
+  get saveStatusLabel(): string {
+    const he = this.reviewPanelIsHebrew;
+    if (this.isSaving) return he ? 'שומר…' : 'Saving…';
+    if (this.hasPendingChanges) return he ? 'שינויים ממתינים לשמירה' : 'Changes pending save';
+    return he ? 'כל השינויים נשמרו' : 'All changes saved';
+  }
+
+  /** Localized "Save" toolbar button (book-scoped; was hardcoded Hebrew-only, f06). */
+  get saveButtonLabel(): string {
+    return this.reviewPanelIsHebrew ? 'שמור' : 'Save';
+  }
+
+  /** Localized "Back to books" toolbar button (book-scoped; was hardcoded Hebrew-only, f06). */
+  get backToBooksLabel(): string {
+    return this.reviewPanelIsHebrew ? 'חזרה לספרים' : 'Back to books';
+  }
+
+  /** Localized "Scene" scope badge shown beside the save status when a scene is selected (f06). */
+  get sceneBadgeLabel(): string {
+    return this.reviewPanelIsHebrew ? 'סצנה' : 'Scene';
+  }
+
+  /** Localized tooltip for the selection-direction toolbar buttons (f06). */
+  get rtlDirectionTitle(): string {
+    return this.reviewPanelIsHebrew ? 'מימין לשמאל (RTL)' : 'Right-to-left (RTL)';
+  }
+
+  get ltrDirectionTitle(): string {
+    return this.reviewPanelIsHebrew ? 'משמאל לימין (LTR)' : 'Left-to-right (LTR)';
+  }
+
+  /** Localized main-pane empty state ("no chapter/scene selected"). Was untranslated English on every
+   *  book (review finding 36) - the largest text on an empty Hebrew book's first editor screen. */
+  get editorEmptyStateLabel(): string {
+    return this.reviewPanelIsHebrew
+      ? 'בחרו פרק או סצנה מסרגל הצד.'
+      : 'Select a chapter or scene from the sidebar.';
+  }
+
+  /**
    * The two SegmentedControl options (Edit help / Book review), already localized. Count badges are
    * intentionally omitted: deriving live pending-edit / findings counts would require new outputs from
    * the analysis panel and dashboard, which couples into the proven orchestration. The shared

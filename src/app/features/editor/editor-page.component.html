@@ -36,15 +36,13 @@
       @if (selectedChapterId) {
         <div class="editor-shell" [attr.dir]="editorDirection">
           <div class="editor-status">
-            <span *ngIf="isSaving">שומר…</span>
-            <span *ngIf="!isSaving && hasPendingChanges">שינויים ממתינים לשמירה</span>
-            <span *ngIf="!isSaving && !hasPendingChanges">כל השינויים נשמרו</span>
+            <span>{{ saveStatusLabel }}</span>
             @if (selectedSceneId) {
-              <span class="scope-badge">Scene</span>
+              <span class="scope-badge">{{ sceneBadgeLabel }}</span>
             }
             <span class="direction-btns">
-              <button type="button" class="dir-btn" title="Right-to-left (RTL)" (click)="setSelectionRtl()">RTL</button>
-              <button type="button" class="dir-btn" title="Left-to-right (LTR)" (click)="setSelectionLtr()">LTR</button>
+              <button type="button" class="dir-btn" [title]="rtlDirectionTitle" (click)="setSelectionRtl()">RTL</button>
+              <button type="button" class="dir-btn" [title]="ltrDirectionTitle" (click)="setSelectionLtr()">LTR</button>
             </span>
             <!-- Wave 3 / w3, corrected by c05: the COMPACT stage spine, placement A of two. Shown exactly
                  when the full spine is off screen AND a chapter is open, since this status bar only exists
@@ -70,8 +68,8 @@
               (click)="toggleFocusMode()">
               {{ focusModeLabel }}
             </button>
-            <button type="button" class="save-btn" [disabled]="!hasPendingChanges || isSaving" (click)="saveCurrentDocument()">שמור</button>
-            <button type="button" class="back-btn" (click)="goBackToBooks()">חזרה לספרים</button>
+            <button type="button" class="save-btn" [disabled]="!hasPendingChanges || isSaving" (click)="saveCurrentDocument()">{{ saveButtonLabel }}</button>
+            <button type="button" class="back-btn" (click)="goBackToBooks()">{{ backToBooksLabel }}</button>
           </div>
           <div id="custom-toolbar" dir="ltr"></div>
           <ejs-documenteditorcontainer
@@ -93,7 +91,7 @@
              needs the panel CLOSED, so panel-open + no-chapter (a fresh import, or "just let me edit")
              rendered no spine at all: this paragraph alone. -->
         <div class="editor-empty">
-          <p>Select a chapter or scene from the sidebar.</p>
+          <p>{{ editorEmptyStateLabel }}</p>
           @if (compactSpineInEmptyPane) {
             <app-stage-spine
               class="empty-spine"
