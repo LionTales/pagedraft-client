@@ -215,6 +215,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           #summaryRow
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
+          [chapterCount]="chapterCount"
           (summaryTerminal)="onSummaryTerminal()"
           (statusChange)="onSummaryStatusChange($event)"
           (buildingChange)="onSummaryBuildingChange($event)">
@@ -243,6 +244,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           #reviewRow
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
+          [chapterCount]="chapterCount"
           (reviewStateChange)="onReviewStateChange($event)"
           (statusChange)="onReviewStatusChange($event)"
           (tierChanged)="onTierChanged()">
@@ -312,6 +314,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           #baselineRow
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
+          [chapterCount]="chapterCount"
           [focusToken]="focusBaselineToken">
         </app-book-style-baseline-status-row>
       </section>
@@ -1124,6 +1127,17 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    */
   spineSignals: StageSpineSignals = emptyStageSpineSignals();
 
+  /**
+   * How many chapters this book has, or `null` while the chapter list has not arrived. ONE authority, read
+   * by the spine's stage-1 signal AND by the three build rows' import precondition, because those two are
+   * required to agree: the live defect this closes was a spine rendering `blocked` by Import while the
+   * build buttons 200px below it stayed enabled and offered to analyse the chapters of a book with none.
+   * Two independently computed copies of "how many chapters" is how that comes back.
+   */
+  get chapterCount(): number | null {
+    return this.chapters ? this.chapters.length : null;
+  }
+
   /** Latest raw briefs status from the hosted summary row. The spine's whole stage 2. */
   private summaryStatus: BookSummaryStatusDto | null = null;
   /** Latest raw review status from the hosted review row. The spine's whole stage 3. */
@@ -1156,7 +1170,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
       : null;
     this.spineSignals = {
       chapters,
-      chapterCount: this.chapters ? this.chapters.length : null,
+      chapterCount: this.chapterCount,
       chaptersWithText: this.chapters ? this.chapters.filter(c => c.wordCount > 0).length : null,
       summary: this.summaryStatus,
       review: this.reviewStatus,
@@ -1199,10 +1213,12 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    * A spine stage's action was pressed. The spine names the INTENT; this maps it onto the mechanisms the
    * page already has, so no action opens a second way of doing something the status rows own.
    *
-   *  - `open-import`    leaves the page, so it goes up to the host, which owns the Router.
+   *  - `open-import`    leaves the page, so it goes up to the host, which owns the Router. It is also what
+   *                     every blocked stage offers on a book with NO chapters, because it is the only
+   *                     action the author can actually walk from there.
    *  - `build-briefs`   scrolls to the briefs row, which owns the build, its consent and its estimate.
-   *                     This is also the FIX offered by a `blocked` review stage, which is the point:
-   *                     the blocked row names the prerequisite AND hands the user the way to clear it.
+   *                     This is the FIX offered by a review stage blocked on MISSING BRIEFS - the case
+   *                     where chapters exist and the briefs row can genuinely build.
    *  - `build-review`   scrolls to the same status block, where the review row's build lives.
    *  - `open-findings`  selects the Findings tab and scrolls to the ledger.
    *  - `open-export`    leaves the page for `/books/:bookId/export`, so like `open-import` it goes up to the

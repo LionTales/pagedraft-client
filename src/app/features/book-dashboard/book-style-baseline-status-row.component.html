@@ -10,13 +10,15 @@
   <div class="sb-line">
     <span class="sb-title">{{ baselineLabel('title') }}</span>
 
-    <!-- NOT BUILT -->
+    <!-- NOT BUILT. Disabled with its reason on a book with no chapters, which is the same precondition the
+         stage spine above renders as `blocked` by Import. Disabled, never hidden. -->
     <ng-container *ngIf="baselineState === 'not-built'">
       <span class="sb-status sb-not-built" data-testid="bsb-not-built">{{ baselineLabel('notBuilt') }}</span>
       <button
         type="button"
         class="pd-btn pd-btn-primary sb-action"
         data-testid="bsb-build-now"
+        [disabled]="blockedByImport"
         (click)="openBaselineConsent()">
         {{ baselineLabel('buildNow') }}
       </button>
@@ -44,6 +46,7 @@
         type="button"
         class="pd-btn pd-btn-ghost sb-action"
         data-testid="bsb-rebuild"
+        [disabled]="blockedByImport"
         (click)="openBaselineConsent()">
         {{ baselineLabel('rebuild') }}
       </button>
@@ -58,10 +61,20 @@
         type="button"
         class="pd-btn pd-btn-primary sb-action"
         data-testid="bsb-refresh"
+        [disabled]="blockedByImport"
         (click)="openBaselineConsent()">
         {{ baselineLabel('refresh') }}
       </button>
     </ng-container>
+
+    <!-- THE REASON, beside the disabled action rather than instead of it. Outside the per-state containers
+         so no state can show a disabled build with nothing explaining it. -->
+    <span
+      class="sb-hint-inline muted"
+      *ngIf="blockedByImport"
+      data-testid="bsb-needs-import">
+      {{ baselineLabel('needsImport') }}
+    </span>
   </div>
 
   <!-- What this artifact IS. It appears in no shipped guide, and the old label ("style baseline") named a

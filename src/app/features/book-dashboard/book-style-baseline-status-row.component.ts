@@ -49,6 +49,15 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
    * on the top of a long dashboard. Zero means "nobody asked".
    */
   @Input() focusToken = 0;
+  /**
+   * How many chapters the book has, from the host's already-loaded chapter list. The same number the stage
+   * spine derives stage 1 (and every stage it gates) from: with zero chapters the spine renders `blocked`
+   * by Import a couple of hundred pixels above this row, and a build button that stayed enabled here made
+   * the two surfaces contradict each other on the same screen.
+   *
+   * `null` means NOT KNOWN YET, never empty. Only an explicit `0` refuses anything.
+   */
+  @Input() chapterCount: number | null = null;
 
   /** Emitted whenever a build reaches a terminal state, so the host can re-read anything derived from it. */
   @Output() baselineTerminal = new EventEmitter<void>();
@@ -252,6 +261,17 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
     return s.hasBaseline ? 'ready' : 'not-built';
   }
 
+  /**
+   * The book has no chapters, so this whole-book measurement has nothing to read. Every action on the row
+   * is DISABLED WITH THE REASON stated beside it, never hidden: the same idiom the review row's briefs gate
+   * and the tier toggle's server-reason disable already use on this page.
+   *
+   * Keyed on `=== 0` so an unarrived chapter list (null) can never disable a build.
+   */
+  get blockedByImport(): boolean {
+    return this.chapterCount === 0;
+  }
+
   /** True when a baseline exists but was built with a different model (drives the cross-model warning). */
   get baselineBuiltWithDifferentModel(): boolean {
     return !!this.styleBaselineStatus?.builtWithDifferentModel;
@@ -317,6 +337,8 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       confirm: 'אישור',
       cancel: 'ביטול',
       crossModelWarning: 'המדידה נבנתה עם מודל אחר מהפעיל כעת. רעננו אותה לקבלת תוצאות מדויקות.',
+      // The blocked-by-import reason, in the same words the briefs row and the spine's blocked row use.
+      needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
     };
     const en: Record<string, string> = {
       title: "Your book's writing style",
@@ -335,6 +357,7 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       confirm: 'Confirm',
       cancel: 'Cancel',
       crossModelWarning: 'The measurement was built with a different model than the one now active. Refresh it for accurate results.',
+      needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
     };
     const map = this.baselineDir === 'ltr' ? en : he;
     return map[key] ?? key;
@@ -343,6 +366,9 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
   // ── Consent gate ────────────────────────────────────────────────────────────
 
   openBaselineConsent(): void {
+    // The disabled attribute is the user-facing guard; this is the same refusal where the build actually
+    // starts, so no programmatic path can open a consent prompt for a book with nothing to measure.
+    if (this.blockedByImport) return;
     this.showBaselineConsent = true;
   }
 

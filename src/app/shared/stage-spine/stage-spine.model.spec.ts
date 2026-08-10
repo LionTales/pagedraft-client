@@ -243,10 +243,17 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       expect(s.action).toBe('build-briefs');
     });
 
-    it('is blocked, naming the briefs, even before the status lands on a book with no chapters', () => {
-      const s = stage(deriveStageSpine(signals({ chapters: [], chaptersWithText: 0 })), 'review');
+    it('names IMPORT on a book with no chapters, because the briefs are not walkable there either', () => {
+      const all = deriveStageSpine(signals({ chapters: [], chaptersWithText: 0 }));
+      const s = stage(all, 'review');
       expect(s.state).toBe('blocked');
-      expect(s.blockedBy).toBe('briefs');
+      // Not `briefs`: stage 2 is itself blocked on this book and retargets to the import, so naming the
+      // briefs here would send the user to a row that cannot build. The four blocked stages agree.
+      expect(s.blockedBy).toBe('import');
+      expect(s.action).toBe('open-import');
+      const blockedStages = all.filter(x => x.state === 'blocked');
+      expect(blockedStages.map(x => x.id)).toEqual(['briefs', 'review', 'chapter-passes', 'export']);
+      expect(blockedStages.every(x => x.blockedBy === 'import' && x.action === 'open-import')).toBe(true);
     });
 
     it('is not-started once briefs exist but no review has been built', () => {

@@ -714,4 +714,90 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
     expect(component.profilePhase).toBeTrue();
     expect(component.bookSummaryBuilding).toBeTrue();
   });
+
+  // ── Wave 3 fixes / c02: the build cannot contradict the spine on a book with no chapters ───────────
+  //
+  // Found live: the spine rendered stage 2 `חסום / צריך קודם: ייבוא` and this row's Build now button sat
+  // enabled roughly 200px below it, opening a consent prompt that offered to analyse the chapters of a book
+  // with zero chapters. The precondition is the same one the spine derives, so the two must agree.
+
+  describe('c02: the import precondition, disabled WITH the reason', () => {
+    function notBuiltStatus(): BookSummaryStatusDto {
+      return makeBookSummaryStatus({
+        hasSummary: false, ready: false, builtChapters: 0, totalChapters: 0,
+        staleCount: 0, lastUpdatedAt: null, chaptersToBuild: 0, estimatedSeconds: 0,
+      });
+    }
+
+    it('disables the build and states why when the book has no chapters', () => {
+      component.chapterCount = 0;
+      component.bookSummaryStatus = notBuiltStatus();
+      fixture.detectChanges();
+
+      const btn = query('[data-testid="bsum-build-now"]');
+      expect(btn).withContext('disabled, never hidden: the author must still see the build').not.toBeNull();
+      expect((btn.nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      const reason = query('[data-testid="bsum-needs-import"]');
+      expect(reason).withContext('a disabled action always carries its reason').not.toBeNull();
+      expect((reason.nativeElement as HTMLElement).textContent!.trim().length).toBeGreaterThan(0);
+    });
+
+    it('refuses to open the consent prompt for a book with no chapters, even bypassing the button', () => {
+      component.chapterCount = 0;
+      component.bookSummaryStatus = notBuiltStatus();
+
+      component.openBookSummaryConsent();
+
+      expect(component.showBookSummaryConsent).toBeFalse();
+    });
+
+    it('leaves the build ENABLED while the chapter count is not known yet (null is not empty)', () => {
+      component.chapterCount = null;
+      component.bookSummaryStatus = notBuiltStatus();
+      fixture.detectChanges();
+
+      expect((query('[data-testid="bsum-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="bsum-needs-import"]')).toBeNull();
+      component.openBookSummaryConsent();
+      expect(component.showBookSummaryConsent).toBeTrue();
+    });
+
+    it('leaves the build ENABLED on a book that has chapters', () => {
+      component.chapterCount = 3;
+      component.bookSummaryStatus = notBuiltStatus();
+      fixture.detectChanges();
+
+      expect((query('[data-testid="bsum-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="bsum-needs-import"]')).toBeNull();
+    });
+
+    it('states the reason in the book language, both sides (he/en parity)', () => {
+      component.chapterCount = 0;
+      component.bookSummaryStatus = notBuiltStatus();
+      component.bookLanguage = 'he';
+      fixture.detectChanges();
+      const he = (query('[data-testid="bsum-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      const en = (query('[data-testid="bsum-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(he).not.toBe('needsImport');
+      expect(en).not.toBe('needsImport');
+      expect(he).not.toBe(en);
+      expect(he).not.toContain('—');
+      expect(en).not.toContain('—');
+    });
+
+    it('disables the REBUILD and REFRESH actions too, so no state can escape the precondition', () => {
+      component.chapterCount = 0;
+      component.bookSummaryStatus = makeBookSummaryStatus({ hasSummary: true, ready: true, totalChapters: 0, builtChapters: 0 });
+      fixture.detectChanges();
+      expect((query('[data-testid="bsum-rebuild"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+
+      component.bookSummaryStatus = makeBookSummaryStatus({ hasSummary: true, ready: false, staleCount: 2, totalChapters: 0, builtChapters: 0 });
+      fixture.detectChanges();
+      expect((query('[data-testid="bsum-refresh"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+    });
+  });
 });

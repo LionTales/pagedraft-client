@@ -48,6 +48,17 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   @Input() bookId: string | null = null;
   /** Book language (e.g. 'he', 'en'). Defaults to 'he'. Drives localization, [dir], and the status key. */
   @Input() bookLanguage: string | null = null;
+  /**
+   * How many chapters the book has, from the host's already-loaded chapter list. THE SAME NUMBER THE
+   * STAGE SPINE DERIVES FROM, deliberately: the spine renders stage 2 `blocked` by Import on a book with
+   * zero chapters, and this row sits roughly 200px below it. When the row's build button stayed enabled
+   * there, one surface said "you cannot do this yet" while the surface beside it offered to do it, and
+   * pressing it opened a consent prompt offering to analyse the chapters of a book with no chapters.
+   *
+   * `null` means NOT KNOWN YET, never empty - the same contract the spine signals carry. Only an explicit
+   * `0` disables anything; an unarrived chapter list leaves the row exactly as it was.
+   */
+  @Input() chapterCount: number | null = null;
 
   /** Fired when a summary build reaches a terminal/error state (or a no-op confirms a fresh summary). */
   @Output() summaryTerminal = new EventEmitter<void>();
@@ -386,6 +397,18 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     return s.hasSummary ? 'ready' : 'not-built';
   }
 
+  /**
+   * The book has no chapters, so this build has nothing to read and every action on this row is refused
+   * with its reason stated beside it. DISABLED WITH THE REASON, NOT HIDDEN: a build that vanishes teaches
+   * the author nothing, and the wave's idiom (see the review row's briefs gate and the tier toggle's
+   * server-reason disable) is to leave the control where it is and say why it cannot run.
+   *
+   * Keyed on `=== 0` so an unarrived chapter list (null) can never disable a build.
+   */
+  get blockedByImport(): boolean {
+    return this.chapterCount === 0;
+  }
+
   /** True when a summary exists but was built with a different model (drives the cross-model warning). */
   get bookSummaryBuiltWithDifferentModel(): boolean {
     return !!this.bookSummaryStatus?.builtWithDifferentModel;
@@ -428,6 +451,8 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       builds: 'הבנייה הזו מייצרת תקציר לכל פרק, תקציר ברמת הספר, ואת כרטיסי הפרופיל שבהמשך הדף.',
       buildingProfile: 'בונה את פרופיל הספר...',
       profileFailed: 'התקצירים נבנו, אך בניית פרופיל הספר נכשלה. אפשר לנסות שוב.',
+      // The blocked-by-import reason, said in the same words the spine's blocked row uses. DRAFT Hebrew.
+      needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
     };
     const en: Record<string, string> = {
       title: 'Book briefs',
@@ -447,6 +472,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       builds: 'This build produces a brief for each chapter, one book-level brief, and the profile cards further down this page.',
       buildingProfile: 'Building the book profile...',
       profileFailed: 'The briefs were built, but the book profile build failed. You can run it again.',
+      needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
     };
     const map = lang === 'he' ? he : en;
     return map[key] ?? key;
@@ -479,6 +505,10 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   // ── Consent gate ────────────────────────────────────────────────────────────
 
   openBookSummaryConsent(): void {
+    // The disabled attribute is the user-facing guard; this is the same refusal stated once more where the
+    // build actually starts, so a keyboard/programmatic path cannot open a consent prompt that offers to
+    // analyse the chapters of a book that has none.
+    if (this.blockedByImport) return;
     this.showBookSummaryConsent = true;
   }
 

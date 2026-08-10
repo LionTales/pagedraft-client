@@ -314,6 +314,7 @@ function behindReasonsForBriefs(summary: BookSummaryStatusDto): BehindReason[] {
 /**
  * Stage 3, Developmental review. From `BookReviewStatusDto`.
  *
+ *   no chapters              -> blocked by IMPORT, offering the import. See the walkability rule below.
  *   activeBuildJobId != null -> running.
  *   !hasBriefs               -> blocked BY THE BOOK BRIEFS, and the row offers building them. This is the
  *                               product's one hard prerequisite: a review build with no briefs spends zero
@@ -324,8 +325,15 @@ function behindReasonsForBriefs(summary: BookSummaryStatusDto): BehindReason[] {
  *   staleVsBriefs || builtWithDifferentModel -> behind.
  *   ready                    -> ready.
  *
- * With zero chapters the stage is blocked before the status even lands, and it still names the briefs as
- * the prerequisite: that is the chain the user has to walk, and stage 2 names Import in turn.
+ * THE WALKABILITY RULE FOR `blocked`, and why zero chapters names Import rather than the briefs. The
+ * `blocked` contract is two halves: name the prerequisite AND offer the way to fix it. An offered action
+ * the user cannot actually walk satisfies the letter and breaks the point. With zero chapters this stage
+ * used to name the briefs and offer `build-briefs`, while stage 2 in the SAME derivation was itself
+ * `blocked` by Import and retargeted to `open-import`: one empty book therefore rendered two contradictory
+ * primary CTAs, and pressing this row's action landed the user on a briefs row that also could not build.
+ * So the empty book names the ONE prerequisite that is walkable from here, exactly as stages 4 and 5 do -
+ * all four downstream stages say the same thing and point at the same door. The briefs prerequisite is
+ * still named the moment it is the real one: chapters exist and `hasBriefs` is false, below.
  */
 function deriveReview(
   review: BookReviewStatusDto | null,
@@ -335,8 +343,8 @@ function deriveReview(
   const base = emptyStatus('review');
   if (chapterCount === 0) {
     base.state = 'blocked';
-    base.blockedBy = 'briefs';
-    base.action = 'build-briefs';
+    base.blockedBy = 'import';
+    base.action = 'open-import';
     return base;
   }
   if (clientRunning) {

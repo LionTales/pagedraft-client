@@ -32,6 +32,16 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
   @Input() bookId: string | null = null;
   /** Book language (e.g. 'he', 'en'). Defaults to 'he'. Drives localization, [dir], and the status key. */
   @Input() bookLanguage: string | null = null;
+  /**
+   * How many chapters the book has, from the host's already-loaded chapter list. This row already refuses
+   * a build when the briefs are missing, but on a book with ZERO chapters that refusal named a prerequisite
+   * the author could not walk either: the briefs row is itself refused on the same screen. With no chapters
+   * the gate names the import instead, which is the one action that is actually available, and matches what
+   * the stage spine above renders on all four of its blocked stages.
+   *
+   * `null` means NOT KNOWN YET, never empty. Only an explicit `0` changes anything.
+   */
+  @Input() chapterCount: number | null = null;
 
   /**
    * Emits the current derived review state on every successful status read (wb3-c02 seam): the host uses it
@@ -414,6 +424,23 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
     return s.hasReview ? 'stale' : 'not-built';
   }
 
+  /**
+   * The book has no chapters, so nothing on this row can run. Disabled with the reason, never hidden.
+   * Keyed on `=== 0` so an unarrived chapter list (null) can never disable a build.
+   */
+  get blockedByImport(): boolean {
+    return this.chapterCount === 0;
+  }
+
+  /**
+   * The gate sentence for the `needs-summary` state. It names the BRIEFS when the briefs are the real
+   * prerequisite, and the IMPORT when the book has no chapters at all - because in that case the briefs
+   * cannot be built either, and pointing the author at a refused row is a diagnosis with no fix attached.
+   */
+  get bookReviewGateHint(): string {
+    return this.bookReviewLabel(this.blockedByImport ? 'needsImport' : 'needsSummary');
+  }
+
   /** True when the review exists but was built with a different model (drives the cross-model warning). */
   get bookReviewBuiltWithDifferentModel(): boolean {
     return !!this.bookReviewStatus?.builtWithDifferentModel;
@@ -446,6 +473,8 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       cancel: 'ביטול',
       crossModelWarning: 'הסקירה נבנתה עם מודל אחר מהפעיל כעת. רעננו אותה לקבלת תוצאות מדויקות.',
       needsSummary: 'הסקירה ההתפתחותית דורשת תקצירי ספר. בנו תחילה את תקצירי הספר.',
+      // The zero-chapter gate: naming the briefs there would point at a row that is refused too.
+      needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
       buildFailed: 'בניית הסקירה נכשלה: אף ממד לא הניב ממצאים. נסו שוב; אם התקלה חוזרת ייתכן שהספר גדול מדי עבור המודל.',
       buildDegraded: 'הסקירה נבנתה חלקית: חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
       buildDegradedWithCount: 'הסקירה נבנתה חלקית: {count} ממצאים נשמרו, אך חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
@@ -473,6 +502,7 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       cancel: 'Cancel',
       crossModelWarning: 'The review was built with a different model than the one now active. Refresh it for accurate results.',
       needsSummary: 'The developmental review requires book briefs. Build the book summary first.',
+      needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
       buildFailed: 'The review build failed: no dimension produced findings. Try again; if it persists the book may be too large for the model.',
       buildDegraded: 'The review built partially: some dimensions failed. Results may be incomplete; refresh to try again.',
       buildDegradedWithCount: 'The review built partially: {count} findings were saved, but some dimensions failed. Results may be incomplete; refresh to try again.',
@@ -565,8 +595,12 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
 
   // ── Consent gate ────────────────────────────────────────────────────────────
 
-  /** Open the book-review consent prompt. Guard: must not open if briefs are missing (build is gated). */
+  /**
+   * Open the book-review consent prompt. Guards: must not open if briefs are missing (build is gated), and
+   * must not open on a book with no chapters, where a consent prompt would offer to analyse nothing.
+   */
   openBookReviewConsent(): void {
+    if (this.blockedByImport) return;
     if (this.bookReviewStatus && !this.bookReviewStatus.hasBriefs) return;
     this.showBookReviewConsent = true;
   }

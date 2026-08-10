@@ -420,4 +420,62 @@ describe('BookStyleBaselineStatusRowComponent (w5 MOVE-1 + MOVE-2)', () => {
     component.ngOnChanges({ focusToken: new SimpleChange(undefined, 0, true) });
     expect(scrollSpy).not.toHaveBeenCalled();
   });
+
+  // ── Wave 3 fixes / c02: the import precondition ────────────────────────────────────────────────────
+  //
+  // Found live on the empty book: the spine said `blocked, needs Import first` and this row's Build now
+  // sat enabled below it. The row now reads the SAME chapter count the spine derives from.
+
+  describe('c02: the import precondition, disabled WITH the reason', () => {
+    it('disables the build and states why when the book has no chapters', () => {
+      component.chapterCount = 0;
+      component.styleBaselineStatus = makeStatus({ hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 0 });
+      fixture.detectChanges();
+
+      const btn = query('[data-testid="bsb-build-now"]');
+      expect(btn).withContext('disabled, never hidden').not.toBeNull();
+      expect((btn.nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      const reason = query('[data-testid="bsb-needs-import"]');
+      expect(reason).not.toBeNull();
+      expect((reason.nativeElement as HTMLElement).textContent!.trim().length).toBeGreaterThan(0);
+    });
+
+    it('refuses to open the consent prompt for a book with no chapters', () => {
+      component.chapterCount = 0;
+      component.styleBaselineStatus = makeStatus({ hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 0 });
+
+      component.openBaselineConsent();
+
+      expect(component.showBaselineConsent).toBeFalse();
+    });
+
+    it('leaves the build ENABLED while the chapter count is not known yet (null is not empty)', () => {
+      component.chapterCount = null;
+      component.styleBaselineStatus = makeStatus({ hasBaseline: false, ready: false, builtChapters: 0 });
+      fixture.detectChanges();
+
+      expect((query('[data-testid="bsb-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="bsb-needs-import"]')).toBeNull();
+      component.openBaselineConsent();
+      expect(component.showBaselineConsent).toBeTrue();
+    });
+
+    it('states the reason in the book language, both sides (he/en parity)', () => {
+      component.chapterCount = 0;
+      component.styleBaselineStatus = makeStatus({ hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 0 });
+      component.bookLanguage = 'he';
+      fixture.detectChanges();
+      const he = (query('[data-testid="bsb-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      const en = (query('[data-testid="bsb-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(he).not.toBe('needsImport');
+      expect(en).not.toBe('needsImport');
+      expect(he).not.toBe(en);
+      expect(he).not.toContain('—');
+      expect(en).not.toContain('—');
+    });
+  });
 });

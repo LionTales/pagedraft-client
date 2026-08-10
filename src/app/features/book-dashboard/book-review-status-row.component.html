@@ -11,7 +11,9 @@
     <!-- NEEDS SUMMARY (gate: hasBriefs===false) -->
     <ng-container *ngIf="bookReviewState === 'needs-summary'">
       <span class="sb-status sb-not-built" data-testid="brev-needs-summary">{{ bookReviewLabel('notBuilt') }}</span>
-      <span class="sb-hint-inline muted" data-testid="brev-needs-summary-hint">{{ bookReviewLabel('needsSummary') }}</span>
+      <!-- The gate sentence names the BRIEFS normally and the IMPORT on a book with no chapters, because
+           there the briefs row is refused too and pointing at it would be a fix that cannot be walked. -->
+      <span class="sb-hint-inline muted" data-testid="brev-needs-summary-hint">{{ bookReviewGateHint }}</span>
     </ng-container>
 
     <!-- NOT BUILT -->
@@ -21,6 +23,7 @@
         type="button"
         class="pd-btn pd-btn-primary sb-action"
         data-testid="brev-build-now"
+        [disabled]="blockedByImport"
         (click)="openBookReviewConsent()">
         {{ bookReviewLabel('buildNow') }}
       </button>
@@ -72,10 +75,20 @@
         type="button"
         class="pd-btn pd-btn-primary sb-action"
         data-testid="brev-refresh"
+        [disabled]="blockedByImport"
         (click)="openBookReviewConsent()">
         {{ bookReviewLabel('refresh') }}
       </button>
     </ng-container>
+
+    <!-- A disabled action always carries its reason. The needs-summary state already renders one above, so
+         this covers the remaining states rather than repeating it. -->
+    <span
+      class="sb-hint-inline muted"
+      *ngIf="blockedByImport && bookReviewState !== 'needs-summary'"
+      data-testid="brev-needs-import">
+      {{ bookReviewLabel('needsImport') }}
+    </span>
   </div>
 
   <!-- The model tier for the whole-book review (tier-ux-rework c3), on the launcher surface itself. The

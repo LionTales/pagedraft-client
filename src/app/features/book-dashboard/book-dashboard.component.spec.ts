@@ -850,6 +850,59 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       const spine = fixture.debugElement.query(By.css('[data-testid="stage-spine"]')).nativeElement as HTMLElement;
       expect(spine.querySelectorAll('[data-state="ready"]').length).toBe(0);
     });
+
+    it('offers the SAME walkable action on every blocked row (no CTA contradicts another)', () => {
+      component.chapters = [];
+      component.onReviewStatusChange(null);
+      component.onSummaryStatusChange(null);
+      (component as any).rebuildSpineSignals();
+      fixture.detectChanges();
+
+      // The review row used to offer build-briefs here, landing the user on a briefs row that also could
+      // not build. Every blocked stage now points at the one door that opens.
+      let imports = 0;
+      component.openImport.subscribe(() => imports++);
+      for (const stage of ['briefs', 'review', 'chapter-passes', 'export']) {
+        fixture.debugElement
+          .query(By.css(`[data-testid="spine-stage-head-${stage}"]`))
+          .nativeElement.click();
+        fixture.detectChanges();
+        fixture.debugElement
+          .query(By.css(`[data-testid="spine-action-${stage}"]`))
+          .nativeElement.click();
+      }
+      expect(imports).toBe(4);
+    });
+
+    it('hands the build rows the SAME chapter count the spine derives from, so they cannot disagree', () => {
+      component.chapters = [];
+      (component as any).rebuildSpineSignals();
+      fixture.detectChanges();
+
+      const rows = [
+        fixture.debugElement.query(By.css('app-book-summary-status-row')),
+        fixture.debugElement.query(By.css('app-book-review-status-row')),
+        fixture.debugElement.query(By.css('app-book-style-baseline-status-row')),
+      ];
+      for (const row of rows) {
+        expect(row).not.toBeNull();
+        expect(row.componentInstance.chapterCount).toBe(0);
+        expect(row.componentInstance.blockedByImport)
+          .withContext(`${row.name} must refuse its build on a book with no chapters`)
+          .toBeTrue();
+      }
+      expect(component.spineSignals.chapterCount).toBe(0);
+    });
+
+    it('leaves the build rows alone while the chapter list has NOT arrived (null is not empty)', () => {
+      component.chapters = null;
+      (component as any).rebuildSpineSignals();
+      fixture.detectChanges();
+
+      const row = fixture.debugElement.query(By.css('app-book-summary-status-row'));
+      expect(row.componentInstance.chapterCount).toBeNull();
+      expect(row.componentInstance.blockedByImport).toBeFalse();
+    });
   });
 
   // ══════════════════════════════════════════════════════════════════════════════════════════════════

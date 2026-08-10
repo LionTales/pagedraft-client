@@ -222,15 +222,30 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
 
     it('names the missing prerequisite on the blocked review row, in words', () => {
       expand('review');
-      expect(text('[data-testid="spine-blocked-review"]')).toContain(STAGE_NAMES['briefs'].he);
+      expect(text('[data-testid="spine-blocked-review"]')).toContain(STAGE_NAMES['import'].he);
     });
 
-    it('offers the FIX on the blocked review row, not just the diagnosis', () => {
+    it('offers a WALKABLE fix on the blocked review row, not one that dead-ends on another blocked row', () => {
+      // The `blocked` contract is two halves: name the prerequisite AND offer the way to fix it. This row
+      // used to offer `build-briefs`, but stage 2 is itself blocked on an empty book, so pressing it landed
+      // the user on a briefs row that could not build - the diagnosis was right and the fix went nowhere.
+      // The only action a user can actually walk from an empty book is the import, and that is what it must
+      // emit; the briefs prerequisite is still named once chapters exist and it is the real one.
       expand('review');
       const emitted: StageActionEvent[] = [];
       component.stageAction.subscribe(e => emitted.push(e));
       (fixture.debugElement.query(By.css('[data-testid="spine-action-review"]')).nativeElement as HTMLElement).click();
-      expect(emitted).toEqual([{ stage: 'review', action: 'build-briefs' }]);
+      expect(emitted).toEqual([{ stage: 'review', action: 'open-import' }]);
+    });
+
+    it('offers the SAME one walkable action on every blocked row, so the empty book has one CTA', () => {
+      const emitted: StageActionEvent[] = [];
+      component.stageAction.subscribe(e => emitted.push(e));
+      for (const stage of ['briefs', 'review', 'chapter-passes', 'export'] as const) {
+        expand(stage);
+        (fixture.debugElement.query(By.css(`[data-testid="spine-action-${stage}"]`)).nativeElement as HTMLElement).click();
+      }
+      expect(emitted.map(e => e.action)).toEqual(['open-import', 'open-import', 'open-import', 'open-import']);
     });
   });
 

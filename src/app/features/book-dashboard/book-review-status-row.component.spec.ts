@@ -1308,4 +1308,56 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
       expect(emitted).toContain('building');
     });
   });
+
+  // ── Wave 3 fixes / c02: the gate must name a prerequisite the author can actually walk ─────────────
+
+  describe('c02: with NO chapters the gate names the import, not the briefs', () => {
+    it('swaps the gate sentence, because the briefs row is refused on that book too', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: false });
+      component.chapterCount = 5;
+      fixture.detectChanges();
+      const withChapters = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      component.chapterCount = 0;
+      fixture.detectChanges();
+      const withNone = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(component.bookReviewState).toBe('needs-summary');
+      expect(withNone).not.toBe(withChapters);
+      expect(withNone).toBe(component.bookReviewLabel('needsImport'));
+      expect(withChapters).toBe(component.bookReviewLabel('needsSummary'));
+    });
+
+    it('keeps the briefs wording while the chapter count is not known yet (null is not empty)', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: false });
+      component.chapterCount = null;
+      fixture.detectChanges();
+
+      expect(component.blockedByImport).toBeFalse();
+      expect((query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim())
+        .toBe(component.bookReviewLabel('needsSummary'));
+    });
+
+    it('refuses the consent prompt on a zero-chapter book even when the briefs gate would allow it', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      component.chapterCount = 0;
+
+      component.openBookReviewConsent();
+
+      expect(component.showBookReviewConsent).toBeFalse();
+    });
+
+    it('states the import reason in both languages (he/en parity)', () => {
+      component.bookLanguage = 'he';
+      const he = component.bookReviewLabel('needsImport');
+      component.bookLanguage = 'en';
+      const en = component.bookReviewLabel('needsImport');
+
+      expect(he).not.toBe('needsImport');
+      expect(en).not.toBe('needsImport');
+      expect(he).not.toBe(en);
+      expect(he).not.toContain('—');
+      expect(en).not.toContain('—');
+    });
+  });
 });
