@@ -1563,10 +1563,14 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       component.selectedChapterId = null;
       component.reviewPanelOpen = false;
       fixture.detectChanges();
-      // No editor status bar exists in this state, so the reopen zone carries it instead - and carries
-      // it exactly once, which is what the two placements' mutually exclusive guards buy.
+      // No editor status bar exists in this state, so the EMPTY WRITING PANE carries it instead - and
+      // carries it exactly once, which is what the two placements' mutually exclusive guards buy.
+      // (c05 moved this mount out of the reopen zone: that zone requires the panel to be CLOSED, so it
+      // could never cover the panel-OPEN half of "no chapter open". See the c05 matrix describe below.)
       expect(el().querySelector('.review-reopen')).not.toBeNull();
       expect(compactSpines().length).toBe(1);
+      expect(el().querySelectorAll('.editor-empty [data-testid="stage-spine-compact"]').length).toBe(1);
+      expect(el().querySelectorAll('.review-reopen-zone [data-testid="stage-spine-compact"]').length).toBe(0);
     });
 
     it('the compact spine follows the BOOK language, so entering a book never flips it', () => {
@@ -1722,6 +1726,211 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       registryStub.setRunning('book-B', true);
       fixture.detectChanges();
       expect(compactReviewState()).toBe('running');
+    });
+  });
+
+  // ── c05: THE SPINE-PRESENCE CELL MATRIX (P1-9 + P2-31) ────────────────────────────────────────
+  //
+  // The rf-c02/w3 tests above assert the density HANDOFF, but every one of them sets
+  // `selectedChapterId = 'chap-1'` before asserting - which is exactly why the empty cell was invisible
+  // to the suite and had to be found by a browser. The status-bar mount needs a chapter; the old
+  // no-chapter mount (the reopen zone) needs the panel CLOSED; so panel-open + no-chapter had NEITHER
+  // density, and that is where an import and "just let me edit" both land the reader.
+  //
+  // These tests therefore drive the CELLS: the full cross of the four inputs that gate the mounts
+  // (panel open/closed x focus on/off x panel body x chapter selected/not), plus the book-not-yet-loaded
+  // pair. The expected placement per cell is HAND-AUTHORED from the crossed template guards, not computed
+  // from the production getters, so a change to those getters cannot quietly re-derive its own oracle.
+  //
+  // Focus mode is an owner KEEPER decision (2026-08-09): it HIDES both side zones, so the full spine
+  // hides with them and the compact one is the surface that remains. The `focus: true` rows below pin
+  // that as CORRECT behaviour, not as a gap to be closed by forcing the full spine into focus mode.
+
+  describe('c05 spine presence: every cell of the crossed matrix', () => {
+    type Body = 'review' | 'edit' | 'handoff';
+    type Placement = 'full' | 'status-bar' | 'empty-pane';
+    interface Cell {
+      panelOpen: boolean;
+      focus: boolean;
+      body: Body;
+      chapter: boolean;
+      /** false = the route has a bookId but the book GET has not resolved yet. Defaults to true. */
+      bookLoaded?: boolean;
+      expected: Placement;
+    }
+
+    /** Put the component into the named cell directly, then render. */
+    function drive(cell: Cell): void {
+      component.bookId = 'book-1';
+      component.book = cell.bookLoaded === false ? null : BOOK;
+      component.reviewPanelOpen = cell.panelOpen;
+      component.focusMode = cell.focus;
+      component.showHandoffCard = cell.body === 'handoff';
+      component.reviewMode = cell.body === 'edit' ? 'edit' : 'review';
+      component.selectedChapterId = cell.chapter ? 'chap-1' : null;
+      fixture.detectChanges();
+    }
+
+    /** The full spine's host on this route. It is the ONLY thing `fullSpineVisible` gates. */
+    const fullSpineMounts = () => el().querySelectorAll('app-book-dashboard').length;
+    const statusBarSpines = () =>
+      el().querySelectorAll('.editor-status [data-testid="stage-spine-compact"]').length;
+    const emptyPaneSpines = () =>
+      el().querySelectorAll('.editor-empty [data-testid="stage-spine-compact"]').length;
+    const allSpines = () =>
+      fullSpineMounts() + el().querySelectorAll('[data-testid="stage-spine-compact"]').length;
+
+    function label(cell: Cell): string {
+      return `panel ${cell.panelOpen ? 'open' : 'closed'} / focus ${cell.focus ? 'ON' : 'off'} / `
+        + `${cell.body}${cell.bookLoaded === false ? ' (book not loaded)' : ''} / `
+        + `${cell.chapter ? 'chapter open' : 'NO chapter'}`;
+    }
+
+    const CELLS: Cell[] = [
+      // Panel open, no focus: the review body hosts the FULL spine, and only it.
+      { panelOpen: true,  focus: false, body: 'review',  chapter: true,  expected: 'full' },
+      { panelOpen: true,  focus: false, body: 'review',  chapter: false, expected: 'full' },
+      // ... but the review body is REPLACED by Edit help and by the import handoff card, and neither
+      // hosts a spine. These two `chapter: false` rows are the cells that rendered NOTHING before c05.
+      { panelOpen: true,  focus: false, body: 'edit',    chapter: true,  expected: 'status-bar' },
+      { panelOpen: true,  focus: false, body: 'edit',    chapter: false, expected: 'empty-pane' },
+      { panelOpen: true,  focus: false, body: 'handoff', chapter: true,  expected: 'status-bar' },
+      { panelOpen: true,  focus: false, body: 'handoff', chapter: false, expected: 'empty-pane' },
+      // The book GET has not resolved yet, so the review body cannot mount either.
+      { panelOpen: true,  focus: false, body: 'review',  chapter: true,  bookLoaded: false, expected: 'status-bar' },
+      { panelOpen: true,  focus: false, body: 'review',  chapter: false, bookLoaded: false, expected: 'empty-pane' },
+      // Panel closed: the reopen zone renders, and (since c05) carries no spine of its own.
+      { panelOpen: false, focus: false, body: 'review',  chapter: true,  expected: 'status-bar' },
+      { panelOpen: false, focus: false, body: 'review',  chapter: false, expected: 'empty-pane' },
+      { panelOpen: false, focus: false, body: 'edit',    chapter: true,  expected: 'status-bar' },
+      { panelOpen: false, focus: false, body: 'edit',    chapter: false, expected: 'empty-pane' },
+      { panelOpen: false, focus: false, body: 'handoff', chapter: true,  expected: 'status-bar' },
+      { panelOpen: false, focus: false, body: 'handoff', chapter: false, expected: 'empty-pane' },
+      // FOCUS MODE, panel remembered as open. Focus hides both side zones - KEEPER, not a gap.
+      { panelOpen: true,  focus: true,  body: 'review',  chapter: true,  expected: 'status-bar' },
+      { panelOpen: true,  focus: true,  body: 'review',  chapter: false, expected: 'empty-pane' },
+      { panelOpen: true,  focus: true,  body: 'edit',    chapter: true,  expected: 'status-bar' },
+      { panelOpen: true,  focus: true,  body: 'edit',    chapter: false, expected: 'empty-pane' },
+      { panelOpen: true,  focus: true,  body: 'handoff', chapter: true,  expected: 'status-bar' },
+      { panelOpen: true,  focus: true,  body: 'handoff', chapter: false, expected: 'empty-pane' },
+      // FOCUS MODE, panel remembered as closed (what toggleFocusMode actually leaves behind).
+      { panelOpen: false, focus: true,  body: 'review',  chapter: true,  expected: 'status-bar' },
+      { panelOpen: false, focus: true,  body: 'review',  chapter: false, expected: 'empty-pane' },
+      { panelOpen: false, focus: true,  body: 'edit',    chapter: true,  expected: 'status-bar' },
+      { panelOpen: false, focus: true,  body: 'edit',    chapter: false, expected: 'empty-pane' },
+      { panelOpen: false, focus: true,  body: 'handoff', chapter: true,  expected: 'status-bar' },
+      { panelOpen: false, focus: true,  body: 'handoff', chapter: false, expected: 'empty-pane' },
+    ];
+
+    for (const cell of CELLS) {
+      it(`mounts EXACTLY ONE spine, in the ${cell.expected}, when ${label(cell)}`, () => {
+        drive(cell);
+
+        // (1) Never none, never two. This is the claim the old docstring made and could not keep.
+        expect(allSpines())
+          .withContext(`${label(cell)}: expected exactly one spine on screen`)
+          .toBe(1);
+
+        // (2) And it is the density/placement the crossed guards say it should be.
+        expect(fullSpineMounts())
+          .withContext(`${label(cell)}: full spine`)
+          .toBe(cell.expected === 'full' ? 1 : 0);
+        expect(statusBarSpines())
+          .withContext(`${label(cell)}: compact spine in the editor status bar`)
+          .toBe(cell.expected === 'status-bar' ? 1 : 0);
+        expect(emptyPaneSpines())
+          .withContext(`${label(cell)}: compact spine in the empty writing pane`)
+          .toBe(cell.expected === 'empty-pane' ? 1 : 0);
+
+        // (3) The three getters partition the same way the DOM does, so the template and the single
+        //     authority cannot drift apart.
+        expect(component.fullSpineVisible).toBe(cell.expected === 'full');
+        expect(component.compactSpineInStatusBar).toBe(cell.expected === 'status-bar');
+        expect(component.compactSpineInEmptyPane).toBe(cell.expected === 'empty-pane');
+      });
+    }
+
+    // ── The two cells the live browser measured as `compact: 0, full: 0` ─────────────────────────
+
+    it('THE DEFECT CELL: panel open + Edit help + no chapter selected still shows a spine', () => {
+      drive({ panelOpen: true, focus: false, body: 'edit', chapter: false, expected: 'empty-pane' });
+      // This is where "just let me edit" (onHandoffEditMode) lands a reader on the headline empty book.
+      expect(el().querySelector('.editor-empty [data-testid="stage-spine-compact"]'))
+        .withContext('the empty book first screen must carry stage guidance')
+        .not.toBeNull();
+      expect(allSpines()).toBe(1);
+    });
+
+    it('THE DEFECT CELL: the import handoff card with no chapter selected still shows a spine', () => {
+      drive({ panelOpen: true, focus: false, body: 'handoff', chapter: false, expected: 'empty-pane' });
+      // The handoff card owns the panel body, so there is no full spine behind it; the writing pane is
+      // the only surface left, and an import is exactly how a reader arrives in this state.
+      expect(has('app-import-handoff-card')).toBe(true);
+      expect(has('app-book-dashboard')).toBe(false);
+      expect(emptyPaneSpines()).toBe(1);
+      expect(allSpines()).toBe(1);
+    });
+
+    it('the reopen zone no longer carries a spine of its own (no double mount with the writing pane)', () => {
+      drive({ panelOpen: false, focus: false, body: 'edit', chapter: false, expected: 'empty-pane' });
+      expect(el().querySelector('.review-reopen')).not.toBeNull();
+      expect(el().querySelectorAll('.review-reopen-zone [data-testid="stage-spine-compact"]').length).toBe(0);
+      expect(emptyPaneSpines()).toBe(1);
+    });
+
+    // ── Focus mode is UNCHANGED by c05 (owner keeper decision) ───────────────────────────────────
+
+    it('focus mode still hides both side zones and keeps the compact spine, with a chapter open', () => {
+      component.bookId = 'book-1';
+      component.book = BOOK;
+      component.selectedChapterId = 'chap-1';
+      component.reviewMode = 'review';
+      component.reviewPanelOpen = true;
+      fixture.detectChanges();
+      expect(fullSpineMounts()).toBe(1); // full spine before focus
+
+      component.toggleFocusMode();
+      fixture.detectChanges();
+
+      expect(component.focusMode).toBe(true);
+      expect(el().querySelector('.sidebar')).toBeNull();
+      expect(el().querySelector('.review-panel')).toBeNull();
+      expect(el().querySelector('.review-reopen')).toBeNull();
+      expect(fullSpineMounts()).toBe(0);
+      expect(statusBarSpines()).toBe(1);
+      const focusBtn = el().querySelector('.focus-btn') as HTMLElement;
+      expect(focusBtn.getAttribute('aria-pressed')).toBe('true');
+
+      // Exiting restores the panel exactly as it was, and the full spine with it.
+      component.toggleFocusMode();
+      fixture.detectChanges();
+      expect(component.reviewPanelOpen).toBe(true);
+      expect(fullSpineMounts()).toBe(1);
+      expect(statusBarSpines()).toBe(0);
+    });
+
+    it('focus mode with NO chapter open shows the compact spine in the writing pane, not the full one', () => {
+      drive({ panelOpen: true, focus: true, body: 'review', chapter: false, expected: 'empty-pane' });
+      // Focus mode does NOT get the full spine back - that is the owner decision, restated as a test so
+      // a later "fix" for this cell cannot quietly force the side panels open in focus mode.
+      expect(el().querySelector('.review-panel')).toBeNull();
+      expect(fullSpineMounts()).toBe(0);
+      expect(emptyPaneSpines()).toBe(1);
+    });
+
+    it('the compact spine in the writing pane follows the BOOK language', () => {
+      component.bookId = 'book-en';
+      component.book = { ...BOOK, id: 'book-en', language: 'en' };
+      component.selectedChapterId = null;
+      component.reviewMode = 'edit';
+      component.reviewPanelOpen = true;
+      component.focusMode = false;
+      fixture.detectChanges();
+
+      const spine = el().querySelector('.editor-empty [data-testid="stage-spine-compact"]') as HTMLElement;
+      expect(spine).not.toBeNull();
+      expect(spine.getAttribute('dir')).toBe('ltr');
+      expect(spine.textContent).toContain('Import');
     });
   });
 

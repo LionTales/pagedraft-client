@@ -138,9 +138,11 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
   // panel-reopen button) so a whole-book build stayed visible while the dashboard was @if-destroyed. Both
   // dots are gone (Q12b). The signal did not go with them: it now renders as the `running` state of the
   // stage spine, which is the ONE surface that speaks the product's stage vocabulary, and this route shows
-  // the COMPACT density of it exactly when the full spine is off screen - panel closed, focus mode, or
-  // Edit-help mode. Those are the same three cases the dots existed for, which is why the rf-c02 contracts
-  // (survives unmount, book-scoped, one reattach per load) are preserved and re-asserted on the spine.
+  // the COMPACT density of it exactly when the full spine is off screen. Which states those are is NOT a
+  // short list - it is the crossed matrix documented on {@link fullSpineVisible}, and the three cases the
+  // retired dots covered (panel closed, focus mode, Edit help) are a SUBSET of it, not the whole of it.
+  // The rf-c02 contracts (survives unmount, book-scoped, one reattach per load) are preserved and
+  // re-asserted on the spine regardless of which of the two compact placements carries it.
   //
   // WHAT IT READS. The same single job registry, still the only truth, but PER KIND rather than as one
   // "something is running" flag: a briefs build and a review build are different stages, and one flag
@@ -398,15 +400,46 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
   }
 
   /**
-   * Whether the FULL spine is on screen right now. This getter is the single authority for that question:
-   * the template renders the book dashboard (which hosts the full spine) from it, and renders the compact
-   * spine from its negation, so the two densities cannot both be mounted and cannot both be absent. That
-   * is the handoff Q1-D asks for, expressed as one expression rather than two that agree today.
+   * Whether the FULL spine is on screen right now. This getter is the single authority for that question,
+   * and it is one HALF of a partition: {@link compactSpineInStatusBar} and {@link compactSpineInEmptyPane}
+   * split its negation on `selectedChapterId`, so the three mounts are mutually exclusive AND exhaustive -
+   * exactly one spine is on screen in every reachable state, never two and never none.
    *
-   * The three cases where it is false are precisely the three the retired dots existed for: the panel is
-   * closed, focus mode has hidden the panel, or the panel is showing Edit help instead of the review.
-   * Focus mode hiding the full spine is CORRECT, not a bug (owner, 2026-08-09): the compact spine in the
-   * editor's own status bar is the surface that remains, and the focus button and mode are untouched.
+   * c05 (2026-08-10) - WHY THIS DOCSTRING IS LONGER THAN THE EXPRESSION. What stood here enumerated "the
+   * three cases the retired dots existed for" (panel closed, focus mode, Edit help) and claimed the two
+   * densities "cannot both be mounted and cannot both be absent". The enumeration was FALSE and the claim
+   * with it: the status-bar compact mount ALSO required a selected chapter (the `@if (selectedChapterId)`
+   * around the editor shell in this template), and the only other compact mount ALSO required the panel to
+   * be CLOSED, so panel-open + Edit-help + no chapter selected had neither density. Measured live on the
+   * empty book at 1440x900 Hebrew as `compact: 0, full: 0`. The enumeration below is therefore derived by
+   * CROSSING the template guards, not from intent, over the four inputs that gate them: whether the panel
+   * is open, whether focus mode is on, what the panel body is showing (the import handoff card counts as
+   * "not review" because it replaces the review body), and whether a chapter is selected.
+   *
+   * | panel  | focus | panel body                  | chapter | spine on screen             |
+   * |--------|-------|-----------------------------|---------|-----------------------------|
+   * | open   | off   | review, book loaded         | yes     | FULL, in the dashboard      |
+   * | open   | off   | review, book loaded         | no      | FULL, in the dashboard      |
+   * | open   | off   | review, book NOT yet loaded | yes     | compact, editor status bar  |
+   * | open   | off   | review, book NOT yet loaded | no      | compact, empty writing pane |
+   * | open   | off   | Edit help                   | yes     | compact, editor status bar  |
+   * | open   | off   | Edit help                   | no      | compact, empty writing pane |
+   * | open   | off   | import handoff card         | yes     | compact, editor status bar  |
+   * | open   | off   | import handoff card         | no      | compact, empty writing pane |
+   * | closed | off   | (reopen zone)               | yes     | compact, editor status bar  |
+   * | closed | off   | (reopen zone)               | no      | compact, empty writing pane |
+   * | either | ON    | (both side zones hidden)    | yes     | compact, editor status bar  |
+   * | either | ON    | (both side zones hidden)    | no      | compact, empty writing pane |
+   *
+   * The five "empty writing pane" rows are what c05 added; before it they were the empty cells. Two of
+   * them are where the product actually lands a reader: an import shows the handoff card on a book whose
+   * first screen has no chapter selected yet, and "just let me edit" ({@link onHandoffEditMode}) drops the
+   * same reader into Edit help in that same state. That was the wave's headline empty book rendering no
+   * stage guidance at all.
+   *
+   * Focus mode hiding the FULL spine is CORRECT, not a bug (owner, 2026-08-09): focus collapses BOTH side
+   * zones, and the compact spine in the writing column is the surface that remains. The focus button and
+   * focus mode itself are untouched by any of this.
    */
   get fullSpineVisible(): boolean {
     return this.reviewPanelOpen
@@ -415,6 +448,35 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
       && this.reviewMode === 'review'
       && !!this.bookId
       && !!this.book;
+  }
+
+  /**
+   * Whether the COMPACT spine is on screen right now. The exact negation of {@link fullSpineVisible}, so
+   * "a spine is always on screen" is true by construction rather than by two guards that agree today.
+   * The template never reads this directly - it reads the two placements below, which partition it.
+   */
+  get compactSpineVisible(): boolean {
+    return !this.fullSpineVisible;
+  }
+
+  /**
+   * Compact spine placement A: the editor status bar, which only exists when a chapter is open (that bar
+   * lives inside the editor shell). Mutually exclusive with {@link compactSpineInEmptyPane} by the
+   * `selectedChapterId` split, so the running signal still lives in exactly ONE place on this route.
+   */
+  get compactSpineInStatusBar(): boolean {
+    return this.compactSpineVisible && !!this.selectedChapterId;
+  }
+
+  /**
+   * Compact spine placement B: the empty writing pane shown when no chapter is open. This is the cell c05
+   * closed - the reopen zone used to be the only no-chapter home and it needs the panel CLOSED, so with
+   * the panel OPEN and no chapter (a fresh import, or "just let me edit") no spine rendered at all. The
+   * writing pane is present in every one of those states, including focus mode, which is why the mount
+   * moved here rather than being duplicated per side zone.
+   */
+  get compactSpineInEmptyPane(): boolean {
+    return this.compactSpineVisible && !this.selectedChapterId;
   }
 
   /**

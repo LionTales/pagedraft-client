@@ -244,8 +244,9 @@
   color: var(--pd-primary-700);
 }
 
-/* Collapsed-state zone: the re-open affordance, plus (only when no chapter is open, so the editor status
-   bar that normally carries it does not exist) the compact stage spine. */
+/* Collapsed-state zone: the re-open affordance. c05 removed the compact stage spine that used to mount
+   here for the no-chapter case - this zone requires the panel to be CLOSED, so it could not cover the
+   panel-open half of that state. The empty writing pane (.editor-empty) carries every no-chapter case. */
 .review-reopen-zone {
   display: flex;
   flex-direction: column;
@@ -253,10 +254,6 @@
   gap: var(--pd-space-3);
   padding: var(--pd-space-4);
   overflow-y: auto;
-}
-.review-reopen-zone .reopen-spine {
-  display: block;
-  inline-size: 100%;
 }
 
 /* Collapsed-state re-open affordance. */
@@ -284,8 +281,8 @@
 /* Wave 3 / w3 (Q12b): the P2-6 `.review-running-dot` and its pulse keyframes lived here - a bespoke
    whole-book-build indicator hung on the focus toggle and the reopen button. Both dots are gone; the
    signal is now the stage spine's `running` state, rendered by the compact spine mounted in the editor
-   status bar (and in the reopen zone when no chapter is open). The focus BUTTON and focus mode are
-   untouched by that removal, by owner decision. */
+   status bar (when a chapter is open) or in the empty writing pane (when none is). The focus BUTTON and
+   focus mode are untouched by that removal, by owner decision. */
 .editor-status .status-spine {
   display: block;
   flex: 1 1 220px;
@@ -495,12 +492,28 @@
   box-shadow: var(--pd-ring);
 }
 
-/* Empty-state hint shown when no chapter/scene is open. */
-.editor-area > p {
+/* Empty-state pane shown when no chapter/scene is open: the hint, plus (c05) compact spine placement B,
+   which is the only stage guidance on screen in this state. Centred in the writing column so it reads as
+   the pane's content rather than as chrome, and width-capped so the spine keeps the same narrow measure
+   it holds in the status bar. */
+.editor-empty {
   margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--pd-space-5);
+  inline-size: 100%;
+  max-inline-size: 420px;
+}
+.editor-empty > p {
+  margin: 0;
   color: var(--pd-text-muted);
   font-size: var(--pd-text-body);
   text-align: center;
+}
+.editor-empty .empty-spine {
+  display: block;
+  inline-size: 100%;
 }
 
 /*

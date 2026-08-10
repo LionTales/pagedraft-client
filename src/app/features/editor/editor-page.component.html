@@ -46,11 +46,14 @@
               <button type="button" class="dir-btn" title="Right-to-left (RTL)" (click)="setSelectionRtl()">RTL</button>
               <button type="button" class="dir-btn" title="Left-to-right (LTR)" (click)="setSelectionLtr()">LTR</button>
             </span>
-            <!-- Wave 3 / w3: the COMPACT stage spine, shown exactly when the full spine is off screen
-                 (panel closed, focus mode, or Edit help). It is where the two retired chrome dots' running
-                 signal now lives, in the product's own stage vocabulary instead of a bespoke pulse. It sits
-                 BEFORE the focus button, which is unchanged. -->
-            @if (!fullSpineVisible) {
+            <!-- Wave 3 / w3, corrected by c05: the COMPACT stage spine, placement A of two. Shown exactly
+                 when the full spine is off screen AND a chapter is open, since this status bar only exists
+                 inside the editor shell. Placement B (the empty writing pane below) carries the no-chapter
+                 half, so the two together are the whole negation of fullSpineVisible - see the crossed
+                 matrix on that getter. It is where the two retired chrome dots' running signal now lives,
+                 in the product's own stage vocabulary instead of a bespoke pulse. It sits BEFORE the focus
+                 button, which is unchanged. -->
+            @if (compactSpineInStatusBar) {
               <app-stage-spine
                 class="status-spine"
                 density="compact"
@@ -84,7 +87,22 @@
           </ejs-documenteditorcontainer>
         </div>
       } @else {
-        <p>Select a chapter or scene from the sidebar.</p>
+        <!-- c05: the empty writing pane. This branch renders in EVERY state where no chapter is open -
+             panel open or closed, focus mode on or off, any panel body - which is why it is the home of
+             compact spine placement B. Before c05 the only no-chapter mount was in the reopen zone, which
+             needs the panel CLOSED, so panel-open + no-chapter (a fresh import, or "just let me edit")
+             rendered no spine at all: this paragraph alone. -->
+        <div class="editor-empty">
+          <p>Select a chapter or scene from the sidebar.</p>
+          @if (compactSpineInEmptyPane) {
+            <app-stage-spine
+              class="empty-spine"
+              density="compact"
+              [bookLanguage]="book?.language ?? null"
+              [signals]="spineSignals">
+            </app-stage-spine>
+          }
+        </div>
       }
     </main>
     @if (reviewPanelOpen && !focusMode) {
@@ -249,17 +267,10 @@
           (click)="openReviewPanel()">
           <span class="review-reopen-label">{{ reviewPanelTitle }}</span>
         </button>
-        <!-- With the panel closed AND no chapter open there is no editor status bar, so the compact spine
-             mounts here instead. The two placements are mutually exclusive by this guard, which is what
-             keeps the running signal in exactly ONE place on this route. -->
-        @if (!selectedChapterId) {
-          <app-stage-spine
-            class="reopen-spine"
-            density="compact"
-            [bookLanguage]="book?.language ?? null"
-            [signals]="spineSignals">
-          </app-stage-spine>
-        }
+        <!-- c05: the compact spine used to mount HERE for the no-chapter case. It does not any more. This
+             zone requires the panel to be CLOSED, so it could never cover panel-open + no-chapter, and a
+             mount here would double up with the empty writing pane, which covers every no-chapter state.
+             Do not re-add one: the two placements on {@link fullSpineVisible} are exhaustive already. -->
       </div>
     }
   </div>
