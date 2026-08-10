@@ -96,7 +96,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   set bookSummaryStatus(value: BookSummaryStatusDto | null) {
     if (this._bookSummaryStatus === value) return;
     this._bookSummaryStatus = value;
-    this.statusChange.emit(value);
+    this.publishStatus();
   }
   /** Backing field for {@link bookSummaryBuilding}; mutated only via the setter so the change emits. */
   private _bookSummaryBuilding = false;
@@ -111,7 +111,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   set bookSummaryBuilding(value: boolean) {
     if (this._bookSummaryBuilding === value) return;
     this._bookSummaryBuilding = value;
-    this.buildingChange.emit(value);
+    this.publishBuilding();
   }
   /** Live summary build progress 0..100 (null = indeterminate). */
   bookSummaryProgressPercent: number | null = null;
@@ -157,25 +157,101 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   }
 
   ngOnChanges(changes: SimpleChanges): void {
-    // The summary is keyed by (book, language); a change to EITHER invalidates the current build/poll.
-    if (changes['bookId'] || changes['bookLanguage']) {
-      // Dismiss any open consent for the PREVIOUS book/language so it cannot be confirmed into the new one.
-      this.showBookSummaryConsent = false;
-      if (this.bookId) {
-        this.resetBookSummaryBuildState();
-        this.loadBookSummaryStatus();
-      } else {
-        this.resetBookSummaryBuildState();
+    // c03: everything inside this hook runs INSIDE the host's change-detection pass (see the publishing
+    // block below). The reset is synchronous - this row must be honestly empty the instant its context
+    // changes - but the two @Outputs it moves are published only once the pass is over.
+    this.inHostChangeDetection = true;
+    try {
+      // The summary is keyed by (book, language); a change to EITHER invalidates the current build/poll.
+      if (changes['bookId'] || changes['bookLanguage']) {
+        // Dismiss any open consent for the PREVIOUS book/language so it cannot be confirmed into the new one.
+        this.showBookSummaryConsent = false;
+        if (this.bookId) {
+          this.resetBookSummaryBuildState();
+          this.loadBookSummaryStatus();
+        } else {
+          this.resetBookSummaryBuildState();
+        }
       }
+    } finally {
+      this.inHostChangeDetection = false;
     }
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.stopBookSummaryProgress();
     this.bookSummarySub?.unsubscribe();
     this.bookSummaryStatusSub?.unsubscribe();
     this.profileRefreshSub?.unsubscribe();
     this.bookSummaryHandledTerminalJobId = null;
+  }
+
+  // ── c03: publishing to the host without writing its bindings mid-pass ────────────────────────────────
+  //
+  // `ngOnChanges` is called INSIDE the host's change-detection pass, so anything this row emits from there
+  // lands on host state while that pass is half finished. The dashboard binds both of these outputs into
+  // `spineSignals`, and `<app-stage-spine [signals]>` is declared ABOVE this row in its template - already
+  // checked against the previous object by the time our hook runs. So a synchronous emit from the context
+  // reset is a write to an already-checked binding: it leaves the spine rendering an object the host has
+  // already superseded (corrected for only on some LATER pass), and it is the shape Angular raises
+  // NG0100 for. It does not raise it here today only because the one binding involved is an OBJECT, and
+  // the dev-mode verification pass (`devModeEqual`) treats any two objects as equal; the first primitive
+  // the host derives from a row status - a count, a state chip, a badge above the rows - makes it throw.
+  //
+  // The fix is not to suppress the emission but to move it out of the pass: a deferred publish drains on
+  // the microtask queue, which runs after the pass completes and before the browser paints, and the write
+  // it then makes is picked up by a fresh pass rather than mid-way through the current one. It therefore
+  // cannot merely relocate the error - there is no checked binding to invalidate outside a pass.
+  //
+  // A deferred publish is COALESCED and re-reads the CURRENT field rather than replaying the value it was
+  // scheduled with, so a status that answers before it drains supersedes it instead of being clobbered by
+  // a stale null. The `published*` fields are what was last EMITTED (not merely assigned), which is what
+  // makes that de-duplication exact.
+
+  /** True only while {@link ngOnChanges} is running, i.e. while we are inside the host's CD pass. */
+  private inHostChangeDetection = false;
+  /** The status value last EMITTED on {@link statusChange}. */
+  private publishedStatus: BookSummaryStatusDto | null = null;
+  /** True while one deferred status publish is queued. */
+  private statusPublishQueued = false;
+  /** The value last EMITTED on {@link buildingChange}. */
+  private publishedBuilding = false;
+  /** True while one deferred building publish is queued. */
+  private buildingPublishQueued = false;
+  /** Set on destroy so a queued publish cannot emit out of a dead row. */
+  private destroyed = false;
+
+  /** Publish the current status to the host - now, or after the host's pass when called from within one. */
+  private publishStatus(): void {
+    if (this.inHostChangeDetection) {
+      if (this.statusPublishQueued) return;
+      this.statusPublishQueued = true;
+      Promise.resolve().then(() => {
+        this.statusPublishQueued = false;
+        if (!this.destroyed) this.publishStatus();
+      });
+      return;
+    }
+    if (this.publishedStatus === this._bookSummaryStatus) return;
+    this.publishedStatus = this._bookSummaryStatus;
+    this.statusChange.emit(this._bookSummaryStatus);
+  }
+
+  /** Publish the current building flag to the host, under the same rule as {@link publishStatus}. */
+  private publishBuilding(): void {
+    if (this.inHostChangeDetection) {
+      if (this.buildingPublishQueued) return;
+      this.buildingPublishQueued = true;
+      Promise.resolve().then(() => {
+        this.buildingPublishQueued = false;
+        if (!this.destroyed) this.publishBuilding();
+      });
+      return;
+    }
+    if (this.publishedBuilding === this._bookSummaryBuilding) return;
+    this.publishedBuilding = this._bookSummaryBuilding;
+    this.buildingChange.emit(this._bookSummaryBuilding);
   }
 
   // ── Status load + reset ─────────────────────────────────────────────────────

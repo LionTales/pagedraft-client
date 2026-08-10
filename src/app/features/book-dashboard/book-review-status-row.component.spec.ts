@@ -13,8 +13,8 @@
  *    failed/clear-on-ready reconcile (ported from the c03 describe block). The progress Subject is held
  *    OPEN across assertions so the terminal/error emit lands inside the real in-flight window.
  */
-import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { SimpleChange } from '@angular/core';
+import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { Component, SimpleChange } from '@angular/core';
 import { By } from '@angular/platform-browser';
 import { NEVER, Subject, of, throwError } from 'rxjs';
 import { BookReviewStatusRowComponent } from './book-review-status-row.component';
@@ -48,6 +48,33 @@ function makeBookReviewStatus(
     failedWindows: 0,
     ...overrides,
   };
+}
+
+/**
+ * c03. The dashboard's anatomy in miniature: something the host derives from this row's status, rendered
+ * ABOVE the row, so it is already checked when the row's `ngOnChanges` runs. The real host binds an object
+ * (`spineSignals`) there; this one binds a string, which is the same write with the failure Angular
+ * actually reports.
+ */
+@Component({
+  standalone: true,
+  imports: [BookReviewStatusRowComponent],
+  template: `
+    <p data-testid="host-probe">{{ probe }}</p>
+    <app-book-review-status-row
+      [bookId]="bookId"
+      [bookLanguage]="bookLanguage"
+      (statusChange)="onStatus($event)">
+    </app-book-review-status-row>
+  `,
+})
+class StatusAboveRowHostComponent {
+  bookId: string | null = 'book-1';
+  bookLanguage = 'he';
+  probe = 'no status';
+  onStatus(status: BookReviewStatusDto | null): void {
+    this.probe = status ? 'status loaded' : 'no status';
+  }
 }
 
 describe('BookReviewStatusRowComponent (wb3-c01)', () => {
@@ -1359,5 +1386,94 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
       expect(he).not.toContain('—');
       expect(en).not.toContain('—');
     });
+  });
+
+  /**
+   * c03. `ngOnChanges` runs INSIDE the host's change-detection pass, and `statusChange` is bound into host
+   * state the stage spine - declared ABOVE this row in the host template, so already checked in that same
+   * pass - renders from. Publishing the context reset synchronously from there writes to a checked binding
+   * and the host dies on NG0100 (the host spec drives the whole shape).
+   *
+   * These cases pin the row's half: the reset stays synchronous, only the PUBLISH is deferred to the
+   * microtask queue, and the deferred publish carries the row's CURRENT status rather than the value it
+   * was scheduled with.
+   */
+  describe('c03: the context reset publishes outside the host change-detection pass', () => {
+    it('does not emit statusChange synchronously from ngOnChanges, and does emit it one microtask later', fakeAsync(() => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+      component.bookReviewStatus = makeBookReviewStatus();
+      const emitted: (BookReviewStatusDto | null)[] = [];
+      component.statusChange.subscribe((s) => emitted.push(s));
+
+      component.bookLanguage = 'en';
+      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+
+      expect(component.bookReviewStatus)
+        .withContext('the reset itself is synchronous: the row must not keep rendering the old language')
+        .toBeNull();
+      expect(emitted)
+        .withContext('emitting here would write to a host binding the spine above this row already checked')
+        .toEqual([]);
+
+      tick();
+
+      expect(emitted)
+        .withContext('the host still has to learn the previous status is gone, just not mid-pass')
+        .toEqual([null]);
+    }));
+
+    /**
+     * The dashboard's own spine binding is an OBJECT, and Angular's dev-mode verification treats any two
+     * objects as equal, so the shipped host survives the mid-pass write with a stale binding rather than an
+     * error. This host derives a PRIMITIVE from the same output, exactly as any count, chip or badge placed
+     * above the rows would, and that is a hard NG0100. It pins the rule (do not write the host's state from
+     * inside its pass) instead of the current tolerance.
+     */
+    it('does not break a host that derives a primitive above this row (ExpressionChanged)', async () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      const read$ = new Subject<BookReviewStatusDto>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(read$.asObservable());
+
+      const host = TestBed.createComponent(StatusAboveRowHostComponent);
+      host.detectChanges();
+      // The status answers OUTSIDE a change-detection pass, the way a real HTTP response does.
+      read$.next(makeBookReviewStatus());
+      host.detectChanges();
+      expect(host.componentInstance.probe)
+        .withContext('precondition: the host renders something derived from the row status')
+        .toBe('status loaded');
+
+      host.componentInstance.bookLanguage = 'en';
+
+      // Update pass then verification pass: exactly what a dev-mode ApplicationRef.tick() runs.
+      expect(() => { host.detectChanges(); host.checkNoChanges(); }).not.toThrow();
+
+      // ...and the host still learns about the reset, one microtask later.
+      await host.whenStable();
+      host.detectChanges();
+      expect(host.componentInstance.probe).toBe('no status');
+    });
+
+    it('lets a status that answers before the deferred publish drains win over the reset null', fakeAsync(() => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      const enStatus = makeBookReviewStatus({ language: 'en' });
+      const enRead$ = new Subject<BookReviewStatusDto>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(enRead$.asObservable());
+      component.bookReviewStatus = makeBookReviewStatus({ language: 'he' });
+      const emitted: (BookReviewStatusDto | null)[] = [];
+      component.statusChange.subscribe((s) => emitted.push(s));
+
+      component.bookLanguage = 'en';
+      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+      // The new language answers while the reset's publish is still queued.
+      enRead$.next(enStatus);
+      tick();
+
+      expect(emitted[emitted.length - 1])
+        .withContext('a queued null from the reset must never clobber the answer for the new language')
+        .toBe(enStatus);
+      expect(component.bookReviewStatus).toBe(enStatus);
+    }));
   });
 });

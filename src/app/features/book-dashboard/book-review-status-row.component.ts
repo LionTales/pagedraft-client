@@ -85,7 +85,7 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
   set bookReviewStatus(value: BookReviewStatusDto | null) {
     if (this._bookReviewStatus === value) return;
     this._bookReviewStatus = value;
-    this.statusChange.emit(value);
+    this.publishStatus();
   }
   /** True while a review build job is in flight (drives the BUILDING state). */
   bookReviewBuilding = false;
@@ -151,22 +151,74 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
   }
 
   ngOnChanges(changes: SimpleChanges): void {
-    // The review is keyed by (book, language); a change to EITHER invalidates the current build/poll.
-    if (changes['bookId'] || changes['bookLanguage']) {
-      // Dismiss any open consent for the PREVIOUS book/language so it cannot be confirmed into the new one.
-      this.showBookReviewConsent = false;
-      this.resetBookReviewBuildState();
-      if (this.bookId) {
-        this.loadBookReviewStatus();
+    // c03: everything inside this hook runs INSIDE the host's change-detection pass (see the publishing
+    // block below). The reset is synchronous - this row must be honestly empty the instant its context
+    // changes - but the status it publishes to the host is published only once the pass is over.
+    this.inHostChangeDetection = true;
+    try {
+      // The review is keyed by (book, language); a change to EITHER invalidates the current build/poll.
+      if (changes['bookId'] || changes['bookLanguage']) {
+        // Dismiss any open consent for the PREVIOUS book/language so it cannot be confirmed into the new one.
+        this.showBookReviewConsent = false;
+        this.resetBookReviewBuildState();
+        if (this.bookId) {
+          this.loadBookReviewStatus();
+        }
       }
+    } finally {
+      this.inHostChangeDetection = false;
     }
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.stopBookReviewProgress();
     this.bookReviewSub?.unsubscribe();
     this.bookReviewStatusSub?.unsubscribe();
     this.bookReviewHandledTerminalJobId = null;
+  }
+
+  // ── c03: publishing to the host without writing its bindings mid-pass ────────────────────────────────
+  //
+  // `ngOnChanges` is called INSIDE the host's change-detection pass, so a status published from there lands
+  // on host state while that pass is half finished. The dashboard binds {@link statusChange} into
+  // `spineSignals`, and `<app-stage-spine [signals]>` is declared ABOVE this row in its template - already
+  // checked against the previous object by the time our hook runs. So a synchronous emit from the context
+  // reset is a write to an already-checked binding: it leaves the spine rendering an object the host has
+  // already superseded (corrected for only on some LATER pass), and it is the shape Angular raises NG0100
+  // for. It does not raise it here today only because the one binding involved is an OBJECT, and the
+  // dev-mode verification pass (`devModeEqual`) treats any two objects as equal; the first primitive the
+  // host derives from a row status - a count, a state chip, a badge above the rows - makes it throw.
+  //
+  // The deferred publish drains on the microtask queue, i.e. after the pass completes and before the
+  // browser paints, so the write is picked up by a fresh pass instead of invalidating the current one. It
+  // is COALESCED and re-reads the CURRENT status rather than replaying the value it was scheduled with, so
+  // a status that answers before it drains supersedes it instead of being clobbered by a stale null. The
+  // twin of this block lives in the briefs row, which also publishes its building flag.
+
+  /** True only while {@link ngOnChanges} is running, i.e. while we are inside the host's CD pass. */
+  private inHostChangeDetection = false;
+  /** The status value last EMITTED on {@link statusChange}. */
+  private publishedStatus: BookReviewStatusDto | null = null;
+  /** True while one deferred status publish is queued. */
+  private statusPublishQueued = false;
+  /** Set on destroy so a queued publish cannot emit out of a dead row. */
+  private destroyed = false;
+
+  /** Publish the current status to the host - now, or after the host's pass when called from within one. */
+  private publishStatus(): void {
+    if (this.inHostChangeDetection) {
+      if (this.statusPublishQueued) return;
+      this.statusPublishQueued = true;
+      Promise.resolve().then(() => {
+        this.statusPublishQueued = false;
+        if (!this.destroyed) this.publishStatus();
+      });
+      return;
+    }
+    if (this.publishedStatus === this._bookReviewStatus) return;
+    this.publishedStatus = this._bookReviewStatus;
+    this.statusChange.emit(this._bookReviewStatus);
   }
 
   // ── Status load + reset ─────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ import {
   DashboardLabelKey,
 } from './book-dashboard.component';
 import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
+import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { BookService } from '../../core/services/book.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { BookReviewService } from '../../core/services/book-review.service';
@@ -2014,5 +2015,202 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
       .withContext('the transport string is the only place the failed call status and URL are visible')
       .toHaveBeenCalledWith(jasmine.any(String), raw);
     expect(component.error).not.toContain(PROFILE_URL);
+  });
+});
+
+/**
+ * c03. THE REAL TRANSITION, not a first mount: a book whose language changes while the dashboard stays
+ * mounted and both status rows already hold a loaded status.
+ *
+ * The hosted rows reset their context from `ngOnChanges`, which runs INSIDE this component's
+ * change-detection pass. The reset nulls the row's status, the row publishes it, and this host assigns a
+ * new `spineSignals` object - a binding that `<app-stage-spine>` (declared ABOVE the rows in the template)
+ * has already been checked against in the same pass.
+ *
+ * PREMISE CORRECTION, measured here: this does NOT throw NG0100 on the shipped template. Angular's
+ * dev-mode verification pass compares with `devModeEqual`, which treats any two non-iterable objects as
+ * equal, and `spineSignals` is an object - so the verification tolerates it. What is observable is the
+ * write itself: the mounted spine is left holding an object the host has already replaced, and nothing in
+ * this pass corrects it. That is what these cases assert, plus the row-level rule (in the two row specs)
+ * that the publish must land outside the pass at all, which is what keeps the first primitive the host
+ * ever derives from a row status from turning this into a hard error.
+ *
+ * The `===` early-return in each row's status setter is what keeps a FIRST MOUNT quiet (null -> null does
+ * not publish), which is why no happy-path spec saw this. These cases load a status first, so the reset is
+ * a real value change, and then drive the switch the way the editor does.
+ */
+describe('BookDashboardComponent survives an in-session language change with loaded row statuses (c03)', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  /** One entry per hosted-row status GET, in issue order, each answerable on demand. */
+  let summaryStatusReads: Subject<BookSummaryStatusDto>[];
+  let reviewStatusReads: Subject<BookReviewStatusDto>[];
+
+  function queued<T>(log: Subject<T>[]): Observable<T> {
+    const subject = new Subject<T>();
+    log.push(subject);
+    return subject.asObservable();
+  }
+
+  function summaryStatus(language: string): BookSummaryStatusDto {
+    return {
+      bookId: 'book-1', language, totalChapters: 3, builtChapters: 3, staleCount: 0,
+      hasSummary: true, ready: true, lastUpdatedAt: new Date().toISOString(),
+      builtWithDifferentModel: false, summaryCoversBuiltChapters: true, activeBuildJobId: null,
+      chaptersToBuild: 0, estimatedSeconds: 0, estimatedUsd: null,
+    };
+  }
+
+  function reviewStatus(language: string): BookReviewStatusDto {
+    return {
+      bookId: 'book-1', language, hasReview: true, findingCount: 4, openFindingCount: 4,
+      resolvedFindingCount: 0, lastUpdatedAt: new Date().toISOString(), builtWithDifferentModel: false,
+      staleVsBriefs: false, hasBriefs: true, activeBuildJobId: null, ready: true,
+      chaptersReviewed: 3, chaptersTotal: 3, windowCount: 0, ranSynthesis: false,
+      ranContinuityReduce: false, failedWindows: 0,
+    };
+  }
+
+  /** Rebind [bookLanguage] the way the editor host does: set the input, then run ngOnChanges. */
+  function switchLanguageTo(next: string): void {
+    const previous = component.bookLanguage;
+    component.bookLanguage = next;
+    component.ngOnChanges({ bookLanguage: new SimpleChange(previous, next, false) });
+  }
+
+  beforeEach(async () => {
+    summaryStatusReads = [];
+    reviewStatusReads = [];
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', {
+            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+          }),
+        },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        {
+          provide: BookSummaryService,
+          useValue: {
+            getBookSummaryStatus: () => queued(summaryStatusReads),
+            buildBookSummary: () => NEVER,
+          },
+        },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => queued(reviewStatusReads), buildReview: () => NEVER,
+            getReviewProgress: () => NEVER, getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        { provide: CharacterRegisterService, useValue: { getRegister: () => NEVER, applyEdits: () => NEVER } },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    localStorage.removeItem('pd:dashboard-collapse:book-1');
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    localStorage.removeItem('pd:dashboard-collapse:book-1');
+  });
+
+  /** Answer both hosted rows' Hebrew status reads OUTSIDE a change-detection pass, as real HTTP does. */
+  function loadHebrewStatuses(): void {
+    expect(summaryStatusReads.length)
+      .withContext('precondition: the mounted briefs row issued its status read')
+      .toBe(1);
+    expect(reviewStatusReads.length)
+      .withContext('precondition: the mounted review row issued its status read')
+      .toBe(1);
+    summaryStatusReads[0].next(summaryStatus('he'));
+    reviewStatusReads[0].next(reviewStatus('he'));
+    fixture.detectChanges();
+    expect(component.spineSignals.summary)
+      .withContext('precondition: the spine holds the briefs payload, so the reset is a real value change')
+      .not.toBeNull();
+    expect(component.spineSignals.review)
+      .withContext('precondition: the spine holds the review payload, so the reset is a real value change')
+      .not.toBeNull();
+  }
+
+  it('leaves the mounted spine holding the signals the host actually has, not an object superseded mid-pass', () => {
+    loadHebrewStatuses();
+
+    switchLanguageTo('en');
+    fixture.detectChanges();
+
+    const spine = fixture.debugElement.query(By.css('app-stage-spine'))
+      .componentInstance as { signals: unknown };
+    expect(spine.signals)
+      .withContext('a row that publishes from ngOnChanges rewrites this binding after the spine was checked against it')
+      .toBe(component.spineSignals);
+
+    // The verification half of a dev-mode tick, run explicitly (the fixture's detectChanges() does not run
+    // it in this Angular version). It tolerates an object-to-object change, so it cannot catch the defect
+    // above on its own - it is here as the guard for the day a primitive above the rows derives from a
+    // row status, which is the same write with a harder failure mode.
+    expect(() => fixture.checkNoChanges()).not.toThrow();
+  });
+
+  it('leaves the spine describing the NEW language rather than the previous one', async () => {
+    loadHebrewStatuses();
+
+    switchLanguageTo('en');
+    fixture.detectChanges();
+    // The deferred publish drains on the microtask queue, i.e. after the pass that would have thrown.
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(component.spineSignals.summary)
+      .withContext('the Hebrew briefs payload must not survive into the English page')
+      .toBeNull();
+    expect(component.spineSignals.review)
+      .withContext('the Hebrew review payload must not survive into the English page')
+      .toBeNull();
+    expect(summaryStatusReads.length)
+      .withContext('the row re-read its status for the new language')
+      .toBe(2);
+    expect(reviewStatusReads.length).toBe(2);
+  });
+
+  /**
+   * The English answers land after the switch: the spine must end up describing them. Proves the deferred
+   * reset publish cannot clobber a status that arrives before it drains (it re-reads the row's CURRENT
+   * status rather than replaying the null it was scheduled with).
+   */
+  it('publishes the NEW language status even when it answers before the deferred reset drains', async () => {
+    loadHebrewStatuses();
+
+    switchLanguageTo('en');
+    fixture.detectChanges();
+    summaryStatusReads[1].next(summaryStatus('en'));
+    reviewStatusReads[1].next(reviewStatus('en'));
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(component.spineSignals.summary?.language)
+      .withContext('a stale null from the context reset must never overwrite the answer for the new language')
+      .toBe('en');
+    expect(component.spineSignals.review?.language).toBe('en');
   });
 });
