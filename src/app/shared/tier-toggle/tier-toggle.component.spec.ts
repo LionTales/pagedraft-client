@@ -30,6 +30,7 @@ import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@an
 import { HttpRequest } from '@angular/common/http';
 import { TierToggleComponent, TIER_TOGGLE_LABEL_KEYS, TIER_TOGGLE_LABELS_HE, TIER_TOGGLE_LABELS_EN } from './tier-toggle.component';
 import { AiTierService } from '../../core/services/ai-tier.service';
+import { NO_TIER_TASK_VALUES } from '../../core/utils/ai-task-key';
 import { BookAiTierDto, BookAiTierTaskDto } from '../../core/models/book';
 
 /**
@@ -280,6 +281,34 @@ describe('TierToggleComponent (tier-ux-rework c3)', () => {
     mount(makeDto(), '');
     expect(component.visible).toBeFalse();
     expect(exists('tier-toggle')).toBeFalse();
+  });
+
+  /**
+   * wave3-spine fixes c08, finding 27. `noTierControl` used to be "a non-empty task that did not resolve",
+   * so ANY unrecognized string - a typo, a binding that was never a task, a seventh analysis type shipped
+   * without a map entry - rendered the assertive sentence "The server does not report a tier for it, so
+   * there is nothing to change here". That is a claim about the SERVER derived from a gap in the CLIENT's
+   * table, and for a task the server does report a tier for it is flatly wrong. The explained-absence shape
+   * is now reserved for `NO_TIER_TASK_VALUES`; everything else renders nothing, exactly as an unbound task
+   * does. Silence says nothing untrue.
+   */
+  it('says NOTHING for a task it does not recognize, rather than asserting the server reports no tier', () => {
+    for (const unknown of ['Nonsense', 'proofread', 'QA-2', 'Synopsis']) {
+      mount(makeDto(), unknown);
+      expect(component.noTierControl).withContext(unknown).toBeFalse();
+      expect(component.visible).withContext(unknown).toBeFalse();
+      expect(exists('tier-toggle')).withContext(unknown).toBeFalse();
+      expect(exists('tier-toggle-no-control')).withContext(unknown).toBeFalse();
+      expect(exists('tier-toggle-reason')).withContext(unknown).toBeFalse();
+    }
+  });
+
+  it('keeps the explained absence for every KNOWN no-tier pass, including the QA task name', () => {
+    for (const known of NO_TIER_TASK_VALUES) {
+      mount(makeDto(), known);
+      expect(component.noTierControl).withContext(known).toBeTrue();
+      expect(exists('tier-toggle-no-control')).withContext(known).toBeTrue();
+    }
   });
 
   it('re-derives from the snapshot in hand when the selected type changes, without a second read', () => {

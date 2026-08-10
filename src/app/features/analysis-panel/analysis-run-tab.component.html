@@ -1,9 +1,12 @@
 <section class="run-tab-content">
   <!-- The model tier for THIS edit type (tier-ux-rework c3). Bound to the selected analysis type, which the
        toggle resolves to its routing task: several analysis types (Literary, Overview, Character, Story) run
-       as LinguisticAnalysis and therefore share ONE setting, and a type with no tier control (Summarize,
-       Custom) renders nothing. It re-derives from the snapshot in hand when the picker changes; only a book
-       or language change re-reads. -->
+       as LinguisticAnalysis and therefore share ONE setting. The two types with no tier control (Summarize,
+       Custom) render a DISABLED control with a reason - Wave 3 / w5 replaced the earlier silent vanish,
+       which read as a rendering bug; this comment described that older behaviour until c08. Every value the
+       picker can hold is in the client's known partition (`ai-task-key.ts`), so nothing bound here can reach
+       the render-nothing branch that an UNRECOGNIZED task takes. It re-derives from the snapshot in hand
+       when the picker changes; only a book or language change re-reads. -->
   <app-tier-toggle
     [bookId]="bookId"
     [bookLanguage]="bookLanguage"

@@ -16,11 +16,21 @@
  * an empty map is indistinguishable from "nothing has been collapsed yet", which is exactly the state a
  * first-run author is in, so the failure mode is the first-run experience rather than an error.
  *
- * WHAT IS NOT STORED HERE, and why it matters: the sections whose visibility IS the feature (the stage
- * spine at either density, a status row carrying a `blocked` warning, an open consent prompt) are never
- * wrapped in a collapsible at all, so no key for them can ever exist. That is enforced by placement, not
- * by a deny-list here, because a deny-list would still leave the markup collapsible and one refactor away
- * from hiding a warning.
+ * WHAT IS NOT STORED HERE, and why it matters: the things whose visibility IS the feature (the stage spine
+ * at either density, a status row carrying a `blocked` warning, an open consent prompt, the book-default
+ * tier row that carries the fallback warning) are not wrapped in a collapsible, so this map holds no key
+ * for them. There is deliberately no deny-list here: a deny-list would still leave the markup collapsible,
+ * and the key it refused to store would only ever be the SYMPTOM of a wrap that had already happened.
+ *
+ * BUT PLACEMENT IS A DECISION, NOT A MECHANISM (corrected by wave3-spine fixes c08, finding 26). This
+ * docstring used to claim the never-collapse set was "enforced by placement ... so no key for them can
+ * ever exist". It was not enforced by anything: nothing in this file or in the component can see where a
+ * host mounted it, and a review found exactly the failure the claim said was impossible - the `settings`
+ * section had been wrapped with `app-tier-toggle`'s server-driven fallback warning inside it, and the key
+ * `settings` duly appeared in this map. What actually holds the line is (a) a recorded verdict at every
+ * mount site in `book-dashboard.component.ts` and (b) the spec "the never-collapse class" in
+ * `book-dashboard.component.spec.ts`, which asserts the class against the RENDERED DOM. A future host that
+ * wraps a warning goes red there, which is the guarantee the old sentence only asserted.
  */
 
 /** localStorage key for one book's collapse map. */

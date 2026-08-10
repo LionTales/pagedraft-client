@@ -10,11 +10,29 @@ import { readCollapseMap, writeCollapseState } from './collapse-store';
  * by WHERE it is mounted rather than by a flag inside it:
  *
  *  • It is a WRAPPER, so a thing that must never hide is simply not wrapped. The stage spine (either
- *    density), a status row's `blocked` warning and an open consent prompt are not children of any
- *    instance of this component, which is a stronger guarantee than a "do not collapse me" input would be.
+ *    density), a status row's `blocked` warning, an open consent prompt and the book-default tier row are
+ *    not children of any instance of this component. That is a DECISION taken per mount, not something
+ *    this component can enforce - it cannot see where it was placed - so the class is recorded at each
+ *    mount in `book-dashboard.component.ts` and pinned against the rendered DOM by the spec "the
+ *    never-collapse class" (see the note in {@link collapse-store}, which used to over-claim this).
  *  • It renders its own header as a real <button> with aria-expanded / aria-controls, so keyboard and
- *    screen-reader users get the same affordance, and the collapsed body is REMOVED from the DOM (not
- *    visually hidden) so a collapsed section cannot be tab-focused or read out.
+ *    screen-reader users get the same affordance.
+ *
+ * WHAT COLLAPSING DOES AND DOES NOT SAVE. The `*ngIf` means the body's nodes are never ATTACHED to the
+ * document while collapsed: nothing in a folded section is tab-focusable, hit-testable or read out by a
+ * screen reader, and `document.querySelector` cannot find it. That is the whole of the guarantee.
+ *
+ * It does NOT stop the projected children from RUNNING. `<ng-content>` is a projection slot, and in Ivy
+ * the projected nodes are instantiated by the DECLARING view (the host's template) when the host renders,
+ * whether or not the slot is ever rendered - so a collapsed section's children are constructed, run
+ * `ngOnInit` / `ngOnChanges`, and issue their HTTP reads exactly as if they were open. Measured live on
+ * 2026-08-10 rather than reasoned about: on `/books/{id}` with `character-register` folded (aria-expanded
+ * "false", `app-character-register` absent from the DOM), the network log still shows
+ * `GET /api/books/{id}/character-register`, and with `inputs` folded it still shows the per-chapter
+ * `GET .../chapters/{id}/summary` reads. An earlier version of this docstring said the body was "removed
+ * from the DOM", which readers took as licence to infer that folding a section saves its requests. It does
+ * not. A section whose cost is the REQUEST, not the pixels, needs `ngTemplateOutlet` or an explicit gate
+ * on the child; do not reach for a fold to get it.
  *
  * DEFAULT STATE = THE CURRENT LAYOUT. `defaultCollapsed` is false unless the section is a long content
  * list, because the wave's brief is explicit that this reorganization must not hide anything the author

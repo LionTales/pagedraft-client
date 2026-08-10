@@ -776,7 +776,7 @@ function nowIso(): string {
  * No em-dash in any user-facing string.
  */
 // DRAFT he - needs native review
-const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
+export const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
   'summary': { he: 'בניית סיכום הספר', en: 'Building book summary' },
   'review': { he: 'סקירת הספר', en: 'Reviewing book' },
   'proofread': { he: 'הגהה', en: 'Proofreading' },
@@ -784,6 +784,26 @@ const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
   // entry and the build it reports name the same thing. DRAFT he - needs native review.
   'style-baseline': { he: 'בניית סגנון הכתיבה של הספר', en: "Building your book's writing style" },
 };
+
+/**
+ * EVERY member of {@link JobKind}, DISCOVERED from {@link DEFAULT_TITLES} rather than restated.
+ *
+ * The union has no runtime representation, so a test that wants to iterate it has to get the members from
+ * somewhere. Hand-writing the list is what finding 33 caught: `const kinds: JobKind[] = ['summary', ...]`
+ * assigns cleanly for a union of ANY size, so such a list silently goes stale the moment a member lands
+ * and asserts nothing about the union at all.
+ *
+ * `Record<JobKind, ...>` is different: TypeScript DOES reject a Record that is missing a member, so a new
+ * kind cannot reach a build without an entry here, and once it has one this array grows on its own. That
+ * makes this the discovered side of the completeness oracle in `job-registry.service.spec.ts` (one side
+ * must be discovered, never both hand-authored), and it is the reason `DEFAULT_TITLES` is exported: not
+ * because a caller needs the strings, but because the KEY SET is the mechanical enumeration.
+ *
+ * Frozen, and typed as readonly, so a consumer cannot mutate the enumeration it is asking about.
+ */
+export const ALL_JOB_KINDS: readonly JobKind[] = Object.freeze(
+  Object.keys(DEFAULT_TITLES) as JobKind[],
+);
 
 /**
  * Title (he/en) for a NEW tracked job. Chapter/scene async analysis rides ONE JobKind (`proofread`) for

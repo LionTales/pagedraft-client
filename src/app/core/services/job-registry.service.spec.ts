@@ -3,6 +3,8 @@ import { Subject, of, throwError } from 'rxjs';
 import { firstValueFrom } from 'rxjs';
 
 import {
+  ALL_JOB_KINDS,
+  CHAPTER_SCOPED_KINDS,
   JobKind,
   JobRegistryService,
   TrackedJob,
@@ -772,30 +774,103 @@ describe('JobRegistryService', () => {
       expect(showsChunkCounts(withCounts('style-baseline'))).toBeTrue();
     });
 
-    // w5: the reserved `whole-book-analysis` kind is GONE (nothing in the client ever tracked one, and the
-    // audit called its vocabulary entry a dead label). Its chunk-count case went with it; the guard that
-    // matters now is that the KIND SET itself carries no member without a producer.
-    it('has no JobKind without a producer: every kind in the union is one some caller can track', () => {
-      const kinds: JobKind[] = ['summary', 'review', 'proofread', 'style-baseline'];
-      // Exhaustiveness by construction: assigning the literal list to JobKind[] and back fails to compile
-      // if a member is added without updating this list, which is the point.
-      expect(kinds.length).toBe(4);
-      expect(kinds).not.toContain('whole-book-analysis' as unknown as JobKind);
-    });
-
     it('WITHHOLDS the pair for review: its denominator is map WINDOWS plus reduce passes, not chapters', () => {
       expect(showsChunkCounts(withCounts('review'))).toBeFalse();
     });
 
     it('withholds the pair from every kind when there is no chunk shape at all (never "0 of 0")', () => {
-      for (const kind of ['proofread', 'summary', 'style-baseline', 'whole-book-analysis', 'review'] as JobKind[]) {
-        expect(showsChunkCounts({ kind, totalChunks: null })).toBeFalse();
+      for (const kind of ALL_JOB_KINDS) {
+        expect(showsChunkCounts({ kind, totalChunks: null })).withContext(kind).toBeFalse();
       }
     });
 
     it('withholds the pair for a job that is not tracked at all', () => {
       expect(showsChunkCounts(null)).toBeFalse();
       expect(showsChunkCounts(undefined)).toBeFalse();
+    });
+  });
+
+  /**
+   * THE JobKind COMPLETENESS ORACLE (wave3-spine fixes c08, finding 33).
+   *
+   * What used to live here was non-falsifiable. It read:
+   *
+   *     const kinds: JobKind[] = ['summary', 'review', 'proofread', 'style-baseline'];
+   *     expect(kinds.length).toBe(4);
+   *     expect(kinds).not.toContain('whole-book-analysis' as unknown as JobKind);
+   *
+   * under a comment claiming "assigning the literal list to JobKind[] ... fails to compile if a member is
+   * added". TypeScript gives no such guarantee: a 4-element literal is a perfectly good `JobKind[]` for a
+   * union of any size, so a fifth member could land and this stayed green. Both assertions were about a
+   * literal constructed two lines above, so neither could ever fail for any reason at all.
+   *
+   * The replacement follows the completeness-oracle rule: ONE SIDE MUST BE DISCOVERED. The discovered side
+   * is {@link ALL_JOB_KINDS}, whose members come from `DEFAULT_TITLES`, a `Record<JobKind, ...>` that
+   * TypeScript really does reject when a member is missing. The hand-authored side is `KIND_DECISIONS`
+   * below: what this suite has decided about each kind. A new member therefore appears in the discovered
+   * list on its own and goes RED here until someone decides it - which is the guarantee the old comment
+   * only asserted.
+   */
+  describe('the JobKind union: every member is served, and every member has been decided', () => {
+    /**
+     * The HAND-AUTHORED side: one row per kind this suite has reasoned about. Deliberately keyed by
+     * `string`, not by `JobKind` - a `Record<JobKind, ...>` here would make TypeScript fill the gap at
+     * compile time and the runtime assertion below would become vacuous again, which is the exact failure
+     * this block exists to undo.
+     */
+    const KIND_DECISIONS: Record<string, { chunkCounts: boolean; chapterScoped: boolean }> = {
+      'summary': { chunkCounts: true, chapterScoped: false },
+      'review': { chunkCounts: false, chapterScoped: false },
+      'proofread': { chunkCounts: true, chapterScoped: true },
+      'style-baseline': { chunkCounts: true, chapterScoped: false },
+    };
+
+    it('has no member this suite has not decided (the discovered set drives the comparison)', () => {
+      // Widened to string[] only so both sides of the comparison have the same static type; the VALUES
+      // still come from the production enumeration, which is the half that has to be discovered.
+      const discovered: string[] = [...ALL_JOB_KINDS].sort();
+      expect(discovered)
+        .withContext(
+          'a JobKind was added or removed: decide its chunk-count and chapter-scope rows in KIND_DECISIONS',
+        )
+        .toEqual(Object.keys(KIND_DECISIONS).sort());
+    });
+
+    it('SERVES every declared kind: each one can be tracked and comes back fully named', () => {
+      configure();
+      for (const kind of ALL_JOB_KINDS) {
+        service.track(kind, 'book-A', `J-${kind}`, { chapterId: 'ch-1' });
+      }
+
+      const tracked = currentJobs();
+      expect(tracked.length).withContext('one tracked job per declared kind').toBe(ALL_JOB_KINDS.length);
+      for (const kind of ALL_JOB_KINDS) {
+        const job = tracked.find((j) => j.kind === kind);
+        expect(job).withContext(`no producer path for kind "${kind}"`).toBeDefined();
+        // A kind with no title / no scope label reaches the Activity Center as a blank row, which is the
+        // "dead vocabulary" defect w5 removed `whole-book-analysis` for.
+        expect((job?.titleHe ?? '').trim()).withContext(`${kind} he title`).not.toBe('');
+        expect((job?.titleEn ?? '').trim()).withContext(`${kind} en title`).not.toBe('');
+        expect((job?.scopeLabel ?? '').trim()).withContext(`${kind} scope label`).not.toBe('');
+      }
+    });
+
+    it('classifies every declared kind the way this suite says it is classified', () => {
+      for (const kind of ALL_JOB_KINDS) {
+        const decided = KIND_DECISIONS[kind];
+        // An undecided kind is already reported by the case above; fail readably here rather than
+        // crashing on a property of undefined, so the two reds name the same cause.
+        if (!decided) {
+          fail(`no KIND_DECISIONS row for "${kind}"`);
+          continue;
+        }
+        expect(showsChunkCounts({ kind, totalChunks: 10 }))
+          .withContext(`${kind}: chunk counts`)
+          .toBe(decided.chunkCounts);
+        expect(CHAPTER_SCOPED_KINDS.has(kind))
+          .withContext(`${kind}: chapter-scoped`)
+          .toBe(decided.chapterScoped);
+      }
     });
   });
 });

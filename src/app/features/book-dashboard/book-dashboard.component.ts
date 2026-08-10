@@ -539,19 +539,31 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
            book-tier-default-card carries no CSS of its own (.card alone styles it, same as the predecessor
            .book-ai-tier-card) - it exists as a spec selector hook to identify this section as the foot-of-page
            tier row, so keep it even though it looks unstyled. -->
+      <!-- COLLAPSE VERDICT for the settings section: NEVER COLLAPSE (wave3-spine fixes c08, finding 25).
+           It was the one section of the nine with no recorded verdict, and it was wrapped. Two reasons,
+           either of which is sufficient:
+             1. It CARRIES A SERVER-DRIVEN WARNING. The tier toggle renders its fallback warning ("this is
+                set to thinking, but the task is actually running on the fast tier") off a flag that
+                arrives on the ai-tier GET with NO user action - so a fold the author performed weeks ago,
+                on a different topic, would hide the only place the app admits the book default is not
+                what will run. The save error and the consent prompt live in here too. That puts this
+                section squarely in the same class as a status row's blocked warning and an open consent
+                prompt, which the collapse directive's own qualifier keeps out of the fold.
+             2. Folding it SIMPLIFIES NOTHING. The directive's brief is "collapsible WHERE IT SIMPLIFIES";
+                the body here is one line (two words and an info affordance), so the fold traded a warning
+                surface for roughly one line of scroll.
+           A stale settings key may still sit in a reader's stored collapse map from before this verdict;
+           it is inert (no section reads it) and the map is best-effort by design, so it is left alone.
+           Pinned by book-dashboard.component.spec.ts, "the never-collapse class", which asserts the whole
+           class against the rendered DOM rather than trusting this comment. -->
       <section class="card book-tier-default-card">
-        <app-collapsible-section
-          sectionId="settings"
+        <h4 class="settings-heading">{{ label('settings') }}</h4>
+        <app-tier-toggle
+          scope="book"
           [bookId]="bookId"
-          [dir]="bookDir"
-          [heading]="label('settings')">
-          <app-tier-toggle
-            scope="book"
-            [bookId]="bookId"
-            [bookLanguage]="bookLanguage"
-            (tierChanged)="onTierChanged()">
-          </app-tier-toggle>
-        </app-collapsible-section>
+          [bookLanguage]="bookLanguage"
+          (tierChanged)="onTierChanged()">
+        </app-tier-toggle>
       </section>
     </div>
   `,

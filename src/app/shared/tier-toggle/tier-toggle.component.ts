@@ -11,7 +11,7 @@ import {
 import { Observable, Subscription } from 'rxjs';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { AiTierReadiness, AiTierValue, BookAiTierDto, BookAiTierTaskDto } from '../../core/models/book';
-import { AiTaskKey, resolveAiTaskKey } from '../../core/utils/ai-task-key';
+import { AiTaskKey, isKnownNoTierTask, resolveAiTaskKey } from '../../core/utils/ai-task-key';
 
 /** Which setting this instance addresses: one task's override, or the book-level default seed. */
 export type TierToggleScope = 'task' | 'book';
@@ -346,23 +346,35 @@ export class TierToggleComponent implements OnChanges, OnDestroy {
    * Wave 3 / w5 - THE Q11-A RESIDUE. Q11 itself is a no-op by decision (the tier control stays at the
    * point of use), but the owner's answer named one thing to fix: for the two passes where the control
    * simply VANISHED (Summarization and Custom, the two analysis types with no user-facing tier), an
-   * unexplained absence is replaced by a disabled state with a reason. So this is now true whenever a task
-   * is bound at all; {@link noTierControl} decides which of the two shapes renders.
+   * unexplained absence is replaced by a disabled state with a reason. {@link noTierControl} decides which
+   * of the two shapes renders.
+   *
+   * A task this client does not RECOGNIZE renders nothing (fixes c08, finding 27). Silence about a pass we
+   * know nothing about is the honest render; the explained-absence shape is reserved for the passes whose
+   * absence of a tier is a fact this client holds.
    */
   get visible(): boolean {
     return this.scope === 'book' || this.taskKey !== null || this.noTierControl;
   }
 
   /**
-   * True for a bound analysis type that has NO tier control at all (Summarization, Custom).
+   * True for a bound value KNOWN to have no tier control at all (`NO_TIER_TASK_VALUES`: Summarization,
+   * Custom, QA).
    *
    * The disabled state this drives asserts nothing the app has not computed: it does not paint a selected
    * tier, because the server reports no tier row for these tasks and inventing one would be exactly the
    * "answer the server did not give" this component's contract forbids. It states the fact that IS known -
    * that this pass has no tier choice - and says so where the control used to disappear.
+   *
+   * SCOPED TO THE KNOWN SET, NOT TO "did not resolve" (fixes c08, finding 27). This used to be
+   * `taskKey === null` with a non-empty task, so a typo, a binding that was never a task, or a seventh
+   * analysis type shipped without an entry in the map all rendered the assertive sentence "The server does
+   * not report a tier for it, so there is nothing to change here" - a claim about the SERVER derived from a
+   * gap in the CLIENT's own table, and one that may be flatly wrong. An unrecognized value now makes the
+   * whole control render nothing, which is the same thing an unbound task does and says nothing untrue.
    */
   get noTierControl(): boolean {
-    return this.scope === 'task' && !!(this.task ?? '').trim() && this.taskKey === null;
+    return this.scope === 'task' && isKnownNoTierTask(this.task);
   }
 
   /** This task's row on the DTO. Null in book scope, or when the server did not report the task. */

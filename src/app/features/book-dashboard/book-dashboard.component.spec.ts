@@ -1015,37 +1015,72 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(ids).toContain('review-findings');   // a major part
       expect(ids).toContain('inputs');            // an element inside stage 2s row group
       expect(ids).toContain('character-register');
-      expect(ids).toContain('settings');
     });
 
     it('DEFAULTS to the current layout: expanded everywhere except the two long content lists', () => {
+      component.reviewState = 'ready';
+      fixture.detectChanges();
       // Expanded by default: nothing the reader sees today is hidden by this change.
-      expect(fixture.debugElement.query(By.css('[data-testid="collapse-body-settings"]'))).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="collapse-body-review-findings"]'))).not.toBeNull();
       // Collapsed by default: the two long lists.
       expect(fixture.debugElement.query(By.css('[data-testid="collapse-body-inputs"]'))).toBeNull();
       expect(fixture.debugElement.query(By.css('[data-testid="collapse-body-character-register"]'))).toBeNull();
     });
 
-    it('NEVER collapses the stage spine: its visibility IS the feature', () => {
-      const spine = fixture.debugElement.query(By.css('app-stage-spine'));
-      expect(spine).not.toBeNull();
-      expect((spine.nativeElement as HTMLElement).closest('app-collapsible-section'))
-        .withContext('the spine is the wave centerpiece; it must not be foldable out of sight')
-        .toBeNull();
+    /**
+     * THE NEVER-COLLAPSE CLASS, asserted against the rendered DOM (wave3-spine fixes c08, findings 25+26).
+     *
+     * `collapse-store.ts` used to claim this class was "enforced by placement ... so no key for them can
+     * ever exist". Nothing enforced it: the review found `settings` wrapped with the tier toggle's
+     * server-driven fallback warning inside the fold, and the key `settings` duly in the stored map. This
+     * spec is what enforcement looks like. It fails in BOTH directions a regression can take:
+     *
+     *  - wrapped in an EXPANDED collapsible -> the element has a `[data-testid^="collapse-body-"]`
+     *    ancestor, and the ancestor assertion goes red;
+     *  - wrapped in a COLLAPSED one -> Ivy leaves the projected nodes unattached, so the element is not in
+     *    the DOM at all and the presence assertion goes red first.
+     *
+     * The `.closest()` target is the collapse BODY rather than `app-collapsible-section`, because the body
+     * is the thing that actually disappears.
+     */
+    it('the never-collapse class: nothing whose visibility IS the warning may sit inside a fold', () => {
+      component.reviewState = 'ready';
+      fixture.detectChanges();
+
+      const neverCollapse: Array<[string, string]> = [
+        ['app-stage-spine', 'the spine is the wave centerpiece; it must not be foldable out of sight'],
+        ['app-book-summary-status-row', 'a blocked / stale / building / consent state must not be foldable'],
+        ['app-book-review-status-row', 'a blocked / stale / building / consent state must not be foldable'],
+        ['app-book-style-baseline-status-row', 'a blocked / stale / building / consent state must not be foldable'],
+        // Finding 25. It renders `fallbackWarning` off a server flag that arrives with NO user action, plus
+        // `saveError` and the consent prompt. Scoped to the foot-of-page card because the OTHER mounted
+        // toggle lives inside the review status row, and a bare `app-tier-toggle` would let that one
+        // satisfy the presence assertion for a settings row that had been folded back out of the DOM.
+        ['.book-tier-default-card app-tier-toggle', 'the book-default tier row carries the server-driven fallback warning'],
+      ];
+
+      for (const [selector, why] of neverCollapse) {
+        const found = fixture.debugElement.queryAll(By.css(selector));
+        expect(found.length).withContext(`${selector} is not rendered at all: ${why}`).toBeGreaterThan(0);
+        for (const one of found) {
+          expect((one.nativeElement as HTMLElement).closest('[data-testid^="collapse-body-"]'))
+            .withContext(`${selector} must not sit inside a collapsible body: ${why}`)
+            .toBeNull();
+        }
+      }
     });
 
-    it('NEVER collapses a build status row, so a blocked/stale/consent state cannot be hidden', () => {
-      for (const selector of [
-        'app-book-summary-status-row',
-        'app-book-review-status-row',
-        'app-book-style-baseline-status-row',
-      ]) {
-        const row = fixture.debugElement.query(By.css(selector));
-        expect(row).withContext(selector).not.toBeNull();
-        expect((row.nativeElement as HTMLElement).closest('app-collapsible-section'))
-          .withContext(`${selector} must not sit inside a collapsible`)
-          .toBeNull();
-      }
+    it('records a verdict for EVERY section it renders, so the set stays complete', () => {
+      component.reviewState = 'ready';
+      fixture.detectChanges();
+      // The collapsible set, DISCOVERED from the DOM rather than restated, against the sections whose
+      // collapse verdict is argued in the component template. A NEW `app-collapsible-section` goes red here
+      // until its verdict is written down beside the others - which is how `settings` should have been
+      // caught. The four profile cards and Ask carry the sixth verdict (the comment above them in the
+      // template) and are absent here only because this fixture's `getProfile` never answers.
+      expect(sectionIds().sort()).toEqual(
+        ['character-register', 'inputs', 'review-findings'].sort(),
+      );
     });
 
     it('persists a fold per book, under a book-scoped key', () => {
@@ -1058,14 +1093,21 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     });
 
     it('restores the remembered fold on the next mount of the same book', () => {
-      localStorage.setItem('pd:dashboard-collapse:book-1', JSON.stringify({ settings: true }));
+      // `review-findings` rather than `settings`: c08 gave settings a never-collapse verdict, so it has no
+      // stored key any more. This one defaults EXPANDED, so a stored `true` proves storage outranks the
+      // default rather than merely agreeing with it.
+      localStorage.setItem('pd:dashboard-collapse:book-1', JSON.stringify({ 'review-findings': true }));
 
       const second = TestBed.createComponent(BookDashboardComponent);
       second.componentInstance.bookId = 'book-1';
       second.componentInstance.bookLanguage = 'he';
+      second.componentInstance.reviewState = 'ready';
       second.detectChanges();
 
-      expect(second.debugElement.query(By.css('[data-testid="collapse-body-settings"]')))
+      expect(second.debugElement.query(By.css('[data-testid="collapse-toggle-review-findings"]')))
+        .withContext('the section must be mounted for this to mean anything')
+        .not.toBeNull();
+      expect(second.debugElement.query(By.css('[data-testid="collapse-body-review-findings"]')))
         .withContext('a section the reader folded stays folded for that book')
         .toBeNull();
       second.destroy();
@@ -1410,10 +1452,16 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
       .toBeNull();
     const exportBtn = fixture.nativeElement.querySelector('[data-testid="dashboard-export-btn"]') as HTMLElement;
     expect(exportBtn.textContent?.trim()).toBe('Export');
+    // c08 finding 25: `.settings-heading` is in this list because the settings heading LEFT the collapsible
+    // when that section took its never-collapse verdict; without it, unwrapping a section would silently
+    // drop its heading out of this i18n sweep.
     const headings = Array.from(
-      fixture.nativeElement.querySelectorAll('app-collapsible-section .cs-title')
+      fixture.nativeElement.querySelectorAll('app-collapsible-section .cs-title, .settings-heading')
     ) as HTMLElement[];
     expect(headings.length).withContext('the collapse headings are localized chrome too').toBeGreaterThan(0);
+    expect(fixture.nativeElement.querySelector('.settings-heading')?.textContent?.trim())
+      .withContext('the unwrapped settings heading is localized chrome too')
+      .toBe('Settings');
     for (const h of headings) {
       expect(HEBREW.test(h.textContent ?? ''))
         .withContext(`English book must not render Hebrew section heading: ${h.textContent}`)
