@@ -1,0 +1,109 @@
+<!-- Wave 3 / w5 (MOVE-1 + MOVE-2): the book-wide writing-style build, on the book dashboard beside the
+     other whole-book builds. Same row anatomy as the briefs and review rows: one status, one action, one
+     consent, one estimate, one activity entry. Hidden until a status is available, so the row never
+     asserts a state the app has not computed. -->
+<div
+  class="style-baseline-row"
+  *ngIf="baselineState !== 'unknown'"
+  [attr.dir]="baselineDir"
+  data-testid="book-style-baseline-row">
+  <div class="sb-line">
+    <span class="sb-title">{{ baselineLabel('title') }}</span>
+
+    <!-- NOT BUILT -->
+    <ng-container *ngIf="baselineState === 'not-built'">
+      <span class="sb-status sb-not-built" data-testid="bsb-not-built">{{ baselineLabel('notBuilt') }}</span>
+      <button
+        type="button"
+        class="pd-btn pd-btn-primary sb-action"
+        data-testid="bsb-build-now"
+        (click)="openBaselineConsent()">
+        {{ baselineLabel('buildNow') }}
+      </button>
+    </ng-container>
+
+    <!-- BUILDING -->
+    <ng-container *ngIf="baselineState === 'building'">
+      <span class="sb-status sb-building" data-testid="bsb-building">
+        {{ baselineLabel('building') }}
+        <ng-container *ngIf="styleBaselineProgressPercent != null"> ({{ styleBaselineProgressPercent }}%)</ng-container>
+      </span>
+      <span class="sb-spinner" aria-hidden="true"></span>
+    </ng-container>
+
+    <!-- READY. It still offers a rebuild: this artifact is derived from chapters the author keeps editing,
+         and a state with no action at all is how the old dashboard ended up needing a bare arrow. -->
+    <ng-container *ngIf="baselineState === 'ready'">
+      <span class="sb-status sb-ready" data-testid="bsb-ready">
+        {{ baselineLabel('coverage') }} {{ baselineCoverage }}
+        <ng-container *ngIf="baselineUpdatedRelative">
+          · {{ baselineLabel('updated') }} {{ baselineUpdatedRelative }}
+        </ng-container>
+      </span>
+      <button
+        type="button"
+        class="pd-btn pd-btn-ghost sb-action"
+        data-testid="bsb-rebuild"
+        (click)="openBaselineConsent()">
+        {{ baselineLabel('rebuild') }}
+      </button>
+    </ng-container>
+
+    <!-- STALE -->
+    <ng-container *ngIf="baselineState === 'stale'">
+      <span class="sb-status sb-stale" data-testid="bsb-stale">
+        {{ baselineLabel('stalePrefix') }} {{ styleBaselineStatus?.staleCount }}
+      </span>
+      <button
+        type="button"
+        class="pd-btn pd-btn-primary sb-action"
+        data-testid="bsb-refresh"
+        (click)="openBaselineConsent()">
+        {{ baselineLabel('refresh') }}
+      </button>
+    </ng-container>
+  </div>
+
+  <!-- What this artifact IS. It appears in no shipped guide, and the old label ("style baseline") named a
+       measurement technique rather than a thing an author has, so the row carries its own explanation. -->
+  <p class="sb-what" [attr.dir]="baselineDir" data-testid="bsb-what">{{ baselineLabel('what') }}</p>
+
+  <!-- Cross-model staleness: it exists but was built with a different model than the one now active. -->
+  <p
+    class="sb-cross-model-warning"
+    *ngIf="baselineBuiltWithDifferentModel"
+    [attr.dir]="baselineDir"
+    data-testid="bsb-cross-model-warning">
+    {{ baselineLabel('crossModelWarning') }}
+  </p>
+
+  <!-- CONSENT prompt: estimate + gate. The build endpoint is NOT called until Confirm. Hidden while a
+       build is in flight so a lingering prompt cannot duplicate it. Never collapsible: an open consent
+       prompt is one of the three things the collapse directive is explicitly forbidden to hide. -->
+  <div class="sb-consent" *ngIf="showBaselineConsent && !styleBaselineBuilding" data-testid="bsb-consent" [attr.dir]="baselineDir">
+    <p class="sb-consent-title">{{ baselineLabel('consentTitle') }}</p>
+    <p class="sb-consent-body">{{ baselineLabel('consentBody') }}</p>
+    <p class="sb-consent-estimate" data-testid="bsb-consent-estimate">{{ baselineConsentEstimate }}</p>
+    <!-- A price with no explanation is not consent: the paid case says WHY there is a cost and that the
+         text leaves the machine. Rendered only when there is actually a figure. -->
+    <p class="sb-consent-paid-note" data-testid="bsb-consent-paid-note" *ngIf="baselineConsentIsPaid">
+      {{ baselineLabel('consentPaidNote') }}
+    </p>
+    <div class="sb-consent-actions">
+      <button
+        type="button"
+        class="pd-btn pd-btn-primary"
+        data-testid="bsb-consent-confirm"
+        (click)="confirmBaselineBuild()">
+        {{ baselineLabel('confirm') }}
+      </button>
+      <button
+        type="button"
+        class="pd-btn pd-btn-ghost"
+        data-testid="bsb-consent-cancel"
+        (click)="cancelBaselineConsent()">
+        {{ baselineLabel('cancel') }}
+      </button>
+    </div>
+  </div>
+</div>

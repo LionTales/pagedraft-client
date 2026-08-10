@@ -1,4 +1,4 @@
-/**
+﻿/**
  * wb3-c01: BookDashboardComponent host spec. Verifies the dashboard renders the relocated book-scoped
  * status rows and wires the summary-terminal -> review-refresh relationship (preserving the Phase-2
  * "a summary terminal also refreshes review status" behavior across the component split).
@@ -28,6 +28,7 @@ import { ChapterSummaryService } from '../../core/services/chapter-summary.servi
 import { CharacterRegisterService } from '../../core/services/character-register.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { AiTierService } from '../../core/services/ai-tier.service';
+import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 
 describe('BookDashboardComponent (wb3-c01 host)', () => {
@@ -63,6 +64,8 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
           }),
         },
         // Transitive deps of the hosted status-row children (NullInjector guard).
+        // w5 (MOVE-1): transitive dep of the relocated writing-style row hosted by the dashboard.
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
         {
           provide: BookSummaryService,
           useValue: {
@@ -127,12 +130,35 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       ],
     }).compileComponents();
 
+    // w5: the collapse directive persists per book in localStorage. Karma shares one origin across the
+    // whole run, so without this a test that folds a section would leak that fold into every later test
+    // and into other suites. Cleared before AND after each case, so the leak cannot travel either way.
+    localStorage.removeItem('pd:dashboard-collapse:book-1');
+
     fixture = TestBed.createComponent(BookDashboardComponent);
     component = fixture.componentInstance;
     component.bookId = 'book-1';
     component.bookLanguage = 'he';
     fixture.detectChanges();
   });
+
+  afterEach(() => {
+    localStorage.removeItem('pd:dashboard-collapse:book-1');
+    localStorage.removeItem('pd:dashboard-collapse:book-2');
+  });
+
+  /**
+   * w5: open a collapsible section by clicking its real header button, the way a reader does. Used by the
+   * cases that assert on content inside a section which DEFAULTS to collapsed (the two long content
+   * lists). Deliberately drives the DOM rather than setting the child's `collapsed` field, so a change
+   * that breaks the toggle breaks these tests too.
+   */
+  function expandSection(sectionId: string): void {
+    const toggle = fixture.debugElement.query(By.css(`[data-testid="collapse-toggle-${sectionId}"]`));
+    expect(toggle).withContext(`no collapse toggle for section "${sectionId}"`).not.toBeNull();
+    (toggle.nativeElement as HTMLButtonElement).click();
+    fixture.detectChanges();
+  }
 
   it('constructs the dashboard and its hosted status-row children without a NullInjector error', () => {
     expect(component).toBeTruthy();
@@ -171,10 +197,20 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
    * anything inside that guard would be absent - which is exactly the case a book with no profile hits.
    */
   it('mounts the book-scoped character register, outside the profile guard, with the book context', () => {
+    // w5: the register is one of the two LONG CONTENT LISTS the collapse directive defaults to collapsed,
+    // so its body is not in the DOM until the section is opened. The card and its toggle still are: what
+    // the directive may hide is content, never the affordance that reveals it.
+    expect(component.profile).toBeNull();
+    expect(fixture.debugElement.query(By.css('.book-dashboard > .character-register-card'))).not.toBeNull();
+    expect(
+      fixture.debugElement.query(By.css('[data-testid="collapse-toggle-character-register"]'))
+    ).not.toBeNull();
+
+    expandSection('character-register');
+
     const registers = fixture.debugElement.queryAll(
       By.css('.book-dashboard > .character-register-card app-character-register')
     );
-    expect(component.profile).toBeNull();
     expect(registers.length).toBe(1);
     expect(registers[0].componentInstance.bookId).toBe('book-1');
     expect(registers[0].componentInstance.bookLanguage).toBe('he');
@@ -420,6 +456,10 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     });
 
     it('binds summaryDerivedRefresh to the chapter-summaries surface', () => {
+      // w5 / Q8-C: the chapter-brief list is now the "inputs to this build" group inside stage 2's row
+      // group, and it is a long content list, so it defaults to collapsed. Open it before asserting the
+      // binding it still carries.
+      expandSection('inputs');
       const cs = fixture.debugElement.query(By.css('app-book-chapter-summaries')).componentInstance;
       expect(cs.refreshSignal).toBe(component.summaryDerivedRefresh);
 
@@ -811,6 +851,168 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(spine.querySelectorAll('[data-state="ready"]').length).toBe(0);
     });
   });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════════
+  // Wave 3 / w5: the dashboard consolidation
+  // ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+  describe('w5 / Q4-A: the bare circular arrow is folded into the formal build row', () => {
+    it('renders NO icon-only refresh control anywhere in the header', () => {
+      expect(fixture.debugElement.query(By.css('.refresh-btn'))).toBeNull();
+      const header = fixture.debugElement.query(By.css('.dashboard-header')).nativeElement as HTMLElement;
+      expect(header.textContent).not.toContain('⟳');
+    });
+
+    it('keeps the Export button in the header action cluster (it must not vanish with the arrow)', () => {
+      const cluster = fixture.debugElement.query(By.css('.dashboard-header .header-actions'));
+      expect(cluster).not.toBeNull();
+      const btn = cluster.query(By.css('[data-testid="dashboard-export-btn"]'));
+      expect(btn).not.toBeNull();
+
+      let exports = 0;
+      component.openExport.subscribe(() => exports++);
+      (btn.nativeElement as HTMLElement).click();
+      expect(exports).withContext('the Export button still raises openExport').toBe(1);
+    });
+
+    it('the empty profile state points at the build row instead of at a removed icon', () => {
+      // The default BookService stub returns NEVER for getProfile, so `profile` is null: this IS the
+      // empty state a book with no profile hits.
+      component.loading = false;
+      fixture.detectChanges();
+      const hint = fixture.debugElement.query(By.css('.empty-hint')).nativeElement as HTMLElement;
+      expect(hint.textContent).not.toContain('⟳');
+      expect(hint.textContent).toContain('תקצירי ספר');
+    });
+  });
+
+  describe('w5 / Q6-A + MOVE-1: the writing-style build lives beside the other whole-book builds', () => {
+    it('mounts the writing-style row inside the SAME status card as the briefs and review rows', () => {
+      const card = fixture.debugElement.query(By.css('.book-status-card'));
+      expect(card.query(By.css('app-book-summary-status-row'))).not.toBeNull();
+      expect(card.query(By.css('app-book-review-status-row'))).not.toBeNull();
+      expect(card.query(By.css('app-book-style-baseline-status-row')))
+        .withContext('the relocated build must sit beside its peers, not in an area of its own')
+        .not.toBeNull();
+    });
+
+    it('forwards the book context to the writing-style row', () => {
+      const row = fixture.debugElement.query(By.css('app-book-style-baseline-status-row')).componentInstance;
+      expect(row.bookId).toBe('book-1');
+      expect(row.bookLanguage).toBe('he');
+    });
+
+    it('passes the retarget focus token through to the row that owns the scroll', () => {
+      component.focusBaselineToken = 3;
+      fixture.detectChanges();
+      const row = fixture.debugElement.query(By.css('app-book-style-baseline-status-row')).componentInstance;
+      expect(row.focusToken).toBe(3);
+    });
+  });
+
+  describe('w5 / Q8-C: the chapter-brief card reads as the inputs to stage 2s build', () => {
+    it('sits INSIDE the briefs row group, after the briefs row, not as a card of its own', () => {
+      const group = fixture.debugElement.query(By.css('.book-status-card [data-testid="inputs-to-this-build"]'));
+      expect(group).withContext('the inputs group belongs to stage 2s row group').not.toBeNull();
+      expect(fixture.debugElement.query(By.css('.book-dashboard > .chapter-summaries-card')))
+        .withContext('the standalone chapter-summaries card is gone')
+        .toBeNull();
+    });
+
+    it('carries the explanation OUTSIDE the fold, so the relationship survives a collapse', () => {
+      const explainer = fixture.debugElement.query(By.css('[data-testid="inputs-to-this-build"] .inputs-explainer'));
+      expect(explainer).not.toBeNull();
+      // Option C's accepted cost: the copy has to carry the whole explanation, so it must name both the
+      // build it feeds and the effect of editing one by hand.
+      expect(explainer.nativeElement.textContent).toContain('תקצירי הספר');
+      expect(explainer.nativeElement.textContent).toContain('עריכה ידנית');
+      // It is outside the collapsible, so folding the list does not fold the explanation away.
+      expect(explainer.nativeElement.closest('.cs-body')).toBeNull();
+    });
+
+    it('names the group "the inputs to this build" in both languages', () => {
+      const headingText = () =>
+        (fixture.debugElement.query(By.css('[data-testid="collapse-toggle-inputs"]')).nativeElement as HTMLElement)
+          .textContent ?? '';
+      expect(headingText()).toContain('הקלט לבנייה הזו');
+
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      expect(headingText()).toContain('The inputs to this build');
+    });
+  });
+
+  describe('w5 / the collapse directive: what folds, what must never fold', () => {
+    /** Every collapsible section the dashboard renders, by its section id. */
+    function sectionIds(): string[] {
+      return fixture.debugElement
+        .queryAll(By.css('app-collapsible-section .cs'))
+        .map((d) => (d.nativeElement as HTMLElement).getAttribute('data-section') ?? '');
+    }
+
+    it('collapses at two levels: a major part (the review findings group) and inner elements', () => {
+      component.reviewState = 'ready';
+      fixture.detectChanges();
+      const ids = sectionIds();
+      expect(ids).toContain('review-findings');   // a major part
+      expect(ids).toContain('inputs');            // an element inside stage 2s row group
+      expect(ids).toContain('character-register');
+      expect(ids).toContain('settings');
+    });
+
+    it('DEFAULTS to the current layout: expanded everywhere except the two long content lists', () => {
+      // Expanded by default: nothing the reader sees today is hidden by this change.
+      expect(fixture.debugElement.query(By.css('[data-testid="collapse-body-settings"]'))).not.toBeNull();
+      // Collapsed by default: the two long lists.
+      expect(fixture.debugElement.query(By.css('[data-testid="collapse-body-inputs"]'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="collapse-body-character-register"]'))).toBeNull();
+    });
+
+    it('NEVER collapses the stage spine: its visibility IS the feature', () => {
+      const spine = fixture.debugElement.query(By.css('app-stage-spine'));
+      expect(spine).not.toBeNull();
+      expect((spine.nativeElement as HTMLElement).closest('app-collapsible-section'))
+        .withContext('the spine is the wave centerpiece; it must not be foldable out of sight')
+        .toBeNull();
+    });
+
+    it('NEVER collapses a build status row, so a blocked/stale/consent state cannot be hidden', () => {
+      for (const selector of [
+        'app-book-summary-status-row',
+        'app-book-review-status-row',
+        'app-book-style-baseline-status-row',
+      ]) {
+        const row = fixture.debugElement.query(By.css(selector));
+        expect(row).withContext(selector).not.toBeNull();
+        expect((row.nativeElement as HTMLElement).closest('app-collapsible-section'))
+          .withContext(`${selector} must not sit inside a collapsible`)
+          .toBeNull();
+      }
+    });
+
+    it('persists a fold per book, under a book-scoped key', () => {
+      expandSection('inputs');
+      expect(fixture.debugElement.query(By.css('[data-testid="collapse-body-inputs"]'))).not.toBeNull();
+
+      const raw = localStorage.getItem('pd:dashboard-collapse:book-1');
+      expect(raw).not.toBeNull();
+      expect(JSON.parse(raw as string)['inputs']).toBeFalse();
+    });
+
+    it('restores the remembered fold on the next mount of the same book', () => {
+      localStorage.setItem('pd:dashboard-collapse:book-1', JSON.stringify({ settings: true }));
+
+      const second = TestBed.createComponent(BookDashboardComponent);
+      second.componentInstance.bookId = 'book-1';
+      second.componentInstance.bookLanguage = 'he';
+      second.detectChanges();
+
+      expect(second.debugElement.query(By.css('[data-testid="collapse-body-settings"]')))
+        .withContext('a section the reader folded stays folded for that book')
+        .toBeNull();
+      second.destroy();
+    });
+  });
 });
 
 /**
@@ -894,6 +1096,8 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
             getById: NEVER,
           }),
         },
+        // w5 (MOVE-1): transitive dep of the relocated writing-style row hosted by the dashboard.
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
         {
           provide: BookSummaryService,
           useValue: {
@@ -1027,6 +1231,7 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
             getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
           }),
         },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,
@@ -1139,8 +1344,23 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
     expect(title.textContent).toContain('Book dashboard');
     expect(HEBREW.test(title.textContent ?? '')).withContext('English book must not render Hebrew chrome').toBeFalse();
 
-    const refresh = fixture.nativeElement.querySelector('.refresh-btn') as HTMLElement;
-    expect(refresh.getAttribute('title')).toBe('Refresh profile');
+    // w5 (Q4-A): the bare circular-arrow refresh button is GONE, so there is no `.refresh-btn` to check a
+    // localized tooltip on. The English-chrome guarantee is now carried by the Export action beside it and
+    // by the collapse headings, which are the header's remaining localized strings.
+    expect(fixture.nativeElement.querySelector('.refresh-btn'))
+      .withContext('the unmetered icon-only whole-book build must not come back')
+      .toBeNull();
+    const exportBtn = fixture.nativeElement.querySelector('[data-testid="dashboard-export-btn"]') as HTMLElement;
+    expect(exportBtn.textContent?.trim()).toBe('Export');
+    const headings = Array.from(
+      fixture.nativeElement.querySelectorAll('app-collapsible-section .cs-title')
+    ) as HTMLElement[];
+    expect(headings.length).withContext('the collapse headings are localized chrome too').toBeGreaterThan(0);
+    for (const h of headings) {
+      expect(HEBREW.test(h.textContent ?? ''))
+        .withContext(`English book must not render Hebrew section heading: ${h.textContent}`)
+        .toBeFalse();
+    }
   });
 
   it('renders a Hebrew book with an rtl container and Hebrew chrome', () => {
@@ -1185,6 +1405,7 @@ describe('BookDashboardComponent threads the book language into its server calls
             getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
           }),
         },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,
@@ -1216,60 +1437,66 @@ describe('BookDashboardComponent threads the book language into its server calls
     component.bookId = 'book-1';
   });
 
-  /** Drive the two real server-calling handlers once each, with a question set so onAsk does not bail. */
-  function driveBothCalls(): void {
-    component.onRefresh();
+  /**
+   * Drive this component's remaining server-calling handler, with a question set so onAsk does not bail.
+   *
+   * w5 (Q4-A): `onRefresh()` used to be driven here too. It was the bare arrow's handler and it is gone;
+   * the refreshProfile call it made is now phase 2 of the Book briefs row's consented build, so the
+   * language-threading guarantee for refreshProfile is asserted in that row's spec
+   * (`book-summary-status-row.component.spec.ts`, describe 'Q4-A'). The property did not weaken, it moved
+   * to the component that now issues the call.
+   */
+  function driveAsk(): void {
     component.askQuestion = 'who is the protagonist?';
     component.onAsk();
   }
 
-  it('sends the English language on BOTH refreshProfile and ask for an English book', () => {
+  it('sends the English language on ask for an English book', () => {
     component.bookLanguage = 'en';
 
-    driveBothCalls();
+    driveAsk();
 
-    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'en');
     expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'en');
   });
 
-  it('sends the Hebrew language on BOTH calls for a Hebrew book', () => {
+  it('sends the Hebrew language on ask for a Hebrew book', () => {
     component.bookLanguage = 'he';
 
-    driveBothCalls();
+    driveAsk();
 
-    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
     expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
   });
 
-  it('falls back to Hebrew on BOTH calls when the book language is null', () => {
+  it('falls back to Hebrew when the book language is null', () => {
     component.bookLanguage = null;
 
-    driveBothCalls();
+    driveAsk();
 
-    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
     expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
   });
 
-  it('falls back to Hebrew on BOTH calls when the book language is blank or whitespace', () => {
+  it('falls back to Hebrew when the book language is blank or whitespace', () => {
     component.bookLanguage = '   ';
 
-    driveBothCalls();
+    driveAsk();
 
-    expect(bookService.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
     expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
   });
 
   it('passes a language argument explicitly rather than relying on the service default', () => {
     component.bookLanguage = 'en';
 
-    driveBothCalls();
+    driveAsk();
 
-    expect(bookService.refreshProfile.calls.mostRecent().args.length)
-      .withContext('refreshProfile must receive the language argument, not fall through to its default')
-      .toBe(2);
     expect(bookService.ask.calls.mostRecent().args.length)
       .withContext('ask must receive the language argument, not fall through to its default')
       .toBe(3);
+  });
+
+  it('w5: this component no longer calls refreshProfile at all (the bare arrow is folded away)', () => {
+    component.bookLanguage = 'en';
+    driveAsk();
+    expect(bookService.refreshProfile).not.toHaveBeenCalled();
   });
 });
 
@@ -1327,6 +1554,7 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
             getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
           }),
         },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,
@@ -1430,56 +1658,11 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
       .toBeTrue();
   });
 
-  it('leaves no refreshing latch raised for a refresh abandoned by the switch (the reset settles it)', () => {
-    component.onRefresh();
-    expect(component.refreshing).withContext('precondition: a he refresh is in flight').toBeTrue();
-
-    switchLanguageTo('en');
-
-    expect(component.refreshing)
-      .withContext('the switch abandons the refresh, so the switch must settle its latch')
-      .toBeFalse();
-    // Proof the button is usable again: a new refresh can start under the new language.
-    component.onRefresh();
-    expect(refreshes.length).toBe(2);
-    expect(bookService.refreshProfile.calls.mostRecent().args).toEqual(['book-1', 'en']);
-  });
-
-  it('a stale refresh response must not settle the CURRENT refresh (next handler ordering)', () => {
-    component.onRefresh();
-    const staleRefresh = refreshes[0]; // issued under 'he'
-
-    switchLanguageTo('en');
-    component.onRefresh(); // a fresh refresh under 'en' is now the one in flight
-    expect(component.refreshing).withContext('precondition: an en refresh is in flight').toBeTrue();
-    expect(refreshes.length).toBe(2);
-
-    staleRefresh.next(profileFor('HebrewGenre'));
-
-    expect(component.profile)
-      .withContext('a profile refreshed in the PREVIOUS language must never populate the card')
-      .toBeNull();
-    expect(component.refreshing)
-      .withContext('the stale response cleared the CURRENT refresh latch: guard must run first')
-      .toBeTrue();
-  });
-
-  it('a stale refresh ERROR must not settle or fail the CURRENT refresh (error handler ordering)', () => {
-    component.onRefresh();
-    const staleRefresh = refreshes[0];
-
-    switchLanguageTo('en');
-    component.onRefresh();
-
-    staleRefresh.error({ message: 'he-side refresh failure' });
-
-    expect(component.error)
-      .withContext('a failure from the abandoned language must not surface as the current error')
-      .toBeNull();
-    expect(component.refreshing)
-      .withContext('the stale error cleared the CURRENT refresh latch: guard must run first')
-      .toBeTrue();
-  });
+  // w5 (Q4-A): four `onRefresh` stale-response tests LIVED HERE. They pinned the abandoned-request
+  // contract for the bare arrow's refreshProfile call, which is no longer issued by this component. The
+  // same contract is asserted on the component that issues it now, the Book briefs row, against the same
+  // (book, language) key (see `book-summary-status-row.component.spec.ts`, describe 'Q4-A'). The
+  // getProfile and ask halves of the contract are untouched and still covered above and below.
 
   it('leaves no asking latch raised for an ask abandoned by the switch, and drops its answer', () => {
     component.askQuestion = 'who is the villain?';
@@ -1628,6 +1811,7 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
             getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
           }),
         },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,
@@ -1712,40 +1896,11 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
       expect(component.loading).toBeFalse();
     });
   });
-
-  describe('onRefresh', () => {
-    it('shows the Hebrew label, never the transport string, on a 500', () => {
-      startIn('he');
-      component.onRefresh();
-
-      refreshes[0].error(transportFailure(`${PROFILE_URL}/refresh`));
-
-      expect(component.error).toBe('שגיאה ברענון הפרופיל');
-      expect(component.error).not.toContain('Http failure');
-      expect(component.refreshing).toBeFalse();
-    });
-
-    it('shows the English label, never the transport string, on a 500', () => {
-      startIn('en');
-      component.onRefresh();
-
-      refreshes[0].error(transportFailure(`${PROFILE_URL}/refresh`));
-
-      expect(component.error).toBe('Could not refresh the profile');
-      expect(component.error).not.toContain('Http failure');
-    });
-
-    it('keeps the label even when the body carries the API error shape', () => {
-      startIn('he');
-      component.onRefresh();
-
-      refreshes[0].error(transportFailure(`${PROFILE_URL}/refresh`, { error: 'No chapters to summarize' }));
-
-      expect(component.error)
-        .withContext('an English server string must not land in a Hebrew card')
-        .toBe('שגיאה ברענון הפרופיל');
-    });
-  });
+  // w5 (Q4-A): `describe('onRefresh')` LIVED HERE. Its three cases pinned that a failed profile refresh
+  // shows a localized label rather than Angular's English transport string. This component no longer
+  // issues that call, and the row that does reports the failure of the profile HALF specifically (so a
+  // succeeded briefs build is not misreported as a total failure), covered in
+  // `book-summary-status-row.component.spec.ts`. The loadProfile and ask cases either side are untouched.
 
   describe('onAsk', () => {
     function ask(): void {

@@ -17,6 +17,7 @@ import { By } from '@angular/platform-browser';
 import { NEVER, Subject, of } from 'rxjs';
 import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
 import { BookSummaryService } from '../../core/services/book-summary.service';
+import { BookService } from '../../core/services/book.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
@@ -49,9 +50,16 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
   // rf-c02: the row publishes its build job to the registry on start. Spy so we can assert track() and so
   // the real (root) registry (with its transitive deps) is not pulled into this component-focused TestBed.
   let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
+  /**
+   * Wave 3 / w5 (Q4-A): the row gained a BookService dependency when the bare arrow's profile refresh was
+   * folded into its build as phase 2. Spied rather than real, so this component-focused TestBed does not
+   * pull in HttpClient - the NullInjector trap this suite has now paid for three separate features.
+   */
+  let bookServiceSpy: jasmine.SpyObj<BookService>;
 
   beforeEach(async () => {
     jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']);
+    bookServiceSpy = jasmine.createSpyObj<BookService>('BookService', { refreshProfile: NEVER });
     await TestBed.configureTestingModule({
       imports: [BookSummaryStatusRowComponent],
       providers: [
@@ -62,6 +70,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
             buildBookSummary: () => NEVER,
           },
         },
+        { provide: BookService, useValue: bookServiceSpy },
         {
           provide: AnalysisProgressService,
           useValue: {
@@ -479,8 +488,14 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
 
     poll$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
 
-    expect(component.bookSummaryBuilding).toBeFalse();
+    // Q4-A: summaryTerminal fires at the BRIEFS terminal (that is what clears the review row's gate), but
+    // the building latch stays raised through phase 2, the folded profile refresh. The BookService stub
+    // returns NEVER, so the row is still in the profile phase here - and must still read as building.
     expect(terminalCount).toBe(1);
+    expect(component.profilePhase).toBeTrue();
+    expect(component.bookSummaryBuilding)
+      .withContext('the row must not read ready while the profile cards below it are still rebuilding')
+      .toBeTrue();
   });
 
   it('c02: emits summaryTerminal when the book-summary build poll ERRORS', () => {
@@ -529,10 +544,140 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
     poll$.next({ status: 'running', message: 'working', estimatedCompletionPercent: 40 });
     expect(events).toEqual([true]);
 
-    // Terminal emit on the open Subject: building flips false and the output emits false.
+    // Q4-A: the briefs terminal hands over to phase 2 (the folded profile refresh) rather than ending the
+    // action, so the latch is STILL true and no false has been emitted yet. This is the property the host
+    // fan-out depends on: `buildingChange(false)` must fire once, after BOTH halves, or the dashboard
+    // reloads its profile card while the profile is still being written.
     poll$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
-    expect(component.bookSummaryBuilding).toBeFalse();
-    expect(events).toEqual([true, false]);
+    expect(component.bookSummaryBuilding).toBeTrue();
+    expect(events).toEqual([true]);
+  });
+
+  // ── Q4-A: the folded profile refresh (what the removed bare arrow used to do on its own) ────────────
+  describe('Q4-A: the bare arrow folded into this row as phase 2', () => {
+    /** Start a build whose briefs half succeeds, leaving the row in the profile phase. */
+    function buildToProfilePhase(language = 'he'): Subject<any> {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+      spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(progressSvc, 'pollBookSummaryProgress').and.returnValue(poll$.asObservable());
+      spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(NEVER);
+      component.bookLanguage = language;
+      component.onBuildBookSummary();
+      poll$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
+      return poll$;
+    }
+
+    it('runs refreshProfile after the briefs half succeeds, threading the CURRENT book language', () => {
+      buildToProfilePhase('en');
+
+      expect(bookServiceSpy.refreshProfile).toHaveBeenCalledWith('book-1', 'en');
+      expect(bookServiceSpy.refreshProfile.calls.mostRecent().args.length)
+        .withContext('the language must be passed explicitly, not left to the service default')
+        .toBe(2);
+    });
+
+    it('falls back to Hebrew when the book language is blank (same rule as the briefs call)', () => {
+      buildToProfilePhase('   ');
+      expect(bookServiceSpy.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+    });
+
+    it('lowers the building latch only once the profile refresh settles', () => {
+      const profile$ = new Subject<any>();
+      bookServiceSpy.refreshProfile.and.returnValue(profile$.asObservable());
+      const events: boolean[] = [];
+      component.buildingChange.subscribe((b) => events.push(b));
+
+      buildToProfilePhase();
+      expect(events).toEqual([true]);
+
+      profile$.next({} as any);
+      expect(component.profilePhase).toBeFalse();
+      expect(component.bookSummaryBuilding).toBeFalse();
+      expect(events).toEqual([true, false]);
+    });
+
+    it('reports a failed profile half specifically, rather than as a failed build', () => {
+      const profile$ = new Subject<any>();
+      bookServiceSpy.refreshProfile.and.returnValue(profile$.asObservable());
+
+      buildToProfilePhase();
+      profile$.error({ status: 500 });
+
+      expect(component.profilePhaseFailed).toBeTrue();
+      expect(component.bookSummaryBuilding).toBeFalse();
+      // The row hides itself while the state is unknown, and the status GET is stubbed to NEVER here, so
+      // seed a status before asserting on rendered output rather than asserting into a hidden row.
+      component.bookSummaryStatus = makeBookSummaryStatus();
+      fixture.detectChanges();
+      const line = query('[data-testid="bsum-profile-failed"]');
+      expect(line).not.toBeNull();
+      expect(line.nativeElement.textContent).toContain('פרופיל');
+    });
+
+    it('does NOT run the profile half when the briefs half fails or is canceled', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      const progressSvc = TestBed.inject(AnalysisProgressService);
+      spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
+      const poll$ = new Subject<any>();
+      spyOn(progressSvc, 'pollBookSummaryProgress').and.returnValue(poll$.asObservable());
+      spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'he';
+      component.onBuildBookSummary();
+      poll$.next({ status: 'failed', message: 'boom', estimatedCompletionPercent: 10 });
+
+      expect(bookServiceSpy.refreshProfile).not.toHaveBeenCalled();
+      expect(component.bookSummaryBuilding).toBeFalse();
+      expect(component.profilePhase).toBeFalse();
+    });
+
+    it('drops a profile response that lands after the book changed under it', () => {
+      const profile$ = new Subject<any>();
+      bookServiceSpy.refreshProfile.and.returnValue(profile$.asObservable());
+      buildToProfilePhase();
+
+      component.bookId = 'book-2';
+      profile$.error({ status: 500 });
+
+      expect(component.profilePhaseFailed)
+        .withContext('a failure belonging to the abandoned book must not surface on the new one')
+        .toBeFalse();
+    });
+
+    it('still runs the profile half on a NO-OP briefs build (fresh briefs say nothing about the profile)', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: null, noOp: true } as any));
+      spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(NEVER);
+
+      component.bookLanguage = 'he';
+      component.onBuildBookSummary();
+
+      expect(bookServiceSpy.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+    });
+
+    it('offers a rebuild in the READY state, because the removed arrow was available in every state', () => {
+      component.bookSummaryStatus = makeBookSummaryStatus();
+      fixture.detectChanges();
+
+      expect(component.bookSummaryState).toBe('ready');
+      expect(query('[data-testid="bsum-rebuild"]')).not.toBeNull();
+    });
+
+    it('states what the one action produces, in both languages, with no em-dash', () => {
+      component.bookSummaryStatus = makeBookSummaryStatus();
+      fixture.detectChanges();
+      const he = query('[data-testid="bsum-builds"]').nativeElement.textContent as string;
+      expect(he).toContain('פרופיל');
+      expect(he).not.toContain('—');
+
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      const en = query('[data-testid="bsum-builds"]').nativeElement.textContent as string;
+      expect(en).toContain('profile cards');
+      expect(en).not.toContain('—');
+    });
   });
 
   it('P2-6: emits buildingChange(true) when reattaching to an in-progress job advertised by status', () => {
@@ -563,7 +708,10 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
     component.bookLanguage = 'he';
     component.onBuildBookSummary();
 
-    expect(component.bookSummaryBuilding).toBeFalse();
+    // Q4-A: a no-op says the BRIEFS are fresh; it says nothing about the profile, so the folded phase 2
+    // still runs and the latch stays raised until it settles (the BookService stub returns NEVER here).
     expect(terminalCount).toBe(1);
+    expect(component.profilePhase).toBeTrue();
+    expect(component.bookSummaryBuilding).toBeTrue();
   });
 });

@@ -19,16 +19,18 @@
       </button>
     </ng-container>
 
-    <!-- BUILDING -->
+    <!-- BUILDING. Q4-A made this a two-phase action, so the wording names the phase in flight rather than
+         claiming "briefs" while the profile half is running. -->
     <ng-container *ngIf="bookSummaryState === 'building'">
       <span class="sb-status sb-building" data-testid="bsum-building">
-        {{ bookSummaryLabel('building') }}
+        {{ profilePhase ? bookSummaryLabel('buildingProfile') : bookSummaryLabel('building') }}
         <ng-container *ngIf="bookSummaryProgressPercent != null"> ({{ bookSummaryProgressPercent }}%)</ng-container>
       </span>
       <span class="sb-spinner" aria-hidden="true"></span>
     </ng-container>
 
-    <!-- READY -->
+    <!-- READY. Q4-A: it now offers a rebuild. The bare arrow was available in EVERY state, including this
+         one, so a ready row with no action at all would have deleted a capability rather than folded it. -->
     <ng-container *ngIf="bookSummaryState === 'ready'">
       <span class="sb-status sb-ready" data-testid="bsum-ready">
         {{ bookSummaryLabel('coverage') }} {{ bookSummaryCoverage }}
@@ -36,6 +38,13 @@
           · {{ bookSummaryLabel('updated') }} {{ bookSummaryUpdatedRelative }}
         </ng-container>
       </span>
+      <button
+        type="button"
+        class="pd-btn pd-btn-ghost sb-action"
+        data-testid="bsum-rebuild"
+        (click)="openBookSummaryConsent()">
+        {{ bookSummaryLabel('rebuild') }}
+      </button>
     </ng-container>
 
     <!-- STALE -->
@@ -52,6 +61,20 @@
       </button>
     </ng-container>
   </div>
+
+  <!-- Q4-A: what this one action produces. The dashboard used to say this in an empty-state hint that
+       told the author to "press ⟳"; the arrow is gone, so the statement lives on the build itself. -->
+  <p class="sb-what" [attr.dir]="bookSummaryDir" data-testid="bsum-builds">{{ bookSummaryLabel('builds') }}</p>
+
+  <!-- The profile half failed while the briefs half succeeded. Reported separately so the row never
+       claims the whole build failed, and never quietly reports success for half of it. -->
+  <p
+    class="sb-cross-model-warning"
+    *ngIf="profilePhaseFailed"
+    [attr.dir]="bookSummaryDir"
+    data-testid="bsum-profile-failed">
+    {{ bookSummaryLabel('profileFailed') }}
+  </p>
 
   <!-- Cross-model staleness warning: summary exists but was built with a different model. -->
   <p

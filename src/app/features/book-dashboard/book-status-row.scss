@@ -72,6 +72,22 @@
   color: var(--pd-improve);
 }
 
+// ── "What this build is" line (w5: the relocated writing-style row explains itself) ────────────
+
+.sb-what {
+  margin: 0;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+}
+
+// ── Paid-tier note (w5: travels with the relocated consent prompt, MOVE-2) ─────────────────────
+
+.sb-consent-paid-note {
+  margin: 0;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+}
+
 // ── Build-outcome banners ─────────────────────────────────────────────────────
 
 .brev-build-failed {

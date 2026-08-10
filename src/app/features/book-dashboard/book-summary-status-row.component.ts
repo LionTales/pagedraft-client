@@ -3,6 +3,7 @@ import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy
 import { Subject, Subscription } from 'rxjs';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { BookSummaryService } from '../../core/services/book-summary.service';
+import { BookService } from '../../core/services/book.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
@@ -17,6 +18,24 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
  * Emits `summaryTerminal` whenever a build reaches a terminal/error state OR a no-op build confirms an
  * already-fresh summary, so the host can refresh the book-review row (a finished summary clears the
  * review's "build summary first" gate and can mark an existing review stale).
+ *
+ * ── Wave 3 / w5, Q4-A: THE BARE ARROW IS FOLDED INTO THIS ROW ────────────────────────────────────────
+ *
+ * The dashboard used to carry a bare circular-arrow icon three lines above this row. It triggered an
+ * expensive whole-book model run with NO status, NO consent, NO cost estimate and NO activity entry, and
+ * it wrote over the same chapter-summary rows this row's build depends on. Q4-A folds it in here: one
+ * action, one status, one consent, one estimate, one activity entry.
+ *
+ * WHAT THE ARROW UNIQUELY DID, and why the fold has to be a TWO-PHASE build rather than a deletion. The
+ * arrow called `refreshProfile`, which is `SummarizeChaptersAsync` followed by `BuildBookProfileAsync`.
+ * This row's build is `BuildBookSummaryAsync`, which fills the STRUCTURED chapter briefs and rolls them
+ * into the book-level brief. Those are different artifacts on the server: `BookProfile` (genre, sub-genre,
+ * audience, literature level, register, synopsis, characters, plot structure - i.e. every card below this
+ * row on the dashboard) has exactly ONE writer in the API, and it is the profile build the arrow ran.
+ * Deleting the arrow without carrying its work would have left the dashboard's own profile cards with no
+ * way to be built at all. So the folded action runs the briefs build FIRST (it reports real progress, and
+ * it produces the freshest input for the profile) and then the profile refresh, under one building latch,
+ * so the row's status stays true for the whole run rather than claiming ready halfway.
  */
 @Component({
   selector: 'app-book-summary-status-row',
@@ -90,6 +109,18 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   /** True while the book-summary consent prompt is open. */
   showBookSummaryConsent = false;
 
+  /**
+   * Q4-A phase 2. True while the folded profile refresh (what the removed bare arrow used to do on its
+   * own) is in flight. The building latch stays raised across it, so the row never reads ready while the
+   * profile cards below it are still being rebuilt; this flag only changes the progress WORDING.
+   */
+  profilePhase = false;
+  /**
+   * The profile half of the folded build failed. Surfaced as its own line rather than swallowed: the
+   * briefs may well have succeeded, so a single generic failure message would misreport which half died.
+   */
+  profilePhaseFailed = false;
+
   /** Stops the active summary progress poll; nulled when no poll is running. */
   private bookSummaryProgressStop$: Subject<void> | null = null;
   /** Active summary-related subscriptions (build POST); cleared on context change / destroy. */
@@ -98,9 +129,12 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   private bookSummaryStatusSub: Subscription | null = null;
   /** Loop guard for summary build: a jobId already driven to terminal here will not reattach. */
   private bookSummaryHandledTerminalJobId: string | null = null;
+  /** The in-flight profile refresh (phase 2 of the folded build); cleared on context change / destroy. */
+  private profileRefreshSub: Subscription | null = null;
 
   constructor(
     private bookSummaryService: BookSummaryService,
+    private bookService: BookService,
     private analysisProgressService: AnalysisProgressService,
     private jobRegistry: JobRegistryService,
     private cdr: ChangeDetectorRef
@@ -129,6 +163,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     this.stopBookSummaryProgress();
     this.bookSummarySub?.unsubscribe();
     this.bookSummaryStatusSub?.unsubscribe();
+    this.profileRefreshSub?.unsubscribe();
     this.bookSummaryHandledTerminalJobId = null;
   }
 
@@ -148,7 +183,10 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
         // Drop a stale response after the user switched books OR languages (summary is per (book, language)).
         if (this.bookId !== bookId || this.summaryLanguage !== lang) return;
         this.bookSummaryStatus = status;
-        if (status.ready && this.bookSummaryBuilding && this.bookSummaryProgressPercent === 100) {
+        // `!profilePhase` is load-bearing since Q4-A: a status read that lands while the folded profile
+        // refresh is still running must NOT lower the latch, or the row would claim ready while the
+        // profile cards below it are mid-rebuild - exactly the half-truth the fold exists to remove.
+        if (status.ready && this.bookSummaryBuilding && !this.profilePhase && this.bookSummaryProgressPercent === 100) {
           this.bookSummaryBuilding = false;
         }
         // Reattach to an in-progress build (started in another tab/session).
@@ -183,7 +221,10 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     this.stopBookSummaryProgress();
     this.bookSummarySub?.unsubscribe();
     this.bookSummaryStatusSub?.unsubscribe();
+    this.profileRefreshSub?.unsubscribe();
     this.bookSummaryBuilding = false;
+    this.profilePhase = false;
+    this.profilePhaseFailed = false;
     this.bookSummaryProgressPercent = null;
     this.bookSummaryProgressMessage = '';
     this.bookSummaryStatus = null;
@@ -192,7 +233,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
 
   // ── Build orchestration ─────────────────────────────────────────────────────
 
-  /** Consent confirmed: start (or no-op) the book summary build. */
+  /** Consent confirmed: start (or no-op) the book summary build, then the folded profile refresh. */
   onBuildBookSummary(): void {
     if (!this.bookId) return;
     if (this.bookSummaryBuilding) return;
@@ -200,6 +241,8 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     const language = this.summaryLanguage;
     this.stopBookSummaryProgress();
     this.bookSummaryBuilding = true;
+    this.profilePhase = false;
+    this.profilePhaseFailed = false;
     this.bookSummaryProgressPercent = null;
     this.bookSummaryProgressMessage = '';
     this.bookSummaryHandledTerminalJobId = null;
@@ -211,12 +254,14 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
         // Drop a stale response after the user switched books OR languages (summary is per (book, language)).
         if (this.bookId !== bookId || this.summaryLanguage !== language) return;
         if (resp.noOp || !resp.jobId) {
-          this.bookSummaryBuilding = false;
           this.loadBookSummaryStatus();
           // An already-fresh summary (no-op) still means briefs are present: tell the host so the
           // book-review row clears its "build summary first" gate (and shows STALE if a review exists).
           this.summaryTerminal.emit();
-          this.cdr.detectChanges();
+          // Q4-A: a no-op says the BRIEFS are fresh; it says nothing about the profile, which is a
+          // separate artifact with its own writer. The author asked for a build, so phase 2 still runs -
+          // this is the case that used to require pressing the bare arrow separately.
+          this.startProfilePhase(bookId, language);
           return;
         }
         this.pollBookSummaryBuild(bookId, resp.jobId, language);
@@ -224,7 +269,42 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       error: () => {
         if (this.bookId !== bookId || this.summaryLanguage !== language) return;
         this.bookSummaryBuilding = false;
+        this.profilePhase = false;
         this.bookSummaryProgressMessage = '';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  /**
+   * Q4-A phase 2: the work the removed bare arrow used to do. Re-summarizes any stale chapter into the
+   * flat summary surface and rebuilds the `BookProfile` that every card below this row renders from.
+   *
+   * Runs ONLY after the briefs half reached a usable state (succeeded, or a no-op that confirmed fresh
+   * briefs). A failed or canceled briefs build does not fall through into a second expensive run.
+   *
+   * The building latch is released HERE, at the end of the whole folded action, which is what makes the
+   * host's completion fan-out (`buildingChange` false edge -> reload the profile card + the
+   * summary-derived surfaces) fire once, after both halves, instead of halfway through.
+   */
+  private startProfilePhase(bookId: string, language: string): void {
+    this.profilePhase = true;
+    this.profilePhaseFailed = false;
+    this.bookSummaryProgressPercent = null;
+    this.cdr.detectChanges();
+    this.profileRefreshSub?.unsubscribe();
+    this.profileRefreshSub = this.bookService.refreshProfile(bookId, language).subscribe({
+      next: () => {
+        if (this.bookId !== bookId || this.summaryLanguage !== language) return;
+        this.profilePhase = false;
+        this.bookSummaryBuilding = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        if (this.bookId !== bookId || this.summaryLanguage !== language) return;
+        this.profilePhase = false;
+        this.profilePhaseFailed = true;
+        this.bookSummaryBuilding = false;
         this.cdr.detectChanges();
       },
     });
@@ -254,19 +334,26 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
                 ? Math.max(0, Math.min(100, p.estimatedCompletionPercent))
                 : this.bookSummaryProgressPercent);
         if (status === 'succeeded' || status === 'failed' || status === 'canceled') {
-          this.bookSummaryBuilding = false;
           this.stopBookSummaryProgress();
           this.bookSummaryHandledTerminalJobId = jobId;
           this.loadBookSummaryStatus();
           // A finished summary build makes briefs present (clearing the review row's "build summary first"
           // gate) and any existing review staleVsBriefs: tell the host so the review row reflects both.
           this.summaryTerminal.emit();
+          if (status === 'succeeded') {
+            // Q4-A phase 2 keeps the latch raised; it lowers it when the profile refresh settles.
+            this.startProfilePhase(bookId, lang);
+          } else {
+            this.bookSummaryBuilding = false;
+            this.profilePhase = false;
+          }
         }
         this.cdr.detectChanges();
       },
       error: () => {
         if (this.bookId !== bookId || this.summaryLanguage !== lang) return;
         this.bookSummaryBuilding = false;
+        this.profilePhase = false;
         this.stopBookSummaryProgress();
         this.bookSummaryHandledTerminalJobId = jobId;
         this.loadBookSummaryStatus();
@@ -328,14 +415,19 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       buildNow: 'בנה עכשיו',
       building: 'בונה תקצירים...',
       refresh: 'רענן',
+      rebuild: 'בנה מחדש',
       coverage: 'כיסוי',
       updated: 'עודכן',
       stalePrefix: 'פרקים שהשתנו:',
       consentTitle: 'בניית תקצירי ספר',
-      consentBody: 'פעולה זו תנתח את פרקי הספר כדי לבנות תקצירים לכל פרק.',
+      consentBody: 'פעולה זו תנתח את פרקי הספר כדי לבנות תקציר לכל פרק, תקציר ברמת הספר, ואת כרטיסי הפרופיל שבהמשך הדף (סקירה, תקציר, דמויות ומבנה עלילה).',
       confirm: 'אישור',
       cancel: 'ביטול',
       crossModelWarning: 'התקצירים נבנו עם מודל אחר מהפעיל כעת. רעננו אותם לקבלת תוצאות מדויקות.',
+      // Q4-A: the folded whole-book build. DRAFT Hebrew - w8 native sweep.
+      builds: 'הבנייה הזו מייצרת תקציר לכל פרק, תקציר ברמת הספר, ואת כרטיסי הפרופיל שבהמשך הדף.',
+      buildingProfile: 'בונה את פרופיל הספר...',
+      profileFailed: 'התקצירים נבנו, אך בניית פרופיל הספר נכשלה. אפשר לנסות שוב.',
     };
     const en: Record<string, string> = {
       title: 'Book briefs',
@@ -343,14 +435,18 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       buildNow: 'Build now',
       building: 'Building briefs...',
       refresh: 'Refresh',
+      rebuild: 'Rebuild',
       coverage: 'Coverage',
       updated: 'Updated',
       stalePrefix: 'Chapters changed:',
       consentTitle: 'Build book briefs',
-      consentBody: 'This will analyze the book chapters to build a brief summary for each chapter.',
+      consentBody: 'This will analyze the book chapters to build a brief for each chapter, one book-level brief, and the profile cards further down this page (overview, synopsis, characters and plot structure).',
       confirm: 'Confirm',
       cancel: 'Cancel',
       crossModelWarning: 'The briefs were built with a different model than the one now active. Refresh them for accurate results.',
+      builds: 'This build produces a brief for each chapter, one book-level brief, and the profile cards further down this page.',
+      buildingProfile: 'Building the book profile...',
+      profileFailed: 'The briefs were built, but the book profile build failed. You can run it again.',
     };
     const map = lang === 'he' ? he : en;
     return map[key] ?? key;
