@@ -22,10 +22,11 @@ import { BehaviorSubject } from 'rxjs';
 import { provideRouter } from '@angular/router';
 
 import { ActivityCenterComponent, LABELS_HE, LABELS_EN } from './activity-center.component';
-import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { ALL_JOB_KINDS, JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
+import { ANALYSIS_TYPE_LABELS } from '../../core/models/analysis';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -486,9 +487,39 @@ describe('ActivityCenterComponent (rf-f01)', () => {
     });
 
     it('gives every analysis type sharing the proofread kind its own glyph', () => {
-      const types = ['Proofread', 'LineEdit', 'LinguisticAnalysis', 'LiteraryAnalysis', 'Summarization', 'Custom'];
+      // f03 (nit 60): the type list is DISCOVERED from ANALYSIS_TYPE_LABELS.he - the same mechanical
+      // source titleForJob (job-registry.service.ts) already keys off - rather than restated here by
+      // hand. A hand-written array would keep passing forever even if a seventh analysis type shipped
+      // with no icon entry, because it would simply never be asked about. Keying off the real source
+      // means a new type is included automatically and this test goes red the moment it has no glyph
+      // of its own (see the ANALYSIS_TYPE_ICONS fallback test below for what "no glyph of its own" means
+      // in practice: it silently reuses the proofread kind's glyph, which is exactly the collision this
+      // guard exists to catch).
+      const types = Object.keys(ANALYSIS_TYPE_LABELS.he);
       const icons = types.map((analysisType) => component.kindIcon({ kind: 'proofread', analysisType }));
       expect(new Set(icons).size).withContext('one glyph per type, none shared').toBe(types.length);
+    });
+
+    it('assigns no glyph collisions across whole-book job kinds and analysis types combined', () => {
+      // f03 (nit 61): the test above only compares the six analysis types WITH EACH OTHER, which is why
+      // style-baseline (a job KIND) was free to reuse LinguisticAnalysis's glyph (a job TYPE) undetected
+      // - a style-baseline build and an in-flight Linguistic chapter run looked identical in the panel.
+      // This widens the same assertion to the full combined set actually rendered in the Activity Center.
+      //
+      // 'proofread' is excluded from the kind side on purpose, not an oversight: kindIcon() resolves the
+      // analysisType first and only falls back to the kind glyph when analysisType is absent/unknown, so
+      // the bare 'proofread' kind glyph is BY CONSTRUCTION the same glyph as the 'Proofread' analysis
+      // type (both mean "proofread"). Comparing it against itself would make this test permanently
+      // fail on a deliberate identity rather than catch an accidental one.
+      const wholeBookKinds = ALL_JOB_KINDS.filter((kind) => kind !== 'proofread');
+      const kindIcons = wholeBookKinds.map((kind) => component.kindIcon({ kind, analysisType: undefined }));
+      const typeIcons = Object.keys(ANALYSIS_TYPE_LABELS.he)
+        .map((analysisType) => component.kindIcon({ kind: 'proofread', analysisType }));
+
+      const combined = [...kindIcons, ...typeIcons];
+      expect(new Set(combined).size)
+        .withContext('one glyph per kind/type across the combined set, none shared')
+        .toBe(combined.length);
     });
 
     it('falls back to the KIND glyph for an unknown or absent analysis type', () => {

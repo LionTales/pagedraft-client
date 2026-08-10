@@ -64,7 +64,11 @@ const KIND_ICONS: Record<JobKind, string> = {
   summary:             '📋',
   review:              '🔍',
   proofread:           '✏️',
-  'style-baseline':    '📐',
+  // f03: was 📐, the same glyph ANALYSIS_TYPE_ICONS gives LinguisticAnalysis below - a style-baseline
+  // build and an in-flight Linguistic chapter run rendered visually identical. Palette reads as "style"
+  // without colliding with anything else in this file's combined glyph set (see the spec's combined
+  // kind+type uniqueness test).
+  'style-baseline':    '🎨',
 };
 
 /**
