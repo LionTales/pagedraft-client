@@ -1,11 +1,27 @@
-<!-- Book summary status row (wb1-f01, relocated wb3-c01). Hidden until a status is available. -->
+<!-- Book summary status row (wb1-f01, relocated wb3-c01). Hidden until a status is available, EXCEPT when
+     the status read failed: since Q4-A this row is the only path to the whole build ceremony (briefs AND
+     book profile), so a read failure that made it vanish left the book with no way to be built at all.
+     c04 renders the failure and a retry in the status's place instead. -->
 <div
   class="style-baseline-row"
-  *ngIf="bookSummaryState !== 'unknown'"
+  *ngIf="bookSummaryState !== 'unknown' || showStatusReadError"
   [attr.dir]="bookSummaryDir"
   data-testid="book-summary-row">
   <div class="sb-line">
     <span class="sb-title">{{ bookSummaryLabel('title') }}</span>
+
+    <!-- STATUS READ FAILED. Says so, and offers the read again; every other branch below is keyed on a
+         status this row does not have. -->
+    <ng-container *ngIf="showStatusReadError">
+      <span class="sb-status sb-error" data-testid="bsum-status-error">{{ bookSummaryLabel('statusError') }}</span>
+      <button
+        type="button"
+        class="pd-btn pd-btn-ghost sb-action"
+        data-testid="bsum-status-retry"
+        (click)="loadBookSummaryStatus()">
+        {{ bookSummaryLabel('retry') }}
+      </button>
+    </ng-container>
 
     <!-- NOT BUILT. The build is DISABLED WITH ITS REASON on a book with no chapters, which is the same
          precondition the stage spine above renders as `blocked` by Import. It stays visible and keeps its
@@ -78,7 +94,11 @@
 
   <!-- Q4-A: what this one action produces. The dashboard used to say this in an empty-state hint that
        told the author to "press ⟳"; the arrow is gone, so the statement lives on the build itself. -->
-  <p class="sb-what" [attr.dir]="bookSummaryDir" data-testid="bsum-builds">{{ bookSummaryLabel('builds') }}</p>
+  <p
+    class="sb-what"
+    *ngIf="!showStatusReadError"
+    [attr.dir]="bookSummaryDir"
+    data-testid="bsum-builds">{{ bookSummaryLabel('builds') }}</p>
 
   <!-- The profile half failed while the briefs half succeeded. Reported separately so the row never
        claims the whole build failed, and never quietly reports success for half of it. -->

@@ -14,10 +14,16 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { Component, SimpleChange } from '@angular/core';
 import { By } from '@angular/platform-browser';
-import { NEVER, Subject, of } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
+import { distinctUntilChanged, map } from 'rxjs/operators';
 import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
 import { BookSummaryService } from '../../core/services/book-summary.service';
-import { BookService } from '../../core/services/book.service';
+import {
+  BookProfileContinuationService,
+  ProfileContinuationOutcome,
+  ProfileContinuationRequest,
+  ProfileContinuationState,
+} from '../../core/services/book-profile-continuation.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
@@ -71,6 +77,54 @@ class StatusAboveRowHostComponent {
   }
 }
 
+/**
+ * c04. A controllable stand-in for the shared profile continuation.
+ *
+ * The row is ONE of eight arrival paths and no longer owns the refresh, so what this spec can assert about
+ * it is exactly two things: what it REPORTS to the continuation, and how it renders the continuation's
+ * state - including a refresh some other arrival started. The gate itself (which arrivals earn a refresh,
+ * and why one completion cannot pay for two) belongs to the service and is proven in its own spec against
+ * the real thing.
+ *
+ * Every arrival's outcome is a Subject held OPEN, so the in-flight window is real: a synchronous `of()`
+ * would settle the row before any assertion could observe the phase it is supposed to hold.
+ */
+class ProfileContinuationFake {
+  /** Every arrival this row reported, in order. */
+  readonly arrivals: ProfileContinuationRequest[] = [];
+  private readonly outcomes: Subject<ProfileContinuationOutcome>[] = [];
+  private readonly states = new BehaviorSubject<ReadonlyMap<string, ProfileContinuationState>>(new Map());
+
+  ensureAfterBriefs(request: ProfileContinuationRequest): Observable<ProfileContinuationOutcome> {
+    this.arrivals.push(request);
+    const out = new Subject<ProfileContinuationOutcome>();
+    this.outcomes.push(out);
+    this.setState(request.bookId ?? '', 'running');
+    return out.asObservable();
+  }
+
+  stateFor$(bookId: string | null | undefined): Observable<ProfileContinuationState> {
+    const id = (bookId ?? '').trim();
+    return this.states.pipe(map(s => (id ? s.get(id) ?? 'idle' : 'idle')), distinctUntilChanged());
+  }
+
+  /** Answer an arrival (the latest by default), moving the shared state exactly as the real service does. */
+  settle(outcome: ProfileContinuationOutcome, index = this.outcomes.length - 1): void {
+    const bookId = this.arrivals[index].bookId ?? '';
+    this.setState(bookId, outcome === 'failed' ? 'failed' : 'idle');
+    this.outcomes[index].next(outcome);
+    this.outcomes[index].complete();
+  }
+
+  /** Drive the shared state directly, i.e. a refresh some OTHER arrival path started for this book. */
+  setState(bookId: string, state: ProfileContinuationState): void {
+    const next = new Map(this.states.value);
+    if (state === 'idle') next.delete(bookId);
+    else next.set(bookId, state);
+    this.states.next(next);
+  }
+}
+
 describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
   let component: BookSummaryStatusRowComponent;
   let fixture: ComponentFixture<BookSummaryStatusRowComponent>;
@@ -78,15 +132,16 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
   // the real (root) registry (with its transitive deps) is not pulled into this component-focused TestBed.
   let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
   /**
-   * Wave 3 / w5 (Q4-A): the row gained a BookService dependency when the bare arrow's profile refresh was
-   * folded into its build as phase 2. Spied rather than real, so this component-focused TestBed does not
-   * pull in HttpClient - the NullInjector trap this suite has now paid for three separate features.
+   * Wave 3 / w5 (Q4-A) gave this row the profile refresh as phase 2 of its build; c04 moved the refresh
+   * itself into the shared continuation, so what the row depends on now is that service. Faked rather than
+   * real, so this component-focused TestBed does not pull in HttpClient or the job registry - the
+   * NullInjector trap this suite has now paid for three separate features.
    */
-  let bookServiceSpy: jasmine.SpyObj<BookService>;
+  let continuation: ProfileContinuationFake;
 
   beforeEach(async () => {
     jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']);
-    bookServiceSpy = jasmine.createSpyObj<BookService>('BookService', { refreshProfile: NEVER });
+    continuation = new ProfileContinuationFake();
     await TestBed.configureTestingModule({
       imports: [BookSummaryStatusRowComponent],
       providers: [
@@ -97,7 +152,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
             buildBookSummary: () => NEVER,
           },
         },
-        { provide: BookService, useValue: bookServiceSpy },
+        { provide: BookProfileContinuationService, useValue: continuation },
         {
           provide: AnalysisProgressService,
           useValue: {
@@ -596,41 +651,56 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
       return poll$;
     }
 
-    it('runs refreshProfile after the briefs half succeeds, threading the CURRENT book language', () => {
+    it('reports the succeeded briefs build to the shared continuation, with its jobId and language', () => {
       buildToProfilePhase('en');
 
-      expect(bookServiceSpy.refreshProfile).toHaveBeenCalledWith('book-1', 'en');
-      expect(bookServiceSpy.refreshProfile.calls.mostRecent().args.length)
-        .withContext('the language must be passed explicitly, not left to the service default')
-        .toBe(2);
+      expect(continuation.arrivals.length).toBe(1);
+      expect(continuation.arrivals[0]).toEqual({
+        bookId: 'book-1',
+        language: 'en',
+        reason: 'briefs-succeeded',
+        // c04: the jobId is what collapses this report and the job registry's independent observation of
+        // the SAME terminal into one refresh. Without it the registry watch - which is what covers every
+        // path where this row is not mounted - would pay for a second whole-book profile build.
+        briefsJobId: 'job-1',
+      });
     });
 
     it('falls back to Hebrew when the book language is blank (same rule as the briefs call)', () => {
       buildToProfilePhase('   ');
-      expect(bookServiceSpy.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+      expect(continuation.arrivals[0].language).toBe('he');
     });
 
     it('lowers the building latch only once the profile refresh settles', () => {
-      const profile$ = new Subject<any>();
-      bookServiceSpy.refreshProfile.and.returnValue(profile$.asObservable());
       const events: boolean[] = [];
       component.buildingChange.subscribe((b) => events.push(b));
 
       buildToProfilePhase();
       expect(events).toEqual([true]);
 
-      profile$.next({} as any);
+      continuation.settle('built');
       expect(component.profilePhase).toBeFalse();
       expect(component.bookSummaryBuilding).toBeFalse();
       expect(events).toEqual([true, false]);
     });
 
-    it('reports a failed profile half specifically, rather than as a failed build', () => {
-      const profile$ = new Subject<any>();
-      bookServiceSpy.refreshProfile.and.returnValue(profile$.asObservable());
+    it('settles the same way when the gate SKIPPED the refresh (the same completion already ran it)', () => {
+      const events: boolean[] = [];
+      component.buildingChange.subscribe((b) => events.push(b));
 
       buildToProfilePhase();
-      profile$.error({ status: 500 });
+      continuation.settle('skipped');
+
+      expect(component.profilePhase).toBeFalse();
+      expect(component.profilePhaseFailed)
+        .withContext('a refusal by the gate is not a failure - the profile is current either way')
+        .toBeFalse();
+      expect(events).toEqual([true, false]);
+    });
+
+    it('reports a failed profile half specifically, rather than as a failed build', () => {
+      buildToProfilePhase();
+      continuation.settle('failed');
 
       expect(component.profilePhaseFailed).toBeTrue();
       expect(component.bookSummaryBuilding).toBeFalse();
@@ -655,25 +725,23 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
       component.onBuildBookSummary();
       poll$.next({ status: 'failed', message: 'boom', estimatedCompletionPercent: 10 });
 
-      expect(bookServiceSpy.refreshProfile).not.toHaveBeenCalled();
+      expect(continuation.arrivals).toEqual([]);
       expect(component.bookSummaryBuilding).toBeFalse();
       expect(component.profilePhase).toBeFalse();
     });
 
-    it('drops a profile response that lands after the book changed under it', () => {
-      const profile$ = new Subject<any>();
-      bookServiceSpy.refreshProfile.and.returnValue(profile$.asObservable());
+    it('drops a profile outcome that lands after the book changed under it', () => {
       buildToProfilePhase();
 
       component.bookId = 'book-2';
-      profile$.error({ status: 500 });
+      continuation.settle('failed');
 
       expect(component.profilePhaseFailed)
         .withContext('a failure belonging to the abandoned book must not surface on the new one')
         .toBeFalse();
     });
 
-    it('still runs the profile half on a NO-OP briefs build (fresh briefs say nothing about the profile)', () => {
+    it('still arrives at the continuation on a NO-OP briefs build, as a USER-REQUESTED build', () => {
       const summarySvc = TestBed.inject(BookSummaryService);
       spyOn(summarySvc, 'buildBookSummary').and.returnValue(of({ jobId: null, noOp: true } as any));
       spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(NEVER);
@@ -681,7 +749,49 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
       component.bookLanguage = 'he';
       component.onBuildBookSummary();
 
-      expect(bookServiceSpy.refreshProfile).toHaveBeenCalledWith('book-1', 'he');
+      expect(continuation.arrivals).toEqual([
+        // Not `briefs-already-fresh`: the author pressed the action and confirmed a consent prompt that
+        // names the profile cards, and this is the ONLY way to rebuild a profile whose inputs did not
+        // change. There is no jobId to key on because nothing was built.
+        { bookId: 'book-1', language: 'he', reason: 'user-requested', briefsJobId: null },
+      ]);
+    });
+
+    /**
+     * c04 / finding 6, the half this row cannot start: the continuation runs for THIS book but some other
+     * arrival path started it (the import handoff card's build finishing, a build reattached by the job
+     * registry after a reload). The row must not read READY while the profile cards below it are being
+     * rewritten, and the dashboard's completion fan-out hangs off the same latch.
+     */
+    it('renders a continuation it did not start, and settles when that one finishes', () => {
+      component.bookLanguage = 'he';
+      component.ngOnChanges({ bookId: new SimpleChange(null, 'book-1', true) });
+      component.bookSummaryStatus = makeBookSummaryStatus();
+      const events: boolean[] = [];
+      component.buildingChange.subscribe((b) => events.push(b));
+
+      continuation.setState('book-1', 'running');
+
+      expect(component.profilePhase).toBeTrue();
+      expect(component.bookSummaryState)
+        .withContext('a profile build running for this book is this row\'s ceremony, whoever started it')
+        .toBe('building');
+      expect(events).toEqual([true]);
+
+      continuation.setState('book-1', 'idle');
+      expect(component.profilePhase).toBeFalse();
+      expect(component.bookSummaryBuilding).toBeFalse();
+      expect(events).toEqual([true, false]);
+    });
+
+    it('ignores a continuation running for a DIFFERENT book', () => {
+      component.bookLanguage = 'he';
+      component.ngOnChanges({ bookId: new SimpleChange(null, 'book-1', true) });
+
+      continuation.setState('book-2', 'running');
+
+      expect(component.profilePhase).toBeFalse();
+      expect(component.bookSummaryBuilding).toBeFalse();
     });
 
     it('offers a rebuild in the READY state, because the removed arrow was available in every state', () => {
@@ -704,6 +814,147 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
       const en = query('[data-testid="bsum-builds"]').nativeElement.textContent as string;
       expect(en).toContain('profile cards');
       expect(en).not.toContain('—');
+    });
+  });
+
+  /**
+   * c04 / finding 23. The status GET was swallowed, and because the row's `*ngIf` keys on the derived state
+   * being anything but 'unknown', the row then rendered NOTHING. Since Q4-A folded the bare arrow into it,
+   * this row is the ONLY path to the whole build ceremony, so a silent disappearance left the author with
+   * no way to build briefs OR the book profile until they reloaded the page.
+   */
+  describe('c04: a failed status read is visible and retryable, not silent', () => {
+    it('renders an error and a retry instead of vanishing when the status GET fails', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(throwError(() => ({ status: 500 })));
+
+      component.loadBookSummaryStatus();
+      fixture.detectChanges();
+
+      expect(component.bookSummaryState)
+        .withContext('the row still knows nothing about the briefs - that is exactly what it must say')
+        .toBe('unknown');
+      expect(query('[data-testid="book-summary-row"]'))
+        .withContext('the row must not disappear: it is the only path to the build')
+        .not.toBeNull();
+      expect(query('[data-testid="bsum-status-error"]')).not.toBeNull();
+      expect(query('[data-testid="bsum-status-retry"]')).not.toBeNull();
+      // It must not describe briefs it could not read.
+      expect(query('[data-testid="bsum-ready"]')).toBeNull();
+      expect(query('[data-testid="bsum-not-built"]')).toBeNull();
+    });
+
+    it('says it in the book language, with no em-dash', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(throwError(() => ({ status: 500 })));
+
+      component.loadBookSummaryStatus();
+      fixture.detectChanges();
+      expect(query('[data-testid="bsum-status-error"]'))
+        .withContext('the failure must be rendered before it can be read in either language')
+        .not.toBeNull();
+      const he = query('[data-testid="bsum-status-error"]').nativeElement.textContent as string;
+      expect(he).toContain('תקצירי הספר');
+      expect(he).not.toContain('—');
+      expect(query('[data-testid="bsum-status-retry"]').nativeElement.textContent).toContain('נסו שוב');
+
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      const en = query('[data-testid="bsum-status-error"]').nativeElement.textContent as string;
+      expect(en).toContain('could not read');
+      expect(en).not.toContain('—');
+      expect(query('[data-testid="bsum-status-retry"]').nativeElement.textContent).toContain('Try again');
+    });
+
+    it('the retry re-issues the read, and a second failure keeps the error up', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      // Held OPEN across assertions so the retry's in-flight window is real: the error latch must be
+      // cleared on the way in and re-raised only by the new answer, never left over from the old one.
+      const first$ = new Subject<BookSummaryStatusDto>();
+      const second$ = new Subject<BookSummaryStatusDto>();
+      const getSpy = spyOn(summarySvc, 'getBookSummaryStatus').and.returnValues(
+        first$.asObservable(), second$.asObservable(),
+      );
+
+      component.loadBookSummaryStatus();
+      first$.error({ status: 500 });
+      fixture.detectChanges();
+      expect(component.bookSummaryStatusError).toBeTrue();
+
+      expect(query('[data-testid="bsum-status-retry"]'))
+        .withContext('there must be a retry to press')
+        .not.toBeNull();
+      query('[data-testid="bsum-status-retry"]').nativeElement.click();
+      expect(getSpy).toHaveBeenCalledTimes(2);
+      expect(component.bookSummaryStatusError)
+        .withContext('the retry is in flight: the previous failure must not still be on screen')
+        .toBeFalse();
+
+      second$.error({ status: 500 });
+      fixture.detectChanges();
+      expect(component.bookSummaryStatusError).toBeTrue();
+      expect(query('[data-testid="bsum-status-error"]')).not.toBeNull();
+    });
+
+    it('a successful retry restores the real row and its build action', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      const first$ = new Subject<BookSummaryStatusDto>();
+      const second$ = new Subject<BookSummaryStatusDto>();
+      spyOn(summarySvc, 'getBookSummaryStatus').and.returnValues(first$.asObservable(), second$.asObservable());
+
+      component.loadBookSummaryStatus();
+      first$.error({ status: 500 });
+      fixture.detectChanges();
+
+      expect(query('[data-testid="bsum-status-retry"]'))
+        .withContext('there must be a retry to press')
+        .not.toBeNull();
+      query('[data-testid="bsum-status-retry"]').nativeElement.click();
+      second$.next(makeBookSummaryStatus({ hasSummary: false, ready: false, builtChapters: 0 }));
+      fixture.detectChanges();
+
+      expect(query('[data-testid="bsum-status-error"]')).toBeNull();
+      expect(query('[data-testid="bsum-not-built"]')).not.toBeNull();
+      expect(query('[data-testid="bsum-build-now"]'))
+        .withContext('the whole point of the retry: the build ceremony is reachable again')
+        .not.toBeNull();
+    });
+
+    /**
+     * Found live at :4201: with the status read failed AND a profile continuation running for the book
+     * (one started by another arrival path), the row rendered "we could not read the status" and
+     * "Building the book profile..." beside each other. Both were true, but the failure line stands IN
+     * PLACE OF a status this row does not have, so it belongs only where there is nothing else to say.
+     */
+    it('yields to a real state: a running continuation replaces the failure line, not sits beside it', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(throwError(() => ({ status: 500 })));
+      component.bookLanguage = 'he';
+      component.ngOnChanges({ bookId: new SimpleChange(null, 'book-1', true) });
+      fixture.detectChanges();
+      expect(query('[data-testid="bsum-status-error"]')).not.toBeNull();
+
+      continuation.setState('book-1', 'running');
+      fixture.detectChanges();
+
+      expect(query('[data-testid="bsum-building"]')).not.toBeNull();
+      expect(query('[data-testid="bsum-status-error"]'))
+        .withContext('the row has something to say now; the stand-in must step aside')
+        .toBeNull();
+    });
+
+    it('drops a failure that belongs to a book the row has already left', () => {
+      const summarySvc = TestBed.inject(BookSummaryService);
+      const first$ = new Subject<BookSummaryStatusDto>();
+      spyOn(summarySvc, 'getBookSummaryStatus').and.returnValue(first$.asObservable());
+
+      component.loadBookSummaryStatus();
+      component.bookId = 'book-2';
+      first$.error({ status: 500 });
+
+      expect(component.bookSummaryStatusError)
+        .withContext("book-1's failure must not be reported on book-2's row")
+        .toBeFalse();
     });
   });
 

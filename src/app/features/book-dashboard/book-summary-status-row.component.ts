@@ -3,7 +3,12 @@ import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy
 import { Subject, Subscription } from 'rxjs';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { BookSummaryService } from '../../core/services/book-summary.service';
-import { BookService } from '../../core/services/book.service';
+import {
+  BookProfileContinuationService,
+  ProfileContinuationOutcome,
+  ProfileContinuationReason,
+  ProfileContinuationState,
+} from '../../core/services/book-profile-continuation.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
@@ -36,6 +41,13 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
  * way to be built at all. So the folded action runs the briefs build FIRST (it reports real progress, and
  * it produces the freshest input for the profile) and then the profile refresh, under one building latch,
  * so the row's status stays true for the whole run rather than claiming ready halfway.
+ *
+ * c04: THIS ROW IS NOT THE OWNER OF PHASE 2. It was, and that was the defect - the continuation ran only
+ * when a live row happened to be watching the briefs terminal, so every path without one (panel closed,
+ * focus mode, Edit help, a reload mid-build, the dashboard unmounted, and the import handoff card, which
+ * never chained it at all) left the profile unbuilt with nothing recording that it was owed. Phase 2 now
+ * belongs to {@link BookProfileContinuationService}, which every arrival path reaches and which holds the
+ * one gate. This row arrives at it like any other caller and watches its state for the current book.
  */
 @Component({
   selector: 'app-book-summary-status-row',
@@ -132,6 +144,17 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
    */
   profilePhaseFailed = false;
 
+  /**
+   * c04 / finding 23. The status GET failed, so this row knows nothing about the briefs.
+   *
+   * It used to be swallowed - the handler left the status null and the row's `*ngIf` (which keys on the
+   * derived state being anything but 'unknown') then rendered NOTHING. Since Q4-A folded the bare arrow
+   * into this row, this row is the only path to the whole build ceremony, briefs AND book profile: a row
+   * that silently does not exist is a book that cannot be built at all until the page is reloaded. So the
+   * failure now renders in place of the status, with a retry that re-issues the same read.
+   */
+  bookSummaryStatusError = false;
+
   /** Stops the active summary progress poll; nulled when no poll is running. */
   private bookSummaryProgressStop$: Subject<void> | null = null;
   /** Active summary-related subscriptions (build POST); cleared on context change / destroy. */
@@ -140,12 +163,14 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   private bookSummaryStatusSub: Subscription | null = null;
   /** Loop guard for summary build: a jobId already driven to terminal here will not reattach. */
   private bookSummaryHandledTerminalJobId: string | null = null;
-  /** The in-flight profile refresh (phase 2 of the folded build); cleared on context change / destroy. */
+  /** This row's OWN pending arrival at the profile continuation; cleared on context change / destroy. */
   private profileRefreshSub: Subscription | null = null;
+  /** Watch on the shared continuation's state for THIS book (covers refreshes this row did not start). */
+  private profileStateSub: Subscription | null = null;
 
   constructor(
     private bookSummaryService: BookSummaryService,
-    private bookService: BookService,
+    private profileContinuation: BookProfileContinuationService,
     private analysisProgressService: AnalysisProgressService,
     private jobRegistry: JobRegistryService,
     private cdr: ChangeDetectorRef
@@ -168,6 +193,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
         this.showBookSummaryConsent = false;
         if (this.bookId) {
           this.resetBookSummaryBuildState();
+          this.watchProfileContinuation();
           this.loadBookSummaryStatus();
         } else {
           this.resetBookSummaryBuildState();
@@ -184,6 +210,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     this.bookSummarySub?.unsubscribe();
     this.bookSummaryStatusSub?.unsubscribe();
     this.profileRefreshSub?.unsubscribe();
+    this.profileStateSub?.unsubscribe();
     this.bookSummaryHandledTerminalJobId = null;
   }
 
@@ -256,8 +283,14 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
 
   // ── Status load + reset ─────────────────────────────────────────────────────
 
-  /** Fetch the current book-summary status for this book/language and update the row. */
+  /**
+   * Fetch the current book-summary status for this book/language and update the row.
+   *
+   * Also the retry action behind {@link bookSummaryStatusError}: it clears the error latch on the way in,
+   * so a retry that fails again re-raises it rather than leaving a stale one.
+   */
   loadBookSummaryStatus(): void {
+    this.bookSummaryStatusError = false;
     if (!this.bookId) {
       this.bookSummaryStatus = null;
       return;
@@ -290,7 +323,14 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
         }
         this.cdr.detectChanges();
       },
-      error: () => { /* leave current; row hides when status is null */ },
+      error: () => {
+        // Drop a stale failure after the user switched books OR languages, exactly as the next handler does.
+        if (this.bookId !== bookId || this.summaryLanguage !== lang) return;
+        // Say so instead of vanishing. The status stays null (this row must not describe briefs it could
+        // not read), but the error + retry render in its place - see bookSummaryStatusError.
+        this.bookSummaryStatusError = true;
+        this.cdr.detectChanges();
+      },
     });
   }
 
@@ -315,7 +355,53 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     this.bookSummaryProgressPercent = null;
     this.bookSummaryProgressMessage = '';
     this.bookSummaryStatus = null;
+    this.bookSummaryStatusError = false;
     this.bookSummaryHandledTerminalJobId = null;
+  }
+
+  // ── c04: the shared profile continuation ────────────────────────────────────
+  //
+  // Phase 2 of the folded build is owned by BookProfileContinuationService, not by this row. This row is
+  // ONE of eight arrival paths (the service's docstring enumerates them), and the decision of whether a
+  // refresh is owed lives there, once. Two wires connect the row to it:
+  //
+  //   - it ARRIVES (`startProfilePhase`), reporting what happened rather than deciding what to do;
+  //   - it WATCHES (`watchProfileContinuation`), so a refresh started by any OTHER arrival - the import
+  //     handoff card, a reattached build, another surface entirely - still keeps this row from reading
+  //     READY while the profile cards below it are being rewritten.
+
+  /** Follow the shared continuation for the CURRENT book; supersedes any previous book's watch. */
+  private watchProfileContinuation(): void {
+    this.profileStateSub?.unsubscribe();
+    const bookId = this.bookId;
+    if (!bookId) return;
+    this.profileStateSub = this.profileContinuation.stateFor$(bookId).subscribe(state => {
+      if (this.bookId !== bookId) return;
+      this.applyProfileContinuationState(state);
+    });
+  }
+
+  /**
+   * Reflect the shared continuation's state on this row.
+   *
+   * Raising the build latch here is deliberate: the profile build IS part of the build this row names, so
+   * a refresh running for this book must read as BUILDING wherever the ceremony is shown, whoever started
+   * it. It also lets the dashboard's existing completion fan-out (the `buildingChange` false edge reloads
+   * the profile card) fire for a continuation this row did not start.
+   *
+   * The latch cannot stick: every write is driven by the state stream, which always leaves `running`.
+   */
+  private applyProfileContinuationState(state: ProfileContinuationState): void {
+    if (state === 'running') {
+      this.profilePhase = true;
+      this.profilePhaseFailed = false;
+      this.bookSummaryBuilding = true;
+    } else if (this.profilePhase) {
+      this.profilePhase = false;
+      this.profilePhaseFailed = state === 'failed';
+      this.bookSummaryBuilding = false;
+    }
+    this.cdr.detectChanges();
   }
 
   // ── Build orchestration ─────────────────────────────────────────────────────
@@ -347,8 +433,11 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
           this.summaryTerminal.emit();
           // Q4-A: a no-op says the BRIEFS are fresh; it says nothing about the profile, which is a
           // separate artifact with its own writer. The author asked for a build, so phase 2 still runs -
-          // this is the case that used to require pressing the bare arrow separately.
-          this.startProfilePhase(bookId, language);
+          // this is the case that used to require pressing the bare arrow separately. `user-requested`
+          // rather than `briefs-already-fresh`: they pressed the action and confirmed a consent prompt
+          // that names the profile cards, and this is the only way to rebuild a profile whose inputs did
+          // not change.
+          this.startProfilePhase(bookId, language, 'user-requested', null);
           return;
         }
         this.pollBookSummaryBuild(bookId, resp.jobId, language);
@@ -364,37 +453,42 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   }
 
   /**
-   * Q4-A phase 2: the work the removed bare arrow used to do. Re-summarizes any stale chapter into the
-   * flat summary surface and rebuilds the `BookProfile` that every card below this row renders from.
+   * Q4-A phase 2: the work the removed bare arrow used to do - rebuilding the `BookProfile` that every
+   * card below this row renders from.
    *
-   * Runs ONLY after the briefs half reached a usable state (succeeded, or a no-op that confirmed fresh
+   * c04: this row no longer OWNS that work; it reports an arrival to the shared continuation and settles
+   * its own UI on the answer. It does not decide whether the refresh is owed - the gate lives in one
+   * place, because seven other arrivals reach the same continuation and a gate copied per call site is
+   * the same defect wearing a hat. `skipped` is a legitimate answer here (the same completion already
+   * ran the refresh), and it settles the row exactly like a success: the profile is current either way.
+   *
+   * Called ONLY after the briefs half reached a usable state (succeeded, or a no-op that confirmed fresh
    * briefs). A failed or canceled briefs build does not fall through into a second expensive run.
    *
    * The building latch is released HERE, at the end of the whole folded action, which is what makes the
    * host's completion fan-out (`buildingChange` false edge -> reload the profile card + the
    * summary-derived surfaces) fire once, after both halves, instead of halfway through.
    */
-  private startProfilePhase(bookId: string, language: string): void {
+  private startProfilePhase(
+    bookId: string,
+    language: string,
+    reason: ProfileContinuationReason,
+    briefsJobId: string | null,
+  ): void {
     this.profilePhase = true;
     this.profilePhaseFailed = false;
     this.bookSummaryProgressPercent = null;
     this.cdr.detectChanges();
     this.profileRefreshSub?.unsubscribe();
-    this.profileRefreshSub = this.bookService.refreshProfile(bookId, language).subscribe({
-      next: () => {
+    this.profileRefreshSub = this.profileContinuation
+      .ensureAfterBriefs({ bookId, language, reason, briefsJobId })
+      .subscribe((outcome: ProfileContinuationOutcome) => {
         if (this.bookId !== bookId || this.summaryLanguage !== language) return;
         this.profilePhase = false;
+        this.profilePhaseFailed = outcome === 'failed';
         this.bookSummaryBuilding = false;
         this.cdr.detectChanges();
-      },
-      error: () => {
-        if (this.bookId !== bookId || this.summaryLanguage !== language) return;
-        this.profilePhase = false;
-        this.profilePhaseFailed = true;
-        this.bookSummaryBuilding = false;
-        this.cdr.detectChanges();
-      },
-    });
+      });
   }
 
   /** Poll the book-summary build job and refresh status when it reaches a terminal state. */
@@ -428,8 +522,11 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
           // gate) and any existing review staleVsBriefs: tell the host so the review row reflects both.
           this.summaryTerminal.emit();
           if (status === 'succeeded') {
-            // Q4-A phase 2 keeps the latch raised; it lowers it when the profile refresh settles.
-            this.startProfilePhase(bookId, lang);
+            // Q4-A phase 2 keeps the latch raised; it lowers it when the profile refresh settles. The
+            // jobId goes with the arrival so this report and the registry's own observation of the SAME
+            // terminal (which reaches the continuation independently, and is what covers every path where
+            // this row is not mounted to see it) collapse to one refresh rather than two.
+            this.startProfilePhase(bookId, lang, 'briefs-succeeded', jobId);
           } else {
             this.bookSummaryBuilding = false;
             this.profilePhase = false;
@@ -485,6 +582,18 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     return this.chapterCount === 0;
   }
 
+  /**
+   * Render the status-read failure IN PLACE OF the status, and only there.
+   *
+   * Found live: with the read failed AND a profile continuation running (one started by another arrival
+   * path), the row showed "we could not read the status" and "Building the book profile..." side by side.
+   * Both were true, but the failure line is the stand-in for a status this row does not have, so it
+   * belongs only in the state where there is nothing else to say. Every other state has its own line.
+   */
+  get showStatusReadError(): boolean {
+    return this.bookSummaryStatusError && this.bookSummaryState === 'unknown';
+  }
+
   /** True when a summary exists but was built with a different model (drives the cross-model warning). */
   get bookSummaryBuiltWithDifferentModel(): boolean {
     return !!this.bookSummaryStatus?.builtWithDifferentModel;
@@ -529,6 +638,9 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       profileFailed: 'התקצירים נבנו, אך בניית פרופיל הספר נכשלה. אפשר לנסות שוב.',
       // The blocked-by-import reason, said in the same words the spine's blocked row uses. DRAFT Hebrew.
       needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
+      // c04: the status read failed. DRAFT Hebrew - w8 native sweep.
+      statusError: 'לא הצלחנו לקרוא את מצב תקצירי הספר.',
+      retry: 'נסו שוב',
     };
     const en: Record<string, string> = {
       title: 'Book briefs',
@@ -549,6 +661,8 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       buildingProfile: 'Building the book profile...',
       profileFailed: 'The briefs were built, but the book profile build failed. You can run it again.',
       needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
+      statusError: 'We could not read the book briefs status.',
+      retry: 'Try again',
     };
     const map = lang === 'he' ? he : en;
     return map[key] ?? key;

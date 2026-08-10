@@ -42,10 +42,13 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
   beforeEach(async () => {
     // `activeJobs$` is read by the dashboard itself since Wave 3 / w2 (the spine's stage-4 running marks),
     // so the spy must carry it or every spec in this file dies on `.subscribe of undefined`.
+    // `jobs$` joined it in c04: the hosted briefs row injects the shared profile continuation, which
+    // watches the registry for briefs builds reaching their terminal - the wiring that makes the profile
+    // get built when nothing is mounted to see it happen.
     jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>(
       'JobRegistryService',
       ['track'],
-      { activeJobs$: of([]) },
+      { activeJobs$: of([]), jobs$: of([]) },
     );
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
@@ -1140,7 +1143,7 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1278,7 +1281,7 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1452,7 +1455,7 @@ describe('BookDashboardComponent threads the book language into its server calls
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1601,7 +1604,7 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1858,7 +1861,7 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -2084,7 +2087,7 @@ describe('BookDashboardComponent survives an in-session language change with loa
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {

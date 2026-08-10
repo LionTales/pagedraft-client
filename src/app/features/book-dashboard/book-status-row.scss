@@ -52,6 +52,12 @@
   color: var(--pd-improve);   // amber: needs refresh
 }
 
+// c04: the status read itself failed. Red rather than amber - amber is "this needs refreshing", and here
+// the row knows nothing at all.
+.sb-status.sb-error {
+  color: var(--pd-cut);
+}
+
 // Inline hint (e.g. "build summary first") — muted secondary text.
 .sb-hint-inline {
   font-size: var(--pd-text-caption);
