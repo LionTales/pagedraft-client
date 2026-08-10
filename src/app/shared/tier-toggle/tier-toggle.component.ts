@@ -52,6 +52,8 @@ export const TIER_TOGGLE_LABELS_HE: Record<string, string> = {
 
   fallbackWarning: 'ההגדרה היא מעמיק, אך המשימה רצה בפועל בשכבה המהירה.',
   reasonTaskNotEligible: 'משימה זו רצה תמיד בשכבה המהירה.',
+  // Wave 3 / w5, the Q11-A residue. DRAFT Hebrew - w8 native sweep.
+  reasonNoTierControl: 'לפעולה הזו אין בחירת שכבת מודל. השרת אינו מדווח שכבה עבורה, ולכן אין כאן מה לשנות.',
   reasonLanguageAlwaysFast: 'בשפת הספר הזו המשימה רצה תמיד בשכבה המהירה. שינוי שפת הספר ישנה זאת.',
   reasonRouteNotConfigured: 'השכבה המעמיקה אינה מופעלת בשרת הזה כרגע.',
   reasonProviderNotRegistered: 'השכבה המעמיקה אינה זמינה בשרת הזה, ולכן ריצה בה תיכשל.',
@@ -84,6 +86,7 @@ export const TIER_TOGGLE_LABELS_EN: Record<string, string> = {
 
   fallbackWarning: 'This is set to thinking, but the task is actually running on the fast tier.',
   reasonTaskNotEligible: 'This task always runs on the fast tier.',
+  reasonNoTierControl: 'This pass has no model tier choice. The server does not report a tier for it, so there is nothing to change here.',
   reasonLanguageAlwaysFast:
     'For this book language the task always runs on the fast tier. Changing the book language changes that.',
   reasonRouteNotConfigured: 'The thinking tier is not enabled on this server right now.',
@@ -337,9 +340,29 @@ export class TierToggleComponent implements OnChanges, OnDestroy {
     return this.scope === 'book' ? null : resolveAiTaskKey(this.task);
   }
 
-  /** False when the bound analysis type has no user-facing tier (Summarization, Custom): render nothing. */
+  /**
+   * Whether this control renders at all.
+   *
+   * Wave 3 / w5 - THE Q11-A RESIDUE. Q11 itself is a no-op by decision (the tier control stays at the
+   * point of use), but the owner's answer named one thing to fix: for the two passes where the control
+   * simply VANISHED (Summarization and Custom, the two analysis types with no user-facing tier), an
+   * unexplained absence is replaced by a disabled state with a reason. So this is now true whenever a task
+   * is bound at all; {@link noTierControl} decides which of the two shapes renders.
+   */
   get visible(): boolean {
-    return this.scope === 'book' || this.taskKey !== null;
+    return this.scope === 'book' || this.taskKey !== null || this.noTierControl;
+  }
+
+  /**
+   * True for a bound analysis type that has NO tier control at all (Summarization, Custom).
+   *
+   * The disabled state this drives asserts nothing the app has not computed: it does not paint a selected
+   * tier, because the server reports no tier row for these tasks and inventing one would be exactly the
+   * "answer the server did not give" this component's contract forbids. It states the fact that IS known -
+   * that this pass has no tier choice - and says so where the control used to disappear.
+   */
+  get noTierControl(): boolean {
+    return this.scope === 'task' && !!(this.task ?? '').trim() && this.taskKey === null;
   }
 
   /** This task's row on the DTO. Null in book scope, or when the server did not report the task. */

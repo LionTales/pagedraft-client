@@ -237,12 +237,49 @@ describe('TierToggleComponent (tier-ux-rework c3)', () => {
     expect(put.request.body).toEqual({ tier: 'thinking', task: 'LinguisticAnalysis' });
   });
 
-  it('renders NOTHING for an analysis type the server reports no tier for', () => {
-    for (const analysisType of ['Summarization', 'Custom', '']) {
+  /**
+   * Wave 3 / w5, THE Q11-A RESIDUE. This test used to assert that the control rendered NOTHING for the two
+   * passes the server reports no tier for. The owner's answer to Q11 kept the control at the point of use
+   * and named exactly one thing to fix: those two passes get a disabled state WITH a reason instead of an
+   * unexplained absence, because a control that silently vanishes reads as a rendering bug.
+   */
+  it('Q11-A residue: renders a DISABLED control with a reason for the two passes with no tier', () => {
+    for (const analysisType of ['Summarization', 'Custom']) {
       mount(makeDto(), analysisType);
-      expect(component.visible).withContext(analysisType).toBeFalse();
-      expect(exists('tier-toggle')).withContext(analysisType).toBeFalse();
+      expect(component.visible).withContext(analysisType).toBeTrue();
+      expect(component.noTierControl).withContext(analysisType).toBeTrue();
+      expect(exists('tier-toggle')).withContext(analysisType).toBeTrue();
+      expect(exists('tier-toggle-no-control')).withContext(analysisType).toBeTrue();
+      expect(exists('tier-toggle-reason')).withContext(analysisType).toBeTrue();
     }
+  });
+
+  it('Q11-A residue: the disabled control claims NO selected tier (the server reported none)', () => {
+    mount(makeDto(), 'Summarization');
+    const fast = fixture.debugElement.query(By.css('[data-testid="tier-toggle-fast"]'));
+    const thinking = fixture.debugElement.query(By.css('[data-testid="tier-toggle-thinking"]'));
+
+    expect(fast.nativeElement.getAttribute('aria-checked')).toBe('false');
+    expect(thinking.nativeElement.getAttribute('aria-checked')).toBe('false');
+    expect(fast.nativeElement.getAttribute('aria-disabled')).toBe('true');
+    expect(thinking.nativeElement.getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('Q11-A residue: the reason has he/en parity, no em-dash, and names no model or provider', () => {
+    for (const [lang, needle] of [['he', 'שכבת מודל'], ['en', 'model tier']] as const) {
+      mount(makeDto(), 'Custom', lang);
+      const reason = fixture.debugElement.query(By.css('[data-testid="tier-toggle-reason"]'))
+        .nativeElement.textContent as string;
+      expect(reason).withContext(lang).toContain(needle);
+      expect(reason).withContext(lang).not.toContain('—');
+      expect(reason).withContext(lang).not.toContain('–');
+    }
+  });
+
+  it('still renders nothing at all when no task is bound (there is no pass to explain)', () => {
+    mount(makeDto(), '');
+    expect(component.visible).toBeFalse();
+    expect(exists('tier-toggle')).toBeFalse();
   });
 
   it('re-derives from the snapshot in hand when the selected type changes, without a second read', () => {
