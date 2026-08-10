@@ -1,9 +1,10 @@
 import { HttpClient, HttpErrorResponse, HttpResponse } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable, from, of, throwError } from 'rxjs';
-import { catchError, map, switchMap } from 'rxjs/operators';
+import { catchError, switchMap } from 'rxjs/operators';
 
 import {
+  DOCX_CONTENT_TYPE,
   EXPORT_SKIPPED_CHAPTERS_HEADER,
   EXPORT_SKIPPED_COUNT_HEADER,
   ExportFailure,
@@ -84,23 +85,49 @@ export class ExportService {
    *
    * Both header reads are done here, once, for the same reason the transfer is: the two document paths have
    * drifted before, and a caller that read the skipped-chapter headers itself would be the drift.
+   *
+   * The `catchError` here only ever sees a genuine HTTP-layer error (a 4xx/5xx or a transport failure);
+   * {@link toExportedFile} runs strictly AFTER it, so a 200 it rejects (an empty body, or a content type
+   * that is not a DOCX) surfaces as its own failure rather than being re-processed by `toFailure`, which
+   * expects an `HttpErrorResponse`.
    */
   private request(url: string, fallbackName: string): Observable<ExportedFile> {
     return this.http
       .get(url, { observe: 'response', responseType: 'blob' })
       .pipe(
-        map((res: HttpResponse<Blob>) => ({
-          blob: res.body ?? new Blob([]),
-          fileName: fileNameFromContentDisposition(res.headers.get('Content-Disposition'), fallbackName),
-          // Null when the server said nothing, which is NOT "nothing was skipped" - see
-          // `skipReportFromHeaders`. The screen has a different sentence for each.
-          skipped: skipReportFromHeaders(
-            res.headers.get(EXPORT_SKIPPED_COUNT_HEADER),
-            res.headers.get(EXPORT_SKIPPED_CHAPTERS_HEADER),
-          ),
-        })),
         catchError((err: HttpErrorResponse) => this.toFailure(err)),
+        switchMap((res: HttpResponse<Blob>) => this.toExportedFile(res, fallbackName)),
       );
+  }
+
+  /**
+   * Turn a 200 response into the file this screen can save, or refuse it.
+   *
+   * TWO THINGS A 200 CAN LIE ABOUT: a bodyless response (`res.body ?? new Blob([])` used to turn that into
+   * a 0-byte "successful" download) and a body that is not actually a DOCX - a proxy returning its own HTML
+   * error page under a 200 would otherwise be saved to disk with a `.docx` name. Both are refused here
+   * rather than silently accepted.
+   *
+   * The content-type check is PERMISSIVE about a MISSING header (CORS-safelisted, so a real server always
+   * sends one, but nothing here should invent a failure out of a test double or a proxy that stripped it) -
+   * it only refuses a header that is PRESENT and says something other than {@link DOCX_CONTENT_TYPE}.
+   */
+  private toExportedFile(res: HttpResponse<Blob>, fallbackName: string): Observable<ExportedFile> {
+    const contentType = res.headers.get('Content-Type');
+    const wrongType = contentType !== null && contentType.split(';')[0].trim() !== DOCX_CONTENT_TYPE;
+    if (res.body === null || wrongType) {
+      return throwError((): ExportFailure => ({ status: res.status, reason: null }));
+    }
+    return of({
+      blob: res.body,
+      fileName: fileNameFromContentDisposition(res.headers.get('Content-Disposition'), fallbackName),
+      // Null when the server said nothing, which is NOT "nothing was skipped" - see
+      // `skipReportFromHeaders`. The screen has a different sentence for each.
+      skipped: skipReportFromHeaders(
+        res.headers.get(EXPORT_SKIPPED_COUNT_HEADER),
+        res.headers.get(EXPORT_SKIPPED_CHAPTERS_HEADER),
+      ),
+    });
   }
 
   /**

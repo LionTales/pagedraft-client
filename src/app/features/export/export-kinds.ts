@@ -162,10 +162,14 @@ export const EXPORT_ERRORS = {
     he: 'הספר לא נמצא. ייתכן שנמחק בחלון אחר.',
     en: 'The book could not be found. It may have been deleted in another window.',
   },
-  /** 404 on the chapter path (the lookup is book-scoped, so this covers a chapter of another book too). */
+  /**
+   * 404 on the chapter path. The chapter lookup is book-scoped and the server answers a bare 404 for both
+   * an unknown chapter AND an unknown book with no way to tell them apart on the wire - so this sentence
+   * must not promise "pick another chapter" as the fix, since there may be no book left to pick one from.
+   */
   chapterNotFound: {
-    he: 'הפרק לא נמצא. ייתכן שנמחק. אפשר לרענן את הדף ולבחור פרק אחר.',
-    en: 'The chapter could not be found. It may have been deleted. Refresh the page and pick another chapter.',
+    he: 'הפרק לא נמצא. ייתכן שהפרק נמחק, או שכל הספר כבר לא קיים. אפשר לרענן את הדף; אם הבעיה נמשכת, אפשר לחזור לרשימת הספרים.',
+    en: 'The chapter could not be found. It may have been deleted, or the whole book may no longer exist. Refresh the page; if the problem continues, go back to your books.',
   },
   /** status 0: the request never reached the server. */
   offline: {

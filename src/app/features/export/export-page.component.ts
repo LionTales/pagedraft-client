@@ -2,7 +2,8 @@ import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { Observable, Subscription } from 'rxjs';
+import { Observable, Subject, merge } from 'rxjs';
+import { takeUntil } from 'rxjs/operators';
 
 import { BookDetailDto, ChapterSummaryDto } from '../../core/models/book';
 import {
@@ -406,9 +407,23 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   /** The compact spine's signals, assembled from the same book payload this page already loads. */
   spineSignals: StageSpineSignals = emptyStageSpineSignals();
   private chaptersKnown = false;
-  private jobsSub: Subscription | null = null;
   private briefsRunning = false;
   private reviewRunning = false;
+
+  /** Component lifetime. Everything subscribed in {@link ngOnInit} is torn down here, once. */
+  private readonly destroy$ = new Subject<void>();
+  /**
+   * Fires on every bookId change, INCLUDING the first. A subscription scoped to "this book" - the book
+   * load itself, and any export in flight when the route changes - is piped through
+   * `takeUntil(merge(destroy$, bookChange$))` so it cannot write into this component's state after that
+   * state has moved on to a different book.
+   *
+   * Finding 15: `bookId` used to be read once from `route.snapshot` with no `params` subscription, so a
+   * same-route param change (`/books/A/export` -> `/books/B/export`) left `chapters`, `bookLanguage`,
+   * `errors`, `downloaded` and `skipped` on the previous book - book B's screen exported book A's
+   * manuscript under book A's name. `bookChange$` is what {@link loadForBook} fires to close that window.
+   */
+  private readonly bookChange$ = new Subject<void>();
 
   readonly kinds = EXPORT_KINDS;
   readonly COPY = EXPORT_COPY;
@@ -421,32 +436,13 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
-    this.bookId = this.route.snapshot.params['bookId'] ?? null;
-    if (!this.bookId) {
-      this.loading = false;
-      this.bookLoadFailed = true;
-      return;
-    }
-    this.bookService.getById(this.bookId).subscribe({
-      next: (book: BookDetailDto) => {
-        this.bookLanguage = book.language ?? 'he';
-        this.chapters = (book.chapters ?? []).slice().sort((a, b) => a.order - b.order);
-        this.selectedChapterId = this.chapters.length ? this.chapters[0].id : null;
-        this.chaptersKnown = true;
-        this.loading = false;
-        this.rebuildSpineSignals();
-      },
-      error: () => {
-        // The chapters are UNKNOWN, not empty: the screen says it could not read the book rather than
-        // telling the author their book is empty, which would be a claim it cannot make.
-        this.bookLanguage = 'he';
-        this.chaptersKnown = false;
-        this.loading = false;
-        this.bookLoadFailed = true;
-        this.rebuildSpineSignals();
-      },
+    // A subscription, not a one-time `route.snapshot` read: this route can receive a same-route param
+    // change (`/books/A/export` -> `/books/B/export`, reachable via history and the guide's deep link),
+    // and a snapshot read would never see it.
+    this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
+      this.loadForBook((params['bookId'] as string | undefined) ?? null);
     });
-    this.jobsSub = this.jobRegistry.activeJobs$.subscribe(jobs => {
+    this.jobRegistry.activeJobs$.pipe(takeUntil(this.destroy$)).subscribe(jobs => {
       this.briefsRunning = jobs.some(j => j.bookId === this.bookId && j.kind === 'summary');
       this.reviewRunning = jobs.some(j => j.bookId === this.bookId && j.kind === 'review');
       this.rebuildSpineSignals();
@@ -454,8 +450,66 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    this.jobsSub?.unsubscribe();
-    this.jobsSub = null;
+    this.bookChange$.next();
+    this.bookChange$.complete();
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
+
+  /**
+   * Load (or reload) the whole screen for one book. Runs on the FIRST params emission and again on every
+   * same-route bookId change.
+   *
+   * `bookChange$.next()` fires BEFORE the fields below are reset, so the previous book's load and any
+   * export still in flight for it are torn down first and cannot land a response into the fields this
+   * method is about to overwrite (Finding 15). Every field this screen holds about "the current book" is
+   * reset here, not just `bookId` - a partial reset is the same bug with fewer symptoms.
+   */
+  private loadForBook(bookId: string | null): void {
+    this.bookChange$.next();
+
+    this.bookId = bookId;
+    this.bookLanguage = null;
+    this.chapters = [];
+    this.selectedChapterId = null;
+    this.chaptersKnown = false;
+    this.loading = true;
+    this.bookLoadFailed = false;
+    this.busyKindId = null;
+    this.errors.clear();
+    this.downloaded.clear();
+    this.skipped.clear();
+    this.briefsRunning = false;
+    this.reviewRunning = false;
+    this.spineSignals = emptyStageSpineSignals();
+
+    if (!this.bookId) {
+      this.loading = false;
+      this.bookLoadFailed = true;
+      return;
+    }
+
+    this.bookService.getById(this.bookId)
+      .pipe(takeUntil(merge(this.destroy$, this.bookChange$)))
+      .subscribe({
+        next: (book: BookDetailDto) => {
+          this.bookLanguage = book.language ?? 'he';
+          this.chapters = (book.chapters ?? []).slice().sort((a, b) => a.order - b.order);
+          this.selectedChapterId = this.chapters.length ? this.chapters[0].id : null;
+          this.chaptersKnown = true;
+          this.loading = false;
+          this.rebuildSpineSignals();
+        },
+        error: () => {
+          // The chapters are UNKNOWN, not empty: the screen says it could not read the book rather than
+          // telling the author their book is empty, which would be a claim it cannot make.
+          this.bookLanguage = 'he';
+          this.chaptersKnown = false;
+          this.loading = false;
+          this.bookLoadFailed = true;
+          this.rebuildSpineSignals();
+        },
+      });
   }
 
   /**
@@ -616,15 +670,29 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  /** One subscription shape for every kind, so the two document paths cannot behave differently here. */
+  /**
+   * One subscription shape for every kind, so the two document paths cannot behave differently here.
+   *
+   * `takeUntil(merge(destroy$, bookChange$))` (Finding 14): without it, a response landing after this
+   * component is destroyed - or after the route moved on to a different book - called `saveAs` from a
+   * dead component and dropped a file onto whatever screen the user had since navigated to.
+   */
   private run(kind: ExportKind, call: Observable<ExportedFile>): void {
-    call.subscribe({
+    call.pipe(takeUntil(merge(this.destroy$, this.bookChange$))).subscribe({
       next: (file: ExportedFile) => {
         this.busyKindId = null;
+        // saveAs FIRST (Finding 37): `downloaded` must never say a file landed before the browser actually
+        // has it. A throw here is treated the same as a transport failure - the user sees a truthful error,
+        // not "Downloaded: X" naming a file that never reached disk.
+        try {
+          this.exportService.saveAs(file);
+        } catch (err) {
+          this.errors.set(kind.id, this.failureMessage(kind, err));
+          return;
+        }
         this.downloaded.set(kind.id, file.fileName);
         // Recorded even when it is null: "the server did not say" is a state this screen renders.
         this.skipped.set(kind.id, file.skipped);
-        this.exportService.saveAs(file);
       },
       error: (err: unknown) => {
         this.busyKindId = null;

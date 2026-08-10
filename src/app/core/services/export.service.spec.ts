@@ -343,6 +343,58 @@ describe('ExportService (Wave 3 / w4)', () => {
     });
   });
 
+  // ── A 200 can still lie: no body, or the wrong content type (Findings 37, 42) ──────────────────────
+  //
+  // `observe: 'response'` never gives Angular a reason to reject a 2xx on its own, so both of these used to
+  // reach the screen as a "successful" download: a bodyless 200 as a 0-byte file (`res.body ?? new
+  // Blob([])`), and a proxy's HTML error page returned under a 200 as a `.docx` no application can open.
+
+  describe('a 200 that is not actually a usable DOCX', () => {
+    it('refuses a bodyless 200 rather than saving a 0-byte file', async () => {
+      const failure = await new Promise<ExportFailure>(resolve => {
+        svc.exportBook(BOOK_ID).subscribe({
+          next: () => fail('a bodyless response must not resolve as a success'),
+          error: e => resolve(e as ExportFailure),
+        });
+        // No body: the testing backend answers this with a 204, itself still a 2xx.
+        http.expectOne(BOOK_URL).flush(null);
+      });
+      expect(isExportFailure(failure)).toBeTrue();
+    });
+
+    it('refuses a 200 whose Content-Type is not the DOCX media type, e.g. a proxy error page', async () => {
+      const failure = await new Promise<ExportFailure>(resolve => {
+        svc.exportBook(BOOK_ID).subscribe({
+          next: () => fail('an HTML body under a 200 must not resolve as a success'),
+          error: e => resolve(e as ExportFailure),
+        });
+        http.expectOne(BOOK_URL).flush(new Blob(['<html>gateway timeout</html>']), {
+          headers: { 'Content-Type': 'text/html' },
+        });
+      });
+      expect(isExportFailure(failure)).toBeTrue();
+    });
+
+    it('still accepts a 200 with no Content-Type header at all, which the rest of this suite relies on', () => {
+      let got: ExportedFile | undefined;
+      svc.exportBook(BOOK_ID).subscribe(f => (got = f));
+      http.expectOne(BOOK_URL).flush(docx(), { headers: { 'Content-Disposition': disposition('b.docx') } });
+      expect(got).toBeDefined();
+    });
+
+    it('accepts a 200 whose Content-Type carries a charset parameter alongside the DOCX type', () => {
+      let got: ExportedFile | undefined;
+      svc.exportBook(BOOK_ID).subscribe(f => (got = f));
+      http.expectOne(BOOK_URL).flush(docx(), {
+        headers: {
+          'Content-Disposition': disposition('b.docx'),
+          'Content-Type': `${DOCX_CONTENT_TYPE}; charset=utf-8`,
+        },
+      });
+      expect(got).toBeDefined();
+    });
+  });
+
   // ── Handing the file to the browser ─────────────────────────────────────────────────────────────
 
   describe('saveAs', () => {

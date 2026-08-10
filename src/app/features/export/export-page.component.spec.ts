@@ -67,7 +67,20 @@ function file(name: string, skipped: ExportSkipReport | null = { count: 0, chapt
 describe('ExportPageComponent (Wave 3 / w4)', () => {
   let fixture: ComponentFixture<ExportPageComponent>;
   let component: ExportPageComponent;
+  /**
+   * The CURRENT book-load Subject. Reassigned by tests that need a fresh one (a same-route bookId change
+   * needs its OWN Subject, held open independently of the first book's, because `getById` is stubbed to
+   * always read whatever this variable currently points at - see {@link bookRequests}).
+   */
   let bookSubject: Subject<BookDetailDto>;
+  /** Every id the screen asked `BookService.getById` for, in order - what proves a reload actually fired. */
+  let bookRequests: string[];
+  /**
+   * The route's `bookId` param, as a held-open `BehaviorSubject` rather than a fixed `snapshot`: Finding 15
+   * is exactly this - a same-route navigation changes this value without the route or the component being
+   * recreated, and the fix is a `params` subscription that reacts to it.
+   */
+  let paramsSubject: BehaviorSubject<{ bookId: string | null }>;
   let activeJobs$: BehaviorSubject<TrackedJob[]>;
 
   /** What the screen asked the service for, in order. The seam that catches a mis-wired kind. */
@@ -85,6 +98,8 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
 
   beforeEach(async () => {
     bookSubject = new Subject<BookDetailDto>();
+    bookRequests = [];
+    paramsSubject = new BehaviorSubject<{ bookId: string | null }>({ bookId: BOOK_ID });
     activeJobs$ = new BehaviorSubject<TrackedJob[]>([]);
     calls = [];
     saved = [];
@@ -111,8 +126,16 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       imports: [ExportPageComponent],
       providers: [
         provideRouter([]),
-        { provide: ActivatedRoute, useValue: { snapshot: { params: { bookId: BOOK_ID } } } },
-        { provide: BookService, useValue: { getById: () => bookSubject.asObservable() } },
+        { provide: ActivatedRoute, useValue: { params: paramsSubject.asObservable() } },
+        {
+          provide: BookService,
+          useValue: {
+            getById: (id: string) => {
+              bookRequests.push(id);
+              return bookSubject.asObservable();
+            },
+          },
+        },
         { provide: ExportService, useValue: exportStub },
         { provide: JobRegistryService, useValue: { activeJobs$: activeJobs$.asObservable() } },
       ],
@@ -498,6 +521,139 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       chapterResponse = () => throwError(() => ({ status: 404, reason: null } as ExportFailure));
       click('export-download-chapter-docx');
       expect(el('export-error-chapter-docx')!.textContent!.trim()).toBe(EXPORT_ERRORS.chapterNotFound.en);
+    });
+  });
+
+  // ── Teardown: an in-flight export must not touch a dead component (Finding 14) ──────────────────
+  //
+  // Both regression tests use a held-open `Subject` and fire it AFTER the teardown, deliberately: a
+  // synchronous mock (`of()`/`throwError()`) resolves before teardown can matter and would pass whether or
+  // not the subscription is actually closed, which is the exact vacuity shape this fix must not repeat.
+
+  describe('teardown of an in-flight export', () => {
+    it('does not save a file that lands after the component is destroyed', () => {
+      loadBook();
+      click('export-download-book-docx');
+      expect(calls).toEqual([`book:${BOOK_ID}`]);
+
+      fixture.destroy();
+      bookFiles.next(file('too-late.docx'));
+
+      expect(saved).toEqual([]);
+    });
+
+    it('does not throw writing into a destroyed component when a failure lands late either', () => {
+      loadBook();
+      click('export-download-chapter-docx');
+      fixture.destroy();
+
+      expect(() => chapterFiles.error({ status: 500, reason: null })).not.toThrow();
+    });
+  });
+
+  // ── A same-route bookId change must not leak the previous book (Finding 15) ─────────────────────
+
+  describe('a same-route bookId change', () => {
+    /** A fresh Subject: the previous one already completed, and a completed Subject replays nothing. */
+    function navigateTo(nextBookId: string): void {
+      bookSubject = new Subject<BookDetailDto>();
+      paramsSubject.next({ bookId: nextBookId });
+      fixture.detectChanges();
+    }
+
+    it('resets every book-scoped field immediately, then reloads for the new book', () => {
+      loadBook('he', [chapter(0)]);
+      click('export-download-book-docx');
+      bookFiles.next(file('book-a.docx', { count: 1, chapters: [{ order: 0, title: 'X' }] }));
+      fixture.detectChanges();
+      expect(component.downloadedFor(EXPORT_KINDS[0])).toBe('book-a.docx');
+      expect(component.selectedChapterId).toBe('ch-0');
+
+      navigateTo('book-2');
+
+      // Reset immediately - before the new book's own response has even landed.
+      expect(component.bookId).toBe('book-2');
+      expect(component.downloadedFor(EXPORT_KINDS[0])).toBeNull();
+      expect(component.chapters).toEqual([]);
+      expect(component.selectedChapterId).toBeNull();
+      expect(el('export-loading')).not.toBeNull();
+
+      bookSubject.next(book('en', [chapter(0, { title: 'Only Chapter' })]));
+      bookSubject.complete();
+      fixture.detectChanges();
+
+      expect(bookRequests).toEqual([BOOK_ID, 'book-2']);
+      expect(component.bookLanguage).toBe('en');
+      expect(el('export-page')!.getAttribute('dir')).toBe('ltr');
+      expect(component.chapters.map(c => c.id)).toEqual(['ch-0']);
+    });
+
+    it('does not let a stale response for the OLD book land on the new book\'s screen', () => {
+      loadBook('he', [chapter(0)]);
+      click('export-download-book-docx');
+      expect(calls).toEqual([`book:${BOOK_ID}`]);
+
+      // Navigate away before book A's export resolves.
+      navigateTo('book-2');
+
+      // Book A's export answers LATE, after the route moved on - it must not write into book B's screen.
+      bookFiles.next(file('book-a-late.docx'));
+      fixture.detectChanges();
+
+      expect(saved).toEqual([]);
+      expect(component.downloadedFor(EXPORT_KINDS[0])).toBeNull();
+    });
+
+    it('does not let book A\'s book-load response land on book B\'s screen either', () => {
+      loadBook('he', [chapter(0)]);
+      navigateTo('book-2');
+
+      // The OLD bookSubject (book A's) is a separate reference at this point; landing it now must not
+      // resurrect book A's chapters under book B's title.
+      expect(bookRequests).toEqual([BOOK_ID, 'book-2']);
+
+      bookSubject.next(book('en', [chapter(0), chapter(1)]));
+      bookSubject.complete();
+      fixture.detectChanges();
+
+      expect(component.bookId).toBe('book-2');
+      expect(component.chapters.length).toBe(2);
+      expect(component.bookLanguage).toBe('en');
+    });
+  });
+
+  // ── The file must be on disk before the screen says so (Finding 37) ─────────────────────────────
+
+  describe('a save that fails after the file already left the wire', () => {
+    it('does not claim the file downloaded when saveAs throws, and shows an honest error instead', () => {
+      loadBook();
+      const exportSvc = TestBed.inject(ExportService);
+      spyOn(exportSvc, 'saveAs').and.throwError('disk write failed');
+
+      click('export-download-book-docx');
+      bookFiles.next(file('b.docx'));
+      fixture.detectChanges();
+
+      expect(el('export-done-book-docx')).toBeNull();
+      expect(component.downloadedFor(EXPORT_KINDS[0])).toBeNull();
+      expect(el('export-error-book-docx')).not.toBeNull();
+      expect(el('export-error-book-docx')!.textContent!.trim()).toBe(EXPORT_ERRORS.generic.he);
+    });
+  });
+
+  // ── A deleted book must not be blamed on the chapter (Finding 38) ───────────────────────────────
+
+  describe('a 404 on the chapter path that could be the book, not the chapter', () => {
+    it('does not promise that picking another chapter will fix it', () => {
+      loadBook();
+      chapterResponse = () => throwError(() => ({ status: 404, reason: null } as ExportFailure));
+      click('export-download-chapter-docx');
+
+      const message = el('export-error-chapter-docx')!.textContent!.trim();
+      expect(message).toBe(EXPORT_ERRORS.chapterNotFound.he);
+      // The old copy told the author to "pick another chapter", which cannot help when the whole book is
+      // what is gone - the message must at least raise that possibility.
+      expect(message).toContain('הספר');
     });
   });
 
