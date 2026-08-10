@@ -362,7 +362,10 @@ describe('ActivityCenterComponent (rf-f01)', () => {
       const keys = [
         'panelTitle', 'emptyState', 'view',
         'running', 'pending', 'succeeded', 'failed', 'canceled',
-        'summary', 'review', 'proofread', 'style-baseline', 'whole-book-analysis',
+        // w5: `whole-book-analysis` is gone from this list because the KIND is gone. It was vocabulary
+        // for a capability nothing in the client could ever produce, which is the defect class this wave
+        // removes; a label with no producer is not parity, it is a dead label.
+        'summary', 'review', 'proofread', 'style-baseline',
       ];
       for (const key of keys) {
         const label = component.label(key);
@@ -466,6 +469,44 @@ describe('ActivityCenterComponent (rf-f01)', () => {
       const icon = fixture.debugElement.query(By.css('.ac-kind-icon'));
       expect(icon).not.toBeNull();
       expect(icon.nativeElement.textContent.trim().length).toBeGreaterThan(0);
+    });
+
+    /**
+     * Wave 3 / w5, the audit's second Activity Center content fix. EVERY chapter or scene analysis rides
+     * the single `proofread` job kind, so a per-KIND icon gave an in-flight Summarize a proofreading
+     * pencil beside a correct title. The row title already discriminates on `analysisType`; the icon now
+     * uses the same discriminator, so the two cannot disagree.
+     */
+    it('does not dress an in-flight Summarize as a proofread run', () => {
+      const summarize = component.kindIcon({ kind: 'proofread', analysisType: 'Summarization' });
+      const proofread = component.kindIcon({ kind: 'proofread', analysisType: 'Proofread' });
+
+      expect(summarize).not.toBe(proofread);
+      expect(summarize.trim().length).toBeGreaterThan(0);
+    });
+
+    it('gives every analysis type sharing the proofread kind its own glyph', () => {
+      const types = ['Proofread', 'LineEdit', 'LinguisticAnalysis', 'LiteraryAnalysis', 'Summarization', 'Custom'];
+      const icons = types.map((analysisType) => component.kindIcon({ kind: 'proofread', analysisType }));
+      expect(new Set(icons).size).withContext('one glyph per type, none shared').toBe(types.length);
+    });
+
+    it('falls back to the KIND glyph for an unknown or absent analysis type', () => {
+      const byKind = component.kindIcon({ kind: 'proofread', analysisType: undefined });
+      expect(component.kindIcon({ kind: 'proofread', analysisType: 'SomethingNew' })).toBe(byKind);
+      expect(byKind.trim().length).toBeGreaterThan(0);
+    });
+
+    it('renders the per-type glyph in the row, not just from the helper', () => {
+      stub.setJobs([
+        makeJob({ id: 'j1', kind: 'proofread', analysisType: 'Summarization', titleHe: 'סיכום', titleEn: 'Summarize' }),
+      ]);
+      component.panelOpen = true;
+      fixture.detectChanges();
+
+      const icon = fixture.debugElement.query(By.css('.ac-kind-icon'));
+      expect(icon.nativeElement.textContent.trim())
+        .toBe(component.kindIcon({ kind: 'proofread', analysisType: 'Summarization' }));
     });
   });
 

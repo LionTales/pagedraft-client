@@ -772,8 +772,15 @@ describe('JobRegistryService', () => {
       expect(showsChunkCounts(withCounts('style-baseline'))).toBeTrue();
     });
 
-    it('shows the pair for the reserved whole-book-analysis kind, which rides the chapter chunk shape', () => {
-      expect(showsChunkCounts(withCounts('whole-book-analysis'))).toBeTrue();
+    // w5: the reserved `whole-book-analysis` kind is GONE (nothing in the client ever tracked one, and the
+    // audit called its vocabulary entry a dead label). Its chunk-count case went with it; the guard that
+    // matters now is that the KIND SET itself carries no member without a producer.
+    it('has no JobKind without a producer: every kind in the union is one some caller can track', () => {
+      const kinds: JobKind[] = ['summary', 'review', 'proofread', 'style-baseline'];
+      // Exhaustiveness by construction: assigning the literal list to JobKind[] and back fails to compile
+      // if a member is added without updating this list, which is the point.
+      expect(kinds.length).toBe(4);
+      expect(kinds).not.toContain('whole-book-analysis' as unknown as JobKind);
     });
 
     it('WITHHOLDS the pair for review: its denominator is map WINDOWS plus reduce passes, not chapters', () => {

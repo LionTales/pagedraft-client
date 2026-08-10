@@ -191,8 +191,8 @@ export class JobRegistryService {
    * running" affordance reads.
    *
    * It counts ONLY the {@link WHOLE_BOOK_BUILD_KINDS} - NOT every tracked job. Chapter `proofread`
-   * runs, `style-baseline` builds, and the reserved `whole-book-analysis` kind are also published to
-   * the registry (for the Activity Center), but they are not a summary/review build and must not light
+   * runs and `style-baseline` builds are also published to the registry (for the Activity Center), but
+   * they are not a summary/review build and must not light
    * the review affordance. Without this scoping, starting a chapter proofread or a style-baseline build
    * would falsely turn "review running" on.
    */
@@ -304,8 +304,7 @@ export class JobRegistryService {
         return this.progress.pollBookReviewProgress(bookId, jobId, stop$);
       case 'style-baseline':
         return this.progress.pollStyleBaselineProgress(bookId, jobId, stop$);
-      case 'proofread':
-      case 'whole-book-analysis': {
+      case 'proofread': {
         // Chapter-scoped async analysis. The chapterId lives on the tracked job (set at reattach/track
         // time from the source). Fall back defensively; the poller URL needs it.
         const chapterId = this.findJob(jobId)?.chapterId ?? '';
@@ -440,17 +439,22 @@ export class JobRegistryService {
 
 /**
  * The FE's normalized kinds of background job.
- * `whole-book-analysis` is RESERVED for Phase 2 and is type-PARAMETERIZED via `analysisType` (it is
- * NOT proofread-specific); it shares the chapter/analysis progress shape.
+ *
+ * Wave 3 / w5: a fifth member, `whole-book-analysis`, was REMOVED. It was reserved for a Phase 2 that
+ * never landed: it carried a title, an icon, a scope label and a chunk-count entry, and a sweep of every
+ * `track(` call site in the client found no caller that could ever produce one. The audit's own words for
+ * it are "a dead label in the one surface whose job is to name what is happening", and shipping vocabulary
+ * for a capability that does not exist is the same defect class the whole wave exists to remove. If a
+ * whole-book analysis kind is ever built, it comes back WITH its producer, not before it.
  */
-export type JobKind = 'summary' | 'review' | 'proofread' | 'style-baseline' | 'whole-book-analysis';
+export type JobKind = 'summary' | 'review' | 'proofread' | 'style-baseline';
 
 /**
  * The JobKinds that count as a whole-book BUILD for the editor's "review running" affordance: the book
  * summary rollup and the developmental review. Single source of truth for {@link
- * JobRegistryService.anyRunningForBook$}. Chapter `proofread` runs, `style-baseline` builds, and the
- * reserved `whole-book-analysis` kind are tracked for the Activity Center but are NOT a summary/review
- * build, so they are deliberately excluded here.
+ * JobRegistryService.anyRunningForBook$}. Chapter `proofread` runs and `style-baseline` builds are
+ * tracked for the Activity Center but are NOT a summary/review build, so they are deliberately excluded
+ * here.
  */
 const WHOLE_BOOK_BUILD_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['summary', 'review']);
 
@@ -489,9 +493,6 @@ const WHOLE_BOOK_BUILD_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['summary'
  */
 const CHUNK_COUNT_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
   'proofread',
-  // Reserved Phase-2 kind. It rides the chapter-analysis progress shape (see `progressStreamFor`,
-  // which polls it through `pollProgress`), so its counts are text chunks like `proofread`'s.
-  'whole-book-analysis',
   'summary',
   'style-baseline',
 ]);
@@ -567,7 +568,12 @@ export interface TrackedJob {
   chapterId?: string;
   /** Where "view" navigates when done. Best-effort; the Activity Center (rf-f01) consumes it. */
   resultRoute?: string;
-  /** Phase-2 whole-book-analysis type parameter (e.g. 'Proofread'); undefined for the built-in kinds. */
+  /**
+   * The analysis type behind a chapter-scoped `proofread` job (e.g. 'Summarization', 'LineEdit');
+   * undefined for the book-level build kinds. Chapter/scene analysis rides ONE JobKind for every type, so
+   * this is the only field that distinguishes them, and it drives both the row title and (since w5) the
+   * row ICON.
+   */
   analysisType?: string;
 }
 
@@ -712,8 +718,7 @@ function analysisJobToSource(j: ActiveAnalysisJobDto): ReattachSource {
   return {
     // Chapter/scene async analysis is the `proofread` kind today: Proofread, LineEdit, and the
     // single-shot whole-chapter types (Linguistic, Literary, Summarization, Custom) all share this
-    // async path, distinguished by `analysisType`. Phase 2's `whole-book-analysis` is book-scoped and
-    // does not arrive here.
+    // async path, distinguished by `analysisType`.
     kind: 'proofread',
     jobId: j.jobId,
     // Scope label must match what the live `job-started` path sets in AnalysisPanelComponent: a
@@ -759,8 +764,9 @@ const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
   'summary': { he: 'בניית סיכום הספר', en: 'Building book summary' },
   'review': { he: 'סקירת הספר', en: 'Reviewing book' },
   'proofread': { he: 'הגהה', en: 'Proofreading' },
-  'style-baseline': { he: 'בניית קו סגנון', en: 'Building style baseline' },
-  'whole-book-analysis': { he: 'ניתוח הספר כולו', en: 'Analyzing whole book' },
+  // w5: renamed to match the row's new user-comprehensible name on the book dashboard, so the activity
+  // entry and the build it reports name the same thing. DRAFT he - needs native review.
+  'style-baseline': { he: 'בניית סגנון הכתיבה של הספר', en: "Building your book's writing style" },
 };
 
 /**
@@ -788,7 +794,6 @@ function defaultScopeLabel(kind: JobKind): string {
     case 'summary':
     case 'review':
     case 'style-baseline':
-    case 'whole-book-analysis':
       return 'הספר כולו'; // "Whole book"
     case 'proofread':
       return 'פרק'; // "Chapter"

@@ -39,8 +39,7 @@ export const LABELS_HE: Record<string, string> = {
   summary:           'סיכום',          // DRAFT he - needs native review
   review:            'סקירה',          // DRAFT he - needs native review
   proofread:         'הגהה',           // DRAFT he - needs native review
-  'style-baseline':  'קו סגנון',       // DRAFT he - needs native review
-  'whole-book-analysis': 'ניתוח כולל', // DRAFT he - needs native review
+  'style-baseline':  'סגנון כתיבה',    // DRAFT he - needs native review
 };
 
 export const LABELS_EN: Record<string, string> = {
@@ -57,8 +56,7 @@ export const LABELS_EN: Record<string, string> = {
   summary:           'Summary',
   review:            'Review',
   proofread:         'Proofread',
-  'style-baseline':  'Style baseline',
-  'whole-book-analysis': 'Whole-book analysis',
+  'style-baseline':  'Writing style',
 };
 
 /** Per-kind icon glyph (no icon library - pure Unicode/emoji). */
@@ -67,7 +65,26 @@ const KIND_ICONS: Record<JobKind, string> = {
   review:              '🔍',
   proofread:           '✏️',
   'style-baseline':    '📐',
-  'whole-book-analysis': '📖',
+};
+
+/**
+ * Wave 3 / w5, the audit's second Activity Center content fix.
+ *
+ * Every chapter or scene analysis rides the SINGLE `proofread` job kind, so before this map the kind was
+ * the only thing the icon could be derived from and an in-flight Summarize run wore a proofreading pencil
+ * beside a correct title. The row title already resolves per `analysisType` (see `titleForJob`), so the
+ * icon now uses the same discriminator: title and icon agree by construction rather than by luck.
+ *
+ * An analysis type absent from this map falls back to the kind icon, which is the safe direction: a new
+ * type gets the generic chapter-run glyph until someone chooses one, never a wrong specific one.
+ */
+const ANALYSIS_TYPE_ICONS: Record<string, string> = {
+  Proofread:          '✏️',
+  LineEdit:           '✂️',
+  LinguisticAnalysis: '📐',
+  LiteraryAnalysis:   '📚',
+  Summarization:      '📝',
+  Custom:             '💬',
 };
 
 /** Status pill color class mapping. */
@@ -129,7 +146,7 @@ const STATUS_CLASS: Record<JobStatus, string> = {
               <div class="ac-row" [class]="'ac-row--' + job.status">
                 <!-- Kind icon + scope + title -->
                 <div class="ac-row-top">
-                  <span class="ac-kind-icon" aria-hidden="true">{{ kindIcon(job.kind) }}</span>
+                  <span class="ac-kind-icon" aria-hidden="true">{{ kindIcon(job) }}</span>
                   <span class="ac-scope">{{ job.scopeLabel }}</span>
                   <span class="ac-title">{{ rowTitle(job) }}</span>
                 </div>
@@ -308,8 +325,19 @@ export class ActivityCenterComponent implements OnDestroy {
     return job.titleEn || job.titleHe;
   }
 
-  kindIcon(kind: JobKind): string {
-    return KIND_ICONS[kind] ?? '⚙️';
+  /**
+   * The glyph for one row. Per ANALYSIS TYPE first (w5), falling back to the job kind.
+   *
+   * Takes the whole job rather than just the kind because the kind alone cannot name a chapter run: all
+   * six analysis types share the `proofread` kind, which is why an in-flight Summarize used to show a
+   * proofreading pencil. Same discriminator the row title already uses.
+   */
+  kindIcon(job: Pick<TrackedJob, 'kind' | 'analysisType'>): string {
+    if (job.analysisType) {
+      const byType = ANALYSIS_TYPE_ICONS[job.analysisType];
+      if (byType) return byType;
+    }
+    return KIND_ICONS[job.kind] ?? '⚙️';
   }
 
   statusClass(status: JobStatus): string {
