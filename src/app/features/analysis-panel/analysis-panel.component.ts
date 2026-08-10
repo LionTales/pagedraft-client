@@ -1,12 +1,11 @@
-﻿import { CommonModule } from '@angular/common';
+import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnInit, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Subject, Subscription, forkJoin } from 'rxjs';
+import { Subscription, forkJoin } from 'rxjs';
 import { ANALYSIS_TYPE_LABELS, ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { analysisTypeLabelFor, runChromeLang, runString } from '../../core/i18n/run-strings';
 import { AnalysisService } from '../../core/services/analysis.service';
-import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { JobRegistryService, normalizeLang } from '../../core/services/job-registry.service';
 import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent, assertUnhandledRunEvent } from '../../core/services/analysis-run-orchestration.service';
@@ -475,7 +474,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     private suggestionKeyService: SuggestionKeyService,
     private suggestionAnchorService: SuggestionAnchorService,
     private styleBaselineService: StyleBaselineService,
-    private analysisProgressService: AnalysisProgressService,
     private jobRegistry: JobRegistryService
   ) {}
 

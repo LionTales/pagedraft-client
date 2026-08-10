@@ -9,7 +9,8 @@
  *
  * KEYED PER BOOK. One author can have a long book whose chapter-brief list they always want folded and a
  * short one where they never do, so a single global key would have made the setting wrong half the time.
- * The book id is in the storage key, not in the payload, so deleting a book's row costs one removeItem.
+ * The book id is in the storage key, not in the payload, so deleting a book's row costs one removeItem -
+ * see `clearCollapseState`, called from the dashboard's book-delete handler.
  *
  * FAILS OPEN, ALWAYS. Every read and write is wrapped: a private-mode browser, a full quota, or a
  * hand-corrupted value must degrade to "use the defaults", never to a broken dashboard. `read` returning
@@ -72,5 +73,19 @@ export function writeCollapseState(
     localStorage.setItem(collapseStorageKey(bookId), JSON.stringify(map));
   } catch {
     // Fails open: the section still collapses for this session, it just will not be remembered.
+  }
+}
+
+/**
+ * Drop one book's whole collapse row. Call this when the book itself is deleted, so a stale map does not
+ * linger in localStorage forever for an id that can never be reopened (wave3-spine fixes f02, finding 63 -
+ * the book id being IN the storage key rather than the payload is what makes this a single removeItem).
+ */
+export function clearCollapseState(bookId: string | null | undefined): void {
+  if (!bookId) return;
+  try {
+    localStorage.removeItem(collapseStorageKey(bookId));
+  } catch {
+    // Fails open: a leftover map for a deleted book is inert (nothing reads it back), not a correctness bug.
   }
 }

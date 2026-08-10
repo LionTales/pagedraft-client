@@ -314,20 +314,19 @@ describe('BookStyleBaselineStatusRowComponent (w5 MOVE-1 + MOVE-2)', () => {
     expect(component.styleBaselineBuilding).toBeFalse();
   });
 
-  it('emits baselineTerminal once when a build reaches a terminal state', () => {
+  it('re-reads status once when a build reaches a terminal state (no other row depends on baseline builds today)', () => {
     const svc = TestBed.inject(StyleBaselineService);
     const progress = TestBed.inject(AnalysisProgressService);
     spyOn(svc, 'buildStyleBaseline').and.returnValue(of({ jobId: 'job-1', noOp: false } as any));
     const poll$ = new Subject<any>();
     spyOn(progress, 'pollStyleBaselineProgress').and.returnValue(poll$.asObservable());
-    spyOn(svc, 'getStyleBaselineStatus').and.returnValue(NEVER);
-    let terminals = 0;
-    component.baselineTerminal.subscribe(() => terminals++);
+    const statusSpy = spyOn(svc, 'getStyleBaselineStatus').and.returnValue(NEVER);
 
     component.onBuildStyleBaseline();
     poll$.next({ status: 'succeeded', message: 'done', estimatedCompletionPercent: 100 });
 
-    expect(terminals).toBe(1);
+    expect(component.styleBaselineBuilding).toBeFalse();
+    expect(statusSpy).toHaveBeenCalledOnceWith('book-1', 'he');
   });
 
   it('a tier change re-reads the status through the same loader (supersede, not race)', () => {

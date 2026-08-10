@@ -996,9 +996,13 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
 
   /**
    * Clear the dashboard-owned transient state that is NOT re-derived from an @Input on its own, so a
-   * book switch does not show the previous book's profile/answer/tab. loadProfile() resets profile +
-   * parsed structured fields, so this covers the rest: the Ask question/answer, expansion toggles, and
-   * the active review tab (back to the default Findings view). findingsRefreshToken is owned by the
+   * book switch does not show the previous book's profile/answer/tab. `loadProfile()` only ASSIGNS
+   * `this.profile` from its `next` handler (or nulls it on a 404) - it never nulls the field up front,
+   * because the OTHER caller (`onSummaryBuildingChange`, a same-book refresh after a briefs build
+   * completes) deliberately relies on that to keep the current profile visible with no flash while the
+   * new one loads. A book switch has the opposite requirement, so `profile` and the fields parsed from
+   * it are nulled HERE instead: the Ask question/answer, expansion toggles, and the active review tab
+   * (back to the default Findings view) are cleared the same way. findingsRefreshToken is owned by the
    * hosted review row's re-emit on its own OnChanges, so it self-corrects.
    *
    * The cached whole-book-build inputs (reviewState + summaryBuilding) are reset HERE rather than left to
@@ -1028,6 +1032,11 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
     this.reviewState = 'unknown';
     this.summaryBuilding = false;
     this.loading = false;
+    // Drop the previous book's profile card (and anything parsed from it) so it cannot keep rendering
+    // under the new book's title while the switch's loadProfile() GET is still in flight.
+    this.profile = null;
+    this.charactersParsed = null;
+    this.storyParsed = null;
     // The two spine payloads belong to the PREVIOUS book: drop them so the spine renders "not known"
     // until the rows answer for the new one, rather than describing book A's briefs on book B's page.
     this.summaryStatus = null;

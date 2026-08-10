@@ -8,6 +8,7 @@ import { BookDto } from '../../core/models/book';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
 import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
+import { clearCollapseState } from '../../shared/collapsible-section/collapse-store';
 
 /**
  * NIT 52. `spineSignalsFor`'s fallback runs on every change-detection tick for any row not yet in the
@@ -399,6 +400,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
         this.books = this.books.filter(b => b.id !== book.id);
         this.rebuildSpineSignals();
         this.deletingId = null;
+        // f02/63: the collapse map is keyed per book id and nothing else ever removes a row, so a
+        // deleted book's row would otherwise linger in localStorage forever for an id that can never
+        // be reopened.
+        clearCollapseState(book.id);
       },
       error: () => { this.deletingId = null; }
     });

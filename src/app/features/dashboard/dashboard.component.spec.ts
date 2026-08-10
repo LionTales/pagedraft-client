@@ -10,6 +10,7 @@ import { BookDto } from '../../core/models/book';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { STAGE_NAMES } from '../../shared/stage-spine/stage-spine.copy';
+import { collapseStorageKey } from '../../shared/collapsible-section/collapse-store';
 
 /**
  * Wave 3 / w3 - the BOOKS LIST as the first place a user is oriented.
@@ -275,6 +276,43 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
       fixture.detectChanges();
 
       expect(component.spineSignalsFor(book({ id: 'a' }))).toBe(before);
+    });
+  });
+
+  // ── f02/63: deleting a book clears its collapse-map row ─────────────────────────────────────────────
+
+  describe('deleteBook clears the collapse map (f02/63)', () => {
+    beforeEach(() => {
+      localStorage.removeItem(collapseStorageKey('doomed'));
+      localStorage.removeItem(collapseStorageKey('survivor'));
+    });
+
+    afterEach(() => {
+      localStorage.removeItem(collapseStorageKey('doomed'));
+      localStorage.removeItem(collapseStorageKey('survivor'));
+    });
+
+    it('removes the deleted book\'s collapse-store row so it does not linger forever for an id that can never reopen', () => {
+      load([book({ id: 'doomed' })]);
+      localStorage.setItem(collapseStorageKey('doomed'), JSON.stringify({ chapterBriefs: true }));
+      spyOn(window, 'confirm').and.returnValue(true);
+
+      component.deleteBook(book({ id: 'doomed' }));
+      httpMock.expectOne(r => r.method === 'DELETE' && r.url.endsWith('/api/books/doomed')).flush(null);
+
+      expect(localStorage.getItem(collapseStorageKey('doomed'))).toBeNull();
+    });
+
+    it('leaves other books\' collapse rows untouched', () => {
+      load([book({ id: 'doomed' }), book({ id: 'survivor' })]);
+      localStorage.setItem(collapseStorageKey('doomed'), JSON.stringify({ chapterBriefs: true }));
+      localStorage.setItem(collapseStorageKey('survivor'), JSON.stringify({ chapterBriefs: false }));
+      spyOn(window, 'confirm').and.returnValue(true);
+
+      component.deleteBook(book({ id: 'doomed' }));
+      httpMock.expectOne(r => r.method === 'DELETE' && r.url.endsWith('/api/books/doomed')).flush(null);
+
+      expect(localStorage.getItem(collapseStorageKey('survivor'))).toBe(JSON.stringify({ chapterBriefs: false }));
     });
   });
 });

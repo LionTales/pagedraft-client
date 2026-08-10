@@ -1,4 +1,4 @@
-﻿/**
+/**
  * wb3-c01: BookDashboardComponent host spec. Verifies the dashboard renders the relocated book-scoped
  * status rows and wires the summary-terminal -> review-refresh relationship (preserving the Phase-2
  * "a summary terminal also refreshes review status" behavior across the component split).
@@ -563,6 +563,9 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(component.citationChapterIds).toEqual([]);
       expect(component.synopsisExpanded).toBeFalse();
       expect(component.expandedPlotNode).toBeNull();
+      // Book A's profile card must not keep rendering under book B's title while the new GET is still
+      // in flight: resetOwnState() nulls it synchronously (loadProfile() itself only assigns on `next`).
+      expect(component.profile).withContext('OldGenre must not leak into the gap before NewGenre resolves').toBeNull();
 
       // Profile reloaded for the new book.
       expect(getProfile.calls.count()).toBe(callsBefore + 1);

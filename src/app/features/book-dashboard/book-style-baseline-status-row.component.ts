@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
+import { ChangeDetectorRef, Component, Input, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
 import { Subject, Subscription } from 'rxjs';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
@@ -58,9 +58,6 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
    * `null` means NOT KNOWN YET, never empty. Only an explicit `0` refuses anything.
    */
   @Input() chapterCount: number | null = null;
-
-  /** Emitted whenever a build reaches a terminal state, so the host can re-read anything derived from it. */
-  @Output() baselineTerminal = new EventEmitter<void>();
 
   /** Latest status read for this (book, language); null while loading / no book. */
   styleBaselineStatus: BookStyleBaselineStatusDto | null = null;
@@ -181,7 +178,6 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
         if (resp.noOp || !resp.jobId) {
           this.styleBaselineBuilding = false;
           this.loadStyleBaselineStatus();
-          this.baselineTerminal.emit();
           this.cdr.detectChanges();
           return;
         }
@@ -218,7 +214,6 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
           this.stopProgress();
           this.baselineHandledTerminalJobId = jobId;
           this.loadStyleBaselineStatus();
-          this.baselineTerminal.emit();
         }
         this.cdr.detectChanges();
       },
@@ -228,7 +223,6 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
         this.stopProgress();
         this.baselineHandledTerminalJobId = jobId;
         this.loadStyleBaselineStatus();
-        this.baselineTerminal.emit();
         this.cdr.detectChanges();
       },
     });
@@ -333,7 +327,7 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       stalePrefix: 'פרקים שהשתנו:',
       consentTitle: 'בניית סגנון הכתיבה של הספר',
       consentBody: 'פעולה זו תנתח את פרקי הספר כדי למדוד את סגנון הכתיבה שלו.',
-      consentPaidNote: 'הסכום מוצג משום שהספר מוגדר לשכבת חשיבה, שרצה על מודל בענן. טקסט הפרקים יישלח לספק צד שלישי ויוצא מהמחשב הזה. אפשר לשנות זאת בהגדרת שכבת המודל בלוח הספר.',
+      consentPaidNote: 'הסכום מוצג משום שהספר מוגדר לשכבת חשיבה, שרצה על מודל בענן. טקסט הפרקים יישלח לספק צד שלישי ויוצא מהמחשב הזה. אפשר לשנות זאת בקטע ההגדרות בהמשך הדף.',
       confirm: 'אישור',
       cancel: 'ביטול',
       crossModelWarning: 'המדידה נבנתה עם מודל אחר מהפעיל כעת. רעננו אותה לקבלת תוצאות מדויקות.',
@@ -353,7 +347,7 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       stalePrefix: 'Chapters changed:',
       consentTitle: "Build your book's writing style",
       consentBody: 'This will analyze the book chapters to measure how the book is written.',
-      consentPaidNote: 'The amount is shown because this book is set to the thinking tier, which runs on a cloud model. The chapter text is sent to a third-party provider and leaves this machine. You can change this in the model tier setting on the book dashboard.',
+      consentPaidNote: 'The amount is shown because this book is set to the thinking tier, which runs on a cloud model. The chapter text is sent to a third-party provider and leaves this machine. You can change this in the Settings section further down this page.',
       confirm: 'Confirm',
       cancel: 'Cancel',
       crossModelWarning: 'The measurement was built with a different model than the one now active. Refresh it for accurate results.',
