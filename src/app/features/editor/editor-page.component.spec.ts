@@ -1130,6 +1130,11 @@ class RegistryStub {
     this.active.next(running ? [...others, makeTrackedJob(bookId, kind)] : others);
   }
 
+  /** finding 19: push an arbitrary set of active jobs verbatim, for tests that need a specific kind. */
+  pushActive(jobs: TrackedJob[]): void {
+    this.active.next(jobs);
+  }
+
   /**
    * c01: the run dialog is now a REAL component in this suite (it is the surface the panel's unmount must
    * not strand), and it injects the registry. c02 needs the dialog to actually REACH state (b) and state
@@ -2323,6 +2328,49 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
 
       expect(dialogCard()).withContext('a run whose result WAS surfaced must keep its terminal card').not.toBeNull();
       expect(dialogStatus()).toBe(RUN_DIALOG_LABELS_HE['succeeded']);
+    });
+  });
+
+  // ── c07 finding 19: the per-chapter running mark is scoped to CHAPTER_SCOPED_KINDS ────────────────
+  describe('finding 19: the chapter breakdown reads an explicit kind allowlist, not any chapterId', () => {
+    beforeEach(() => {
+      component.bookId = 'book-1';
+      component.book = {
+        ...BOOK,
+        chapters: [
+          { id: 'ch-1', title: 'One', partName: null, order: 0, wordCount: 10, updatedAt: '' },
+          { id: 'ch-2', title: 'Two', partName: null, order: 1, wordCount: 10, updatedAt: '' },
+        ],
+      };
+      fixture.detectChanges();
+    });
+
+    /**
+     * Verified independently before this fix (not just trusted from the review): today only `proofread`
+     * ever carries a `chapterId` - `job-registry.service.ts`'s `analysisJobToSource` (the ONLY place a
+     * `TrackedJob.chapterId` is ever set from a reattach) hardcodes `kind: 'proofread'`, and the three
+     * book-level reattach sources (summary/review/style-baseline) never set `chapterId` at all. So this
+     * exact scenario - a NON-proofread kind carrying a chapterId - cannot happen in the shipped product
+     * today. It is exactly the scenario `CHAPTER_SCOPED_KINDS` exists to guard against: a future kind
+     * that starts carrying a chapterId without this reader being updated to know about it. This fails on
+     * the reverted code, which read the bare presence of `chapterId` with no kind check at all.
+     */
+    it('ignores a chapterId on a job whose kind is not in CHAPTER_SCOPED_KINDS', () => {
+      registryStub.pushActive([
+        {
+          id: 'j-1', kind: 'proofread', bookId: 'book-1', scopeLabel: 'פרק', titleHe: 'הגהה', titleEn: 'Proofread',
+          status: 'running', percent: 10, completedChunks: null, totalChunks: null, chunkClock: EMPTY_CHUNK_CLOCK,
+          message: '', startedAt: '', updatedAt: '', chapterId: 'ch-1',
+        },
+        {
+          id: 'j-2', kind: 'style-baseline', bookId: 'book-1', scopeLabel: 'Whole book', titleHe: 'סגנון', titleEn: 'Style',
+          status: 'running', percent: 10, completedChunks: null, totalChunks: null, chunkClock: EMPTY_CHUNK_CLOCK,
+          message: '', startedAt: '', updatedAt: '', chapterId: 'ch-2',
+        },
+      ]);
+
+      const running = component.spineSignals.chapters?.filter(c => c.running).map(c => c.chapterId);
+      expect(running).toEqual(['ch-1']);
     });
   });
 });

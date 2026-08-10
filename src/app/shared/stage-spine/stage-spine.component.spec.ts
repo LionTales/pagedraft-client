@@ -371,6 +371,42 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       expect(progress).toContain('23');
       expect(progress).toContain('12');
     });
+
+    /**
+     * Finding 30: 23 findings, 7 resolved, 12 open leaves 4 `acknowledged` - a bucket neither field
+     * counts. The old sentence ("7 of 23 resolved, 12 still open") named only 19 of the 23, which visibly
+     * fails to reconcile beside a ledger that shows a third group. The reconciled sentence must name all
+     * three counts so 7 + 4 + 12 = 23 actually appears end to end.
+     */
+    it('names the acknowledged bucket too, so the three counts add back up to the total', () => {
+      render(healthyBook());
+      expand('review');
+      const progress = text('[data-testid="spine-progress-review"]');
+      expect(progress).toContain('4');
+      expect(progress).toContain('7');
+      expect(progress).toContain('23');
+      expect(progress).toContain('12');
+    });
+
+    /** Finding 32: digits embedded inside this sentence are isolated (unicode-bidi), same as the marker/
+     *  chapter-order/behind-magnitude spans - just at the string level, since this count has no DOM
+     *  element of its own. */
+    it('isolates the digits inside the review progress sentence', () => {
+      render(healthyBook());
+      expand('review');
+      const nums = fixture.debugElement.query(By.css('[data-testid="spine-progress-review"]'))
+        .queryAll(By.css('.iso'));
+      expect(nums.length).withContext('one isolated span per embedded count').toBeGreaterThanOrEqual(3);
+    });
+
+    /** Finding 32: same treatment for stage 1's import detail. */
+    it('isolates the digits inside the import detail sentence', () => {
+      render(signals({ chapters: chapters(3), chaptersWithText: 2 }));
+      expand('import');
+      const nums = fixture.debugElement.query(By.css('[data-testid="spine-import-detail"]'))
+        .queryAll(By.css('.iso'));
+      expect(nums.length).toBeGreaterThanOrEqual(2);
+    });
   });
 
   // ── Stage 4: an entry point, never a tick ─────────────────────────────────────────────────────────

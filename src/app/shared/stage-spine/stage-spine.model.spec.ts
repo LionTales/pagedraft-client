@@ -301,6 +301,30 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       expect(s.action).toBe('open-findings');
     });
 
+    /**
+     * Finding 17: `deriveReview` used to RE-DERIVE the ready/behind decision from
+     * `staleVsBriefs || builtWithDifferentModel` instead of trusting `review.ready`, unlike its sibling
+     * `deriveBriefs`. These two cases seed a `ready` that DISAGREES with the two booleans, which the old
+     * derivation could never see (it never read `ready` at all) - so both fail on the reverted code.
+     */
+    it('TRUSTS `ready` over the two booleans: ready=true wins even if staleVsBriefs also says true', () => {
+      const s = stage(deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 3,
+        review: review({ ready: true, staleVsBriefs: true }),
+      })), 'review');
+      expect(s.state).toBe('ready');
+      expect(s.action).toBe('open-findings');
+    });
+
+    it('TRUSTS `ready` over the two booleans: ready=false is behind even if neither booleans says why', () => {
+      const s = stage(deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 3,
+        review: review({ ready: false, staleVsBriefs: false, builtWithDifferentModel: false }),
+      })), 'review');
+      expect(s.state).toBe('behind');
+      expect(s.behindReasons).toEqual([]);
+    });
+
     it('carries the finding counts VERBATIM, so open is never derived as total minus resolved', () => {
       // 23 total, 7 resolved, 12 open. The missing 4 are `acknowledged`, a third bucket that neither
       // count includes - which is exactly why the open count ships as its own field.

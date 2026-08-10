@@ -459,6 +459,22 @@ export type JobKind = 'summary' | 'review' | 'proofread' | 'style-baseline';
 const WHOLE_BOOK_BUILD_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['summary', 'review']);
 
 /**
+ * The JobKinds that can carry a `chapterId` and therefore belong in a book's PER-CHAPTER running
+ * breakdown (the spine's stage 4, hosted by both `book-dashboard.component.ts` and
+ * `editor-page.component.ts`). `proofread` is the only chapter/scene-scoped async analysis path today
+ * (Proofread, LineEdit and the single-shot whole-chapter types all share it, distinguished by
+ * `analysisType`) - see {@link analysisJobToSource}, the one place a `TrackedJob.chapterId` is ever set.
+ *
+ * Mirrors {@link WHOLE_BOOK_BUILD_KINDS}: an explicit allowlist, not "any job that happens to carry a
+ * chapterId". Both hosts used to read the per-chapter breakdown off that absence rather than off this
+ * set, two functions away from the idiom this constant establishes - true today only because no other
+ * kind's `track()` call site ever passes `chapterId`, a fact enforced by nothing. Exported so the two
+ * hosts read the SAME allowlist rather than each re-deriving "chapter-scoped" from the negative space of
+ * {@link WHOLE_BOOK_BUILD_KINDS}.
+ */
+export const CHAPTER_SCOPED_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['proofread']);
+
+/**
  * c02 (2026-08-03): the JobKinds whose `totalChunks` denominator is a unit a reader can identify from
  * the run's own scope, and which may therefore render the BARE, unlabelled `3/10` pair.
  *

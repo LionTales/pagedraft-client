@@ -27,6 +27,20 @@ export function spineLang(bookLanguage: string | null | undefined): SpineLang {
 
 type Bi = Record<SpineLang, string>;
 
+/**
+ * Wrap every digit run in `<span class="iso">`, Angular's `[innerHTML]`-safe way to isolate a count
+ * INSIDE a sentence rather than in its own DOM element. Digits are LTR glyphs; the marker number, chapter
+ * order and behind-magnitude get the same treatment for free because they are already separate elements
+ * with `unicode-bidi: isolate` in `stage-spine.component.ts`'s styles - a count embedded in a Hebrew
+ * sentence (import detail, findings progress, the chapter-toggle count) has no element of its own to put
+ * that CSS on, so this does the same thing at the string level. `class`, not inline `style`: Angular's
+ * default HTML sanitizer (no `bypassSecurityTrust*`, matching `markdown-text.component.ts`) keeps `span`
+ * and `class` but strips `style`.
+ */
+function isolateDigits(text: string): string {
+  return text.replace(/\d+/g, digits => `<span class="iso">${digits}</span>`);
+}
+
 /** The five stage names. DRAFT he. */
 export const STAGE_NAMES: Record<SpineStageId, Bi> = {
   'import': { he: 'ייבוא', en: 'Import' },
@@ -176,36 +190,47 @@ export function importDetail(
 ): string | null {
   if (chaptersWithText === null) return null;
   if (chapterCount > 0 && chaptersWithText === 0) {
-    return lang === 'he'
+    return isolateDigits(lang === 'he'
       ? `יש ${chapterCount} פרקים, אך עדיין אין בהם טקסט.`
-      : `${chapterCount} chapters exist, but none of them has any text yet.`;
+      : `${chapterCount} chapters exist, but none of them has any text yet.`);
   }
   if (chaptersWithText > 0) {
-    return lang === 'he'
+    return isolateDigits(lang === 'he'
       ? `${chaptersWithText} מתוך ${chapterCount} פרקים מכילים טקסט.`
-      : `${chaptersWithText} of ${chapterCount} chapters contain text.`;
+      : `${chaptersWithText} of ${chapterCount} chapters contain text.`);
   }
   return null;
 }
 
 /**
- * Stage 3's working-through progress, from `resolvedFindingCount` over `findingCount`.
+ * Stage 3's working-through progress, from `resolvedFindingCount` and `openFindingCount` over
+ * `findingCount`.
  *
- * It renders ONLY what the two fields say. `acknowledged` findings are counted by neither field, so the
- * open count is stated separately rather than derived as total minus resolved, which would be wrong.
+ * `acknowledged` findings are counted by NEITHER `resolved` nor `open` (be-c05:
+ * `FindingStatusBucket.Acknowledged`, the third bucket) - a naive "N resolved, K open" sentence therefore
+ * visibly fails to add up to the total whenever an acknowledged finding exists ("2 of 5 resolved, 2 still
+ * open" reads as 4, not 5), even though the underlying fields are exactly the ones the ledger uses (finding
+ * 30). be-c05 also added the server-side guarantee that the three buckets are TOTAL over the vocabulary, so
+ * this subtraction is exact rather than a guess: nothing here is derived FROM an absent fact, only from the
+ * two counts the payload actually carries plus the total it also carries. The acknowledged clause is
+ * omitted when it is zero, matching how the open clause already behaves.
  */
 export function findingsProgress(status: StageStatus, lang: SpineLang): string | null {
   const total = status.findingTotal;
   const resolved = status.findingResolved;
   if (total === null || resolved === null || total <= 0) return null;
-  const open = status.findingOpen;
-  const base = lang === 'he'
+  const open = status.findingOpen ?? 0;
+  const acknowledged = Math.max(0, total - resolved - open);
+  let sentence = lang === 'he'
     ? `${resolved} מתוך ${total} ממצאים טופלו`
     : `${resolved} of ${total} findings resolved`;
-  if (open === null || open <= 0) return `${base}.`;
-  return lang === 'he'
-    ? `${base}, ${open} עדיין פתוחים.`
-    : `${base}, ${open} still open.`;
+  if (acknowledged > 0) {
+    sentence += lang === 'he' ? `, ${acknowledged} נצפו` : `, ${acknowledged} acknowledged`;
+  }
+  if (open > 0) {
+    sentence += lang === 'he' ? `, ${open} עדיין פתוחים` : `, ${open} still open`;
+  }
+  return isolateDigits(`${sentence}.`);
 }
 
 // Stage 5 used to carry an EXPORT_UNAVAILABLE_REASON here: the sentence that explained, honestly, that the
@@ -256,7 +281,7 @@ export function behindMagnitudeLabel(magnitude: number, lang: SpineLang): string
 
 /** Stage 4's entry point into the per-chapter breakdown. */
 export function chapterListToggleLabel(count: number, lang: SpineLang): string {
-  return lang === 'he' ? `בחירת פרק (${count})` : `Choose a chapter (${count})`;
+  return isolateDigits(lang === 'he' ? `בחירת פרק (${count})` : `Choose a chapter (${count})`);
 }
 
 /** Marks one chapter in the breakdown as having a pass in flight. */

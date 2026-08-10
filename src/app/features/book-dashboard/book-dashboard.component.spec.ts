@@ -11,7 +11,7 @@ import { SimpleChange } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
-import { NEVER, Observable, Subject, of } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, Subject, of } from 'rxjs';
 import { BookProfileDto } from '../../core/models/book';
 import {
   BookDashboardComponent,
@@ -27,7 +27,8 @@ import { BookReviewService } from '../../core/services/book-review.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { ChapterSummaryService } from '../../core/services/chapter-summary.service';
 import { CharacterRegisterService } from '../../core/services/character-register.service';
-import { JobRegistryService } from '../../core/services/job-registry.service';
+import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
@@ -2215,5 +2216,87 @@ describe('BookDashboardComponent survives an in-session language change with loa
       .withContext('a stale null from the context reset must never overwrite the answer for the new language')
       .toBe('en');
     expect(component.spineSignals.review?.language).toBe('en');
+  });
+});
+
+// ─── c07 finding 19: the per-chapter running mark is scoped to CHAPTER_SCOPED_KINDS ──────────────────
+describe('BookDashboardComponent finding 19: the chapter breakdown reads an explicit kind allowlist', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  let activeJobs$: BehaviorSubject<TrackedJob[]>;
+
+  function job(overrides: Partial<TrackedJob> = {}): TrackedJob {
+    return {
+      id: 'j', kind: 'proofread', bookId: 'book-1', scopeLabel: 'פרק', titleHe: 'הגהה', titleEn: 'Proofread',
+      status: 'running', percent: 10, completedChunks: null, totalChunks: null, chunkClock: EMPTY_CHUNK_CLOCK,
+      message: '', startedAt: '', updatedAt: '', ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    // A live BehaviorSubject, held open, so a test can push a second snapshot AFTER the component has
+    // already mounted and subscribed - mirrors RegistryStub.active in editor-page.component.spec.ts.
+    activeJobs$ = new BehaviorSubject<TrackedJob[]>([]);
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$, jobs$: of([]) }) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER }),
+        },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        { provide: CharacterRegisterService, useValue: { getRegister: () => NEVER, applyEdits: () => NEVER } },
+        {
+          provide: AiTierService,
+          useValue: { watch: () => NEVER, refresh: () => NEVER, get: () => NEVER, setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER },
+        },
+      ],
+    }).compileComponents();
+
+    localStorage.removeItem('pd:dashboard-collapse:book-1');
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+    component.bookLanguage = 'he';
+    component.chapters = [
+      { id: 'ch-1', title: 'One', partName: null, order: 0, wordCount: 10, updatedAt: '' },
+      { id: 'ch-2', title: 'Two', partName: null, order: 1, wordCount: 10, updatedAt: '' },
+    ];
+    fixture.detectChanges();
+  });
+
+  /**
+   * Verified independently before this fix (not just trusted from the review): today only `proofread`
+   * ever carries a `chapterId` - `job-registry.service.ts`'s `analysisJobToSource` (the ONLY place a
+   * `TrackedJob.chapterId` is ever set from a reattach) hardcodes `kind: 'proofread'`, and the three
+   * book-level reattach sources (summary/review/style-baseline) never set `chapterId` at all. So this
+   * exact scenario - a NON-proofread kind carrying a chapterId - cannot happen in the shipped product
+   * today. It is exactly the scenario `CHAPTER_SCOPED_KINDS` exists to guard against: a future kind that
+   * starts carrying a chapterId without this reader being updated to know about it. Fails on the reverted
+   * code, which read the bare presence of `chapterId` with no kind check at all (the twin of the
+   * editor-page.component.spec.ts regression test for the same finding).
+   */
+  it('ignores a chapterId on a job whose kind is not in CHAPTER_SCOPED_KINDS', () => {
+    activeJobs$.next([
+      job({ id: 'j-1', kind: 'proofread', chapterId: 'ch-1' }),
+      job({ id: 'j-2', kind: 'style-baseline', titleHe: 'סגנון', titleEn: 'Style', chapterId: 'ch-2' }),
+    ]);
+
+    const running = component.spineSignals.chapters?.filter(c => c.running).map(c => c.chapterId);
+    expect(running).toEqual(['ch-1']);
   });
 });

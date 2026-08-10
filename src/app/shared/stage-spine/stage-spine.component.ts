@@ -1,6 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChanges } from '@angular/core';
 
+import { chapterDisplayNumber } from '../../core/utils/chapter-number';
 import {
   BEHIND_FALLBACK,
   CHAPTER_RUNNING_LABEL,
@@ -93,10 +94,23 @@ export interface StageActionEvent {
  *                           direction-aware swap the way a left/right arrow would.
  *   - state chip            MIRRORS. It follows the name in reading order.
  *   - the `behind` accent   MIRRORS. `border-inline-start`, so it hugs the reading edge.
- *   - action button         MIRRORS. Full row width, text aligned to `start`.
- *   - numerals              PHYSICALLY FIXED, and deliberately: digits are LTR glyphs, so the marker
- *                           number, the chapter order and the counts inside sentences are wrapped in
- *                           `unicode-bidi: isolate` to keep them from reordering inside Hebrew runs.
+ *   - action button         MIRRORS (full row width). The LABEL is `text-align: center` (`.stage-action`),
+ *                           not `start` - deliberate, matching every other full-width primary button in
+ *                           this app - and center alignment is symmetric under mirroring, so there is
+ *                           nothing to physically fix or preserve reading order for here.
+ *   - numerals              PHYSICALLY FIXED, and deliberately: digits are LTR glyphs. The marker number,
+ *                           the chapter order and the behind-magnitude badge are separate elements with
+ *                           `unicode-bidi: isolate` in the styles below. A count EMBEDDED inside a
+ *                           sentence has no element of its own to put that CSS on - stage 1's import
+ *                           detail, stage 3's findings progress and stage 4's chapter-toggle count get the
+ *                           same isolation at the string level instead (`isolateDigits`,
+ *                           `stage-spine.copy.ts`), wrapping each digit run in `<span class="iso">`
+ *                           and rendered via `[innerHTML]` (Angular's default sanitizer; no
+ *                           `bypassSecurityTrust*`). Stage 5's "nothing written" sentence
+ *                           (`exportNothingWrittenDetail`) is the one remaining sentence-embedded count
+ *                           NOT yet isolated - named here on purpose rather than silently, since a
+ *                           per-element list that misstates its own members is the defect this comment
+ *                           exists to stop repeating.
  *   - the running spinner   PHYSICALLY FIXED. A rotation has no reading direction.
  *
  * ── RTL in the COMPACT density (w3), same discipline, per element ──────────────────────────────────
@@ -223,9 +237,12 @@ export interface StageActionEvent {
                   </div>
                 }
 
-                <!-- Stage 1's honest detail: chapters exist but none has text yet, or the coverage. -->
+                <!-- Stage 1's honest detail: chapters exist but none has text yet, or the coverage. The
+                     count is isolated ([innerHTML], Angular's default sanitizer, no bypassSecurityTrust*
+                     - see stage-spine.copy.ts's isolateDigits) so it cannot reorder inside the Hebrew
+                     sentence around it. -->
                 @if (importDetailText(stage); as detail) {
-                  <p class="stage-line" data-testid="spine-import-detail">{{ detail }}</p>
+                  <p class="stage-line" data-testid="spine-import-detail" [innerHTML]="detail"></p>
                 }
 
                 <!-- Stage 5's honest detail: the chapters are there, the words are not, so the file would
@@ -235,9 +252,10 @@ export interface StageActionEvent {
                   <p class="stage-line" data-testid="spine-export-detail">{{ detail }}</p>
                 }
 
-                <!-- Stage 3's working-through progress, straight off the two counts. -->
+                <!-- Stage 3's working-through progress, straight off the two counts (isolated digits, see
+                     above). -->
                 @if (progressText(stage); as progress) {
-                  <p class="stage-line" data-testid="spine-progress-review">{{ progress }}</p>
+                  <p class="stage-line" data-testid="spine-progress-review" [innerHTML]="progress"></p>
                 }
 
                 <!-- Stage 4: the ENTRY POINT into the per-chapter breakdown. Never a book-level tick. -->
@@ -248,8 +266,8 @@ export interface StageActionEvent {
                     data-testid="spine-chapters-toggle"
                     [attr.aria-expanded]="chaptersOpen"
                     aria-controls="spine-chapter-list"
-                    (click)="chaptersOpen = !chaptersOpen">
-                    {{ chapterToggleText(stage) }}
+                    (click)="chaptersOpen = !chaptersOpen"
+                    [innerHTML]="chapterToggleText(stage)">
                   </button>
                   @if (chaptersOpen) {
                     <ul class="chapter-list" id="spine-chapter-list" data-testid="spine-chapters">
@@ -260,7 +278,7 @@ export interface StageActionEvent {
                             class="chapter-btn"
                             [attr.data-testid]="'spine-chapter-' + chapter.chapterId"
                             (click)="onChapterClick(chapter)">
-                            <span class="chapter-order">{{ chapter.order + 1 }}</span>
+                            <span class="chapter-order">{{ chapterNumber(chapter.order) }}</span>
                             <span class="chapter-title">{{ chapter.title }}</span>
                             @if (chapter.running) {
                               <span class="chapter-running">{{ text(CHAPTER_RUNNING_LABEL) }}</span>
@@ -464,6 +482,9 @@ export interface StageActionEvent {
     .stage-line--explain { color: var(--pd-text-secondary); }
     .stage-line--blocked { color: var(--pd-secondary-700); font-weight: var(--pd-weight-medium); }
     .stage-line--behind { color: var(--pd-text); }
+
+    /* Sentence-embedded count (isolateDigits, stage-spine.copy.ts): same isolation as the spans below. */
+    .iso { unicode-bidi: isolate; }
 
     .behind-block {
       display: flex;
@@ -803,6 +824,11 @@ export class StageSpineComponent implements OnInit, OnChanges {
 
   chapterToggleText(stage: StageStatus): string {
     return chapterListToggleLabel(stage.chapters?.length ?? 0, this.lang);
+  }
+
+  /** c07: the shared chapter-numbering convention. See {@link chapterDisplayNumber}. */
+  chapterNumber(order: number): number {
+    return chapterDisplayNumber(order);
   }
 
   actionText(stage: StageStatus): string {

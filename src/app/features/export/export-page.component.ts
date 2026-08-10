@@ -17,6 +17,7 @@ import {
 import { BookService } from '../../core/services/book.service';
 import { ExportService } from '../../core/services/export.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
+import { chapterDisplayNumber } from '../../core/utils/chapter-number';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
 import {
   EXPORT_SURFACE_AVAILABLE,
@@ -623,14 +624,13 @@ export class ExportPageComponent implements OnInit, OnDestroy {
    * both in the picker and in the skipped-chapter notice, so this screen cannot call one chapter two
    * different numbers on the same page.
    *
-   * FOR c07 (`c07-spine-contract-drift`): that todo owns the cross-surface numbering decision, because two
-   * other surfaces (`book-review-findings`, `book-story-bible`) render the RAW order while this screen and
-   * the spine render `order + 1`. This helper is deliberately the ONLY spelling inside this file, so c07
-   * has one line to change here rather than two, and it should be replaced by the shared helper rather
-   * than left as a third convention.
+   * c07: this used to be a private stopgap (`order + 1`) so a third numbering convention could not form
+   * before the cross-surface decision landed. It now delegates to the shared {@link chapterDisplayNumber},
+   * the same function `stage-spine.component.ts`, `book-review-findings.component.ts` and
+   * `book-story-bible.component.ts` call - one convention, one place it is computed.
    */
   private chapterNumber(order: number): number {
-    return order + 1;
+    return chapterDisplayNumber(order);
   }
 
   // ── Running an export ───────────────────────────────────────────────────────────────────────────

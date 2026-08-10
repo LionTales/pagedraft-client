@@ -16,7 +16,7 @@ import {
 import { AnalysisResultDto } from '../../core/models/analysis';
 import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
-import { JobRegistryService } from '../../core/services/job-registry.service';
+import { CHAPTER_SCOPED_KINDS, JobRegistryService } from '../../core/services/job-registry.service';
 import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
 import { BookStyleBaselineStatusRowComponent } from './book-style-baseline-status-row.component';
 import { BookReviewState, BookReviewStatusRowComponent } from './book-review-status-row.component';
@@ -1182,15 +1182,16 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
 
   /**
    * Track which chapters have an analysis pass in flight, so stage 4's per-chapter breakdown can mark
-   * them. `activeJobs$` is already filtered to non-terminal jobs; the chapter-scoped kinds are the ones
-   * that carry a `chapterId`, and the book filter keeps another book's run out of this book's spine.
+   * them. `activeJobs$` is already filtered to non-terminal jobs; {@link CHAPTER_SCOPED_KINDS} is the
+   * explicit allowlist of kinds that can carry a `chapterId` (the `WHOLE_BOOK_BUILD_KINDS` idiom, applied
+   * to the chapter-scoped side), and the book filter keeps another book's run out of this book's spine.
    */
   private watchRunningChapters(): void {
     this.runningChaptersSub?.unsubscribe();
     this.runningChaptersSub = this.jobRegistry.activeJobs$.subscribe(jobs => {
       const next = new Set<string>();
       for (const job of jobs) {
-        if (job.bookId === this.bookId && job.chapterId) next.add(job.chapterId);
+        if (job.bookId === this.bookId && CHAPTER_SCOPED_KINDS.has(job.kind) && job.chapterId) next.add(job.chapterId);
       }
       this.runningChapterIds = next;
       this.rebuildSpineSignals();

@@ -347,8 +347,10 @@ function behindReasonsForBriefs(summary: BookSummaryStatusDto): BehindReason[] {
  *                               wasted action in the product, and the strip this replaces structurally
  *                               could not warn about it because it fused the two stages into one box.
  *   !hasReview               -> not-started.
- *   staleVsBriefs || builtWithDifferentModel -> behind.
- *   ready                    -> ready.
+ *   !ready                   -> behind, naming `staleVsBriefs` / `builtWithDifferentModel` as the reason(s).
+ *   ready                    -> ready. TRUSTS `review.ready` rather than re-deriving it from the two
+ *                               booleans above, exactly as `deriveBriefs` trusts `summary.ready` - the DTO's
+ *                               own doc says `ready` is the gate and callers must use it.
  *
  * THE WALKABILITY RULE FOR `blocked`, and why zero chapters names Import rather than the briefs. The
  * `blocked` contract is two halves: name the prerequisite AND offer the way to fix it. An offered action
@@ -398,7 +400,12 @@ function deriveReview(
     base.action = 'build-review';
     return base;
   }
-  if (review.staleVsBriefs || review.builtWithDifferentModel) {
+  // Trust the server's `ready`, exactly as `deriveBriefs` trusts `summary.ready`: `BookReviewStatus.IsReady`
+  // (and its wire twin `BookReviewStatusDto.ready`) already state the readiness gate
+  // (`hasBriefs && hasReview && !builtWithDifferentModel && !staleVsBriefs`) and their own doc says callers
+  // must trust it rather than re-derive it. `staleVsBriefs` / `builtWithDifferentModel` are read below only
+  // to NAME the reason a not-ready review is behind, never to decide ready vs. not.
+  if (!review.ready) {
     base.state = 'behind';
     base.action = 'build-review';
     if (review.staleVsBriefs) base.behindReasons.push('briefs-rebuilt');

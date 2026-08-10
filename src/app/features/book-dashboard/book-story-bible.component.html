@@ -118,7 +118,7 @@
         [attr.data-chapter-id]="a.chapterId"
         [attr.data-testid]="'bible-anchor-' + f.id + '-' + a.chapterId"
         (click)="onAnchorClick(a)">
-        {{ a.order }}. {{ a.title }}
+        {{ chapterNumber(a.order) }}. {{ a.title }}
       </button>
     </div>
 

@@ -11,7 +11,7 @@ import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisService } from '../../core/services/analysis.service';
-import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { CHAPTER_SCOPED_KINDS, JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { ReviseContextService } from '../../core/services/revise-context.service';
 import { BookDetailDto, ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
 import { ChapterAnchor } from '../../core/models/book-review';
@@ -491,7 +491,11 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
   private rebuildSpineSignals(): void {
     const jobs = this.activeJobsSnapshot.filter(j => j.bookId === this.bookId);
     const chapters = this.book?.chapters ?? null;
-    const runningChapterIds = new Set(jobs.map(j => j.chapterId).filter((id): id is string => !!id));
+    // Chapter-scoped breakdown: the explicit allowlist (twin of book-dashboard's watchRunningChapters),
+    // not every job that happens to carry a chapterId.
+    const runningChapterIds = new Set(
+      jobs.filter(j => CHAPTER_SCOPED_KINDS.has(j.kind) && j.chapterId).map(j => j.chapterId as string),
+    );
     this.spineSignals = {
       chapters: chapters
         ? chapters
