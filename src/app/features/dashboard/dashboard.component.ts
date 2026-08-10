@@ -328,9 +328,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * object identity across change-detection ticks instead of a fresh one that would re-run the derivation
    * continuously - and, per NIT 53, an untouched row keeps its EXISTING object reference rather than being
    * reallocated alongside whichever row actually changed.
+   *
+   * A SCOPED rebuild carries the previous map forward (that is the point); a FULL one starts empty, so a
+   * book that has left the list - deleted, or absent from a reloaded list - takes its entry with it rather
+   * than being retained for an id that can never be rendered again.
    */
   private rebuildSpineSignals(bookIds?: ReadonlySet<string>): void {
-    const next = new Map<string, StageSpineSignals>(this.spineSignals);
+    const next = bookIds
+      ? new Map<string, StageSpineSignals>(this.spineSignals)
+      : new Map<string, StageSpineSignals>();
     const ids = bookIds ?? new Set(this.books.map(b => b.id));
     for (const id of ids) {
       const b = this.books.find(x => x.id === id);
@@ -350,8 +356,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
         summaryRunning: this.runningBriefs.has(b.id),
         reviewRunning: this.runningReview.has(b.id),
         // w4's export screen exists, and stage 5 needs nothing this row does not already have: it derives
-        // from `chapterCount` alone (the M1 count), so it is REAL on the books list for free - ready when
-        // there are chapters, blocked by Import when there are none.
+        // from the SAME TWO M1 counts stage 1 does (`chapterCount` and `chaptersWithTextCount`, both set
+        // above), so it is REAL on the books list for free - ready once some chapter carries text, blocked
+        // by Import both when there are no chapters and when none of them has been written in. It read
+        // `chapterCount` alone until c01, which is how a book of empty chapters used to render stage 1
+        // "no text yet" and stage 5 "ready" side by side in this very list.
         exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
       });
     }

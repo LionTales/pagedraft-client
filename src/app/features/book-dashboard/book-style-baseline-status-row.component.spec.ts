@@ -481,6 +481,26 @@ describe('BookStyleBaselineStatusRowComponent (w5 MOVE-1 + MOVE-2)', () => {
       expect(component.showBaselineConsent).toBeFalse();
     });
 
+    /**
+     * All three actions on this row are bound to `blockedByImport`, but only `bsb-build-now` was asserted:
+     * flipping the getter to a constant `false` left the REBUILD and REFRESH states green. The summary row
+     * already pins all of its states this way, so this is the same fence, one row over.
+     */
+    it('disables the REBUILD and REFRESH actions too, so no state can escape the precondition', () => {
+      component.chapterCount = 0;
+      component.styleBaselineStatus = makeStatus();
+      fixture.detectChanges();
+      expect(component.baselineState).toBe('ready');
+      expect((query('[data-testid="bsb-rebuild"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="bsb-needs-import"]')).not.toBeNull();
+
+      component.styleBaselineStatus = makeStatus({ ready: false, staleCount: 3, chaptersToBuild: 3 });
+      fixture.detectChanges();
+      expect(component.baselineState).toBe('stale');
+      expect((query('[data-testid="bsb-refresh"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="bsb-needs-import"]')).not.toBeNull();
+    });
+
     it('leaves the build ENABLED while the chapter count is not known yet (null is not empty)', () => {
       component.chapterCount = null;
       component.styleBaselineStatus = makeStatus({ hasBaseline: false, ready: false, builtChapters: 0 });

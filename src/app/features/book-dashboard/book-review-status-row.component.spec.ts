@@ -1386,6 +1386,34 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
       expect(he).not.toContain('—');
       expect(en).not.toContain('—');
     });
+
+    /**
+     * The row's THREE actions are all bound to `blockedByImport`, but only the consent gate was asserted:
+     * flipping the getter to a constant `false` left every rendered button's disabled state green. The
+     * summary row already pins all of its states this way; this is the same fence on this row, plus the
+     * reason beside them, so no state can show a disabled build with nothing explaining it.
+     */
+    it('disables the BUILD and the REFRESH actions, each with the reason beside it', () => {
+      component.chapterCount = 0;
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect((query('[data-testid="brev-needs-import"]').nativeElement as HTMLElement).textContent!.trim())
+        .toBe(component.bookReviewLabel('needsImport'));
+
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: true, ready: false, hasBriefs: true, staleVsBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-refresh"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="brev-needs-import"]')).not.toBeNull();
+    });
+
+    it('leaves both actions ENABLED while the chapter count is not known yet (null is not empty)', () => {
+      component.chapterCount = null;
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="brev-needs-import"]')).toBeNull();
+    });
   });
 
   /**

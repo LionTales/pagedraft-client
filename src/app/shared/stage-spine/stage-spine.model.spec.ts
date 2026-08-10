@@ -560,5 +560,30 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       }));
       expect(focusStageId(all)).toBe('chapter-passes');
     });
+
+    /**
+     * NIT 46, and the assertion the fix for it shipped without: "every stage is settled" and "nothing has
+     * landed yet" both produce a `find` miss, so the settled-book fallback above passes either way. On the
+     * FIRST PAINT of every host the signals are empty and every stage reads `unknown`, and the unguarded
+     * fallback opened "Chapter editing passes" there before visibly jumping to whichever stage actually
+     * wanted attention the instant real data arrived. Deleting the guard leaves the whole suite green
+     * without this case.
+     */
+    it('lands on Import, not the per-chapter stage, while nothing has landed yet', () => {
+      const all = deriveStageSpine(emptyStageSpineSignals());
+      // Premise: this is a `find` MISS, exactly like the settled book above - so the two cases are only
+      // told apart by the guard under test.
+      expect(all.every(s => s.unknown)).toBeTrue();
+      expect(all.every(s => s.state === null)).toBeTrue();
+      expect(focusStageId(all)).toBe('import');
+    });
+
+    it('still prefers a stage that wants something over the loading fallback', () => {
+      // Half-landed: the chapter counts are in, the two build statuses are not. Stage 1 wants text in
+      // those chapters, and that beats both fallbacks.
+      const all = deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 }));
+      expect(all.some(s => s.unknown)).toBeTrue();
+      expect(focusStageId(all)).toBe('import');
+    });
   });
 });
