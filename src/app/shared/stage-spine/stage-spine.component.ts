@@ -121,13 +121,49 @@ export interface StageActionEvent {
  *                           order survives as READING order rather than as a fixed left-to-right one.
  *   - the pip numbers       PHYSICALLY FIXED (`unicode-bidi: isolate`): digits are LTR glyphs and must not
  *                           reorder inside a Hebrew run.
+ *   - the blocked strike    PHYSICALLY FIXED, and it costs nothing: the stripe is drawn corner to corner
+ *                           across the pip, which is symmetric under mirroring, so the same physical
+ *                           angle reads the same in both directions. It is a background stripe on the
+ *                           pip itself (see `.compact-pip[data-state='blocked']` in the styles), NOT a
+ *                           pseudo-element, so the pip keeps a transparent background-COLOR and the fill
+ *                           test below stays a test of the fill.
  *   - the summary line      MIRRORS. `text-align: start`.
  * Nothing in this density is draggable, anchored or animated toward a corner, so nothing needs pinning.
+ *
+ * ── THE STATE PALETTE, and the one rule it obeys ──────────────────────────────────────────────────
+ * A state may be drawn in a SATURATED BRAND TINT, and filled, only when the app computed something that
+ * actually happened: `ready` (it is done), `behind` (it was done and the book moved), `running` (it is
+ * happening now), `not-started` (nothing yet, and this is the stage asking for the next move). Every
+ * state that carries NO progress comes out of the neutral ramp, unfilled wherever it can be: `blocked`,
+ * `unavailable`, `per-chapter` and the honest "not known". THE FILL IS THE CLAIM, so the filled pips on
+ * a books-list row are countable at a glance and the count is true.
+ *
+ * `blocked` used to sit in the secondary teal ramp - filled, saturated, solid-edged, which is exactly the
+ * class `ready` occupies. On the books list, where every pip's label is visually hidden, that made an
+ * EMPTY book (one stage asking for an import, four blocked behind it) show five filled pips while a book
+ * with real chapters showed two: the book with nothing done read as FURTHER ALONG. The words and the
+ * accessible names were honest the whole time; only the drawing lied, at the one glance level the strip
+ * this component replaces also lied at. So blocked is neutral now, and unfilled: inert, waiting,
+ * unmistakably not progress.
+ *
+ * THE COMPACT PIP ALSO GETS A NON-COLOUR MARK, which the full rows do not need. A full row states
+ * "blocked" in words and names its prerequisite underneath; a pip has no visible label at all, so colour
+ * would be its only channel - and colour alone is not an accessible signal. A blocked pip is therefore
+ * struck through with a diagonal stripe (its rule in the styles below): it survives greyscale, every form of
+ * colour blindness and a 16px glance, it reads as "not available" in every UI convention, it is the one
+ * mark no progress state carries, and it keeps blocked distinct from the dashed no-signal pips beside it,
+ * which matter because "you cannot do this yet" and "this surface never asked" are different facts.
+ *
+ * Contrast, measured on the rendered page at :4201 and pinned by spec: the pip's digit and its stripe
+ * (both `currentColor`) 7.12:1 against the list surface, its edge 4.26:1, the full-density chip 6.63:1,
+ * the prerequisite sentence 13.89:1.
  *
  * ── The two hard rules ────────────────────────────────────────────────────────────────────────────
  * 1. Nothing is presented as done unless the app computed it. Stage 1 is derived from the chapters (the
  *    old `Structure` was the literal string 'done'), stage 4 makes no book-level claim at all, and
  *    stage 5 reads the chapters too - `blocked` when there are none, which is the server's own 409.
+ *    The rule binds the PIXELS as well as the words - see THE STATE PALETTE above. A reader who never
+ *    reads a label must not be able to count a book with nothing done as further along than one with work.
  * 2. Tokens only (`--pd-*`), no em-dash or en-dash in any user-facing string, no model or provider
  *    identity anywhere including in the `behind` reasons, and Syncfusion is not touched.
  */
@@ -391,6 +427,7 @@ export interface StageActionEvent {
     .spine-stage--behind .stage-marker { border-color: var(--pd-improve); }
     .spine-stage--running .stage-marker { border-color: var(--pd-info); }
     .spine-stage--unavailable .stage-marker { border-color: var(--pd-neutral-300); }
+    .spine-stage--blocked .stage-marker { border-color: var(--pd-neutral-500); }
 
     .stage-spinner {
       display: inline-block;
@@ -436,14 +473,19 @@ export interface StageActionEvent {
       white-space: normal;
       overflow-wrap: break-word;
     }
+    /* THE STATE PALETTE: brand tint = the app computed something that happened; neutral ramp = it did
+       not. Blocked is neutral and unfilled. The argument is in the class doc, do not re-hue from here. */
     .state--ready { color: var(--pd-keep); background: var(--pd-keep-bg); border-color: var(--pd-keep-border); }
     .state--behind { color: var(--pd-improve); background: var(--pd-improve-bg); border-color: var(--pd-improve-border); }
     .state--running { color: var(--pd-info); background: var(--pd-info-bg); border-color: var(--pd-info); }
-    .state--blocked { color: var(--pd-secondary-700); background: var(--pd-secondary-50); border-color: var(--pd-secondary-300); }
     .state--not-started { color: var(--pd-primary-700); background: var(--pd-primary-50); border-color: var(--pd-primary-200); }
+    /* The no-progress family, drawn as one thing. Blocked joins it and is set apart by a stronger edge
+       (neutral-500, not -300, so the mark clears 3:1) and by its own word and prerequisite sentence. */
+    .state--blocked,
     .state--unavailable,
     .state--unknown,
     .state--per-chapter { color: var(--pd-text-muted); background: var(--pd-neutral-100); border-color: var(--pd-neutral-300); }
+    .state--blocked { border-color: var(--pd-neutral-500); }
 
     .stage-chevron {
       flex: 0 0 auto;
@@ -461,7 +503,9 @@ export interface StageActionEvent {
       border-inline-start-width: 3px;
       border-inline-start-color: var(--pd-improve);
     }
-    .spine-stage--blocked { border-color: var(--pd-secondary-300); }
+    /* Blocked and unavailable are both INERT: sunken, not tinted, so a column of them reads as waiting
+       rather than as results. Blocked keeps the default border - it used to override it with teal. */
+    .spine-stage--blocked,
     .spine-stage--unavailable { background: var(--pd-neutral-50); }
 
     /* ── Row body ── */
@@ -479,8 +523,10 @@ export interface StageActionEvent {
       line-height: var(--pd-lh-caption);
       color: var(--pd-text-secondary);
     }
-    .stage-line--explain { color: var(--pd-text-secondary); }
-    .stage-line--blocked { color: var(--pd-secondary-700); font-weight: var(--pd-weight-medium); }
+    /* .stage-line--explain needs no rule: it takes .stage-line's colour, and it is a spec/semantic hook. */
+    /* The prerequisite sentence must READ loudly, so it takes full body ink - and no hue, because it is
+       text rather than a verdict. */
+    .stage-line--blocked { color: var(--pd-text); font-weight: var(--pd-weight-medium); }
     .stage-line--behind { color: var(--pd-text); }
 
     /* Sentence-embedded count (isolateDigits, stage-spine.copy.ts): same isolation as the spans below. */
@@ -631,15 +677,24 @@ export interface StageActionEvent {
     /* The one state vocabulary, in colour. Same tokens the full rows use, so the two densities cannot
        disagree about what "behind" looks like. The last group - unavailable, per-chapter and the honest
        "not known here" - all read as ABSENCE of a claim and are drawn as one hollow pip; what tells them
-       apart is the pip's accessible name. */
+       apart is the pip's accessible name. THE FILL IS THE CLAIM (class doc), so blocked is unfilled. */
     .compact-pip[data-state='ready'] { color: var(--pd-keep); border-color: currentColor; background: var(--pd-keep-bg); }
     .compact-pip[data-state='behind'] { color: var(--pd-improve); border-color: currentColor; background: var(--pd-improve-bg); }
     .compact-pip[data-state='running'] { color: var(--pd-info); border-color: currentColor; background: var(--pd-info-bg); }
-    .compact-pip[data-state='blocked'] { color: var(--pd-secondary-700); border-color: var(--pd-secondary-300); background: var(--pd-secondary-50); }
     .compact-pip[data-state='not-started'] { color: var(--pd-primary-700); border-color: var(--pd-primary-200); background: var(--pd-primary-50); }
     .compact-pip[data-state='unavailable'],
     .compact-pip[data-state='per-chapter'],
     .compact-pip[data-state='unknown'] { border-style: dashed; border-color: var(--pd-neutral-300); background: transparent; }
+    /* THE NON-COLOUR DIFFERENTIATOR (class doc): this density carries no visible label, so blocked is
+       STRUCK THROUGH as well as greyed - the mark is what a reader who cannot use the hue still gets.
+       The strike is a background stripe rather than a pseudo-element so the pip keeps its transparent
+       background-COLOR, which is the fill test the spec reads. PHYSICALLY FIXED: a corner-to-corner
+       stripe is symmetric under mirroring, so Hebrew and English get the same drawing. */
+    .compact-pip[data-state='blocked'] {
+      color: var(--pd-text-muted);
+      border-color: var(--pd-neutral-500);
+      background: linear-gradient(-45deg, transparent 45%, currentColor 45% 55%, transparent 55%);
+    }
 
     .compact-summary {
       margin: 0;

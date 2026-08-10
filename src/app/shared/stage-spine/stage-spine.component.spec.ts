@@ -705,4 +705,171 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       }
     });
   });
+
+  // ── THE GLANCE CONTRACT: BLOCKED MAY NOT READ AS PROGRESS ─────────────────────────────────────────
+  //
+  // These are RENDERED-PIXEL tests, not token tests: everything below is read back with
+  // getComputedStyle from a real Chrome layout, so they hold whatever the tokens are renamed to and
+  // fail if a later restyle puts `blocked` back into a progress tint.
+  //
+  // The defect they close was found live on /books. `blocked` was drawn in the secondary teal ramp -
+  // filled, saturated, solid-bordered - exactly the visual class `ready` occupies. In the compact
+  // density every pip's label is `pd-visually-hidden`, so colour is all a sighted reader gets, and the
+  // EMPTY book (one not-started stage plus four blocked ones) showed five filled pips while a book with
+  // real chapters showed two filled and three hollow. The book with nothing done read as further along
+  // than the books with work in them - the same glance-level lie, one surface over, that this whole wave
+  // exists to remove. The text and the accessible names were honest the entire time, which is why only
+  // the drawing changed.
+
+  describe('the glance contract: blocked may not read as progress', () => {
+    /** Parse any computed colour into channels. Chrome returns `rgb()` / `rgba()`. */
+    function channels(value: string): { r: number; g: number; b: number; a: number } {
+      const n = value.match(/[\d.]+/g)!.map(Number);
+      return { r: n[0], g: n[1], b: n[2], a: n.length > 3 ? n[3] : 1 };
+    }
+
+    /** WCAG relative luminance. */
+    function luminance(c: { r: number; g: number; b: number }): number {
+      const lin = (v: number) => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+    }
+
+    /** WCAG contrast ratio between two computed colours. */
+    function contrast(fg: string, bg: string): number {
+      const [a, b] = [luminance(channels(fg)), luminance(channels(bg))];
+      return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    }
+
+    /** The state chip of a full-density row. */
+    function chip(id: string): HTMLElement {
+      return fixture.debugElement.query(By.css(`[data-testid="spine-stage-state-${id}"]`)).nativeElement as HTMLElement;
+    }
+
+    function renderCompact(next: StageSpineSignals, bookLanguage: string | null = 'he'): void {
+      fixture.componentRef.setInput('density', 'compact');
+      fixture.componentRef.setInput('bookLanguage', bookLanguage);
+      fixture.componentRef.setInput('signals', next);
+      fixture.detectChanges();
+    }
+
+    function pips(): HTMLElement[] {
+      return fixture.debugElement.queryAll(By.css('[data-testid^="spine-compact-pip-"]'))
+        .map(p => p.nativeElement as HTMLElement);
+    }
+
+    /** A pip is "filled" when it carries an actual (non-transparent) background. */
+    function filledPips(): string[] {
+      return pips()
+        .filter(p => channels(getComputedStyle(p).backgroundColor).a > 0)
+        .map(p => p.dataset['state']!);
+    }
+
+    /** A books-list row for a book with NOTHING done: no chapters at all. */
+    const emptyBookRow = () => signals({ chapters: null, chapterCount: 0, chaptersWithText: 0 });
+    /** A books-list row for a book with REAL WORK in it: chapters, all of them written. */
+    const workedBookRow = () => signals({ chapters: null, chapterCount: 5, chaptersWithText: 5 });
+
+    it('THE FINDING: the empty book never shows more filled pips than a book with real work', () => {
+      // This is the defect stated as an assertion. The states themselves are unchanged and honest -
+      // what was wrong was that four of them were PAINTED as though something had happened.
+      renderCompact(emptyBookRow());
+      const empty = filledPips();
+      expect(empty).toEqual(['not-started']);   // only the stage that is actually asking for a move
+
+      renderCompact(workedBookRow());
+      const worked = filledPips();
+      expect(worked).toEqual(['ready', 'ready']);
+
+      expect(empty.length).toBeLessThan(worked.length);
+    });
+
+    it('holds in English too, since the pips are the same drawing in both directions', () => {
+      renderCompact(emptyBookRow(), 'en');
+      const empty = filledPips();
+      renderCompact(workedBookRow(), 'en');
+      expect(empty.length).toBeLessThan(filledPips().length);
+    });
+
+    it('draws every blocked pip unfilled, and every computed-progress pip filled', () => {
+      renderCompact(emptyBookRow());
+      for (const p of pips()) {
+        const alpha = channels(getComputedStyle(p).backgroundColor).a;
+        if (p.dataset['state'] === 'blocked') expect(alpha).toBe(0);
+        else expect(alpha).toBeGreaterThan(0);
+      }
+    });
+
+    it('gives the blocked pip a NON-COLOUR mark, because its label is visually hidden', () => {
+      // Colour alone is not an accessible signal, and this density has no visible label to fall back on.
+      // The mark is a strike drawn as a background stripe; what matters to this test is that it EXISTS
+      // and that nothing which actually happened wears it.
+      renderCompact(emptyBookRow());
+      const blocked = pips().find(p => p.dataset['state'] === 'blocked')!;
+      expect(getComputedStyle(blocked).backgroundImage).toContain('gradient');
+
+      const notStarted = pips().find(p => p.dataset['state'] === 'not-started')!;
+      expect(getComputedStyle(notStarted).backgroundImage).toBe('none');
+      renderCompact(workedBookRow());
+      for (const p of pips()) expect(getComputedStyle(p).backgroundImage).toBe('none');
+    });
+
+    it('keeps blocked distinguishable from the no-signal pips it now sits beside', () => {
+      // Both are honestly "no progress", but they mean different things - a computed prerequisite versus
+      // a surface that never asked - so the drawing must not collapse them into one another.
+      renderCompact(signals({ chapters: null, chapterCount: 3, chaptersWithText: 0 }));
+      const blocked = pips().find(p => p.dataset['state'] === 'blocked');
+      const unknown = pips().find(p => p.dataset['state'] === 'unknown');
+      expect(blocked).toBeTruthy();
+      expect(unknown).toBeTruthy();
+      expect(getComputedStyle(blocked!).borderStyle).not.toBe(getComputedStyle(unknown!).borderStyle);
+      expect(getComputedStyle(blocked!).backgroundImage).toContain('gradient');
+      expect(getComputedStyle(unknown!).backgroundImage).toBe('none');
+    });
+
+    it('keeps the blocked pip legible: its digit, its mark and its edge clear the accessible ratios', () => {
+      renderCompact(emptyBookRow());
+      const blocked = pips().find(p => p.dataset['state'] === 'blocked')!;
+      // The compact spine is mounted on the app surface, which is the plain white row background.
+      const surface = 'rgb(255, 255, 255)';
+      const ink = getComputedStyle(blocked).color;
+      expect(contrast(ink, surface)).toBeGreaterThanOrEqual(4.5);
+      // The strike is drawn in `currentColor`, so the digit's ink is the mark's ink; the edge is the one
+      // other non-text mark that identifies the state and takes the 3:1 bar.
+      expect(getComputedStyle(blocked).backgroundImage).toContain(ink);
+      expect(contrast(getComputedStyle(blocked).borderTopColor, surface)).toBeGreaterThanOrEqual(3);
+    });
+
+    it('draws the full-density blocked chip out of the neutral ramp, not a progress tint', () => {
+      render(emptyBookRow());
+      const blockedBg = getComputedStyle(chip('briefs')).backgroundColor;
+      const blockedInk = getComputedStyle(chip('briefs')).color;
+
+      render(healthyBook());
+      const readyBg = getComputedStyle(chip('briefs')).backgroundColor;
+      const readyInk = getComputedStyle(chip('briefs')).color;
+
+      expect(blockedBg).not.toBe(readyBg);
+      expect(blockedInk).not.toBe(readyInk);
+
+      // The no-progress family, stated positively: blocked is drawn like the honest "not known", which is
+      // the other thing on this spine that reports no work done.
+      render(signals({ chapters: chapters(3), chapterCount: 3, chaptersWithText: 3 }));
+      expect(getComputedStyle(chip('briefs')).backgroundColor).toBe(blockedBg);
+    });
+
+    it('keeps the full-density blocked chip and its prerequisite sentence readable', () => {
+      render(emptyBookRow());
+      const c = getComputedStyle(chip('briefs'));
+      expect(contrast(c.color, c.backgroundColor)).toBeGreaterThanOrEqual(4.5);
+
+      expand('briefs');
+      const sentence = fixture.debugElement.query(By.css('[data-testid="spine-blocked-briefs"]'))
+        .nativeElement as HTMLElement;
+      const rowBg = getComputedStyle(row('briefs')).backgroundColor;
+      expect(contrast(getComputedStyle(sentence).color, rowBg)).toBeGreaterThanOrEqual(4.5);
+    });
+  });
 });
