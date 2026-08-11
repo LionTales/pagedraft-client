@@ -286,7 +286,10 @@
   flex: 0 0 auto;
 }
 
+/* Also worn by the guides LINK (an <a routerLink>), so it explicitly drops the anchor's underline and
+   inherits the same 32px hit target as the two buttons beside it. */
 .dock-icon-btn {
+  text-decoration: none;
   display: flex;
   align-items: center;
   justify-content: center;

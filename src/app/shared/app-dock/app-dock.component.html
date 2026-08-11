@@ -87,6 +87,20 @@
       </div>
 
       <div class="dock-actions">
+        <!-- THE GUIDES AFFORDANCE (A.2, c1). App-level chrome, so it sits with the dock's own controls
+             and is reachable from every route rather than only from the books list. It is a real link
+             (an <a routerLink>), so middle-click and "open in new tab" work like any other navigation,
+             and it CLOSES the dock for the same reason a citation chip does: the drawer would sit over
+             the page it just opened. -->
+        <a
+          class="dock-icon-btn"
+          [routerLink]="['/help']"
+          [queryParams]="{ lang: lang }"
+          [attr.aria-label]="helpAria"
+          [attr.title]="helpLabel"
+          (click)="openHelp()">
+          <span aria-hidden="true">?</span>
+        </a>
         <!-- The glyph points the way the drawer will GROW, which is toward the inline-end edge. The
              arrow characters are physical, so `.dock-expand-icon` is mirrored in RTL by the SCSS. -->
         <button

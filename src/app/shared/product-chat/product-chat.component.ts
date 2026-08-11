@@ -10,6 +10,7 @@ import {
 } from '@angular/core';
 import { AsyncPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { Subject, takeUntil } from 'rxjs';
 
 import { MarkdownTextComponent } from '../../features/analysis-panel/markdown-text.component';
@@ -126,7 +127,7 @@ export type ChatEntry = UserEntry | AssistantEntry | FaultEntry;
   selector: 'app-product-chat',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AsyncPipe, FormsModule, MarkdownTextComponent],
+  imports: [AsyncPipe, FormsModule, RouterLink, MarkdownTextComponent],
   templateUrl: './product-chat.component.html',
   styleUrl: './product-chat.component.scss',
 })
@@ -230,9 +231,29 @@ export class ProductChatComponent implements OnDestroy {
     return guideTitle(this.appLang, id);
   }
 
-  /** "From the guide" / "From the guides", so a single citation does not read as a plural. */
+  /** The singular or plural citation label, so one guide does not get introduced as several. */
   citationLabel(ids: string[]): string {
     return this.label(ids.length === 1 ? 'citationOne' : 'citationMany');
+  }
+
+  /**
+   * A citation chip was clicked (A.2, c1). The chip's own `routerLink` does the navigating; this
+   * CLOSES the dock.
+   *
+   * DECISION, stated because the plan asked for one: the drawer closes rather than staying open. It is
+   * a full-height panel on the inline-start edge with no modal semantics, so leaving it open would put
+   * it directly over the guide it just sent the author to, and at a narrow viewport it covers nearly
+   * all of it. Closing costs nothing that matters: this component stays MOUNTED across a close, so the
+   * transcript, the composer's contents and the scroll position are all still there when the launcher
+   * is used again. The alternative (stay open) would trade a real occlusion for a saving that the
+   * mounting already provides.
+   *
+   * `close()` on the service rather than `closeTab('assistant')`: the author is looking at the
+   * assistant tab by definition (this chip is in its transcript), and the dock as a whole is what has
+   * to get out of the way.
+   */
+  openCitation(): void {
+    this.overlays.close();
   }
 
   /** The honest sentence for a fault code. Distinct per reason; never a generic catch-all. */

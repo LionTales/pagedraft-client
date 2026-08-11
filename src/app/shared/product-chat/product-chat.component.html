@@ -93,12 +93,22 @@
               @if (answer.guideIds.length) {
                 <!-- CITATION. A feature, not a footnote: it is how the author discovers that the
                      guides exist and which one to open next, so it is inside the answer card, on its
-                     own line, named rather than numbered. -->
+                     own line, named rather than numbered.
+
+                     A.2/c1: each chip is now a LINK to that guide's reader page. Until this shipped the
+                     chip named a document at an author who had no way to open it, which is the whole
+                     reason the reader was built. Clicking one CLOSES the dock (see `openCitation`) - the
+                     drawer would otherwise sit over the page it just sent you to, and the transcript
+                     survives a close, so nothing is lost by getting out of the way. -->
                 <div class="pc-citation">
                   <span class="pc-citation-label">{{ citationLabel(answer.guideIds) }}</span>
                   <span class="pc-citation-list">
                     @for (id of answer.guideIds; track id) {
-                      <span class="pc-citation-chip">{{ citationTitle(id) }}</span>
+                      <a
+                        class="pc-citation-chip"
+                        [routerLink]="['/help', id]"
+                        [queryParams]="{ lang: lang }"
+                        (click)="openCitation()">{{ citationTitle(id) }}</a>
                     }
                   </span>
                 </div>

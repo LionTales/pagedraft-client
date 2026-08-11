@@ -26,6 +26,7 @@ import { JobRegistryService, TrackedJob } from '../../core/services/job-registry
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { DOCK_STRINGS_EN, DOCK_STRINGS_HE } from '../../core/i18n/dock-strings';
 import { CHAT_STRINGS_EN, CHAT_STRINGS_HE } from '../../core/i18n/chat-strings';
+import { GUIDES_STRINGS_HE } from '../../core/i18n/guides-strings';
 import { LABELS_EN, LABELS_HE } from '../activity-center/activity-center.component';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────────────────────────
@@ -486,6 +487,47 @@ describe('AppDockComponent (chatbot phase A.1)', () => {
     expect(qa('.dock-header button').length)
       .withContext('2 tabs + widen + close = 4 controls, nothing more')
       .toBe(4);
+  });
+
+  // ── The guides affordance (A.2, c1) ─────────────────────────────────────────────────────────────
+
+  describe('the guides link', () => {
+    it('is a real link to /help in the dock header, named by the page it opens', () => {
+      openDock();
+
+      const link = q('.dock-header a.dock-icon-btn');
+      expect(link).withContext('the dock is app-level chrome and carries the guides link on every route').not.toBeNull();
+      const el = link.nativeElement as HTMLAnchorElement;
+      expect(el.getAttribute('href')).toBe('/help?lang=he');
+      expect(el.getAttribute('aria-label')).toBe(GUIDES_STRINGS_HE['helpLinkAria']);
+      expect(el.getAttribute('title')).toBe(GUIDES_STRINGS_HE['helpLink']);
+    });
+
+    it('carries the chrome language into the link', () => {
+      openDock();
+      useEnglish();
+      // This component is OnPush and `useEnglish` mutates a private field rather than going through an
+      // input or a stream, so the header has to be re-created for the new language to reach the DOM.
+      // Closing and reopening is the gesture that does that, through the overlay subscription's own
+      // markForCheck - the same path a real language change would eventually take.
+      overlays.close();
+      fixture.detectChanges();
+      overlays.open();
+      fixture.detectChanges();
+
+      expect((q('.dock-header a.dock-icon-btn').nativeElement as HTMLAnchorElement).getAttribute('href'))
+        .toBe('/help?lang=en');
+    });
+
+    it('closes the dock, so the drawer does not cover the page it just opened', () => {
+      openDock();
+      expect(q('.dock-drawer--is-open')).not.toBeNull();
+
+      component.openHelp();
+      fixture.detectChanges();
+
+      expect(q('.dock-drawer--is-open')).toBeNull();
+    });
   });
 
   // ── The seam ────────────────────────────────────────────────────────────────────────────────────

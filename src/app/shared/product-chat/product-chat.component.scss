@@ -306,6 +306,21 @@
   font-size: var(--pd-text-caption);
   font-weight: var(--pd-weight-medium);
   line-height: 18px;
+  /* A.2/c1: the chip is a LINK now. It keeps the chip's shape rather than looking like body-text link
+     (it is a named document, not a phrase), so the underline appears only on hover, and the pointer
+     and focus ring do the rest of the work of saying it is clickable. */
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.pc-citation-chip:hover {
+  background: var(--pd-primary-100);
+  text-decoration: underline;
+}
+
+.pc-citation-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
 }
 
 /* ── In-flight ────────────────────────────────────────────────────────────── */

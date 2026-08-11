@@ -11,6 +11,7 @@ import { JobRegistryService, TrackedJob } from '../../core/services/job-registry
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { STAGE_NAMES } from '../../shared/stage-spine/stage-spine.copy';
 import { collapseStorageKey } from '../../shared/collapsible-section/collapse-store';
+import { GUIDES_STRINGS_HE } from '../../core/i18n/guides-strings';
 
 /**
  * Wave 3 / w3 - the BOOKS LIST as the first place a user is oriented.
@@ -313,6 +314,34 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
       httpMock.expectOne(r => r.method === 'DELETE' && r.url.endsWith('/api/books/doomed')).flush(null);
 
       expect(localStorage.getItem(collapseStorageKey('survivor'))).toBe(JSON.stringify({ chapterBriefs: false }));
+    });
+  });
+
+  // ── The guides affordance (chatbot phase A.2, c1) ───────────────────────────────────────────────
+
+  describe('the guides link', () => {
+    it('is on the books list, where the app lands, and points at /help with the chrome language', () => {
+      load([book({ id: 'a' })]);
+
+      const link = fixture.debugElement.query(By.css('.dash-help-link'));
+      expect(link)
+        .withContext('the guides must be discoverable without opening the assistant first')
+        .not.toBeNull();
+      const el = link.nativeElement as HTMLAnchorElement;
+      // f04: the dock's guides link carries `lang` so a shared link keeps its language; this link
+      // is the same affordance and must agree, or the two land on different pages once Hebrew stops
+      // being the reader's only default.
+      expect(el.getAttribute('href')).toBe('/help?lang=he');
+      expect(el.textContent?.trim()).toBe(GUIDES_STRINGS_HE['helpLink']);
+      expect(el.getAttribute('aria-label')).toBe(GUIDES_STRINGS_HE['helpLinkAria']);
+    });
+
+    it('stays on the page while the create form is open', () => {
+      load([]);
+      component.showCreateForm = true;
+      fixture.detectChanges();
+
+      expect(fixture.debugElement.query(By.css('.dash-help-link'))).not.toBeNull();
     });
   });
 });
