@@ -148,10 +148,18 @@
   font-family: var(--pd-font-ui);
 }
 
+/* Show's avatar, sized as an INTRODUCTION rather than a chrome mark (f03): bigger than the 32px
+   launcher and 18px tab instances, because this is the one screen whose whole job is to put a face
+   to the name in the heading right below it. `.pc-empty` is a plain block with `text-align: center`
+   and this is an inline replaced element, so the centring is the text-align and NOT a margin: an
+   `auto` inline margin computes to 0 here, so only the block-end gap the old glyph already had is
+   written. Nothing here is a flex item either, so no `flex` shorthand. */
 .pc-empty-icon {
-  font-size: 30px;
-  line-height: 1;
-  margin-block-end: var(--pd-space-4);
+  width: 56px;
+  height: 56px;
+  border-radius: var(--pd-radius-pill);
+  object-fit: cover;
+  margin: 0 0 var(--pd-space-4);
 }
 
 .pc-empty-title {

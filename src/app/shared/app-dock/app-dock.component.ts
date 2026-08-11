@@ -131,10 +131,10 @@ export class AppDockComponent implements OnDestroy {
    * carried by the ONE launcher (and, while the drawer is open and the launcher is therefore not
    * rendered, by the activity tab itself, so the number never disappears mid-run).
    *
-   * Both badges render the number beside a `⟳` mark rather than alone (c02). The launcher's glyph is a
-   * speech bubble, and a bare number on a speech bubble reads as unread MESSAGES, which is the opposite
-   * of what this counts. The mark and the composed accessible name below say the same thing, one to the
-   * eye and one to a screen reader.
+   * Both badges render the number beside a `⟳` mark rather than alone (c02). The launcher opens the
+   * assistant (and since A.2/f1 wears its face), and a bare number on a chat launcher reads as unread
+   * MESSAGES, which is the opposite of what this counts. The mark and the composed accessible name
+   * below say the same thing, one to the eye and one to a screen reader.
    */
   readonly activeCount$ = this.registry.activeJobs$.pipe(map(jobs => jobs.length));
 

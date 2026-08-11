@@ -63,8 +63,15 @@
 }
 
 .dock-launcher-icon {
-  font-size: 22px;
-  line-height: 1;
+  /* 32px drawn from a 96px source, so it stays crisp on a 2x/3x display. `pointer-events: none` is
+     load-bearing, not defensive: dock-layout.spec.ts hit-tests the launcher's own corner and expects
+     to land on the BUTTON, which an image child would otherwise intercept. */
+  width: 32px;
+  height: 32px;
+  border-radius: var(--pd-radius-pill);
+  object-fit: cover;
+  flex: 0 0 auto;
+  pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -77,9 +84,9 @@
  * The live job count (c02).
  *
  * TWO deliberate departures from the badge the Activity Center bell used to carry, both because this
- * launcher is not that bell - it also opens the assistant, and its glyph is a speech bubble:
+ * launcher is not that bell - it also opens the assistant, and since A.2/f1 it wears Show's face:
  *
- *   1. The badge carries a `⟳` MARK beside the number. A bare number on a chat glyph reads as unread
+ *   1. The badge carries a `⟳` MARK beside the number. A bare number on a chat launcher reads as unread
  *      messages; the mark is what says the number counts work that is RUNNING. The accessible name
  *      (`launcherAriaLabel`) says the same thing in words, which is why the badge is aria-hidden.
  *   2. The fill is `--pd-primary-600`, not `--pd-cut`. Red is this app's FAILURE colour - the Activity
@@ -256,6 +263,21 @@
 .dock-tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Show's avatar (chatbot phase A.2, f1). Sized to sit inside the pill without dominating it; f2 owns
+   the tab's own shape/color restyle, so this stays a plain circle rather than pre-empting that work.
+   `pointer-events: none` is load-bearing, not decoration: `dock-layout.spec.ts` hit-tests the exact
+   CENTRE of the tab's own bounding box and asserts the topmost element there is the tab button itself
+   (the regression it pins is the old bell sitting on top of that same spot); without this the icon
+   could win that hit test purely by where the text happens to wrap around it. */
+.dock-tab-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--pd-radius-pill);
+  object-fit: cover;
+  flex: 0 0 auto;
+  pointer-events: none;
 }
 
 /* The same number, so deliberately the same treatment as `.dock-badge`: mark, fill and gap all match,

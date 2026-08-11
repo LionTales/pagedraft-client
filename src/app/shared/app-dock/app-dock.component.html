@@ -20,8 +20,12 @@
     [attr.aria-expanded]="false"
     aria-controls="dock-drawer"
     (click)="openDock()">
-    <span class="dock-launcher-icon" aria-hidden="true">💬</span>
-    <!-- The badge NAMES what it counts (c02). A bare number on a speech bubble reads as unread
+    <!-- Show's own face, not a generic glyph: this is the assistant's most visible surface, so it
+         carries the identity the assistant tab and the drawer's empty state also carry. (There is no
+         in-pane drawer header any more: f02 removed it as a duplicate of the tab.) Decorative,
+         because the button's accessible name already says what it opens. -->
+    <img class="dock-launcher-icon" src="/assistant/show-header.png" alt="" aria-hidden="true" />
+    <!-- The badge NAMES what it counts (c02). A bare number on a chat launcher reads as unread
          messages in every product that ships one, and this number is the opposite: background jobs
          running. The `⟳` mark is what says "running" rather than "waiting to be read", and the
          accessible name says the same thing in words ("..., 3 משימות פעילות"), which is why the badge
@@ -51,7 +55,9 @@
 
   @if (isOpen) {
     <header class="dock-header">
-      <!-- The tab strip IS the header title: each tab is named by the surface it opens. -->
+      <!-- The tab strip IS the header title: each tab is named by the surface it opens. The assistant
+           tab also carries Show's avatar (chatbot phase A.2, f1) - decorative (`alt=""`,
+           aria-hidden), since the tab's own text already names the assistant to a screen reader. -->
       <div class="dock-tabs" role="tablist" [attr.aria-label]="label('tabsLabel')">
         <button
           class="dock-tab"
@@ -61,7 +67,7 @@
           [id]="tabId('assistant')"
           [attr.aria-selected]="activeTab === 'assistant'"
           [attr.aria-controls]="panelId('assistant')"
-          (click)="select('assistant')">{{ tabLabel('assistant') }}</button>
+          (click)="select('assistant')"><img class="dock-tab-icon" src="/assistant/show-tab.png" alt="" aria-hidden="true" />{{ tabLabel('assistant') }}</button>
 
         <button
           class="dock-tab"

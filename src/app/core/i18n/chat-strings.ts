@@ -1,6 +1,35 @@
 /**
  * Every user-facing string the product-chat drawer can put on screen (chatbot phase A, c2).
  *
+ * ── Identity (chatbot phase A.2, f1; f02 dropped the in-pane header) ──────────────────────────────
+ * The assistant is named Show / שואו, carried by `drawerTitle` (see its own doc comment) and repeated
+ * by `roleAssistant` on every one of its turns and by `inFlight` while it is working, so the name
+ * follows the assistant everywhere it speaks rather than sitting only on the tab. Its face (resized
+ * from the 1.5 MB source at `.cursor/designs/show.png` into two assets: `show-tab.png` at the dock's
+ * assistant tab, `show-header.png` at the closed dock's launcher and at the chat's empty state) never
+ * renders twice on one screen. f1 also put a copy at `ProductChatComponent`'s own in-pane header;
+ * f02's live-browser pass found that one stacked about 60px below the tab, the same face and the same
+ * name rendered twice on the one screen that shows either of them, so the header copy was removed
+ * rather than kept. The tab is the one that survives a scroll and reads as the assistant's persistent
+ * identity; the empty state (which wears the face itself, f03) and `roleAssistant` still name Show
+ * before and after the first turn, so nothing is lost by dropping the header. This is IDENTITY only: no
+ * prompt text and no server behavior changed here (see the chatbot-phase-a2-show plan, f1's scope
+ * fence).
+ *
+ * ── Voice (chatbot phase A.2, c2) ──────────────────────────────────────────────────────────────────
+ * The chrome speaks in the FIRST PERSON, as Show, everywhere it speaks at all: the grounding note, the
+ * empty state, the citation label and every fault sentence. That is a register decision with one
+ * substantive reason behind it - a refusal is this assistant's normal, correct behaviour, and copy that
+ * describes the surface in the third person ("Answers only from the product guides") makes a refusal
+ * read like a malfunction, where "I answer from the product guides only" makes it read like the promise
+ * being kept. The empty state is the only place that framing is stated BEFORE the first refusal
+ * happens, so it carries the honesty sentence rather than a feature list.
+ *
+ * WHAT THIS LAYER MAY NOT DO: it may not reword a refusal. The refusal TEXT is the server's, governed
+ * by the system prompt and measured by the g1-g5 gate; what lives here is only the framing around it.
+ * The example chips are likewise off limits without a re-measurement, for the retrieval reason spelled
+ * out on their keys below.
+ *
  * ── Conventions this file inherits ─────────────────────────────────────────────────────────────────
  * Same shape as `run-strings.ts`, deliberately: {@link ChatStringKey} is a CLOSED union so a typo'd
  * key is a compile error rather than user-facing chrome, and both maps are `Record<ChatStringKey,
@@ -51,10 +80,11 @@ export function chatChromeLang(language: string | null | undefined): ChatChromeL
 /** Every string the chat drawer can show. Closed on purpose: a typo'd key does not compile. */
 export type ChatStringKey =
   // ── chrome ──
-  // `drawerTitle` is the surface's NAME, and it is what the dock's assistant tab is labelled with
-  // (see `AppDockComponent.tabLabel`), so the tab and the panel it opens cannot drift apart. The
-  // shell strings that used to sit beside it (launcher, close, widen) moved to `dock-strings.ts`
-  // with the controls they name.
+  // `drawerTitle` is the surface's NAME - "Show" / "שואו" (chatbot phase A.2, f1) - and it is what
+  // the dock's assistant tab is labelled with (see `AppDockComponent.tabLabel`), and what the empty
+  // state's greeting and `roleAssistant` repeat inside the pane so the name still surfaces without a
+  // second header duplicating the tab (f02). The shell strings that used to sit beside it (launcher,
+  // close, widen) moved to `dock-strings.ts` with the controls they name.
   | 'drawerTitle'
   | 'groundingNote'
   // ── composer ──
@@ -109,23 +139,23 @@ export type ChatStringKey =
  * already uses.
  */
 export const CHAT_STRINGS_HE: Record<ChatStringKey, string> = {
-  drawerTitle:       'עוזר המדריכים',
-  groundingNote:     'עונה רק מתוך מדריכי המערכת, ותמיד מציין מאיזה מדריך.',
+  drawerTitle:       'שואו',
+  groundingNote:     'אני עונה רק מתוך מדריכי המערכת, ותמיד אומר מאיזה מדריך.',
 
-  inputPlaceholder:  'שאלו על אופן העבודה במערכת',
+  inputPlaceholder:  'שאלו אותי איך משהו כאן עובד',
   inputLabel:        'השאלה שלכם',
   send:              'שליחה',
 
   roleUser:          'אתם',
-  roleAssistant:     'העוזר',
-  inFlight:          'מחפש במדריכים...',
+  roleAssistant:     'שואו',
+  inFlight:          'שואו מחפש במדריכים...',
 
-  citationOne:       'מתוך המדריך',
-  citationMany:      'מתוך המדריכים',
+  citationOne:       'מצאתי את זה במדריך',
+  citationMany:      'מצאתי את זה במדריכים',
 
-  emptyTitle:        'שאלו אותי איך העבודה מתנהלת',
-  emptyBody:         'אני עונה רק ממה שכתוב במדריכים של המערכת. אם המדריכים לא מכסים את השאלה, אומר זאת במקום לנחש.',
-  emptyExamplesTitle: 'לדוגמה',
+  emptyTitle:        'שלום, אני שואו',
+  emptyBody:         'אני מכיר את המערכת מתוך המדריכים שלה, ועונה רק מתוכם. אם הם לא מכסים את השאלה, אומר לכם ולא אנחש.',
+  emptyExamplesTitle: 'אפשר להתחיל מאחת מאלה',
   example1:          'איך מייבאים כתב יד?',
   example2:          'מה נדרש כדי להריץ עריכה התפתחותית על הספר?',
   example3:          'מהם מעברי העריכה על פרק?',
@@ -138,32 +168,32 @@ export const CHAT_STRINGS_HE: Record<ChatStringKey, string> = {
 
   faultTitle:        'לא הצלחתי לענות מתוך המדריכים',
   faultGuidesUnavailable: 'לא הצלחתי להגיע למדריכים כרגע, ולכן לא אענה מהזיכרון שלי. נסו שוב בעוד רגע.',
-  faultGuidesEmpty:  'המדריכים נטענו אבל אף אחד מהם לא נקרא, ולכן אין לי מקור לענות ממנו.',
-  faultModelUnavailable: 'המדריכים נמצאו, אבל העוזר לא הגיב. לא אנחש תשובה במקומו.',
-  faultEmptyAnswer:  'המדריכים נמצאו, אבל התשובה שחזרה הייתה ריקה. לא אמלא אותה בעצמי.',
+  faultGuidesEmpty:  'המדריכים כאן, אבל לא הצלחתי לקרוא אף אחד מהם, ולכן אין לי ממה לענות.',
+  faultModelUnavailable: 'המדריכים לפניי, אבל המנוע שכותב את התשובות שלי לא הגיב. לא אנחש במקומו.',
+  faultEmptyAnswer:  'המדריכים לפניי, אבל התשובה חזרה ריקה. לא אמלא אותה בעצמי.',
   faultNetwork:      'לא הצלחתי להגיע לשרת. בדקו את החיבור ונסו שוב.',
-  faultUnknown:      'לא ניתן היה לבסס תשובה על המדריכים כרגע.',
+  faultUnknown:      'לא הצלחתי לבסס תשובה על המדריכים כרגע.',
   retry:             'ניסיון חוזר',
 };
 
 export const CHAT_STRINGS_EN: Record<ChatStringKey, string> = {
-  drawerTitle:       'Guides assistant',
-  groundingNote:     'Answers only from the product guides, and always names which one.',
+  drawerTitle:       'Show',
+  groundingNote:     'I answer from the product guides only, and I always name the one I used.',
 
-  inputPlaceholder:  'Ask how the work is done here',
+  inputPlaceholder:  'Ask me how something here works',
   inputLabel:        'Your question',
   send:              'Send',
 
   roleUser:          'You',
-  roleAssistant:     'Assistant',
-  inFlight:          'Looking through the guides...',
+  roleAssistant:     'Show',
+  inFlight:          'Show is looking through the guides...',
 
-  citationOne:       'From the guide',
-  citationMany:      'From the guides',
+  citationOne:       'I found this in the guide',
+  citationMany:      'I found this across the guides',
 
-  emptyTitle:        'Ask me how the work flows',
-  emptyBody:         'I answer only from what the product guides say. If the guides do not cover your question, I will say so instead of guessing.',
-  emptyExamplesTitle: 'For example',
+  emptyTitle:        'Hello, I am Show',
+  emptyBody:         'I know this product from its guides, and I answer only from those. If they do not cover your question, I will tell you rather than guess.',
+  emptyExamplesTitle: 'You could start with one of these',
   example1:          'How do I import a manuscript?',
   example2:          'What does the developmental review need first?',
   example3:          'Which editing passes does a chapter have?',
@@ -176,11 +206,11 @@ export const CHAT_STRINGS_EN: Record<ChatStringKey, string> = {
 
   faultTitle:        'I could not answer from the guides',
   faultGuidesUnavailable: 'I could not reach the guides right now, so I will not answer from memory. Try again in a moment.',
-  faultGuidesEmpty:  'The guides loaded but none of them could be read, so I have no source to answer from.',
-  faultModelUnavailable: 'The guides were found, but the assistant did not respond. I will not guess in its place.',
-  faultEmptyAnswer:  'The guides were found, but the answer came back empty. I will not fill it in myself.',
+  faultGuidesEmpty:  'The guides are here, but I could not read any of them, so I have nothing to answer from.',
+  faultModelUnavailable: 'I have the guides in front of me, but the model that writes my answers did not respond. I will not guess in its place.',
+  faultEmptyAnswer:  'I have the guides in front of me, but the answer came back empty. I will not fill it in myself.',
   faultNetwork:      'I could not reach the server. Check the connection and try again.',
-  faultUnknown:      'The answer could not be grounded in the guides right now.',
+  faultUnknown:      'I could not ground an answer in the guides right now.',
   retry:             'Try again',
 };
 

@@ -120,6 +120,19 @@ export type ChatEntry = UserEntry | AssistantEntry | FaultEntry;
  * header is chrome SHARED by both tabs, where an assistant-only control would have to hide itself on
  * the activity tab, which is the exact leak w1's tab gating exists to prevent.
  *
+ * ── Identity (A.2, f1; header dropped f02) ────────────────────────────────────────────────────────
+ * The assistant is named Show / שואו. The name is a single string, `drawerTitle`, which the DOCK reads
+ * for the assistant tab's label; this component names Show through `roleAssistant` and the empty
+ * state's greeting, which are drawn from the same map, so the tab and the per-turn role label can
+ * never say two different names. This component renders NO in-pane header: f02 found one rendered
+ * directly beneath the dock's own assistant tab, which already carries Show's face and the same name
+ * and is the one of the two that survives a scroll, so the pair read as the same identity shown twice
+ * rather than as two different things. The tab is what stays. Inside the pane the face now appears in
+ * exactly one place, the empty state (f03), which greets the author by name before the first turn and
+ * is replaced by the transcript the moment there is one; `roleAssistant` names Show again on every
+ * turn after that. So identity is established without a persistent avatar+name block eating vertical
+ * space from a narrow drawer.
+ *
  * No streaming: the citation is only known once the answer completes, and a streamed reply would put
  * prose the author can act on on screen before anything said where it came from.
  */
