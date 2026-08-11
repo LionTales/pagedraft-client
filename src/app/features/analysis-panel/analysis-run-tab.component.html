@@ -1,8 +1,9 @@
 <section class="run-tab-content">
   <!-- The model tier for THIS edit type (tier-ux-rework c3). Bound to the selected analysis type, which the
        toggle resolves to its routing task: several analysis types (Literary, Overview, Character, Story) run
-       as LinguisticAnalysis and therefore share ONE setting. The two types with no tier control (Summarize,
-       Custom) render a DISABLED control with a reason - Wave 3 / w5 replaced the earlier silent vanish,
+       as LinguisticAnalysis and therefore share ONE setting. The two types with no tier control (the
+       Summarization pass, displayed since w6 as "Chapter recap", and Custom) render a DISABLED control
+       with a reason - Wave 3 / w5 replaced the earlier silent vanish,
        which read as a rendering bug; this comment described that older behaviour until c08. Every value the
        picker can hold is in the client's known partition (`ai-task-key.ts`), so nothing bound here can reach
        the render-nothing branch that an UNRECOGNIZED task takes. It re-derives from the snapshot in hand
@@ -13,6 +14,20 @@
     [task]="selectedAnalysisType"
     (tierChanged)="tierChanged.emit()">
   </app-tier-toggle>
+
+  <!-- Wave 3 / w6 (Q9-C): THE RELATIONSHIP STATEMENT, on the surface rather than only in a guide.
+       Rendered whenever the recap pass is the selected one, before and after any run, because the
+       confusion it answers ("did running this build my book briefs?") is at its worst BEFORE the run.
+       The sentence itself is shared with the book-briefs row on the dashboard, which says the same
+       relationship from the other end (CHAPTER_RECAP_RELATIONSHIP, core/models/analysis.ts).
+       RTL: MIRRORS. It is a plain paragraph with a bound [dir]; nothing here is physically pinned. -->
+  <p
+    class="recap-scope-note muted"
+    *ngIf="selectedAnalysisType === 'Summarization'"
+    [attr.dir]="baselineDir"
+    data-testid="chapter-recap-scope-note">
+    {{ chapterRecapNote }}
+  </p>
 
   <!-- Wave 3 / w5 (MOVE-1 + MOVE-2): the book-wide writing-style STATUS ROW, its build action, its consent
        prompt, its cost estimate and its paid-tier note USED TO SIT HERE, gated behind selecting one

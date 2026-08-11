@@ -777,7 +777,10 @@ function nowIso(): string {
  */
 // DRAFT he - needs native review
 export const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
-  'summary': { he: 'בניית סיכום הספר', en: 'Building book summary' },
+  // Wave 3 / w6 (Q9-C): the stage-2 build is "Book briefs" / "תקצירי ספר" everywhere the wave touched,
+  // and this default title was the last activity surface still calling it the book SUMMARY - the exact
+  // word the per-chapter pass was renamed away from. DRAFT he - w8 native sweep.
+  'summary': { he: 'בניית תקצירי הספר', en: 'Building the book briefs' },
   'review': { he: 'סקירת הספר', en: 'Reviewing book' },
   'proofread': { he: 'הגהה', en: 'Proofreading' },
   // w5: renamed to match the row's new user-comprehensible name on the book dashboard, so the activity

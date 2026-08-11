@@ -51,13 +51,20 @@ export interface RunAnalysisRequest {
   language?: string | null;
 }
 
-/** Analysis types for the type picker (matches API AnalysisType enum). */
+/**
+ * Analysis types for the type picker.
+ *
+ * `value` IS THE WIRE VALUE (the API's `AnalysisType` enum) and may never be renamed here: it is what
+ * `POST .../analyze` carries, what every persisted `AnalysisResult` row holds, and what the repair-config
+ * and tier-routing keys are looked up by. `label` is a DISPLAY string and nothing else - see the Wave 3 /
+ * w6 note on {@link ANALYSIS_TYPE_LABELS} for the one that changed.
+ */
 export const ANALYSIS_TYPES = [
   { value: 'Proofread', label: 'Proofread' },
   { value: 'LineEdit', label: 'Line Edit' },
   { value: 'LinguisticAnalysis', label: 'Linguistic' },
   { value: 'LiteraryAnalysis', label: 'Literary' },
-  { value: 'Summarization', label: 'Summarize' },
+  { value: 'Summarization', label: 'Chapter recap' },
   { value: 'Custom', label: 'Custom' }
 ] as const;
 
@@ -66,6 +73,22 @@ export const ANALYSIS_TYPES = [
  * human-readable analysis-type label (analysis-panel, analysis-run-tab,
  * analysis-history-tab) so all three stay in sync. The canonical Hebrew values are
  * the SHORT forms ('לשוני', 'ספרותי') used on picker buttons.
+ *
+ * ── Wave 3 / w6 (Q9-C): `Summarization` IS DISPLAYED AS "Chapter recap" / "תמצית פרק" ──────────────
+ * The pass used to be labelled "Summarize" / "סיכום", which collided head-on with the book-level build
+ * this wave settled as "Book briefs" / "תקצירי ספר" - and in Hebrew it collided twice, because the
+ * legacy name of that same book-level build is "סיכום הספר". The guides burned two sections and an FAQ
+ * entry keeping the two apart and the confusion survived, which is why Q9 chose to rename rather than
+ * only annotate.
+ *
+ * THE NEW HEBREW AVOIDS BOTH COLLIDING WORDS. "תמצית פרק" shares no root with "תקציר" (ק.צ.ר) and is
+ * not "סיכום" (ס.כ.ם); it also carries its own scope word, פרק, so the label states what it is scoped
+ * to. DRAFT Hebrew, gated on the w8 native-speaker sweep like every other string this wave introduced.
+ *
+ * THE KEYS ARE WIRE VALUES AND DID NOT MOVE. `Summarization` is still what the client sends, what the
+ * server persists and what a history row read back from the database carries, so an older result renders
+ * under the new label with no migration and no dual-read. Renaming a key here would break every one of
+ * those at once; this map is a display mapping and is the correct place to absorb a label change.
  */
 export const ANALYSIS_TYPE_LABELS: {
   he: Record<string, string>;
@@ -76,7 +99,8 @@ export const ANALYSIS_TYPE_LABELS: {
     LineEdit: 'עריכת שורה',
     LinguisticAnalysis: 'לשוני',
     LiteraryAnalysis: 'ספרותי',
-    Summarization: 'סיכום',
+    // DRAFT he - w8 native sweep. Was 'סיכום'; see the collision note above.
+    Summarization: 'תמצית פרק',
     Custom: 'מותאם',
   },
   en: {
@@ -84,8 +108,37 @@ export const ANALYSIS_TYPE_LABELS: {
     LineEdit: 'Line Edit',
     LinguisticAnalysis: 'Linguistic',
     LiteraryAnalysis: 'Literary',
-    Summarization: 'Summarize',
+    Summarization: 'Chapter recap',
     Custom: 'Custom',
+  },
+};
+
+/**
+ * Wave 3 / w6 (Q9-C's second half): THE RELATIONSHIP STATEMENT, ON THE SURFACE.
+ *
+ * The decision was rename AND state on the surface what the pass does and does not feed, because the
+ * guides already tried explaining it in three places and the confusion survived. The statement is
+ * therefore rendered in the product, in TWO places, and it lives here so those two cannot drift:
+ *
+ *  - {@link pass}   on the chapter analysis Run tab, whenever the recap pass is the selected one. Said
+ *                   from the pass's side: this is what you get, and this is what it does not feed.
+ *  - {@link briefs} on the book-briefs row of the book dashboard, which is the OTHER end of the same
+ *                   confusion (the author who ran the recap on every chapter and wonders why the briefs
+ *                   are still not built). Said from the briefs' side, naming the pass by its new label.
+ *
+ * No em-dash and no en-dash in either sentence. Hebrew is DRAFT, w8 native sweep.
+ */
+export const CHAPTER_RECAP_RELATIONSHIP: {
+  pass: { he: string; en: string };
+  briefs: { he: string; en: string };
+} = {
+  pass: {
+    he: 'מתמצת את הפרק הזה עבור הקריאה שלכם. אינו מזין את תקצירי הספר.',
+    en: 'Summarizes this chapter for you to read. It does not feed the book briefs.',
+  },
+  briefs: {
+    he: 'תקצירי הספר הם בנייה נפרדת. הרצת "תמצית פרק" על כל פרק בנפרד אינה מפיקה אותם.',
+    en: 'The book briefs are a separate build. Running Chapter recap on every chapter does not produce them.',
   },
 };
 

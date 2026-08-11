@@ -530,7 +530,9 @@ describe('ActivityCenterComponent (rf-f01)', () => {
 
     it('renders the per-type glyph in the row, not just from the helper', () => {
       stub.setJobs([
-        makeJob({ id: 'j1', kind: 'proofread', analysisType: 'Summarization', titleHe: 'סיכום', titleEn: 'Summarize' }),
+        // w6: the wire value is unchanged (`Summarization`); the titles a registry row carries are the
+        // DISPLAY labels, so this fixture uses the renamed ones.
+        makeJob({ id: 'j1', kind: 'proofread', analysisType: 'Summarization', titleHe: 'תמצית פרק', titleEn: 'Chapter recap' }),
       ]);
       component.panelOpen = true;
       fixture.detectChanges();

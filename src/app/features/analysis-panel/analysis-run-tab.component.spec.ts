@@ -5,7 +5,12 @@ import { NEVER } from 'rxjs';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { AiTierService } from '../../core/services/ai-tier.service';
-import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
+import {
+  ANALYSIS_TYPE_LABELS,
+  AnalysisResultDto,
+  AnalysisSuggestion,
+  CHAPTER_RECAP_RELATIONSHIP,
+} from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 
 // ---------------------------------------------------------------------------
@@ -1048,6 +1053,57 @@ describe('AnalysisRunTabComponent', () => {
 
     it('exposes no visibleModelName helper (the parenthetical has no source left)', () => {
       expect((component as any).visibleModelName).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // Wave 3 / w6 (Q9-C): the renamed pass states its scope ON THIS SURFACE
+  // =========================================================================
+
+  describe('the chapter recap scope statement', () => {
+    function selectPass(type: string, lang: string): void {
+      component.bookId = 'book-1';
+      component.bookLanguage = lang;
+      component.selectedAnalysisType = type;
+      fixture.detectChanges();
+    }
+
+    /**
+     * BEFORE the run, not only after it. The question this sentence answers ("did running this build my
+     * book briefs?") is at its worst when the author is about to press Run, so the note is bound to the
+     * picked pass rather than to a finished result.
+     */
+    it('renders the statement whenever the recap pass is picked, with no run yet', () => {
+      selectPass('Summarization', 'he');
+
+      const note = query('[data-testid="chapter-recap-scope-note"]');
+      expect(note).toBeTruthy();
+      expect((note.nativeElement as HTMLElement).textContent!.trim())
+        .toBe(CHAPTER_RECAP_RELATIONSHIP.pass.he);
+      expect((note.nativeElement as HTMLElement).getAttribute('dir')).toBe('rtl');
+    });
+
+    it('renders it in English, left to right, for an English book', () => {
+      selectPass('Summarization', 'en');
+
+      const note = query('[data-testid="chapter-recap-scope-note"]');
+      expect((note.nativeElement as HTMLElement).textContent!.trim())
+        .toBe(CHAPTER_RECAP_RELATIONSHIP.pass.en);
+      expect((note.nativeElement as HTMLElement).getAttribute('dir')).toBe('ltr');
+    });
+
+    it('says nothing on the five passes the statement is not about', () => {
+      for (const type of ['Proofread', 'LineEdit', 'LinguisticAnalysis', 'LiteraryAnalysis', 'Custom']) {
+        selectPass(type, 'he');
+        expect(query('[data-testid="chapter-recap-scope-note"]')).withContext(type).toBeNull();
+      }
+    });
+
+    /** The picker button and the heading over a finished result both read the new label. */
+    it('labels the pass by its new name', () => {
+      expect(component.analysisTypeLabel('Summarization')).toBe(ANALYSIS_TYPE_LABELS['he']['Summarization']);
+      selectPass('Summarization', 'en');
+      expect(component.analysisTypeLabel('Summarization')).toBe('Chapter recap');
     });
   });
 });

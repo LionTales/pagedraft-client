@@ -36,7 +36,11 @@ export const LABELS_HE: Record<string, string> = {
   failed:         'נכשל',              // DRAFT he - needs native review
   canceled:       'בוטל',             // DRAFT he - needs native review
   // kind labels
-  summary:           'סיכום',          // DRAFT he - needs native review
+  // Wave 3 / w6 (Q9-C): this kind is the BOOK-LEVEL build the wave settled as "Book briefs" /
+  // "תקצירי ספר", not the per-chapter pass. It carried the pass's old word ('סיכום') until the rename,
+  // so the activity list showed the two colliding terms one row apart, which is the collision Q9 exists
+  // to remove. Renamed to the stage-2 vocabulary. DRAFT he - w8 native sweep.
+  summary:           'תקצירי ספר',     // DRAFT he - needs native review
   review:            'סקירה',          // DRAFT he - needs native review
   proofread:         'הגהה',           // DRAFT he - needs native review
   'style-baseline':  'סגנון כתיבה',    // DRAFT he - needs native review
@@ -52,8 +56,8 @@ export const LABELS_EN: Record<string, string> = {
   succeeded:      'Done',
   failed:         'Failed',
   canceled:       'Canceled',
-  // kind labels
-  summary:           'Summary',
+  // kind labels (see the Hebrew map for why `summary` reads "Book briefs")
+  summary:           'Book briefs',
   review:            'Review',
   proofread:         'Proofread',
   'style-baseline':  'Writing style',

@@ -816,7 +816,7 @@ describe('BookChapterSummariesComponent (wb3-c04)', () => {
     component.bookLanguage = 'en';
     fixture.detectChanges();
     expect(component.dir).toBe('ltr');
-    expect(component.label('title')).toBe('Chapter summaries');
+    expect(component.label('title')).toBe('Chapter briefs');
     expect(component.label('rederive')).toBe('Update analysis');
     // No em-dash in any user-facing string.
     const allHe = ['title', 'rederive', 'staleBadge', 'editedBadge', 'rederivePrompt']
