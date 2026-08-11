@@ -743,7 +743,11 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       consentBody: 'פעולה זו תנתח את פרקי הספר כדי לבנות תקציר לכל פרק, תקציר ברמת הספר, ואת כרטיסי הפרופיל שבהמשך הדף (סקירה, תקציר, דמויות ומבנה עלילה).',
       confirm: 'אישור',
       cancel: 'ביטול',
-      crossModelWarning: 'התקצירים נבנו עם מודל אחר מהפעיל כעת. רעננו אותם לקבלת תוצאות מדויקות.',
+      // w8 native sweep: no model, provider or version identity may reach a client surface, so this says
+      // that the configuration differs and not what differs. Worded to match the spine's own
+      // `configuration-changed` sentence and its two sibling rows; pinned across all three by
+      // book-dashboard-status-row-label-consistency.spec.ts.
+      crossModelWarning: 'התקצירים נבנו בהגדרה שונה מזו הפעילה כעת. רעננו אותם לקבלת תוצאות מדויקות.',
       // Q4-A: the folded whole-book build. DRAFT Hebrew - w8 native sweep.
       builds: 'הבנייה הזו מייצרת תקציר לכל פרק, תקציר ברמת הספר, ואת כרטיסי הפרופיל שבהמשך הדף.',
       // The app's ellipsis character, not three ASCII dots (same normalization as `building` above).
@@ -771,7 +775,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       consentBody: 'This will analyze the book chapters to build a brief for each chapter, one book-level brief, and the profile cards further down this page (overview, synopsis, characters and plot structure).',
       confirm: 'Confirm',
       cancel: 'Cancel',
-      crossModelWarning: 'The briefs were built with a different model than the one now active. Refresh them for accurate results.',
+      crossModelWarning: 'The briefs were built under a different configuration than the one now active. Refresh them for accurate results.',
       builds: 'This build produces a brief for each chapter, one book-level brief, and the profile cards further down this page.',
       buildingProfile: 'Building the book profile...',
       profileFailed: 'The briefs were built, but the book profile build failed. You can run it again.',

@@ -405,7 +405,7 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       consentPaidNote: 'The amount is shown because this book is set to the thinking tier, which runs on a cloud model. The chapter text is sent to a third-party provider and leaves this machine. You can change this in the Settings section further down this page.',
       confirm: 'Confirm',
       cancel: 'Cancel',
-      crossModelWarning: 'The measurement was built with a different model than the one now active. Refresh it for accurate results.',
+      crossModelWarning: 'The measurement was built under a different configuration than the one now active. Refresh it for accurate results.',
       needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
       needsText: 'The chapters in this book are still empty. Write in them or import a manuscript first.',
     };

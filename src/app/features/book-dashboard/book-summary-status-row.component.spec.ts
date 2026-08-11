@@ -472,7 +472,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
 
     const warning = query('[data-testid="bsum-cross-model-warning"]');
     expect(warning).not.toBeNull();
-    expect(warning.nativeElement.textContent).toContain('מודל אחר');
+    expect(warning.nativeElement.textContent).toContain('בהגדרה שונה');
     expect(warning.nativeElement.getAttribute('dir')).toBe('rtl');
     expect(component.bookSummaryState).toBe('stale');
     expect(query('[data-testid="bsum-refresh"]')).not.toBeNull();
@@ -506,7 +506,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
 
     const warning = query('[data-testid="bsum-cross-model-warning"]');
     expect(warning).not.toBeNull();
-    expect(warning.nativeElement.textContent).toContain('different model');
+    expect(warning.nativeElement.textContent).toContain('different configuration');
     expect(warning.nativeElement.getAttribute('dir')).toBe('ltr');
   });
 

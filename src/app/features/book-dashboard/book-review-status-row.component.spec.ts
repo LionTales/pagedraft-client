@@ -420,7 +420,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
     const warning = query('[data-testid="brev-cross-model-warning"]');
     expect(warning).not.toBeNull();
-    expect(warning.nativeElement.textContent).toContain('מודל אחר');
+    expect(warning.nativeElement.textContent).toContain('בהגדרה שונה');
     expect(warning.nativeElement.getAttribute('dir')).toBe('rtl');
     expect(component.bookReviewState).toBe('stale');
     expect(query('[data-testid="brev-refresh"]')).not.toBeNull();
@@ -470,7 +470,7 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
 
     const warning = query('[data-testid="brev-cross-model-warning"]');
     expect(warning).not.toBeNull();
-    expect(warning.nativeElement.textContent).toContain('different model');
+    expect(warning.nativeElement.textContent).toContain('different configuration');
     expect(warning.nativeElement.getAttribute('dir')).toBe('ltr');
   });
 

@@ -259,7 +259,7 @@ describe('BookStyleBaselineStatusRowComponent (w5 MOVE-1 + MOVE-2)', () => {
     fixture.detectChanges();
 
     const warning = query('[data-testid="bsb-cross-model-warning"]');
-    expect(warning.nativeElement.textContent).toContain('different model');
+    expect(warning.nativeElement.textContent).toContain('different configuration');
     expect(warning.nativeElement.getAttribute('dir')).toBe('ltr');
   });
 

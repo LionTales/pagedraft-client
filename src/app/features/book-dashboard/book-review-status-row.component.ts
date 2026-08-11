@@ -618,7 +618,11 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       consentBody: 'פעולה זו תנתח את הספר ותזהה ממצאים עריכתיים לפי ממד: עלילה, דמויות, קצב, טון, נושא ורציפות.',
       confirm: 'אישור',
       cancel: 'ביטול',
-      crossModelWarning: 'הסקירה נבנתה עם מודל אחר מהפעיל כעת. רעננו אותה לקבלת תוצאות מדויקות.',
+      // w8 native sweep: no model, provider or version identity may reach a client surface, so this says
+      // that the configuration differs and not what differs. Worded to match the spine's own
+      // `configuration-changed` sentence and its two sibling rows; pinned across all three by
+      // book-dashboard-status-row-label-consistency.spec.ts.
+      crossModelWarning: 'הסקירה נבנתה בהגדרה שונה מזו הפעילה כעת. רעננו אותה לקבלת תוצאות מדויקות.',
       needsSummary: 'הסקירה ההתפתחותית דורשת תקצירי ספר. בנו תחילה את תקצירי הספר.',
       // The zero-chapter gate: naming the briefs there would point at a row that is refused too.
       needsImport: 'אין עדיין פרקים בספר. צריך קודם להעלות כתב יד או להוסיף פרק.',
@@ -649,7 +653,7 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       consentBody: 'This will analyze the book and identify editorial findings across plot, character, pacing, tone, theme, and continuity.',
       confirm: 'Confirm',
       cancel: 'Cancel',
-      crossModelWarning: 'The review was built with a different model than the one now active. Refresh it for accurate results.',
+      crossModelWarning: 'The review was built under a different configuration than the one now active. Refresh it for accurate results.',
       needsSummary: 'The developmental review requires book briefs. Build the book summary first.',
       needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
       needsText: 'The chapters in this book are still empty. Write in them or import a manuscript first.',

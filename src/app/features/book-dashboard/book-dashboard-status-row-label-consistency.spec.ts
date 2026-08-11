@@ -111,4 +111,38 @@ describe('Book dashboard status rows: shared Hebrew build-action vocabulary', ()
       expect(row.label('building')).withContext(`${row.name}/building`).not.toContain('...');
     }
   });
+
+  /**
+   * The standing rule that no model, provider, vendor or version identity reaches a client surface,
+   * enforced ACROSS the three rows rather than inside one of them.
+   *
+   * This lived in `book-style-baseline-status-row.component.spec.ts` and covered that row alone, so the
+   * w8 rewrite of the stale sentence landed on one of the three and its two siblings kept saying
+   * `מודל אחר` / "a different model" - with their own specs pinning the old wording as EXPECTED, which
+   * is how a green suite protected the defect. The same seam that catches a drifted build verb is the
+   * one that catches this, so the guard belongs here.
+   *
+   * The sentence says that the CONFIGURATION differs, not what differs, matching the stage spine's own
+   * `configuration-changed` wording for the same condition.
+   */
+  it('no row names a model in its stale-build sentence, in either language', () => {
+    const rows: Array<{ name: string; label: (key: string) => string }> = [
+      { name: 'baseline', label: (k) => baseline.baselineLabel(k) },
+      { name: 'review', label: (k) => review.bookReviewLabel(k) },
+      { name: 'summary', label: (k) => summary.bookSummaryLabel(k) },
+    ];
+    for (const lang of ['he', 'en']) {
+      baseline.bookLanguage = review.bookLanguage = summary.bookLanguage = lang;
+      const forbidden = lang === 'he' ? 'מודל' : 'model';
+      const required = lang === 'he' ? 'בהגדרה שונה' : 'different configuration';
+      for (const row of rows) {
+        const text = row.label('crossModelWarning');
+        // Non-vacuity first: a key the row does not define would return the key itself, which contains
+        // neither the forbidden word nor the required phrase and would pass both assertions silently.
+        expect(text).withContext(`${row.name}/${lang} defines crossModelWarning`).not.toBe('crossModelWarning');
+        expect(text.toLowerCase()).withContext(`${row.name}/${lang} names a model`).not.toContain(forbidden);
+        expect(text).withContext(`${row.name}/${lang} says what differs`).toContain(required);
+      }
+    }
+  });
 });
