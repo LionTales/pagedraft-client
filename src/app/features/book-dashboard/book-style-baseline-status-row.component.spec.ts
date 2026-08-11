@@ -406,6 +406,32 @@ describe('BookStyleBaselineStatusRowComponent (w5 MOVE-1 + MOVE-2)', () => {
     }
   });
 
+  /**
+   * w8 native sweep (`docs/HEBREW_NATIVE_REVIEW.md`, changes 11 and 12). Two owner decisions that a
+   * later copy edit could quietly undo, so they are pinned rather than left to the diff:
+   *
+   *  - the Hebrew action labels are GERUNDS, matching the stage spine's `בניית…` / `בנייה מחדש של…`.
+   *    They used to be imperatives (`בנה עכשיו`, `רענן`), which is a second button voice on one page.
+   *  - the stale sentence names no MODEL. The standing rule is that no provider, model or version
+   *    identity reaches a client surface, and this string used to say `מודל אחר`.
+   */
+  it('w8: Hebrew actions are gerunds, and the stale sentence names no model', () => {
+    component.bookLanguage = 'he';
+    expect(component.baselineLabel('buildNow')).toBe('בנייה');
+    expect(component.baselineLabel('rebuild')).toBe('בנייה מחדש');
+    expect(component.baselineLabel('refresh')).toBe('רענון');
+    // Imperatives are gone, in every action label.
+    for (const key of ['buildNow', 'rebuild', 'refresh']) {
+      expect(component.baselineLabel(key)).withContext(key).not.toMatch(/^(בנה|רענן)\b/);
+    }
+    // The app's ellipsis character, not three periods.
+    expect(component.baselineLabel('building')).toBe('בונה…');
+    expect(component.baselineLabel('building')).not.toContain('...');
+
+    expect(component.baselineLabel('crossModelWarning')).not.toContain('מודל');
+    expect(component.baselineLabel('crossModelWarning')).toContain('בהגדרה שונה');
+  });
+
   it('he/en label parity, and no em-dash or en-dash in any user-facing string', () => {
     const keys = [
       'title', 'what', 'notBuilt', 'buildNow', 'building', 'refresh', 'rebuild', 'coverage', 'updated',

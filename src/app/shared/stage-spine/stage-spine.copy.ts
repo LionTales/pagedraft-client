@@ -8,9 +8,13 @@ import { BehindReason, SpineStageId, StageActionId, StageState, StageStatus } fr
  * compact variant mounts in app-level chrome, which is Hebrew-default; that is a different rule on a
  * different surface and it reads the same maps.)
  *
- * ALL HEBREW HERE IS DRAFT and is gated on the native-speaker sweep in w8. One specific thing a native
- * reader must confirm: stages 3 and 4 both contain the word עריכה and the pair must not read as one
- * concept.
+ * THE HEBREW HERE HAS BEEN THROUGH THE w8 NATIVE-SPEAKER SWEEP (2026-08-11, `docs/HEBREW_NATIVE_REVIEW.md`).
+ * The owner read every string in this file and either cleared it or dictated its replacement, including the
+ * one thing the draft flagged for a native ear: stages 3 and 4 both contain the word עריכה, and the answer
+ * was to rename stage 4 to `עריכת פרק` (מעברים read as "transitions", not "passes") and to keep the overlap
+ * with stage 3 knowingly. Their wording is authoritative - do not "improve" a Hebrew string here without
+ * another native reading. The GUIDES corpus is NOT covered by that sweep: it still calls an individual pass
+ * a `מעבר`, which is a live, undecided terminology question recorded in that document.
  *
  * TWO STANDING CONSTRAINTS THIS FILE OBEYS:
  *  - No em-dash and no en-dash anywhere. Plain hyphens, or the sentence is restructured.
@@ -46,7 +50,7 @@ export const STAGE_NAMES: Record<SpineStageId, Bi> = {
   'import': { he: 'ייבוא', en: 'Import' },
   'briefs': { he: 'תקצירי ספר', en: 'Book briefs' },
   'review': { he: 'עריכה התפתחותית', en: 'Developmental review' },
-  'chapter-passes': { he: 'מעברי עריכה על פרק', en: 'Chapter editing passes' },
+  'chapter-passes': { he: 'עריכת פרק', en: 'Chapter editing passes' },
   'export': { he: 'ייצוא', en: 'Export' },
 };
 
@@ -75,11 +79,11 @@ export const PER_CHAPTER_LABEL: Bi = { he: 'לפי פרק', en: 'Per chapter' };
 /** One sentence per stage: what the stage IS. The permanent half of the progressive disclosure. */
 export const STAGE_EXPLANATION: Record<SpineStageId, Bi> = {
   'import': {
-    he: 'הכנסת כתב היד ובדיקה כיצד חולק לפרקים.',
+    he: 'העלאת כתב היד ובדיקה כיצד חולק לפרקים.',
     en: 'Bring the manuscript in and check how it was split into chapters.',
   },
   'briefs': {
-    he: 'תקציר קצר לכל פרק, שנרכב לתקציר אחד של הספר כולו.',
+    he: 'תקציר לכל פרק, שמורכב לתקציר אחד של הספר כולו.',
     en: 'A short brief per chapter, composed into one book level brief.',
   },
   'review': {
@@ -98,7 +102,7 @@ export const STAGE_EXPLANATION: Record<SpineStageId, Bi> = {
 
 /** Action labels. `build-briefs` and `build-review` get a rebuild wording in the `behind` state. */
 const ACTION_LABELS: Record<StageActionId, Bi> = {
-  'open-import': { he: 'ייבוא כתב יד', en: 'Import a manuscript' },
+  'open-import': { he: 'העלאת כתב יד', en: 'Import a manuscript' },
   'build-briefs': { he: 'בניית תקצירי ספר', en: 'Build the book briefs' },
   'build-review': { he: 'בניית סקירה', en: 'Build the review' },
   'open-findings': { he: 'מעבר לממצאים', en: 'Go to the findings' },
@@ -153,7 +157,7 @@ export function behindSentence(reason: BehindReason, magnitude: number | null, l
         : `${n} chapters changed since the last build. Rebuild when convenient.`;
     case 'coverage-grew':
       return lang === 'he'
-        ? 'התקציר הכולל מרכיב פחות פרקים מאלה שמוכנים כעת. בנייה מחדש תכלול אותם.'
+        ? 'תקציר הספר נבנה מפחות פרקים מכפי שיש כעת. בנייה מחדש תכלול גם אותם.'
         : 'The composed brief covers fewer chapters than are ready now. Rebuilding includes them.';
     case 'briefs-rebuilt':
       return lang === 'he'
@@ -161,7 +165,7 @@ export function behindSentence(reason: BehindReason, magnitude: number | null, l
         : 'The book briefs were rebuilt after the review, so the review reflects an earlier state of the book.';
     case 'configuration-changed':
       return lang === 'he'
-        ? 'הבנייה הקודמת נעשתה בתצורה אחרת מזו הפעילה כעת. כדאי לבנות מחדש.'
+        ? 'הבנייה הקודמת נעשתה בהגדרה שונה מזו הפעילה כעת. כדאי לבנות מחדש.'
         : 'The previous build ran under a different configuration than the one active now. Rebuilding is advisable.';
   }
 }
@@ -363,6 +367,11 @@ export const COMPACT_UNKNOWN_LABEL: Bi = { he: 'לא ידוע מכאן', en: 'No
  * Which one: a RUNNING stage always wins, because carrying the running signal on every route is this
  * density's job (Q12b, the two chrome dots retired into it). Otherwise it is the focus stage, the first
  * one in canonical order that wants something from the user.
+ *
+ * "Wants something" is load-bearing in the `הבא:` / "Next:" wording, and it is `focusStageId` that has to
+ * honour it: a stage this screen has already settled as `ready` wants nothing and may not be named here.
+ * See that function's own note on the unknown fallback (w8 / E1) - on the surfaces this density mounts on,
+ * stages 2 to 5 are permanently unknown, and naming stage 1 there used to render `הבא: ייבוא, מוכן`.
  */
 export function compactSummaryLine(
   stageName: string,
