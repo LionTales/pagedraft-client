@@ -1,28 +1,70 @@
 import { CommonModule } from '@angular/common';
-import { Component, Input } from '@angular/core';
+import { Component, Input, ViewEncapsulation } from '@angular/core';
 
 /**
- * Renders a SAFE subset of Markdown for free-text analysis results (Custom / Summarize and any other
- * non-structured result). Local-LLM output commonly contains Markdown (bold, bullets, numbered lists,
- * blank-line paragraphs) which, when interpolated as plain text, shows the literal `**`/`*` markers and
- * mangles structure. This component converts that subset to a small set of known-safe HTML tags.
+ * Renders a SAFE subset of Markdown, in two VARIANTS.
  *
- * Security: the input is HTML-ESCAPED FIRST (`&` `<` `>` `"` `'`), so any model-produced HTML/script is
- * inert before any transform runs; the transforms then emit ONLY a fixed set of safe tags
- * (<strong>, <em>, <ul>/<ol>/<li>, <p>, <br>, <h5>/<h6>). The result is bound with [innerHTML], which
- * Angular's DomSanitizer sanitizes by default. We never call bypassSecurityTrust*. See the spec for the
- * script/onerror escaping assertions.
+ * `compact` (the default, and the only behaviour before A.2/c1) is for free-text analysis results
+ * (Custom / Summarize and any other non-structured result). Local-LLM output commonly contains
+ * Markdown (bold, bullets, numbered lists, blank-line paragraphs) which, when interpolated as plain
+ * text, shows the literal `**`/`*` markers and mangles structure. This component converts that subset
+ * to a small set of known-safe HTML tags.
  *
- * RTL: dir="auto" on the root so Hebrew content renders RTL and English LTR. Any spacing uses logical
- * CSS properties so lists/headings read correctly in both directions.
+ * `document` (chatbot phase A.2, c1) is for AUTHORED markdown files rendered as a page: the shipped
+ * product guides at the `/help` reader. It is the same parser with three differences, each forced by
+ * what authored markdown does that model output does not - see {@link MarkdownVariant}. Adding a
+ * variant here rather than forking a second renderer is deliberate: two markdown paths would mean two
+ * escaping stories, and only one of them would keep being reviewed.
  *
- * No i18n strings here: the component renders user/model content, not fixed labels.
+ * Security: the input is HTML-ESCAPED FIRST (`&` `<` `>` `"` `'`), so any model-produced or
+ * file-authored HTML/script is inert before any transform runs; the transforms then emit ONLY a fixed
+ * set of safe tags (<strong>, <em>, <code>, <ul>/<ol>/<li>, <p>, <br>, <h1>-<h3>, <h5>/<h6>). The
+ * result is bound with [innerHTML], which Angular's DomSanitizer sanitizes by default. We never call
+ * bypassSecurityTrust*. See the spec for the script/onerror escaping assertions.
+ *
+ * RTL: dir="auto" on the root so Hebrew content renders RTL and English LTR. The one spacing property
+ * that is direction-sensitive, the list indent, is written logically (padding-inline-start); the rest
+ * are block-direction margins, where physical and logical are the same edge in this writing mode.
+ * Inline code additionally carries unicode-bidi: plaintext, which is not cosmetic - see the styles.
+ *
+ * Styling: this component is deliberately encapsulation: None. Everything it renders arrives through
+ * [innerHTML], and Angular's emulated encapsulation works by stamping a content attribute on the nodes
+ * IT creates, so an innerHTML-inserted <h1> or <code> carries no attribute and the compiled
+ * `.markdown-text[_ngcontent-x] h1[_ngcontent-x]` can never match it. Under Emulated, only the host
+ * rule applied and every descendant rule below was dead. The alternative, ::ng-deep on all sixteen
+ * descendant rules, is deprecated and says the same thing sixteen times. Nothing leaks: every
+ * selector in the block (eighteen, counting the two host rules) is
+ * namespaced under .markdown-text, which only this component's template emits. The cost of the choice
+ * is that a caller cannot restyle the rendered markdown by scoping a rule to its own view either, so
+ * anything a surface needs from this content has to be added here, namespaced the same way.
+ *
+ * No i18n strings here: the component renders user/model/document content, not fixed labels.
  */
+
+/**
+ * Which kind of markdown is being rendered.
+ *
+ * - `compact`: local-model output inside a panel. Headings are small (<h5>/<h6>) because they are
+ *   subordinate to the panel's own chrome; a single newline is a genuine `<br>` because model output
+ *   uses line breaks meaningfully; an inline enumeration ("1. a 2. b") is recovered into a list
+ *   because models write them that way.
+ * - `document`: an authored `.md` file rendered as the page's main content. Headings are real page
+ *   headings (<h1>-<h3>); source lines are HARD-WRAPPED at a column, so a single newline is a wrap and
+ *   NOT a break - joining them is the difference between prose and text with a ragged edge mid-sentence
+ *   at a narrow viewport - and an indented line continuing a list item belongs to that item; and an
+ *   inline ordinal in authored prose is prose, never a list, so that recovery is off.
+ */
+export type MarkdownVariant = 'compact' | 'document';
+
 @Component({
   selector: 'app-markdown-text',
   standalone: true,
   imports: [CommonModule],
-  template: `<div class="markdown-text" dir="auto" [innerHTML]="html"></div>`,
+  template: `<div
+    class="markdown-text"
+    [class.markdown-text--document]="variant === 'document'"
+    dir="auto"
+    [innerHTML]="html"></div>`,
   styles: [`
     .markdown-text {
       font-size: 0.9rem;
@@ -53,19 +95,100 @@ import { Component, Input } from '@angular/core';
     .markdown-text h5 { font-size: 0.95rem; }
     .markdown-text h6 { font-size: 0.9rem; }
     .markdown-text strong { font-weight: 600; }
-  `]
+    .markdown-text code {
+      font-family: var(--pd-font-mono);
+      font-size: 0.9em;
+      background: var(--pd-neutral-100);
+      border-radius: var(--pd-radius-sm);
+      padding: 0.1em 0.35em;
+      /* A code span is a LITERAL: it must read the way it would be typed, whatever direction the prose
+         around it runs. Inside a Hebrew paragraph the span inherits direction: rtl, and a leading
+         punctuation character is bidi-neutral, so a file extension resolved at the paragraph's RTL
+         level and the leading dot landed on the far end - the import guide named the accepted format
+         wrong in the sentence whose job is to name it. plaintext resolves the span's direction from
+         its OWN first strong character, which is the dir="auto" rule applied per span. unicode-bidi:
+         isolate does NOT fix this and was measured: it isolates the span but leaves it at the
+         inherited rtl. */
+      unicode-bidi: plaintext;
+      /* Not word-break: break-all. break-all breaks at every line end regardless of word boundaries,
+         which would split a Hebrew word mid-word at a narrow measure; anywhere only breaks a run that
+         has no other break opportunity and would otherwise overflow. */
+      overflow-wrap: anywhere;
+    }
+
+    /* ── document variant: a page of prose, not a panel note ─────────────────────────────────── */
+    .markdown-text--document {
+      font-size: var(--pd-text-body);
+      line-height: 1.7;
+      color: var(--pd-text);
+    }
+    .markdown-text--document p {
+      margin: 0 0 var(--pd-space-5);
+    }
+    .markdown-text--document ul,
+    .markdown-text--document ol {
+      margin: 0 0 var(--pd-space-5);
+      padding-inline-start: var(--pd-space-7);
+    }
+    .markdown-text--document li {
+      margin: 0 0 var(--pd-space-3);
+    }
+    .markdown-text--document h1,
+    .markdown-text--document h2,
+    .markdown-text--document h3 {
+      color: var(--pd-neutral-900);
+      font-weight: var(--pd-weight-semibold);
+      line-height: 1.3;
+    }
+    .markdown-text--document h1 {
+      font-size: var(--pd-text-h3);
+      margin: 0 0 var(--pd-space-5);
+    }
+    .markdown-text--document h2 {
+      font-size: var(--pd-text-h4);
+      margin: var(--pd-space-8) 0 var(--pd-space-4);
+    }
+    .markdown-text--document h3 {
+      font-size: var(--pd-text-h5);
+      margin: var(--pd-space-6) 0 var(--pd-space-3);
+    }
+  `],
+  // See the class doc: [innerHTML] nodes never carry the emulated content attribute, so every
+  // descendant rule above is dead under Emulated. The selectors are already namespaced under
+  // .markdown-text, so turning encapsulation off scopes them exactly as tightly as before.
+  encapsulation: ViewEncapsulation.None
 })
 export class MarkdownTextComponent {
   private _text = '';
+  private _variant: MarkdownVariant = 'compact';
   html = '';
 
   @Input()
   set text(value: string | null | undefined) {
     this._text = value ?? '';
-    this.html = renderSafeMarkdown(this._text);
+    this.render();
   }
   get text(): string {
     return this._text;
+  }
+
+  /**
+   * See {@link MarkdownVariant}. Defaults to `compact`, so a caller that does not set it keeps the
+   * compact PARSE. That is not the same as "unchanged": inline code spans are parsed in both variants
+   * and were added with the variant, and the encapsulation fix made the compact style rules apply for
+   * the first time, so both of those reach every existing caller.
+   */
+  @Input()
+  set variant(value: MarkdownVariant) {
+    this._variant = value === 'document' ? 'document' : 'compact';
+    this.render();
+  }
+  get variant(): MarkdownVariant {
+    return this._variant;
+  }
+
+  private render(): void {
+    this.html = renderSafeMarkdown(this._text, this._variant);
   }
 }
 
@@ -84,6 +207,9 @@ export class MarkdownTextComponent {
  *     ("3.14") and versions ("1.2.3") never qualify (4-digit / no-trailing-space);
  *   - only an ordinal preceded ON THE SAME LINE by non-whitespace text is broken out; an ordinal already at
  *     a line start (a genuine multi-line list) is left untouched.
+ *
+ * NOT applied in the `document` variant: an authored guide that writes an ordinal mid-sentence means a
+ * sentence, and the file already writes its real lists one item per line.
  */
 function splitInlineOrdinals(raw: string): string {
   const markerRe = /\b\d{1,2}[.)]\s/g;
@@ -101,8 +227,8 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-/** Inline transforms (bold/italic). Operates on ALREADY-ESCAPED text, emits only <strong>/<em>. */
-function renderInline(escaped: string): string {
+/** Bold/italic. Operates on ALREADY-ESCAPED text with no code spans in it, emits only <strong>/<em>. */
+function renderEmphasis(escaped: string): string {
   let out = escaped;
   // Bold: **text** -> <strong>text</strong>. Non-greedy, must contain at least one non-* char.
   out = out.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
@@ -115,33 +241,61 @@ function renderInline(escaped: string): string {
   return out;
 }
 
+/**
+ * Inline transforms. Operates on ALREADY-ESCAPED text, emits only <code>/<strong>/<em>.
+ *
+ * Code spans are lifted out FIRST and emphasis is applied only to what is left, so `**` inside
+ * `` `like_this` `` stays literal - which is the whole reason a reader would have written a code span
+ * around it. The escape pass has already run, so a code span's contents are inert text no matter what
+ * they contain.
+ */
+function renderInline(escaped: string): string {
+  const codeRe = /`([^`\n]+)`/g;
+  let out = '';
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = codeRe.exec(escaped)) !== null) {
+    out += renderEmphasis(escaped.slice(last, match.index));
+    out += `<code>${match[1]}</code>`;
+    last = match.index + match[0].length;
+  }
+  out += renderEmphasis(escaped.slice(last));
+  return out;
+}
+
 /** A block emitted during parsing: a paragraph, a list, or a heading. */
 type Block =
   | { kind: 'p'; lines: string[] }
   | { kind: 'ul'; items: string[] }
   | { kind: 'ol'; items: string[]; start: number }
-  | { kind: 'h'; level: 5 | 6; text: string };
+  | { kind: 'h'; level: 1 | 2 | 3 | 5 | 6; text: string };
 
 /**
  * Convert a SAFE Markdown subset to HTML. Escapes first, then transforms, so the output contains only
  * the documented safe tags. Recognized line forms (leading whitespace allowed):
  *   - `* ` / `- ` / `• `        -> unordered list item
  *   - `<n>. `                    -> ordered list item (faithful numbering via <ol start>)
- *   - `#` / `##` / `###` ...     -> small heading (<h5> for #/##, <h6> for deeper)
+ *   - `#` / `##` / `###` ...     -> heading (small <h5>/<h6> in compact, real <h1>-<h3> in document)
+ *   - `` `code` ``               -> inline code
  *   - blank line                 -> block/paragraph break
- *   - single newline in a para   -> <br>
+ *   - single newline in a para   -> <br> in compact, a joining space in document (hard-wrapped source)
+ *   - an INDENTED line right after a list item, in document -> a continuation of that item
  *   - anything else              -> paragraph text
  */
-export function renderSafeMarkdown(raw: string): string {
+export function renderSafeMarkdown(raw: string, variant: MarkdownVariant = 'compact'): string {
   if (!raw || !raw.trim()) return '';
 
-  // Normalize newlines, recover inline-enumerated lists (see splitInlineOrdinals), then escape the WHOLE
-  // input up front so every downstream branch is safe.
-  const escaped = escapeHtml(splitInlineOrdinals(raw.replace(/\r\n?/g, '\n')));
+  const isDocument = variant === 'document';
+
+  // Normalize newlines, recover inline-enumerated lists where that applies (see splitInlineOrdinals),
+  // then escape the WHOLE input up front so every downstream branch is safe.
+  const normalized = raw.replace(/\r\n?/g, '\n');
+  const escaped = escapeHtml(isDocument ? normalized : splitInlineOrdinals(normalized));
   const lines = escaped.split('\n');
 
   const blocks: Block[] = [];
   let paragraph: string[] = [];
+  let previousWasBlank = true;
 
   const flushParagraph = () => {
     if (paragraph.length) {
@@ -155,18 +309,24 @@ export function renderSafeMarkdown(raw: string): string {
   const bulletRe = /^\s*([*\-•])\s+(.*)$/;
   const orderedRe = /^\s*(\d+)[.)]\s+(.*)$/;
   const headingRe = /^\s*(#{1,6})\s+(.*)$/;
+  const indentedRe = /^\s+\S/;
 
   for (const line of lines) {
     if (!line.trim()) {
       flushParagraph();
+      previousWasBlank = true;
       continue;
     }
 
     const heading = headingRe.exec(line);
     if (heading) {
       flushParagraph();
-      const level: 5 | 6 = heading[1].length <= 2 ? 5 : 6;
+      const depth = heading[1].length;
+      const level: 1 | 2 | 3 | 5 | 6 = isDocument
+        ? (depth === 1 ? 1 : depth === 2 ? 2 : 3)
+        : (depth <= 2 ? 5 : 6);
       blocks.push({ kind: 'h', level, text: heading[2].trim() });
+      previousWasBlank = false;
       continue;
     }
 
@@ -179,6 +339,7 @@ export function renderSafeMarkdown(raw: string): string {
       } else {
         blocks.push({ kind: 'ul', items: [bullet[2]] });
       }
+      previousWasBlank = false;
       continue;
     }
 
@@ -192,20 +353,40 @@ export function renderSafeMarkdown(raw: string): string {
       } else {
         blocks.push({ kind: 'ol', items: [ordered[2]], start: Number.isFinite(num) ? num : 1 });
       }
+      previousWasBlank = false;
       continue;
     }
 
+    // A hard-wrapped list item's continuation. Authored guides wrap at a column, so an item longer
+    // than the column arrives as an INDENTED line with no marker; without this it would end the list
+    // and become a stray paragraph mid-list. Deliberately narrow: it must be indented, it must
+    // immediately follow the item (no blank line), no paragraph may be open, and the previous block
+    // must be a list. A prose paragraph after a list starts at column 0 and is unaffected.
+    if (isDocument && !previousWasBlank && paragraph.length === 0 && indentedRe.test(line)) {
+      const last = blocks[blocks.length - 1];
+      if (last && (last.kind === 'ul' || last.kind === 'ol') && last.items.length > 0) {
+        last.items[last.items.length - 1] += ' ' + line.trim();
+        continue;
+      }
+    }
+
     paragraph.push(line);
+    previousWasBlank = false;
   }
   flushParagraph();
 
-  return blocks.map(renderBlock).join('');
+  return blocks.map(block => renderBlock(block, isDocument)).join('');
 }
 
-function renderBlock(block: Block): string {
+function renderBlock(block: Block, isDocument: boolean): string {
   switch (block.kind) {
     case 'p': {
-      const inner = block.lines.map(l => renderInline(l)).join('<br>');
+      // In a document, consecutive lines are one hard-wrapped paragraph: join them BEFORE the inline
+      // pass, so emphasis that spans a wrap ("**a\nb**") still resolves. In compact, a newline is a
+      // real break and each line is transformed on its own.
+      const inner = isDocument
+        ? renderInline(block.lines.join(' '))
+        : block.lines.map(l => renderInline(l)).join('<br>');
       return `<p>${inner}</p>`;
     }
     case 'ul': {

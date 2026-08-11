@@ -8,6 +8,7 @@ import {
   inject,
 } from '@angular/core';
 import { AsyncPipe } from '@angular/common';
+import { RouterLink } from '@angular/router';
 import { Subject, map, takeUntil } from 'rxjs';
 
 import { ActivityCenterComponent, LABELS_EN, LABELS_HE } from '../activity-center/activity-center.component';
@@ -16,6 +17,7 @@ import { AppDockTab, AppOverlayService } from '../../core/services/app-overlay.s
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { ChatChromeLang, chatString } from '../../core/i18n/chat-strings';
 import { DockStringKey, dockString, launcherAriaLabel } from '../../core/i18n/dock-strings';
+import { guidesString } from '../../core/i18n/guides-strings';
 
 /**
  * The app dock: ONE launcher and ONE drawer with tabs, mounted once for every route
@@ -65,7 +67,7 @@ import { DockStringKey, dockString, launcherAriaLabel } from '../../core/i18n/do
   selector: 'app-dock',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AsyncPipe, ActivityCenterComponent, ProductChatComponent],
+  imports: [AsyncPipe, RouterLink, ActivityCenterComponent, ProductChatComponent],
   templateUrl: './app-dock.component.html',
   styleUrl: './app-dock.component.scss',
 })
@@ -129,10 +131,10 @@ export class AppDockComponent implements OnDestroy {
    * carried by the ONE launcher (and, while the drawer is open and the launcher is therefore not
    * rendered, by the activity tab itself, so the number never disappears mid-run).
    *
-   * Both badges render the number beside a `⟳` mark rather than alone (c02). The launcher's glyph is a
-   * speech bubble, and a bare number on a speech bubble reads as unread MESSAGES, which is the opposite
-   * of what this counts. The mark and the composed accessible name below say the same thing, one to the
-   * eye and one to a screen reader.
+   * Both badges render the number beside a `⟳` mark rather than alone (c02). The launcher opens the
+   * assistant (and since A.2/f1 wears its face), and a bare number on a chat launcher reads as unread
+   * MESSAGES, which is the opposite of what this counts. The mark and the composed accessible name
+   * below say the same thing, one to the eye and one to a screen reader.
    */
   readonly activeCount$ = this.registry.activeJobs$.pipe(map(jobs => jobs.length));
 
@@ -155,6 +157,30 @@ export class AppDockComponent implements OnDestroy {
   tabLabel(tab: AppDockTab): string {
     if (tab === 'assistant') return chatString(this.appLang, 'drawerTitle');
     return (this.appLang === 'he' ? LABELS_HE : LABELS_EN)['panelTitle'];
+  }
+
+  /**
+   * The guides link's visible tooltip and its accessible name (A.2, c1).
+   *
+   * Read from `guides-strings` rather than copied into the dock's own map, on the same rule the tab
+   * labels follow: an affordance is named by the surface it opens, so the dock cannot drift from the
+   * `/help` page it links to.
+   */
+  get helpLabel(): string {
+    return guidesString(this.appLang, 'helpLink');
+  }
+
+  get helpAria(): string {
+    return guidesString(this.appLang, 'helpLinkAria');
+  }
+
+  /**
+   * The guides link was used. Navigation is the anchor's own `routerLink`; this closes the dock, for
+   * the same reason a citation chip does - the drawer is a full-height panel and would otherwise cover
+   * the page it just opened. Both tab bodies stay mounted across a close, so nothing is discarded.
+   */
+  openHelp(): void {
+    this.overlays.close();
   }
 
   /** DOM ids for the tab/tabpanel wiring. */

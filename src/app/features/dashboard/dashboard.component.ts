@@ -6,6 +6,7 @@ import { BookService } from '../../core/services/book.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookDto } from '../../core/models/book';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { guidesString } from '../../core/i18n/guides-strings';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
 import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { clearCollapseState } from '../../shared/collapsible-section/collapse-store';
@@ -36,9 +37,15 @@ function collectChangedIds(previous: ReadonlySet<string>, next: ReadonlySet<stri
     <div class="dashboard" [attr.dir]="dir">
       <header class="dash-header">
         <h1>Pagedraft</h1>
-        @if (!showCreateForm) {
-          <button class="pd-btn pd-btn-primary" (click)="showCreateForm = true">{{ label('newBook') }}</button>
-        }
+        <div class="dash-header-actions">
+          <!-- Chatbot phase A.2 / c1: the guides are a real page now, so the books list - the route the
+               app lands on - says so out loud rather than leaving them to be discovered through the
+               assistant's citations. The dock carries the same link on every other route. -->
+          <a class="dash-help-link" routerLink="/help" [queryParams]="{ lang: langKey }" [attr.aria-label]="helpAria">{{ helpLabel }}</a>
+          @if (!showCreateForm) {
+            <button class="pd-btn pd-btn-primary" (click)="showCreateForm = true">{{ label('newBook') }}</button>
+          }
+        </div>
       </header>
       @if (showCreateForm) {
         <div class="create-form">
@@ -104,6 +111,22 @@ function collectChangedIds(previous: ReadonlySet<string>, next: ReadonlySet<stri
       margin: 0;
       font-size: var(--pd-text-h3);
       color: var(--pd-neutral-900);
+    }
+    .dash-header-actions {
+      display: flex;
+      align-items: center;
+      gap: var(--pd-space-5);
+    }
+    .dash-help-link {
+      color: var(--pd-text-link);
+      text-decoration: none;
+      font-size: var(--pd-text-body-sm);
+    }
+    .dash-help-link:hover { text-decoration: underline; }
+    .dash-help-link:focus-visible {
+      outline: none;
+      box-shadow: var(--pd-ring);
+      border-radius: var(--pd-radius-sm);
     }
     .book-list {
       list-style: none;
@@ -198,8 +221,12 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   // ── Localization (app-level surface: no book language; defaults to Hebrew-first) ──
 
-  /** Dashboard chrome is always Hebrew-first; no per-book language applies here. */
-  private get langKey(): 'he' | 'en' {
+  /**
+   * Dashboard chrome is always Hebrew-first; no per-book language applies here. Not private: the
+   * template reads it directly on the guides link so that link's URL names the same language its
+   * label is drawn in, matching the dock's `[queryParams]="{ lang: lang }"`.
+   */
+  get langKey(): 'he' | 'en' {
     return 'he';
   }
 
@@ -255,6 +282,19 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   relativeTime(iso: string | null | undefined, lang?: string): string {
     return formatRelativeTime(iso, lang === 'he' ? 'he' : 'en');
+  }
+
+  /**
+   * The guides link's text and accessible name (A.2, c1), read from `guides-strings` rather than added
+   * to this component's own label map: the affordance is named by the surface it opens, so the books
+   * list and the dock cannot end up calling the same page two different things.
+   */
+  get helpLabel(): string {
+    return guidesString(this.langKey, 'helpLink');
+  }
+
+  get helpAria(): string {
+    return guidesString(this.langKey, 'helpLinkAria');
   }
 
   // ── Wave 3 / w3: the compact stage spine, one per book row ────────────────────────────────────

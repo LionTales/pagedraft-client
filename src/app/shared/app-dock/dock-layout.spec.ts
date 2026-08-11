@@ -243,8 +243,10 @@ describe('AppDock layout (chatbot phase A.1)', () => {
 
   it('the marked badge still FITS the 48px launcher, on the outer corner in both directions', () => {
     // c02 chose to widen the badge (a `⟳` mark beside the number) rather than change the launcher's
-    // glyph, so the thing that could go wrong is crowding: the badge is now two glyphs wide on a 48px
+    // icon, so the thing that could go wrong is crowding: the badge is now two glyphs wide on a 48px
     // control. Measured rather than eyeballed, at the widest count the badge is likely to carry.
+    // A.2 swapped the icon itself (emoji -> Show's 32px avatar) and this measurement is why: a bigger
+    // icon leaves the badge less room, so the clearance below is now doing real work.
     registry.setActive(12);
     fixture.detectChanges();
 
@@ -263,9 +265,9 @@ describe('AppDock layout (chatbot phase A.1)', () => {
         .withContext(`${lang}: the badge must stay a badge, not become a pill across the launcher`)
         .toBeLessThanOrEqual(launcher.width);
 
-      // And it must not COVER the glyph it annotates. Any-pixel overlap is the wrong predicate here
-      // (the badge is designed to sit on the rim); what matters is that the speech bubble is still
-      // legible, so the test is that the glyph's own centre is not underneath the badge.
+      // And it must not COVER the icon it annotates. Any-pixel overlap is the wrong predicate here
+      // (the badge is designed to sit on the rim); what matters is that Show's face is still
+      // recognizable, so the test is that the icon's own centre is not underneath the badge.
       const iconCentre = { x: icon.left + icon.width / 2, y: icon.top + icon.height / 2 };
       const coversGlyph =
         iconCentre.x > badge.left && iconCentre.x < badge.right &&

@@ -3,6 +3,12 @@
  * the two separate overlays (chatbot phase A.1, w1).
  *
  * ── What lives here and what deliberately does not ─────────────────────────────────────────────────
+ * A.2/c2: the two strings that NAME the dock as a whole (`launcher`, `dockTitle`) now say Show rather
+ * than "the assistant". The assistant has a name as of f1 and the user reads it on every turn, so a
+ * launcher that offers to open "the assistant" is naming a thing the rest of the UI no longer calls
+ * that. This is the ONLY overlap with the rule below: these two strings name BOTH surfaces at once, so
+ * they cannot be delegated to either one the way the tab labels are.
+ *
  * Only the strings the DOCK itself owns. The two tab LABELS are not here: a tab is named by the
  * surface it opens, so the assistant tab reads its name from `chat-strings` and the activity tab from
  * `ActivityCenterComponent`'s own label map. Copying those names into a third map would let the tab
@@ -36,11 +42,11 @@ export type DockStringKey =
 
 /** Hebrew dock chrome. DRAFT he - needs native review. */
 export const DOCK_STRINGS_HE: Record<DockStringKey, string> = {
-  launcher:            'פתיחת העוזר ומרכז הפעילות',   // DRAFT he - needs native review
+  launcher:            'פתיחת שואו ומרכז הפעילות',    // DRAFT he - needs native review
   activeCount:         'משימות פעילות',                // DRAFT he - needs native review (plural)
   activeCountSingular: 'משימה פעילה',                  // DRAFT he - needs native review (singular)
 
-  dockTitle:           'עוזר ופעילות',                 // DRAFT he - needs native review
+  dockTitle:           'שואו ופעילות',                 // DRAFT he - needs native review
   tabsLabel:           'לשוניות החלונית',              // DRAFT he - needs native review
   close:               'סגירה',                        // DRAFT he - needs native review
   expand:              'הרחבת החלונית',                // DRAFT he - needs native review
@@ -48,11 +54,11 @@ export const DOCK_STRINGS_HE: Record<DockStringKey, string> = {
 };
 
 export const DOCK_STRINGS_EN: Record<DockStringKey, string> = {
-  launcher:            'Open the assistant and activity',
+  launcher:            'Open Show and your activity',
   activeCount:         'active tasks',
   activeCountSingular: 'active task',
 
-  dockTitle:           'Assistant and activity',
+  dockTitle:           'Show and activity',
   tabsLabel:           'Panel tabs',
   close:               'Close',
   expand:              'Widen the panel',

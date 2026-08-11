@@ -367,6 +367,48 @@ describe('ProductChatComponent (chatbot phase A)', () => {
       expect(chips[0].nativeElement.textContent.trim()).toBe('release-notes');
     });
 
+    it('makes every chip a LINK to that guide\'s reader page, carrying the chrome language', () => {
+      // A.2/c1: the reason the reader was built. Before this the chip named a document at an author
+      // who had no way to open it.
+      ask('what runs before the review?');
+      http.expectOne('/api/product-chat')
+        .flush(groundedAnswer({ guideIds: ['whole-book-review', 'import'] }));
+      fixture.detectChanges();
+
+      const chips = fixture.debugElement.queryAll(By.css('.pc-citation-chip'));
+      expect(chips.length).toBe(2);
+      expect(chips.map(c => (c.nativeElement as HTMLElement).tagName)).toEqual(['A', 'A']);
+      expect(chips.map(c => (c.nativeElement as HTMLAnchorElement).getAttribute('href')))
+        .toEqual(['/help/whole-book-review?lang=he', '/help/import?lang=he']);
+    });
+
+    it('an UNKNOWN guide id still links to the reader, which is where it can be found', () => {
+      ask('q');
+      http.expectOne('/api/product-chat').flush(groundedAnswer({ guideIds: ['release-notes'] }));
+      fixture.detectChanges();
+
+      expect((fixture.debugElement.query(By.css('.pc-citation-chip')).nativeElement as HTMLAnchorElement)
+        .getAttribute('href')).toBe('/help/release-notes?lang=he');
+    });
+
+    it('following a citation CLOSES the dock, and the transcript survives the close', () => {
+      // The stated decision: the drawer is a full-height panel and would otherwise cover the guide it
+      // just sent the author to. Nothing is lost, because this component stays mounted across a close.
+      ask('how do I import?');
+      http.expectOne('/api/product-chat').flush(groundedAnswer({ guideIds: ['import'] }));
+      fixture.detectChanges();
+      expect(overlays.isOpen).toBeTrue();
+
+      component.openCitation();
+      fixture.detectChanges();
+
+      expect(overlays.isOpen).toBeFalse();
+      expect(component.entries.length)
+        .withContext('the conversation must still be there when the dock is reopened')
+        .toBe(2);
+      expect(component.entries[1].kind).toBe('assistant');
+    });
+
     it('renders no citation block when the answer cites nothing', () => {
       ask('q');
       http.expectOne('/api/product-chat').flush(groundedAnswer({ guideIds: [] }));

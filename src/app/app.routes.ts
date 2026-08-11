@@ -13,5 +13,12 @@ export const routes: Routes = [
   // Wave 3 / w4: export is a ROUTE, a sibling of import, so the spine's Export stage has a real destination
   // and the served guides can name a URL. A dialog would have had neither.
   { path: 'books/:bookId/export', loadComponent: () => import('./features/export/export-page.component').then(m => m.ExportPageComponent) },
+  // Chatbot phase A.2 / c1: the guides reader. APP-LEVEL and deliberately not book-scoped - the guides
+  // describe the product, not a manuscript, and the assistant that cites them is reachable from every
+  // route including ones where no book is open. `/help` is the index; `/help/:guideId` is one guide,
+  // and it is where the chat's citation chips navigate. The `lang` query parameter carries the language
+  // on both, so a shared link keeps the language it was read in.
+  { path: 'help', loadComponent: () => import('./features/help/help-index.component').then(m => m.HelpIndexComponent) },
+  { path: 'help/:guideId', loadComponent: () => import('./features/help/guide-reader.component').then(m => m.GuideReaderComponent) },
   { path: '**', redirectTo: 'books' }
 ];
