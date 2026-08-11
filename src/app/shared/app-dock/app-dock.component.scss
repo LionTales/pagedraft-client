@@ -223,14 +223,27 @@
   flex: 1 1 auto;
 }
 
+/*
+ * A CONTAINED tab shape (f2), not a link: each tab is its own card, with the top two corners
+ * rounded (folder-tab shape via logical `border-start-*-radius`, so the shape mirrors correctly in
+ * RTL) and a shared 2px baseline along the block-end edge that every tab carries regardless of state.
+ * Only COLOR changes between states (never width), so switching tabs never shifts layout - the active
+ * tab's baseline segment turns brand-primary (the "underline"), its fill lifts from sunken to the
+ * drawer's own surface (the "raised" state, plus a slight shadow), and its side/top border becomes
+ * visible (the "tab boundary"); inactive tabs stay filled with `--pd-surface-sunken` (recessed, both
+ * literally the sunken token and visually lower than the active card).
+ */
 .dock-tab {
   display: inline-flex;
   align-items: center;
   gap: var(--pd-space-2);
+  min-height: 44px; /* touch target, block direction */
   padding: var(--pd-space-2) var(--pd-space-4);
   border: 1px solid transparent;
-  border-radius: var(--pd-radius-pill);
-  background: none;
+  border-block-end: 2px solid var(--pd-border-strong);
+  border-start-start-radius: var(--pd-radius-md);
+  border-start-end-radius: var(--pd-radius-md);
+  background: var(--pd-surface-sunken);
   cursor: pointer;
   font-family: var(--pd-font-ui);
   font-size: var(--pd-text-body-sm);
@@ -240,11 +253,14 @@
   min-width: 0;
   transition:
     background var(--pd-dur-fast) var(--pd-ease),
-    color var(--pd-dur-fast) var(--pd-ease);
+    border-color var(--pd-dur-fast) var(--pd-ease),
+    color var(--pd-dur-fast) var(--pd-ease),
+    box-shadow var(--pd-dur-fast) var(--pd-ease);
 }
 
 .dock-tab:hover {
-  background: var(--pd-surface-sunken);
+  background: var(--pd-surface);
+  border-block-end-color: var(--pd-border-strong);
   color: var(--pd-text);
 }
 
@@ -254,8 +270,12 @@
 }
 
 .dock-tab--active {
-  background: var(--pd-surface-brand);
-  border-color: var(--pd-primary-200);
+  background: var(--pd-surface);
+  border-block-start-color: var(--pd-border);
+  border-inline-start-color: var(--pd-border);
+  border-inline-end-color: var(--pd-border);
+  border-block-end-color: var(--pd-primary-600);
+  box-shadow: var(--pd-shadow-1);
   color: var(--pd-primary-700);
   font-weight: var(--pd-weight-bold);
 }
