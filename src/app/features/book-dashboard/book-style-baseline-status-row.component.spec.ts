@@ -530,4 +530,124 @@ describe('BookStyleBaselineStatusRowComponent (w5 MOVE-1 + MOVE-2)', () => {
       expect(en).not.toContain('—');
     });
   });
+
+  // ── final-r02: the same precondition, one book further out - rows with nothing written in them ─────
+  //
+  // Found live at 1440x900 Hebrew on a book with three chapters created empty: `bsb-build-now` was ENABLED
+  // with no reason given and offered `~3 פרקים, ~2 דקות` of real GPU time, roughly 200px below a spine
+  // saying nothing had been written in those chapters. The build is a total no-op on such a book
+  // (`AnalysisContextService.LoadOrBuildChapterStyleProfileAsync` short-circuits on blank text before any
+  // model call), so it is refused with a reason rather than permitted with a warning.
+
+  describe('final-r02: the no-text precondition, on every action the row gates', () => {
+    function rowsButNoText(): void {
+      component.chapterCount = 3;
+      component.chaptersWithText = 0;
+    }
+
+    it('disables the build and states why when the chapters exist but carry no text', () => {
+      rowsButNoText();
+      component.styleBaselineStatus = makeStatus({
+        hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 3, staleCount: 3, chaptersToBuild: 3,
+      });
+      fixture.detectChanges();
+
+      const btn = query('[data-testid="bsb-build-now"]');
+      expect(btn).withContext('disabled, never hidden').not.toBeNull();
+      expect((btn.nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect((query('[data-testid="bsb-needs-import"]').nativeElement as HTMLElement).textContent!.trim().length)
+        .toBeGreaterThan(0);
+    });
+
+    it('disables the REBUILD and REFRESH actions too, so no state can escape the precondition', () => {
+      rowsButNoText();
+      component.styleBaselineStatus = makeStatus({ totalChapters: 3, builtChapters: 3 });
+      fixture.detectChanges();
+      expect(component.baselineState).toBe('ready');
+      expect((query('[data-testid="bsb-rebuild"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="bsb-needs-import"]')).not.toBeNull();
+
+      component.styleBaselineStatus = makeStatus({ ready: false, staleCount: 3, chaptersToBuild: 3, totalChapters: 3 });
+      fixture.detectChanges();
+      expect(component.baselineState).toBe('stale');
+      expect((query('[data-testid="bsb-refresh"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="bsb-needs-import"]')).not.toBeNull();
+    });
+
+    it('refuses to open the consent prompt, even bypassing the button', () => {
+      rowsButNoText();
+      component.styleBaselineStatus = makeStatus({ hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 3 });
+
+      component.openBaselineConsent();
+
+      expect(component.showBaselineConsent).toBeFalse();
+    });
+
+    it('gives the no-text book its OWN reason, in both languages, with no em-dash', () => {
+      component.chapterCount = 0;
+      component.chaptersWithText = 0;
+      component.styleBaselineStatus = makeStatus({ hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 0 });
+      fixture.detectChanges();
+      const noChapters = (query('[data-testid="bsb-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      rowsButNoText();
+      component.bookLanguage = 'he';
+      fixture.detectChanges();
+      const he = (query('[data-testid="bsb-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      const en = (query('[data-testid="bsb-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(he).not.toBe(noChapters);
+      expect(he).not.toBe('needsText');
+      expect(en).not.toBe('needsText');
+      expect(he).not.toBe(en);
+      expect(he).not.toContain('—');
+      expect(en).not.toContain('—');
+    });
+
+    it('leaves the build ENABLED while the TEXT count is not known yet (null is not zero)', () => {
+      component.chapterCount = 3;
+      component.chaptersWithText = null;
+      component.styleBaselineStatus = makeStatus({ hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 3 });
+      fixture.detectChanges();
+
+      expect((query('[data-testid="bsb-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="bsb-needs-import"]')).toBeNull();
+    });
+
+    it('leaves the build ENABLED as soon as one chapter carries text', () => {
+      component.chapterCount = 3;
+      component.chaptersWithText = 1;
+      component.styleBaselineStatus = makeStatus({ hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 3 });
+      fixture.detectChanges();
+
+      expect((query('[data-testid="bsb-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="bsb-needs-import"]')).toBeNull();
+    });
+
+    it('caps the consent estimate at the chapters a build can really read', () => {
+      component.chapterCount = 10;
+      component.chaptersWithText = 7;
+      component.bookLanguage = 'en';
+      component.styleBaselineStatus = makeStatus({
+        hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 10, chaptersToBuild: 10, estimatedSeconds: 300,
+      });
+
+      expect(component.baselineConsentEstimate).toContain('~7 chapters');
+      expect(component.baselineConsentEstimate).not.toContain('~10 chapters');
+    });
+
+    it('leaves the server estimate alone when the text count is not known', () => {
+      component.chapterCount = 10;
+      component.chaptersWithText = null;
+      component.bookLanguage = 'en';
+      component.styleBaselineStatus = makeStatus({
+        hasBaseline: false, ready: false, builtChapters: 0, totalChapters: 10, chaptersToBuild: 10, estimatedSeconds: 300,
+      });
+
+      expect(component.baselineConsentEstimate).toContain('~10 chapters');
+    });
+  });
 });

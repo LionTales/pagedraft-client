@@ -909,7 +909,62 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
 
       const row = fixture.debugElement.query(By.css('app-book-summary-status-row'));
       expect(row.componentInstance.chapterCount).toBeNull();
+      expect(row.componentInstance.chaptersWithText).toBeNull();
       expect(row.componentInstance.blockedByImport).toBeFalse();
+    });
+
+    /**
+     * final-r02. `chapterCount` alone answered only the empty book. On a book whose chapters were all
+     * created empty the spine (which reads both counts since c01) rendered stage 1 "there are 3 chapters,
+     * but nothing has been written in them" and stage 5 `blocked`, while these three rows stayed ENABLED
+     * roughly 200px below and offered a real model run. The host now feeds BOTH counts from one getter
+     * each, and the rows and the spine read them through the same predicate.
+     */
+    it('hands the build rows the TEXT count too, so rows-with-no-text cannot escape the precondition', () => {
+      component.chapters = [
+        { id: 'ch-1', title: 'One', partName: null, order: 0, wordCount: 0, updatedAt: '2026-01-01T00:00:00Z' },
+        { id: 'ch-2', title: 'Two', partName: null, order: 1, wordCount: 0, updatedAt: '2026-01-01T00:00:00Z' },
+        { id: 'ch-3', title: 'Three', partName: null, order: 2, wordCount: 0, updatedAt: '2026-01-01T00:00:00Z' },
+      ];
+      (component as any).rebuildSpineSignals();
+      fixture.detectChanges();
+
+      const rows = [
+        fixture.debugElement.query(By.css('app-book-summary-status-row')),
+        fixture.debugElement.query(By.css('app-book-review-status-row')),
+        fixture.debugElement.query(By.css('app-book-style-baseline-status-row')),
+      ];
+      for (const row of rows) {
+        expect(row).not.toBeNull();
+        expect(row.componentInstance.chapterCount).toBe(3);
+        expect(row.componentInstance.chaptersWithText).toBe(0);
+        expect(row.componentInstance.blockedByImport)
+          .withContext(`${row.name} must refuse a build the server would answer as a no-op`)
+          .toBeTrue();
+      }
+      // And the spine beside them is derived from the SAME two numbers, so the screen cannot contradict
+      // itself: stage 5 blocked is what made this visible live.
+      expect(component.spineSignals.chapterCount).toBe(3);
+      expect(component.spineSignals.chaptersWithText).toBe(0);
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-stage-export"]')).attributes['data-state'])
+        .toBe('blocked');
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-stage-briefs"]')).attributes['data-state'])
+        .toBe('blocked');
+    });
+
+    it('re-enables every build row as soon as one chapter carries text', () => {
+      component.chapters = [
+        { id: 'ch-1', title: 'One', partName: null, order: 0, wordCount: 42, updatedAt: '2026-01-01T00:00:00Z' },
+        { id: 'ch-2', title: 'Two', partName: null, order: 1, wordCount: 0, updatedAt: '2026-01-01T00:00:00Z' },
+      ];
+      (component as any).rebuildSpineSignals();
+      fixture.detectChanges();
+
+      for (const sel of ['app-book-summary-status-row', 'app-book-review-status-row', 'app-book-style-baseline-status-row']) {
+        const row = fixture.debugElement.query(By.css(sel));
+        expect(row.componentInstance.chaptersWithText).toBe(1);
+        expect(row.componentInstance.blockedByImport).withContext(sel).toBeFalse();
+      }
     });
   });
 

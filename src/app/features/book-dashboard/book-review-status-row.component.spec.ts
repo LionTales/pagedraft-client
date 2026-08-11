@@ -1416,6 +1416,109 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
     });
   });
 
+  // ── final-r02: the same gate on a book whose chapters exist but carry no text ──────────────────────
+  //
+  // c02 closed the zero-chapter book; c01 had already taught the spine to read the TEXT count as well.
+  // On a book with three chapters created empty the two answers diverged: the spine said nothing had been
+  // written while this row still pointed at the briefs, and the briefs row itself sat enabled. The briefs
+  // this review needs cannot be built from empty chapters, so naming them here is a fix that cannot be
+  // walked - the same walkability rule c02 applied to the zero-chapter book.
+
+  describe('final-r02: with rows but no text the gate names the writing, not the briefs', () => {
+    function rowsButNoText(): void {
+      component.chapterCount = 3;
+      component.chaptersWithText = 0;
+    }
+
+    it('swaps the gate sentence, because the briefs row is refused on that book too', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: false });
+      component.chapterCount = 3;
+      component.chaptersWithText = 3;
+      fixture.detectChanges();
+      const withText = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      rowsButNoText();
+      fixture.detectChanges();
+      const withNoText = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(component.bookReviewState).toBe('needs-summary');
+      expect(withNoText).not.toBe(withText);
+      expect(withNoText).toBe(component.bookReviewLabel('needsText'));
+      expect(withText).toBe(component.bookReviewLabel('needsSummary'));
+    });
+
+    it('says something different from the no-chapters sentence: this author already added chapters', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: false });
+      component.chapterCount = 0;
+      component.chaptersWithText = 0;
+      fixture.detectChanges();
+      const noChapters = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      rowsButNoText();
+      fixture.detectChanges();
+      const noText = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(noChapters.length).toBeGreaterThan(0);
+      expect(noChapters).toBe(component.bookReviewLabel('needsImport'));
+      expect(noText).toBe(component.bookReviewLabel('needsText'));
+      expect(noText).not.toBe(noChapters);
+    });
+
+    it('disables the BUILD and the REFRESH actions, each with the reason beside it', () => {
+      rowsButNoText();
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect((query('[data-testid="brev-needs-import"]').nativeElement as HTMLElement).textContent!.trim())
+        .toBe(component.bookReviewLabel('needsText'));
+
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: true, ready: false, hasBriefs: true, staleVsBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-refresh"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="brev-needs-import"]')).not.toBeNull();
+    });
+
+    it('refuses the consent prompt even when the briefs gate would allow it', () => {
+      rowsButNoText();
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+
+      component.openBookReviewConsent();
+
+      expect(component.showBookReviewConsent).toBeFalse();
+    });
+
+    it('leaves both actions ENABLED while the TEXT count is not known yet (null is not zero)', () => {
+      component.chapterCount = 3;
+      component.chaptersWithText = null;
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="brev-needs-import"]')).toBeNull();
+    });
+
+    it('leaves both actions ENABLED as soon as one chapter carries text', () => {
+      component.chapterCount = 3;
+      component.chaptersWithText = 1;
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="brev-needs-import"]')).toBeNull();
+    });
+
+    it('states the no-text reason in both languages (he/en parity, no em-dash)', () => {
+      component.bookLanguage = 'he';
+      const he = component.bookReviewLabel('needsText');
+      component.bookLanguage = 'en';
+      const en = component.bookReviewLabel('needsText');
+
+      expect(he).not.toBe('needsText');
+      expect(en).not.toBe('needsText');
+      expect(he).not.toBe(en);
+      expect(he).not.toContain('—');
+      expect(en).not.toContain('—');
+    });
+  });
+
   /**
    * c03. `ngOnChanges` runs INSIDE the host's change-detection pass, and `statusChange` is bound into host
    * state the stage spine - declared ABOVE this row in the host template, so already checked in that same

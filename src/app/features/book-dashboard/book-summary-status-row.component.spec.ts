@@ -1124,6 +1124,161 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
     });
   });
 
+  // ── final-r02: the SECOND shape of the same contradiction - rows, but nothing written in them ──────
+  //
+  // Found live at 1440x900 Hebrew on a book with three chapters created empty: this row's Build now was
+  // ENABLED with no reason given, and pressing it offered `~3 פרקים, ~2 דקות` of real GPU time roughly
+  // 200px below a spine reading "there are 3 chapters in the book, but nothing has been written in them,
+  // so a file made now would be empty". c02 taught the row `chapterCount === 0`; c01 had already taught
+  // the spine to read the text count as well, and the two drifted apart on exactly the books between them.
+  //
+  // The refusal is deliberate rather than a warning: the server answers this build as a TOTAL no-op
+  // (`ChapterBriefService.LoadOrBuildChapterBriefAsync` short-circuits on blank text before any model call,
+  // and the rollup then persists nothing), so permitting it would run a progress bar and an activity entry
+  // to produce nothing at all.
+
+  describe('final-r02: the no-text precondition, on every action the row gates', () => {
+    function rowsButNoText(): void {
+      component.chapterCount = 3;
+      component.chaptersWithText = 0;
+    }
+
+    it('disables the build and states why when the chapters exist but carry no text', () => {
+      rowsButNoText();
+      component.bookSummaryStatus = makeBookSummaryStatus({
+        hasSummary: false, ready: false, builtChapters: 0, totalChapters: 3,
+        staleCount: 3, chaptersToBuild: 3, estimatedSeconds: 90,
+      });
+      fixture.detectChanges();
+
+      const btn = query('[data-testid="bsum-build-now"]');
+      expect(btn).withContext('disabled, never hidden').not.toBeNull();
+      expect((btn.nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect((query('[data-testid="bsum-needs-import"]').nativeElement as HTMLElement).textContent!.trim().length)
+        .toBeGreaterThan(0);
+    });
+
+    it('gives the no-text book its OWN reason, not the one written for a book with no chapters', () => {
+      component.chapterCount = 0;
+      component.chaptersWithText = 0;
+      component.bookSummaryStatus = makeBookSummaryStatus({ hasSummary: false, ready: false, totalChapters: 0 });
+      fixture.detectChanges();
+      const noChapters = (query('[data-testid="bsum-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      rowsButNoText();
+      fixture.detectChanges();
+      const noText = (query('[data-testid="bsum-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(noChapters.length).toBeGreaterThan(0);
+      expect(noText.length).toBeGreaterThan(0);
+      expect(noText)
+        .withContext('telling this author to add a chapter is advice they have already followed')
+        .not.toBe(noChapters);
+    });
+
+    it('states the no-text reason in the book language, both sides (he/en parity, no em-dash)', () => {
+      rowsButNoText();
+      component.bookSummaryStatus = makeBookSummaryStatus({ hasSummary: false, ready: false, totalChapters: 3 });
+      component.bookLanguage = 'he';
+      fixture.detectChanges();
+      const he = (query('[data-testid="bsum-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      const en = (query('[data-testid="bsum-needs-import"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(he).not.toBe('needsText');
+      expect(en).not.toBe('needsText');
+      expect(he).not.toBe(en);
+      expect(he).not.toContain('—');
+      expect(en).not.toContain('—');
+    });
+
+    it('disables the REBUILD and REFRESH actions too, so no state can escape the precondition', () => {
+      rowsButNoText();
+      component.bookSummaryStatus = makeBookSummaryStatus({ hasSummary: true, ready: true, totalChapters: 3, builtChapters: 3 });
+      fixture.detectChanges();
+      expect((query('[data-testid="bsum-rebuild"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="bsum-needs-import"]')).not.toBeNull();
+
+      component.bookSummaryStatus = makeBookSummaryStatus({ hasSummary: true, ready: false, staleCount: 2, totalChapters: 3, builtChapters: 3 });
+      fixture.detectChanges();
+      expect((query('[data-testid="bsum-refresh"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="bsum-needs-import"]')).not.toBeNull();
+    });
+
+    it('refuses to open the consent prompt, even bypassing the button', () => {
+      rowsButNoText();
+      component.bookSummaryStatus = makeBookSummaryStatus({ hasSummary: false, ready: false, totalChapters: 3 });
+
+      component.openBookSummaryConsent();
+
+      expect(component.showBookSummaryConsent).toBeFalse();
+    });
+
+    it('leaves the build ENABLED while the TEXT count is not known yet (null is not zero)', () => {
+      component.chapterCount = 3;
+      component.chaptersWithText = null;
+      component.bookSummaryStatus = makeBookSummaryStatus({ hasSummary: false, ready: false, totalChapters: 3 });
+      fixture.detectChanges();
+
+      expect((query('[data-testid="bsum-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="bsum-needs-import"]')).toBeNull();
+    });
+
+    it('leaves the build ENABLED as soon as one chapter carries text', () => {
+      component.chapterCount = 3;
+      component.chaptersWithText = 1;
+      component.bookSummaryStatus = makeBookSummaryStatus({ hasSummary: false, ready: false, totalChapters: 3 });
+      fixture.detectChanges();
+
+      expect((query('[data-testid="bsum-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="bsum-needs-import"]')).toBeNull();
+    });
+  });
+
+  /**
+   * final-r02, item 3: the estimate is a CLAIM ABOUT WORK, and the server's `chaptersToBuild` counts
+   * chapters with no fresh brief - which an empty chapter can never acquire, so it is counted forever while
+   * no build will ever touch it. Measured against the live API on the three-empty-chapter book:
+   * `chaptersToBuild: 3, estimatedSeconds: 90` for a run that issues zero model calls.
+   */
+  describe('final-r02: the consent estimate is capped by the chapters that actually have text', () => {
+    it('claims only the chapters a build can really read on a partly-written book', () => {
+      component.chapterCount = 10;
+      component.chaptersWithText = 7;
+      component.bookLanguage = 'en';
+      component.bookSummaryStatus = makeBookSummaryStatus({
+        hasSummary: false, ready: false, totalChapters: 10, chaptersToBuild: 10, estimatedSeconds: 300,
+      });
+
+      expect(component.bookSummaryConsentEstimate).toContain('~7 chapters');
+      expect(component.bookSummaryConsentEstimate).not.toContain('~10 chapters');
+    });
+
+    it('leaves the server figure alone when the text count is not known', () => {
+      component.chapterCount = 10;
+      component.chaptersWithText = null;
+      component.bookLanguage = 'en';
+      component.bookSummaryStatus = makeBookSummaryStatus({
+        hasSummary: false, ready: false, totalChapters: 10, chaptersToBuild: 10, estimatedSeconds: 300,
+      });
+
+      expect(component.bookSummaryConsentEstimate).toContain('~10 chapters');
+    });
+
+    it('never inflates the server figure: the cap can only remove a claim', () => {
+      component.chapterCount = 10;
+      component.chaptersWithText = 10;
+      component.bookLanguage = 'en';
+      component.bookSummaryStatus = makeBookSummaryStatus({
+        hasSummary: false, ready: false, totalChapters: 10, chaptersToBuild: 2, estimatedSeconds: 60,
+      });
+
+      expect(component.bookSummaryConsentEstimate).toContain('~2 chapters');
+    });
+  });
+
   /**
    * c03. `ngOnChanges` runs INSIDE the host's change-detection pass, and this row's outputs are bound into
    * host state that the stage spine - declared ABOVE this row in the host template, so already checked in

@@ -6,6 +6,7 @@ import { StyleBaselineService } from '../../core/services/style-baseline.service
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { BuildInputs, buildInputsFor, buildIsRefused } from '../../shared/stage-spine/stage-spine.model';
 
 /**
  * Wave 3 / w5 - MOVE-1 + MOVE-2, executed. The book-wide writing-style build, its status, its rebuild
@@ -58,6 +59,15 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
    * `null` means NOT KNOWN YET, never empty. Only an explicit `0` refuses anything.
    */
   @Input() chapterCount: number | null = null;
+  /**
+   * How many of those chapters carry any text, from the same host getter. The second half of the same
+   * precondition (final-r02): a book with three chapters created empty passed the `chapterCount` gate and
+   * left this button enabled beside a spine saying nothing has been written in them. Both counts go through
+   * {@link buildInputsFor}, the predicate the spine's own stages read.
+   *
+   * `null` means NOT KNOWN YET, never zero.
+   */
+  @Input() chaptersWithText: number | null = null;
 
   /** Latest status read for this (book, language); null while loading / no book. */
   styleBaselineStatus: BookStyleBaselineStatusDto | null = null;
@@ -256,14 +266,28 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
   }
 
   /**
-   * The book has no chapters, so this whole-book measurement has nothing to read. Every action on the row
-   * is DISABLED WITH THE REASON stated beside it, never hidden: the same idiom the review row's briefs gate
-   * and the tier toggle's server-reason disable already use on this page.
+   * What this measurement would have to read, from the shared spine predicate - one authority for the
+   * spine's stages and this row.
+   */
+  get buildInputs(): BuildInputs {
+    return buildInputsFor(this.chapterCount, this.chaptersWithText);
+  }
+
+  /**
+   * This whole-book measurement has nothing to read - no chapters, or chapters with no text in them. Every
+   * action on the row is DISABLED WITH THE REASON stated beside it, never hidden: the same idiom the review
+   * row's briefs gate and the tier toggle's server-reason disable already use on this page.
    *
-   * Keyed on `=== 0` so an unarrived chapter list (null) can never disable a build.
+   * A null on either count answers `unknown`, never a refusal, so an unarrived chapter list cannot disable
+   * a build.
    */
   get blockedByImport(): boolean {
-    return this.chapterCount === 0;
+    return buildIsRefused(this.buildInputs);
+  }
+
+  /** The sentence beside the disabled action: the book has no chapters, or its chapters are empty. */
+  get blockedReason(): string {
+    return this.baselineLabel(this.buildInputs === 'no-text' ? 'needsText' : 'needsImport');
   }
 
   /** True when a baseline exists but was built with a different model (drives the cross-model warning). */
@@ -296,11 +320,20 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
    * genuine-no-op case live: `chaptersToBuild === 0` on an explicit rebuild is a real no-op
    * (`StyleBaselineService.ComputeEstimate` answers `(0, null)` for zero chapters and the build service
    * returns `NoOp: true` with no model call), so the estimate must not claim "~1 minute" for it.
+   *
+   * final-r02: the chapter figure is capped by the chapters that actually HAVE text, for the same reason
+   * and by the same rule as `BookSummaryStatusRowComponent.bookSummaryConsentEstimate` - see the full
+   * argument there. An empty chapter is counted as needing a build forever
+   * (`AnalysisContextService.LoadOrBuildChapterStyleProfileAsync` short-circuits on blank text before any
+   * model call), so the two counts are both upper bounds and the smaller is the honest one. Measured live:
+   * a three-empty-chapter book answers `chaptersToBuild: 3, estimatedSeconds: 90` for zero model calls.
    */
   get baselineConsentEstimate(): string {
     const s = this.styleBaselineStatus;
     if (!s) return '';
-    const chapters = s.chaptersToBuild;
+    const chapters = this.chaptersWithText === null
+      ? s.chaptersToBuild
+      : Math.min(s.chaptersToBuild, this.chaptersWithText);
     const minutes = chapters > 0 ? Math.max(1, Math.ceil((s.estimatedSeconds || 0) / 60)) : 0;
     let phrase: string;
     if (this.baselineDir === 'ltr') {
@@ -350,6 +383,8 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       crossModelWarning: 'המדידה נבנתה עם מודל אחר מהפעיל כעת. רעננו אותה לקבלת תוצאות מדויקות.',
       // The blocked-by-import reason, in the same words the briefs row and the spine's blocked row use.
       needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
+      // final-r02: the SECOND refusal - the chapters are there, the words are not. DRAFT Hebrew.
+      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או לייבא כתב יד.',
     };
     const en: Record<string, string> = {
       title: "Your book's writing style",
@@ -369,6 +404,7 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       cancel: 'Cancel',
       crossModelWarning: 'The measurement was built with a different model than the one now active. Refresh it for accurate results.',
       needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
+      needsText: 'The chapters in this book are still empty. Write in them or import a manuscript first.',
     };
     const map = this.baselineDir === 'ltr' ? en : he;
     return map[key] ?? key;

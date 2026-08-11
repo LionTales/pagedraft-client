@@ -6,6 +6,8 @@ import {
   SPINE_STAGE_ORDER,
   StageSpineSignals,
   StageStatus,
+  buildInputsFor,
+  buildIsRefused,
   deriveStageSpine,
   emptyStageSpineSignals,
   focusStageId,
@@ -100,6 +102,43 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
     expect(SPINE_STAGE_ORDER).toEqual(['import', 'briefs', 'review', 'chapter-passes', 'export']);
   });
 
+  // ── The shared precondition (final-r02) ─────────────────────────────────────
+  //
+  // ONE predicate, read by the spine's stages 1, 2, 3 and 5 AND by the dashboard's three build rows. It
+  // exists because those two sides spelled it separately and drifted: c01 taught the stages to read both
+  // counts, c02 taught the rows `chapterCount === 0` alone, and a book with three chapters created empty
+  // fell exactly between them - the spine said nothing had been written while the rows beside it offered
+  // to spend a real model run on those chapters.
+
+  describe('buildInputsFor / buildIsRefused', () => {
+    it('answers unknown for an absent count on either side, and refuses neither', () => {
+      expect(buildInputsFor(null, null)).toBe('unknown');
+      expect(buildInputsFor(null, 0)).toBe('unknown');
+      expect(buildInputsFor(3, null)).toBe('unknown');
+      expect(buildIsRefused('unknown')).toBeFalse();
+    });
+
+    it('tells the two empty books apart, and refuses both', () => {
+      expect(buildInputsFor(0, 0)).toBe('no-chapters');
+      expect(buildInputsFor(3, 0)).toBe('no-text');
+      expect(buildIsRefused('no-chapters')).toBeTrue();
+      expect(buildIsRefused('no-text')).toBeTrue();
+    });
+
+    it('permits the build as soon as ONE chapter carries text', () => {
+      expect(buildInputsFor(3, 1)).toBe('has-text');
+      expect(buildIsRefused('has-text')).toBeFalse();
+    });
+
+    /**
+     * The order of the two null checks is load-bearing: with no rows there is no text question to ask, so
+     * a zero chapter count must not be reported as "not known" merely because the text count is absent.
+     */
+    it('answers no-chapters even when the text count has not landed', () => {
+      expect(buildInputsFor(0, null)).toBe('no-chapters');
+    });
+  });
+
   // ── Stage 1: Import ─────────────────────────────────────────────────────────
 
   describe('stage 1 Import', () => {
@@ -173,6 +212,52 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       })), 'briefs');
       expect(s.state).toBe('not-started');
       expect(s.action).toBe('build-briefs');
+    });
+
+    /**
+     * final-r02. Found live: on a book with three chapters created empty this stage offered `Build briefs`
+     * beside a stage 1 saying nothing had been written in them, and the dashboard's briefs row 200px below
+     * was enabled with it. The server answers that build as a total no-op, so the offer is a claim about
+     * work that will not happen; and c02's walkability rule forbids an action the neighbouring row refuses.
+     */
+    it('is blocked by Import when the chapters exist but not one of them carries text', () => {
+      const s = stage(deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 0, summary: summary({ hasSummary: false, ready: false }),
+      })), 'briefs');
+      expect(s.state).toBe('blocked');
+      expect(s.blockedBy).toBe('import');
+      expect(s.action)
+        .withContext('the offered action must be the one the author can actually walk')
+        .toBe('open-import');
+    });
+
+    it('refuses a no-text book even before the status payload lands: it is a fact about the chapters', () => {
+      const s = stage(deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 })), 'briefs');
+      expect(s.state).toBe('blocked');
+      expect(s.unknown).toBeFalse();
+    });
+
+    it('does NOT refuse while the text count is unknown (null is not zero)', () => {
+      const s = stage(deriveStageSpine(signals({
+        chapters: null, chapterCount: 3, chaptersWithText: null, summary: summary({ hasSummary: false, ready: false }),
+      })), 'briefs');
+      expect(s.state).toBe('not-started');
+    });
+
+    /**
+     * A run that IS in flight may not be called blocked. Both running signals therefore outrank the no-text
+     * refusal - reachable when the chapters were emptied after a build started.
+     */
+    it('reports a build in flight as running, not blocked, on a book with no text', () => {
+      const clientSide = stage(deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 0, summaryRunning: true,
+      })), 'briefs');
+      expect(clientSide.state).toBe('running');
+
+      const serverSide = stage(deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 0, summary: summary({ activeBuildJobId: 'job-9' }),
+      })), 'briefs');
+      expect(serverSide.state).toBe('running');
     });
 
     it('is running when the payload carries an active build job', () => {
@@ -260,6 +345,43 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       expect(s.state).toBe('blocked');
       expect(s.blockedBy).toBe('briefs');
       expect(s.action).toBe('build-briefs');
+    });
+
+    /**
+     * final-r02, the same walkability rule one book further out: the briefs this stage needs cannot be
+     * built from empty chapters either, so naming them would point the author at a refused row.
+     */
+    it('names IMPORT on a book whose chapters carry no text, for the same reason', () => {
+      const all = deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 0,
+        review: review({ hasBriefs: false, hasReview: false, ready: false }),
+      }));
+      const s = stage(all, 'review');
+      expect(s.state).toBe('blocked');
+      expect(s.blockedBy).toBe('import');
+      expect(s.action).toBe('open-import');
+      // Every stage that offers a whole-book build says the same thing and points at the same door. Stage 4
+      // is deliberately NOT among them: it offers navigation into the chapters, which is where the author
+      // has to go to fix this, and it makes no claim to contradict.
+      const blocked = all.filter(x => x.state === 'blocked');
+      expect(blocked.map(x => x.id)).toEqual(['briefs', 'review', 'export']);
+      expect(blocked.every(x => x.blockedBy === 'import' && x.action === 'open-import')).toBeTrue();
+      expect(stage(all, 'chapter-passes').perChapter).toBeTrue();
+      expect(stage(all, 'chapter-passes').state).toBeNull();
+    });
+
+    it('reports a review build in flight as running, not blocked, on a book with no text', () => {
+      const s = stage(deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 0, reviewRunning: true,
+      })), 'review');
+      expect(s.state).toBe('running');
+    });
+
+    it('does NOT refuse the review while the text count is unknown (null is not zero)', () => {
+      const s = stage(deriveStageSpine(signals({
+        chapters: null, chapterCount: 3, chaptersWithText: null, review: review({ hasReview: false, ready: false }),
+      })), 'review');
+      expect(s.state).toBe('not-started');
     });
 
     it('names IMPORT on a book with no chapters, because the briefs are not walkable there either', () => {
@@ -579,11 +701,18 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
     });
 
     it('still prefers a stage that wants something over the loading fallback', () => {
-      // Half-landed: the chapter counts are in, the two build statuses are not. Stage 1 wants text in
-      // those chapters, and that beats both fallbacks.
-      const all = deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 }));
+      // Half-landed: the chapters and the briefs status are in, the review status is not. Stage 2 wants a
+      // build, and that beats both fallbacks while stage 3 is still loading.
+      //
+      // The fixture used to be `chapters(3), chaptersWithText: 0` and leaned on stages 2 and 3 reading
+      // `unknown` with no payload. final-r02 gave those two stages the same no-text refusal stages 1 and 5
+      // already had, so on that book nothing is `unknown` any more and the premise below could no longer
+      // hold. The case under test is unchanged: a stage that WANTS something outranks the loading fallback.
+      const all = deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 3, summary: summary({ hasSummary: false, ready: false }),
+      }));
       expect(all.some(s => s.unknown)).toBeTrue();
-      expect(focusStageId(all)).toBe('import');
+      expect(focusStageId(all)).toBe('briefs');
     });
   });
 });

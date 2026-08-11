@@ -160,10 +160,12 @@ export interface StageActionEvent {
  *
  * ── The two hard rules ────────────────────────────────────────────────────────────────────────────
  * 1. Nothing is presented as done unless the app computed it. Stage 1 is derived from the chapters (the
- *    old `Structure` was the literal string 'done'), stage 4 makes no book-level claim at all, and
- *    stage 5 reads the SAME two counts stage 1 does - `blocked` both when there are no chapters and when
- *    none of them carries text, which are the server's own two 409 answers (`noChapters`,
- *    `nothingWritten`) said before the click.
+ *    old `Structure` was the literal string 'done'), stage 4 makes no book-level claim at all, and every
+ *    stage that offers a whole-book BUILD - 2, 3 and 5 - reads the SAME two counts stage 1 does, through
+ *    the one shared predicate: `blocked` both when there are no chapters and when none of them carries
+ *    text. For stage 5 those are the server's own two 409 answers (`noChapters`, `nothingWritten`) said
+ *    before the click; for 2 and 3 they are a build the server answers as a total no-op, and the
+ *    dashboard's build rows read the same predicate so a row can never offer what a stage here denies.
  *    The rule binds the PIXELS as well as the words - see THE STATE PALETTE above. A reader who never
  *    reads a label must not be able to count a book with nothing done as further along than one with work.
  * 2. Tokens only (`--pd-*`), no em-dash or en-dash in any user-facing string, no model or provider

@@ -10,7 +10,8 @@
   <div class="sb-line">
     <span class="sb-title">{{ baselineLabel('title') }}</span>
 
-    <!-- NOT BUILT. Disabled with its reason on a book with no chapters, which is the same precondition the
+    <!-- NOT BUILT. Disabled with its reason on a book this measurement cannot read - no chapters, or
+         chapters with no text - which is the same precondition, read from the same predicate, that the
          stage spine above renders as `blocked` by Import. Disabled, never hidden. -->
     <ng-container *ngIf="baselineState === 'not-built'">
       <span class="sb-status sb-not-built" data-testid="bsb-not-built">{{ baselineLabel('notBuilt') }}</span>
@@ -68,12 +69,13 @@
     </ng-container>
 
     <!-- THE REASON, beside the disabled action rather than instead of it. Outside the per-state containers
-         so no state can show a disabled build with nothing explaining it. -->
+         so no state can show a disabled build with nothing explaining it. The testid predates the second
+         refusal; `blockedReason` picks between "no chapters" and "chapters with nothing written in them". -->
     <span
       class="sb-hint-inline muted"
       *ngIf="blockedByImport"
       data-testid="bsb-needs-import">
-      {{ baselineLabel('needsImport') }}
+      {{ blockedReason }}
     </span>
   </div>
 

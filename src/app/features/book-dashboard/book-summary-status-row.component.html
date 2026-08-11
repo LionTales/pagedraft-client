@@ -23,9 +23,10 @@
       </button>
     </ng-container>
 
-    <!-- NOT BUILT. The build is DISABLED WITH ITS REASON on a book with no chapters, which is the same
-         precondition the stage spine above renders as `blocked` by Import. It stays visible and keeps its
-         place: hiding it would leave the author with a silent gap where the build used to be. -->
+    <!-- NOT BUILT. The build is DISABLED WITH ITS REASON on a book this build cannot read - no chapters, or
+         chapters with no text in them - which is the same precondition the stage spine above renders as
+         `blocked` by Import, read from the same predicate. It stays visible and keeps its place: hiding it
+         would leave the author with a silent gap where the build used to be. -->
     <ng-container *ngIf="bookSummaryState === 'not-built'">
       <span class="sb-status sb-not-built" data-testid="bsum-not-built">{{ bookSummaryLabel('notBuilt') }}</span>
       <button
@@ -83,12 +84,14 @@
     </ng-container>
 
     <!-- THE REASON, beside the disabled action rather than instead of it. Rendered outside the per-state
-         containers so no state can ever show a disabled build with nothing explaining it. -->
+         containers so no state can ever show a disabled build with nothing explaining it. The testid is
+         unchanged from when there was only one refusal; `blockedReason` now picks between the two
+         sentences (no chapters at all, or chapters with nothing written in them). -->
     <span
       class="sb-hint-inline muted"
       *ngIf="blockedByImport"
       data-testid="bsum-needs-import">
-      {{ bookSummaryLabel('needsImport') }}
+      {{ blockedReason }}
     </span>
   </div>
 

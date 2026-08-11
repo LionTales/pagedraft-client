@@ -11,8 +11,9 @@
     <!-- NEEDS SUMMARY (gate: hasBriefs===false) -->
     <ng-container *ngIf="bookReviewState === 'needs-summary'">
       <span class="sb-status sb-not-built" data-testid="brev-needs-summary">{{ bookReviewLabel('notBuilt') }}</span>
-      <!-- The gate sentence names the BRIEFS normally and the IMPORT on a book with no chapters, because
-           there the briefs row is refused too and pointing at it would be a fix that cannot be walked. -->
+      <!-- The gate sentence names the BRIEFS normally, and the import or the writing on a book the briefs
+           build cannot read either (no chapters, or chapters with no text), because there the briefs row is
+           refused too and pointing at it would be a fix that cannot be walked. -->
       <span class="sb-hint-inline muted" data-testid="brev-needs-summary-hint">{{ bookReviewGateHint }}</span>
     </ng-container>
 
@@ -82,12 +83,13 @@
     </ng-container>
 
     <!-- A disabled action always carries its reason. The needs-summary state already renders one above, so
-         this covers the remaining states rather than repeating it. -->
+         this covers the remaining states rather than repeating it. The testid predates the second refusal;
+         `blockedReason` picks between "no chapters" and "chapters with nothing written in them". -->
     <span
       class="sb-hint-inline muted"
       *ngIf="blockedByImport && bookReviewState !== 'needs-summary'"
       data-testid="brev-needs-import">
-      {{ bookReviewLabel('needsImport') }}
+      {{ blockedReason }}
     </span>
   </div>
 

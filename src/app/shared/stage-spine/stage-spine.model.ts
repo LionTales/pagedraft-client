@@ -219,13 +219,72 @@ export function deriveStageSpine(signals: StageSpineSignals): StageStatus[] {
   const chapterCount = signals.chapterCount ?? (chapters ? chapters.length : null);
   const chaptersWithText = signals.chaptersWithText;
 
+  const inputs = buildInputsFor(chapterCount, chaptersWithText);
+
   return [
     deriveImport(chapterCount, chaptersWithText),
-    deriveBriefs(signals.summary, chapterCount, signals.summaryRunning),
-    deriveReview(signals.review, chapterCount, signals.reviewRunning),
+    deriveBriefs(signals.summary, inputs, signals.summaryRunning),
+    deriveReview(signals.review, inputs, signals.reviewRunning),
     deriveChapterPasses(chapters, chapterCount),
-    deriveExport(signals.exportSurfaceAvailable, chapterCount, chaptersWithText),
+    deriveExport(signals.exportSurfaceAvailable, chapterCount, chaptersWithText, inputs),
   ];
+}
+
+/**
+ * WHAT A WHOLE-BOOK BUILD HAS TO READ, from the only two counts that answer it.
+ *
+ *   'unknown'     - one of the two counts has not landed. Nothing may be refused on an absent fact.
+ *   'no-chapters' - the book has no chapter rows at all.
+ *   'no-text'     - rows exist and not one of them carries a word.
+ *   'has-text'    - at least one chapter carries text, so a build has something to read.
+ *
+ * WHY THIS IS ONE FUNCTION AND NOT A COMPARISON SPELLED PER CALLER. Every whole-book build in the product
+ * reads chapter TEXT: the briefs builder, the developmental review that consumes them, the writing-style
+ * measurement, and the exporter. They therefore have exactly one precondition, and it was spelled twice with
+ * two different answers - the spine's stages 1 and 5 read both counts (c01) while the dashboard's three
+ * build rows read `chapterCount === 0` alone (c02). On a book with three chapters created empty that put
+ * two surfaces on one screen in direct contradiction: the spine said "there are 3 chapters but nothing has
+ * been written in them, so a file made now would be empty" while, 200px below, `Build now` sat enabled and
+ * offered to spend a real model run on them. That is the same one-surface-denies-the-other class this wave
+ * retired from the stage strip, reintroduced one surface over. Both sides now call this.
+ *
+ * `no-text` IS REFUSED, NOT WARNED ABOUT, because the server answers it as a total no-op and not as a
+ * smaller build. Both per-chapter builders short-circuit on empty text before any model call
+ * (`ChapterBriefService.LoadOrBuildChapterBriefAsync`, `AnalysisContextService.LoadOrBuildChapterStyleProfileAsync`),
+ * and the briefs rollup then reports "not enough chapter briefs to build a book summary" and persists
+ * nothing. A permitted build would therefore run a progress bar, write an activity entry and finish leaving
+ * the row exactly where it started - a ceremony that produces nothing, which is this wave's own definition
+ * of claiming work that will not be done. The prerequisite is walkable (write in a chapter, or import a
+ * manuscript), so `blocked` keeps both halves of its contract.
+ *
+ * THE ORDER OF THE TWO NULL CHECKS IS LOAD-BEARING. `chapterCount === null` is asked first because with no
+ * rows there is no text question to ask; `chaptersWithText === null` is then its own answer rather than
+ * being coalesced to zero, because an absent fact may never become the positive claim "nothing is written".
+ */
+export type BuildInputs = 'unknown' | 'no-chapters' | 'no-text' | 'has-text';
+
+export function buildInputsFor(chapterCount: number | null, chaptersWithText: number | null): BuildInputs {
+  if (chapterCount === null) return 'unknown';
+  if (chapterCount === 0) return 'no-chapters';
+  if (chaptersWithText === null) return 'unknown';
+  if (chaptersWithText === 0) return 'no-text';
+  return 'has-text';
+}
+
+/**
+ * True when {@link buildInputsFor} says a whole-book build has nothing to read. The one predicate the
+ * dashboard's three build rows disable on, so their answer and the spine's cannot drift apart again.
+ */
+export function buildIsRefused(inputs: BuildInputs): boolean {
+  return inputs === 'no-chapters' || inputs === 'no-text';
+}
+
+/** The one blocked answer for a stage whose inputs are missing: name Import, and offer it. */
+function blockedByImport(base: StageStatus): StageStatus {
+  base.state = 'blocked';
+  base.blockedBy = 'import';
+  base.action = 'open-import';
+  return base;
 }
 
 /**
@@ -253,26 +312,21 @@ function deriveImport(chapterCount: number | null, chaptersWithText: number | nu
   const base = emptyStatus('import');
   base.chapterCount = chapterCount;
   base.chaptersWithText = chaptersWithText;
-  if (chapterCount === null) {
-    base.unknown = true;
-    return base;
+  // The same four answers every other stage gates on, read from {@link buildInputsFor}. Stage 1 is where
+  // the two counts MEAN something to the author, so it renders them rather than refusing: `no-chapters` and
+  // `no-text` are both "the manuscript is not in yet", told apart by `importDetail`'s two sentences.
+  switch (buildInputsFor(chapterCount, chaptersWithText)) {
+    case 'unknown':
+      base.unknown = true;
+      return base;
+    case 'has-text':
+      base.state = 'ready';
+      return base;
+    default:
+      base.state = 'not-started';
+      base.action = 'open-import';
+      return base;
   }
-  if (chapterCount === 0) {
-    base.state = 'not-started';
-    base.action = 'open-import';
-    return base;
-  }
-  if (chaptersWithText === null) {
-    base.unknown = true;
-    return base;
-  }
-  if (chaptersWithText > 0) {
-    base.state = 'ready';
-    return base;
-  }
-  base.state = 'not-started';
-  base.action = 'open-import';
-  return base;
 }
 
 /**
@@ -280,36 +334,49 @@ function deriveImport(chapterCount: number | null, chaptersWithText: number | nu
  *
  *   no chapters              -> blocked by Import. A build here would have nothing to read, and saying so
  *                               is more useful than the payload's literal `not-started`.
- *   activeBuildJobId != null -> running (a live job is the strongest available fact).
+ *   a build is running       -> running (a live job is the strongest available fact, and it outranks the
+ *                               refusal below: a run that IS in flight may not be called blocked).
+ *   no chapter carries text  -> blocked by Import, for the same reason as the line above it and on the same
+ *                               shared predicate ({@link buildInputsFor}). See below.
  *   !hasSummary              -> not-started.
  *   ready                    -> ready.
  *   hasSummary && !ready     -> behind, with magnitude `staleCount` and every reason that holds.
+ *
+ * WHY `no-text` REFUSES THIS STAGE AND NOT ONLY STAGES 1 AND 5. c01 taught the two stages that RENDER the
+ * counts to read both of them, which left this stage offering `Build briefs` on a book whose chapters are
+ * all empty - a build the server answers as a total no-op, and one the dashboard's briefs row (which reads
+ * the same predicate) refuses. An offered action the neighbouring row refuses is the walkability defect c02
+ * closed for the zero-chapter book, so it is closed here on the same terms: name the ONE prerequisite that
+ * is walkable from here, which is the same door stages 1, 3 and 5 point at on this book.
+ *
+ * It is placed AFTER both running checks deliberately. `blocked` and `running` are both facts, but only one
+ * of them can be observed to be happening; a build started before the chapters were emptied must keep
+ * reporting that it is running until it finishes.
  *
  * `behind` is the state users hit most and the state the old strip could not express at all. It is not
  * an error: the user edited their book, which is the point of the product, and a derived artifact lags.
  */
 function deriveBriefs(
   summary: BookSummaryStatusDto | null,
-  chapterCount: number | null,
+  inputs: BuildInputs,
   clientRunning: boolean,
 ): StageStatus {
   const base = emptyStatus('briefs');
-  if (chapterCount === 0) {
-    base.state = 'blocked';
-    base.blockedBy = 'import';
-    base.action = 'open-import';
-    return base;
-  }
+  if (inputs === 'no-chapters') return blockedByImport(base);
   if (clientRunning) {
     base.state = 'running';
     return base;
   }
-  if (!summary) {
-    base.unknown = true;
+  // Reordered ahead of the `!summary` guard so a live server-side job still outranks the refusal below.
+  // With no payload the optional chain is undefined and this falls through exactly as it did before.
+  if (summary?.activeBuildJobId) {
+    base.state = 'running';
     return base;
   }
-  if (summary.activeBuildJobId) {
-    base.state = 'running';
+  // Knowable without the status payload: it is a fact about the chapters, not about the briefs.
+  if (inputs === 'no-text') return blockedByImport(base);
+  if (!summary) {
+    base.unknown = true;
     return base;
   }
   if (!summary.hasSummary) {
@@ -347,6 +414,10 @@ function behindReasonsForBriefs(summary: BookSummaryStatusDto): BehindReason[] {
  *
  *   no chapters              -> blocked by IMPORT, offering the import. See the walkability rule below.
  *   activeBuildJobId != null -> running.
+ *   no chapter carries text  -> blocked by IMPORT too, on the same shared predicate ({@link buildInputsFor})
+ *                               and for the same walkability reason: the briefs this stage needs cannot be
+ *                               built from empty chapters either, so naming them would point the author at
+ *                               a row that is itself refused. See the note on {@link deriveBriefs}.
  *   !hasBriefs               -> blocked BY THE BOOK BRIEFS, and the row offers building them. This is the
  *                               product's one hard prerequisite: a review build with no briefs spends zero
  *                               model calls and comes back `briefsMissing`. It is the single most common
@@ -370,29 +441,31 @@ function behindReasonsForBriefs(summary: BookSummaryStatusDto): BehindReason[] {
  */
 function deriveReview(
   review: BookReviewStatusDto | null,
-  chapterCount: number | null,
+  inputs: BuildInputs,
   clientRunning: boolean,
 ): StageStatus {
   const base = emptyStatus('review');
-  if (chapterCount === 0) {
-    base.state = 'blocked';
-    base.blockedBy = 'import';
-    base.action = 'open-import';
-    return base;
-  }
+  if (inputs === 'no-chapters') return blockedByImport(base);
   if (clientRunning) {
     base.state = 'running';
     return base;
   }
-  if (!review) {
-    base.unknown = true;
+  // The findings counts are carried on every branch that HAS a payload, including the running one, exactly
+  // as before - only the two `inputs` refusals below can now return without them, and on a book with no
+  // text there are no findings to carry.
+  if (review) {
+    base.findingTotal = review.findingCount;
+    base.findingResolved = review.resolvedFindingCount;
+    base.findingOpen = review.openFindingCount;
+  }
+  if (review?.activeBuildJobId) {
+    base.state = 'running';
     return base;
   }
-  base.findingTotal = review.findingCount;
-  base.findingResolved = review.resolvedFindingCount;
-  base.findingOpen = review.openFindingCount;
-  if (review.activeBuildJobId) {
-    base.state = 'running';
+  // Knowable without the status payload: it is a fact about the chapters, not about the review.
+  if (inputs === 'no-text') return blockedByImport(base);
+  if (!review) {
+    base.unknown = true;
     return base;
   }
   if (!review.hasBriefs) {
@@ -431,6 +504,14 @@ function deriveReview(
  *   otherwise     -> NO STATE. `perChapter` is set and the row renders the chapter list as an entry
  *                    point. There is no book-level rollup of chapter-pass state, so `not-started` and
  *                    `ready` are both unknowable here and both would be a claim the app cannot make.
+ *
+ * WHY THIS STAGE DELIBERATELY DOES NOT TAKE THE `no-text` REFUSAL stages 2, 3 and 5 now take. Those three
+ * offer a whole-book BUILD, and on a book with no text the build is a no-op, so offering it claims work
+ * that will not happen. This row offers no build: its content is the chapter list, and every entry is a way
+ * INTO the chapter - which on a rows-but-no-text book is precisely where the author has to go to fix the
+ * thing that blocks the other three. Refusing it would remove the only walkable door on the screen while
+ * four rows point at it. It also asserts nothing: `perChapter` with a null state is the absence of a claim,
+ * so there is no contradiction for a refusal to resolve.
  */
 function deriveChapterPasses(
   chapters: ChapterPassSignal[] | null,
@@ -496,6 +577,7 @@ function deriveExport(
   surfaceAvailable: boolean,
   chapterCount: number | null,
   chaptersWithText: number | null,
+  inputs: BuildInputs,
 ): StageStatus {
   const base = emptyStatus('export');
   base.chapterCount = chapterCount;
@@ -504,29 +586,21 @@ function deriveExport(
     base.state = 'unavailable';
     return base;
   }
-  if (chapterCount === null) {
-    base.unknown = true;
-    return base;
+  // The five-way answer this stage used to spell inline is now {@link buildInputsFor}, shared with stages
+  // 1, 2 and 3 and with the dashboard's three build rows. `no-chapters` and `no-text` are the server's own
+  // two 409 answers (`noChapters`, `nothingWritten`), said before the user spends a click on them.
+  switch (inputs) {
+    case 'unknown':
+      base.unknown = true;
+      return base;
+    case 'no-chapters':
+    case 'no-text':
+      return blockedByImport(base);
+    default:
+      base.state = 'ready';
+      base.action = 'open-export';
+      return base;
   }
-  if (chapterCount === 0) {
-    base.state = 'blocked';
-    base.blockedBy = 'import';
-    base.action = 'open-import';
-    return base;
-  }
-  if (chaptersWithText === null) {
-    base.unknown = true;
-    return base;
-  }
-  if (chaptersWithText === 0) {
-    base.state = 'blocked';
-    base.blockedBy = 'import';
-    base.action = 'open-import';
-    return base;
-  }
-  base.state = 'ready';
-  base.action = 'open-export';
-  return base;
 }
 
 /** A status with nothing claimed. Every derivation starts here and only sets what it can prove. */

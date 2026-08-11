@@ -6,6 +6,7 @@ import { BookReviewService } from '../../core/services/book-review.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
+import { BuildInputs, buildInputsFor, buildIsRefused } from '../../shared/stage-spine/stage-spine.model';
 
 /** Derived review state for the whole-book developmental review. Single source of truth shared by the
  *  status row (@Output) and the dashboard host (field + handler types). */
@@ -42,6 +43,15 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
    * `null` means NOT KNOWN YET, never empty. Only an explicit `0` changes anything.
    */
   @Input() chapterCount: number | null = null;
+  /**
+   * How many of those chapters carry any text, from the same host getter. The same argument as above, one
+   * step further out (final-r02): a book whose chapters were all created empty passed the zero-chapter gate,
+   * so this row pointed the author at a briefs row that was itself enabled and would have built nothing.
+   * Both counts go through {@link buildInputsFor}, the predicate the spine's own stages read.
+   *
+   * `null` means NOT KNOWN YET, never zero.
+   */
+  @Input() chaptersWithText: number | null = null;
 
   /**
    * Emits the current derived review state on every successful status read (wb3-c02 seam): the host uses it
@@ -477,20 +487,35 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
   }
 
   /**
-   * The book has no chapters, so nothing on this row can run. Disabled with the reason, never hidden.
-   * Keyed on `=== 0` so an unarrived chapter list (null) can never disable a build.
+   * What this build would have to read, from the shared spine predicate - one authority for the spine's
+   * stages and this row.
+   */
+  get buildInputs(): BuildInputs {
+    return buildInputsFor(this.chapterCount, this.chaptersWithText);
+  }
+
+  /**
+   * Nothing on this row can run: the book has no chapters, or its chapters carry no text. Disabled with
+   * the reason, never hidden. A null on either count answers `unknown`, never a refusal, so an unarrived
+   * chapter list cannot disable a build.
    */
   get blockedByImport(): boolean {
-    return this.chapterCount === 0;
+    return buildIsRefused(this.buildInputs);
+  }
+
+  /** The sentence beside the disabled action: the book has no chapters, or its chapters are empty. */
+  get blockedReason(): string {
+    return this.bookReviewLabel(this.buildInputs === 'no-text' ? 'needsText' : 'needsImport');
   }
 
   /**
    * The gate sentence for the `needs-summary` state. It names the BRIEFS when the briefs are the real
-   * prerequisite, and the IMPORT when the book has no chapters at all - because in that case the briefs
-   * cannot be built either, and pointing the author at a refused row is a diagnosis with no fix attached.
+   * prerequisite, and the import or the writing when there is nothing to build briefs FROM - because in
+   * those cases the briefs cannot be built either, and pointing the author at a refused row is a diagnosis
+   * with no fix attached.
    */
   get bookReviewGateHint(): string {
-    return this.bookReviewLabel(this.blockedByImport ? 'needsImport' : 'needsSummary');
+    return this.blockedByImport ? this.blockedReason : this.bookReviewLabel('needsSummary');
   }
 
   /** True when the review exists but was built with a different model (drives the cross-model warning). */
@@ -527,6 +552,8 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       needsSummary: 'הסקירה ההתפתחותית דורשת תקצירי ספר. בנו תחילה את תקצירי הספר.',
       // The zero-chapter gate: naming the briefs there would point at a row that is refused too.
       needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
+      // final-r02: the same gate one step further out - the chapters exist, the words do not. DRAFT Hebrew.
+      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או לייבא כתב יד.',
       buildFailed: 'בניית הסקירה נכשלה: אף ממד לא הניב ממצאים. נסו שוב; אם התקלה חוזרת ייתכן שהספר גדול מדי עבור המודל.',
       buildDegraded: 'הסקירה נבנתה חלקית: חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
       buildDegradedWithCount: 'הסקירה נבנתה חלקית: {count} ממצאים נשמרו, אך חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
@@ -555,6 +582,7 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       crossModelWarning: 'The review was built with a different model than the one now active. Refresh it for accurate results.',
       needsSummary: 'The developmental review requires book briefs. Build the book summary first.',
       needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
+      needsText: 'The chapters in this book are still empty. Write in them or import a manuscript first.',
       buildFailed: 'The review build failed: no dimension produced findings. Try again; if it persists the book may be too large for the model.',
       buildDegraded: 'The review built partially: some dimensions failed. Results may be incomplete; refresh to try again.',
       buildDegradedWithCount: 'The review built partially: {count} findings were saved, but some dimensions failed. Results may be incomplete; refresh to try again.',
@@ -649,7 +677,8 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
 
   /**
    * Open the book-review consent prompt. Guards: must not open if briefs are missing (build is gated), and
-   * must not open on a book with no chapters, where a consent prompt would offer to analyse nothing.
+   * must not open on a book this build cannot read at all (no chapters, or chapters with no text in them),
+   * where a consent prompt would offer to analyse nothing.
    */
   openBookReviewConsent(): void {
     if (this.blockedByImport) return;

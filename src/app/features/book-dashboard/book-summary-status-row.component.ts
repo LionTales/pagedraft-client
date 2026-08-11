@@ -12,6 +12,7 @@ import {
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { BuildInputs, buildInputsFor, buildIsRefused } from '../../shared/stage-spine/stage-spine.model';
 
 /**
  * wb3-c01: book-summary (briefs) status row + build orchestration, relocated out of the per-chapter
@@ -71,6 +72,16 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
    * `0` disables anything; an unarrived chapter list leaves the row exactly as it was.
    */
   @Input() chapterCount: number | null = null;
+  /**
+   * How many of those chapters carry any text, from the same host getter. THE SECOND HALF OF THE SAME
+   * PRECONDITION: `chapterCount` alone answered the empty book and left the book with three chapters
+   * created empty - where the spine says "there are 3 chapters but nothing has been written in them" and
+   * this row, 200px below, offered to spend a real model run on them (final-r02). Both counts go through
+   * {@link buildInputsFor}, the one predicate the spine's own stages read.
+   *
+   * `null` means NOT KNOWN YET, never zero, exactly as above.
+   */
+  @Input() chaptersWithText: number | null = null;
 
   /** Fired when a summary build reaches a terminal/error state (or a no-op confirms a fresh summary). */
   @Output() summaryTerminal = new EventEmitter<void>();
@@ -571,15 +582,36 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   }
 
   /**
-   * The book has no chapters, so this build has nothing to read and every action on this row is refused
-   * with its reason stated beside it. DISABLED WITH THE REASON, NOT HIDDEN: a build that vanishes teaches
-   * the author nothing, and the wave's idiom (see the review row's briefs gate and the tier toggle's
-   * server-reason disable) is to leave the control where it is and say why it cannot run.
+   * What this build would have to read, from the shared spine predicate. One authority for the spine's
+   * stages and this row, so the two cannot state opposite things about the same book on one screen.
+   */
+  get buildInputs(): BuildInputs {
+    return buildInputsFor(this.chapterCount, this.chaptersWithText);
+  }
+
+  /**
+   * This build has nothing to read - the book has no chapters, or it has chapters and not one of them
+   * carries a word - so every action on this row is refused with its reason stated beside it. DISABLED
+   * WITH THE REASON, NOT HIDDEN: a build that vanishes teaches the author nothing, and the wave's idiom
+   * (see the review row's briefs gate and the tier toggle's server-reason disable) is to leave the control
+   * where it is and say why it cannot run.
    *
-   * Keyed on `=== 0` so an unarrived chapter list (null) can never disable a build.
+   * The name is kept because Import is still the prerequisite both refusals name and offer; only the set
+   * of books it covers grew. Neither case can be triggered by an unarrived count: {@link buildInputsFor}
+   * answers `unknown` for a null on either side and {@link buildIsRefused} is false for it.
    */
   get blockedByImport(): boolean {
-    return this.chapterCount === 0;
+    return buildIsRefused(this.buildInputs);
+  }
+
+  /**
+   * The sentence beside the disabled action. Two refusals, two different truths: a book with no chapters
+   * needs one, and a book whose chapters are all empty needs words in them. Telling the second author to
+   * "add a chapter" would be advice they have already followed, which is how a correct refusal still reads
+   * as the app being wrong.
+   */
+  get blockedReason(): string {
+    return this.bookSummaryLabel(this.buildInputs === 'no-text' ? 'needsText' : 'needsImport');
   }
 
   /**
@@ -638,6 +670,8 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       profileFailed: 'התקצירים נבנו, אך בניית פרופיל הספר נכשלה. אפשר לנסות שוב.',
       // The blocked-by-import reason, said in the same words the spine's blocked row uses. DRAFT Hebrew.
       needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
+      // final-r02: the SECOND refusal - the chapters are there, the words are not. DRAFT Hebrew.
+      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או לייבא כתב יד.',
       // c04: the status read failed. DRAFT Hebrew - w8 native sweep.
       statusError: 'לא הצלחנו לקרוא את מצב תקצירי הספר.',
       retry: 'נסו שוב',
@@ -661,6 +695,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       buildingProfile: 'Building the book profile...',
       profileFailed: 'The briefs were built, but the book profile build failed. You can run it again.',
       needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
+      needsText: 'The chapters in this book are still empty. Write in them or import a manuscript first.',
       statusError: 'We could not read the book briefs status.',
       retry: 'Try again',
     };
@@ -680,12 +715,27 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
    * and issues no model call), so a floor that still claimed "~1 minute" contradicted the "~0 chapters"
    * beside it. Zero chapters to build means zero minutes; the floor exists only to keep a REAL small build
    * from rounding down to "~0 min".
+   *
+   * final-r02: THE CHAPTER FIGURE IS CAPPED BY THE CHAPTERS THAT ACTUALLY HAVE TEXT. The server's
+   * `chaptersToBuild` counts chapters with no fresh, usable brief; an EMPTY chapter can never acquire one
+   * (`ChapterBriefService.LoadOrBuildChapterBriefAsync` short-circuits on blank text before any model call
+   * and returns null), so it is counted as needing a build forever while no build will ever touch it.
+   * Measured against the live API on a three-empty-chapter book: `chaptersToBuild: 3, estimatedSeconds: 90`
+   * for a run that issues zero model calls. Both counts are upper bounds on the same quantity, so the
+   * smaller of the two is the tighter honest bound - it can only ever REMOVE a claim, never invent one, and
+   * a null `chaptersWithText` (not known) leaves the server's figure untouched.
+   *
+   * The SECONDS are left as the server computed them. Over-stating a duration on a partly-empty book is a
+   * conservative estimate under a `~`; re-deriving it here would mean re-implementing the server's own
+   * formula in a second place, which is what the count divergence above already cost once.
    */
   get bookSummaryConsentEstimate(): string {
     const s = this.bookSummaryStatus;
     if (!s) return '';
     const lang = this.summaryLanguage.toLowerCase().startsWith('en') ? 'en' : 'he';
-    const chapters = s.chaptersToBuild;
+    const chapters = this.chaptersWithText === null
+      ? s.chaptersToBuild
+      : Math.min(s.chaptersToBuild, this.chaptersWithText);
     const minutes = chapters > 0 ? Math.max(1, Math.ceil((s.estimatedSeconds || 0) / 60)) : 0;
     let phrase: string;
     if (lang === 'he') {
@@ -712,7 +762,8 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   openBookSummaryConsent(): void {
     // The disabled attribute is the user-facing guard; this is the same refusal stated once more where the
     // build actually starts, so a keyboard/programmatic path cannot open a consent prompt that offers to
-    // analyse the chapters of a book that has none.
+    // analyse the chapters of a book that has none - or, since final-r02, a book whose chapters are all
+    // empty, where the prompt offered "~3 chapters, ~2 min" for a run the server answers as a no-op.
     if (this.blockedByImport) return;
     this.showBookSummaryConsent = true;
   }

@@ -216,6 +216,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
           [chapterCount]="chapterCount"
+          [chaptersWithText]="chaptersWithText"
           (summaryTerminal)="onSummaryTerminal()"
           (statusChange)="onSummaryStatusChange($event)"
           (buildingChange)="onSummaryBuildingChange($event)">
@@ -246,6 +247,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
           [chapterCount]="chapterCount"
+          [chaptersWithText]="chaptersWithText"
           (reviewStateChange)="onReviewStateChange($event)"
           (statusChange)="onReviewStatusChange($event)"
           (tierChanged)="onTierChanged()">
@@ -316,6 +318,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
           [chapterCount]="chapterCount"
+          [chaptersWithText]="chaptersWithText"
           [focusToken]="focusBaselineToken">
         </app-book-style-baseline-status-row>
       </section>
@@ -831,8 +834,10 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    * Wave 3 / w2. The book's chapters, bound from the host's already-loaded `BookDetailDto.chapters`.
    *
    * The spine's stage 1 (Import) and stage 4 (Chapter editing passes) are derived from these, and from
-   * nothing else: `chapterCount === 0` is `not-started` for Import and `blocked` for everything gated on
-   * it, and stage 4 renders the chapters themselves rather than a book-level tick it cannot compute. This
+   * nothing else. TWO numbers come off this list, not one: how many chapters there are and how many of them
+   * carry text, which together are `buildInputsFor`'s whole input - `not-started` for Import and `blocked`
+   * for everything gated on it, whether the book has no rows OR has rows with nothing written in them.
+   * Stage 4 renders the chapters themselves rather than a book-level tick it cannot compute. This
    * is a BINDING of data the host already holds, deliberately not a fetch: the dashboard adding its own
    * chapter request would make the spine's stage 1 disagree with the chapter tree beside it.
    *
@@ -1160,6 +1165,22 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
     return this.chapters ? this.chapters.length : null;
   }
 
+  /**
+   * How many of those chapters carry any text, or `null` while the chapter list has not arrived. THE OTHER
+   * HALF OF THE SAME AUTHORITY, for the same reason (final-r02): `chapterCount` alone answered only the
+   * empty book, so a book with three chapters created empty rendered a spine saying "there are 3 chapters
+   * but nothing has been written in them, so a file made now would be empty" while the three build rows a
+   * couple of hundred pixels below it stayed enabled and offered to spend a real model run on them.
+   *
+   * Read by BOTH the spine's stage-1/2/3/5 derivation and the three rows' `blockedByImport`, through the
+   * one shared predicate (`buildInputsFor`). The `wordCount > 0` test is the server's own `has text`
+   * definition (`BooksController`'s `chaptersWithTextCount`), which is what the books list feeds the same
+   * spine from - so this page and that one answer the same question the same way.
+   */
+  get chaptersWithText(): number | null {
+    return this.chapters ? this.chapters.filter(c => c.wordCount > 0).length : null;
+  }
+
   /** Latest raw briefs status from the hosted summary row. The spine's whole stage 2. */
   private summaryStatus: BookSummaryStatusDto | null = null;
   /** Latest raw review status from the hosted review row. The spine's whole stage 3. */
@@ -1176,7 +1197,9 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
    *
    * `exportSurfaceAvailable` is the shared build fact ({@link EXPORT_SURFACE_AVAILABLE}), true since w4
    * built `/books/:bookId/export`. Stage 5 is therefore computed from this page's chapter list like every
-   * other stage: `blocked` by Import with no chapters (the server's own 409), `ready` otherwise.
+   * other stage, off BOTH counts: `blocked` by Import with no chapters and, since c01, `blocked` again when
+   * the chapters exist but carry no text - the server's own two 409 answers (`noChapters`,
+   * `nothingWritten`) - and `ready` only when a file made now would hold something.
    */
   private rebuildSpineSignals(): void {
     const chapters: ChapterPassSignal[] | null = this.chapters
@@ -1193,7 +1216,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
     this.spineSignals = {
       chapters,
       chapterCount: this.chapterCount,
-      chaptersWithText: this.chapters ? this.chapters.filter(c => c.wordCount > 0).length : null,
+      chaptersWithText: this.chaptersWithText,
       summary: this.summaryStatus,
       review: this.reviewStatus,
       summaryRunning: this.summaryBuilding,
