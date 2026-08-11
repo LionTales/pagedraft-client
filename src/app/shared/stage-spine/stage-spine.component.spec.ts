@@ -4,7 +4,14 @@ import { By } from '@angular/platform-browser';
 import { BookReviewStatusDto } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { StageActionEvent, StageSpineComponent } from './stage-spine.component';
-import { STAGE_NAMES, STATE_LABELS } from './stage-spine.copy';
+import {
+  COMPACT_UNKNOWN_LABEL,
+  STAGE_GUIDE_BROADER_NOTE,
+  STAGE_GUIDE_LINK_LABEL,
+  STAGE_NAMES,
+  STATE_LABELS,
+} from './stage-spine.copy';
+import { StageGuideLink, stageGuideLink } from './stage-guide';
 import { ChapterPassSignal, EXPORT_SURFACE_AVAILABLE, SPINE_STAGE_ORDER, StageSpineSignals } from './stage-spine.model';
 
 /**
@@ -172,7 +179,7 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       at300('he');
 
       const expected = SPINE_STAGE_ORDER.map(id => STAGE_NAMES[id].he);
-      expect(expected).toEqual(['ייבוא', 'תקצירי ספר', 'עריכה התפתחותית', 'מעברי עריכה על פרק', 'ייצוא']);
+      expect(expected).toEqual(['ייבוא', 'תקצירי ספר', 'עריכה התפתחותית', 'עריכת פרק', 'ייצוא']);
 
       nameEls().forEach((el, i) => {
         const ctx = `stage name "${expected[i]}"`;
@@ -399,7 +406,7 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       // Both reasons are stated.
       const behind = text('[data-testid="spine-behind-briefs"]');
       expect(behind).toContain('4');
-      expect(behind).toContain('תצורה');
+      expect(behind).toContain('הגדרה');
       // The action reads as a REBUILD, because the artifact exists.
       expect(text('[data-testid="spine-action-briefs"]')).toContain('מחדש');
     });
@@ -769,6 +776,42 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       expect(summaryLine()).toContain(STATE_LABELS['not-started'].en);
     });
 
+    /**
+     * w8 / E1, and it is a RENDERED-OUTPUT claim rather than a focus-function one: the line is prefixed
+     * with `הבא:` / "Next:", so whatever stage it names is being called the next thing to do.
+     *
+     * The books-list payload is the whole defect. A row carries two counts and nothing else, so stage 1
+     * settles (`ready`, the manuscript is in) while stages 2 to 5 are permanently `unknown` - and the old
+     * unknown fallback read "any stage unknown -> stage 1", which on this payload is not a first-paint
+     * condition that resolves but the steady state of the surface. Every books-list row with a manuscript
+     * therefore rendered `הבא: ייבוא, מוכן`: a FINISHED stage announced as next.
+     *
+     * The assertion is deliberately about what the line must NOT say. A test that only pinned the new
+     * answer would pass again the moment the fallback drifted to any other settled stage.
+     */
+    it('never calls a SETTLED stage next: a books-list row with a manuscript does not summarise Import', () => {
+      // Exactly what GET /api/books gives a row, on a book that has already been imported.
+      const listRow = signals({ chapters: null, chapterCount: 5, chaptersWithText: 5 });
+
+      renderCompact(listRow, 'he');
+      // Premise, so this cannot pass vacuously on a payload that failed to settle stage 1.
+      expect(pip('import').dataset['state']).toBe('ready');
+      expect(pip('briefs').dataset['state']).toBe('unknown');
+      expect(summaryLine()).toContain('הבא:');
+      expect(summaryLine()).not.toContain(STAGE_NAMES['import'].he);
+      expect(summaryLine()).not.toContain(STATE_LABELS['ready'].he);
+      // It names the first stage this screen cannot speak for, and admits it cannot speak for it.
+      expect(summaryLine()).toContain(STAGE_NAMES['briefs'].he);
+      expect(summaryLine()).toContain(COMPACT_UNKNOWN_LABEL.he);
+
+      renderCompact(listRow, 'en');
+      expect(summaryLine()).toContain('Next:');
+      expect(summaryLine()).not.toContain(STAGE_NAMES['import'].en);
+      expect(summaryLine()).not.toContain(STATE_LABELS['ready'].en);
+      expect(summaryLine()).toContain(STAGE_NAMES['briefs'].en);
+      expect(summaryLine()).toContain(COMPACT_UNKNOWN_LABEL.en);
+    });
+
     it('a RUNNING stage takes over the line, even when an earlier stage also wants attention', () => {
       // Stage 1 is not-started (chapters exist, none has text) AND a briefs build is in flight. The
       // running build wins: carrying that signal on every route is this density's whole job.
@@ -981,6 +1024,86 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
         .nativeElement as HTMLElement;
       const rowBg = getComputedStyle(row('briefs')).backgroundColor;
       expect(contrast(getComputedStyle(sentence).color, rowBg)).toBeGreaterThanOrEqual(4.5);
+    });
+  });
+
+  // ── Wave 3 / w6 (Q13-A): the pointer from a row into the guide that answers it ────────────────────
+
+  describe('the stage -> guide pointer (w6)', () => {
+    /** A book with no chapters at all: four of the five rows are blocked, which is the point. */
+    const emptyBook = () => signals({ chapters: [], chapterCount: 0, chaptersWithText: 0 });
+
+    /**
+     * EVERY row, in EVERY state. "What is this stage" is asked at least as often from a blocked row as
+     * from a ready one, so a pointer that only appeared on rows with work done would be missing exactly
+     * where a first-run author needs it. The empty book is the state in which four of the five rows are
+     * blocked, which is what makes it the right fixture for this claim.
+     */
+    it('offers the guide link on every stage, on a book with nothing in it', () => {
+      render(emptyBook());
+
+      for (const stage of SPINE_STAGE_ORDER) {
+        expand(stage);
+        const link = fixture.debugElement.query(By.css(`[data-testid="spine-guide-${stage}"]`));
+        expect(link).withContext(`no guide link on ${stage}`).toBeTruthy();
+        expect((link.nativeElement as HTMLElement).textContent!.trim())
+          .toBe(STAGE_GUIDE_LINK_LABEL.he);
+      }
+    });
+
+    /**
+     * It EMITS rather than navigating. The spine owns no Router by design (adding one would put a
+     * provider in every host's TestBed), and the whole link travels so the host never re-derives the join.
+     */
+    it('emits the resolved link for the stage that was pressed, and navigates nowhere itself', () => {
+      render(healthyBook());
+      const seen: StageGuideLink[] = [];
+      component.openGuide.subscribe(link => seen.push(link));
+
+      expand('review');
+      (fixture.debugElement.query(By.css('[data-testid="spine-guide-review"]'))
+        .nativeElement as HTMLElement).click();
+
+      expect(seen.length).toBe(1);
+      expect(seen[0]).toEqual(stageGuideLink('review'));
+      expect(seen[0].guideId).toBe('whole-book-review');
+    });
+
+    /**
+     * THE ONE ROW WHOSE GUIDE IS BROADER THAN ITS STAGE says so before the author follows it. Asserted
+     * against the rendered DOM on both sides, so "only briefs" is a property of the render and not only
+     * of the map.
+     */
+    it('warns on the briefs row only, that its guide covers more than the stage', () => {
+      render(healthyBook());
+
+      expand('briefs');
+      expect(text('[data-testid="spine-guide-note-briefs"]')).toBe(STAGE_GUIDE_BROADER_NOTE.he);
+
+      for (const stage of SPINE_STAGE_ORDER.filter(s => s !== 'briefs')) {
+        expand(stage);
+        expect(fixture.debugElement.query(By.css(`[data-testid="spine-guide-note-${stage}"]`)))
+          .withContext(`${stage} must not claim its guide is broader`).toBeNull();
+      }
+    });
+
+    /** he/en parity, in the render rather than in the map. */
+    it('renders the pointer in the BOOK language, both ways', () => {
+      render(healthyBook(), 'en');
+      expand('export');
+      expect(text('[data-testid="spine-guide-export"]')).toBe(STAGE_GUIDE_LINK_LABEL.en);
+
+      render(healthyBook(), 'he');
+      expand('export');
+      expect(text('[data-testid="spine-guide-export"]')).toBe(STAGE_GUIDE_LINK_LABEL.he);
+    });
+
+    /** Compact is a five-pip rail with no rows to hang a link on, and deliberately non-interactive. */
+    it('does not appear in the compact density', () => {
+      fixture.componentRef.setInput('density', 'compact');
+      render(healthyBook());
+
+      expect(fixture.debugElement.queryAll(By.css('[data-testid^="spine-guide-"]')).length).toBe(0);
     });
   });
 });

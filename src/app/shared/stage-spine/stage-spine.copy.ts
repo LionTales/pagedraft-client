@@ -310,6 +310,30 @@ export const SPINE_ARIA_LABEL: Bi = { he: 'שלבי העבודה על הספר',
 /** Accessible name of a row's expand/collapse control, composed with the stage name by the component. */
 export const DETAILS_TOGGLE_LABEL: Bi = { he: 'פרטים על השלב', en: 'Stage details' };
 
+// ─── Wave 3 / w6 (Q13-A): the pointer from a stage row to the guide that answers it ────────────────
+//
+// The row's one-sentence {@link STAGE_EXPLANATION} says what the stage IS; this is where an author goes
+// for the rest, and it is CONTENT rather than copy - the destination is the shipped guide, read through
+// the reader chatbot phase A.2 built. That is Q13-A's whole point: orientation is a view over the served
+// guides, so nothing here restates what a guide says.
+
+/** The row's link into its guide. */
+export const STAGE_GUIDE_LINK_LABEL: Bi = {
+  he: 'מדריך לשלב הזה',
+  en: 'Read the guide for this stage',
+};
+
+/**
+ * Said only on the ONE row whose guide is broader than its stage (Book briefs, whose guide also covers
+ * the book profile, the Story Bible, asking questions about the book and the writing style). An author
+ * who presses a link labelled "the guide for this stage" and lands on a document about four other things
+ * has been mildly lied to, and this is the sentence that keeps that from happening.
+ */
+export const STAGE_GUIDE_BROADER_NOTE: Bi = {
+  he: 'המדריך מכסה גם מידע על הספר.',
+  en: 'That guide also covers the other book level material.',
+};
+
 // ─── Wave 3 / w3: the COMPACT density ──────────────────────────────────────────────────────────────
 //
 // The compact spine renders on surfaces that hold no book payload beyond the books-list row: the books

@@ -11,6 +11,8 @@ import {
   PER_CHAPTER_LABEL,
   SPINE_ARIA_LABEL,
   STAGE_EXPLANATION,
+  STAGE_GUIDE_BROADER_NOTE,
+  STAGE_GUIDE_LINK_LABEL,
   STAGE_NAMES,
   STATE_LABELS,
   SpineLang,
@@ -27,6 +29,7 @@ import {
   importDetail,
   spineLang,
 } from './stage-spine.copy';
+import { StageGuideLink, stageGuideLink } from './stage-guide';
 import {
   ChapterPassSignal,
   SpineStageId,
@@ -330,6 +333,31 @@ export interface StageActionEvent {
                   }
                 }
 
+                <!-- Wave 3 / w6 (Q13-A): THE POINTER INTO THE GUIDE that answers this stage. Present on
+                     every row in every state, because "what is this stage" is a question a blocked row
+                     raises at least as often as a ready one.
+
+                     It emits rather than navigating, exactly like the action button above: this component
+                     owns no Router (it is deliberately service-free so mounting it costs no request and
+                     adds no constructor dependency to any host's TestBed), and the host that mounts the
+                     full density already routes openImport and openExport the same way.
+
+                     RTL: MIRRORS. It is a text button in the row body flow, aligned to the reading edge
+                     with a logical text-align of start; it carries no directional glyph, so there is
+                     nothing here to physically pin. -->
+                <button
+                  type="button"
+                  class="stage-guide-link"
+                  [attr.data-testid]="'spine-guide-' + stage.id"
+                  (click)="onGuideClick(stage.id)">
+                  {{ text(STAGE_GUIDE_LINK_LABEL) }}
+                </button>
+                @if (guideIsBroaderThanStage(stage.id)) {
+                  <p
+                    class="stage-line"
+                    [attr.data-testid]="'spine-guide-note-' + stage.id">{{ text(STAGE_GUIDE_BROADER_NOTE) }}</p>
+                }
+
                 <!-- The next action. Absent rather than disabled when there is nothing honest to offer. -->
                 @if (stage.action) {
                   <button
@@ -618,6 +646,23 @@ export interface StageActionEvent {
       padding: 0 var(--pd-space-2);
     }
 
+    /* ── The guide pointer (w6). A text link, not a button: it opens a document, it does not spend a
+       model run, and it must not compete with the row's primary action for the eye. Reading-edge
+       aligned, so it MIRRORS. ── */
+    .stage-guide-link {
+      align-self: flex-start;
+      background: none;
+      border: none;
+      padding: var(--pd-space-1) 0;
+      cursor: pointer;
+      color: var(--pd-text-link);
+      font-family: inherit;
+      font-size: var(--pd-text-caption);
+      text-align: start;
+    }
+    .stage-guide-link:hover { text-decoration: underline; }
+    .stage-guide-link:focus-visible { outline: none; box-shadow: var(--pd-ring); }
+
     /* ── The next action ── */
     .stage-action {
       width: 100%;
@@ -765,6 +810,16 @@ export class StageSpineComponent implements OnInit, OnChanges {
   /** A chapter was picked out of stage 4's breakdown. The host opens it. */
   @Output() openChapter = new EventEmitter<ChapterPassSignal>();
 
+  /**
+   * Wave 3 / w6 (Q13-A): a stage row asked for the guide that answers it. The host routes to the reader
+   * A.2 built (`/help/:guideId`); this component names the destination and nothing more.
+   *
+   * The WHOLE link travels, not just the id, so the host does not have to look the mapping up a second
+   * time (a second lookup is a second place for the join to drift) and so a host can honour
+   * `broaderThanStage` if it ever needs to.
+   */
+  @Output() openGuide = new EventEmitter<StageGuideLink>();
+
   /** The derived stages, recomputed whenever the signals change. */
   stages: StageStatus[] = [];
 
@@ -799,6 +854,8 @@ export class StageSpineComponent implements OnInit, OnChanges {
   readonly COMPACT_ARIA_LABEL = COMPACT_ARIA_LABEL;
   readonly DETAILS_TOGGLE_LABEL = DETAILS_TOGGLE_LABEL;
   readonly CHAPTER_RUNNING_LABEL = CHAPTER_RUNNING_LABEL;
+  readonly STAGE_GUIDE_LINK_LABEL = STAGE_GUIDE_LINK_LABEL;
+  readonly STAGE_GUIDE_BROADER_NOTE = STAGE_GUIDE_BROADER_NOTE;
 
   /**
    * Derived in BOTH lifecycle hooks on purpose. `ngOnChanges` covers every real binding, and `ngOnInit`
@@ -941,6 +998,16 @@ export class StageSpineComponent implements OnInit, OnChanges {
 
   onChapterClick(chapter: ChapterPassSignal): void {
     this.openChapter.emit(chapter);
+  }
+
+  /** True for the one stage whose guide covers more than it (see {@link stageGuideLink}). */
+  guideIsBroaderThanStage(id: SpineStageId): boolean {
+    return stageGuideLink(id).broaderThanStage;
+  }
+
+  /** w6: name the guide this stage's row points at. The host performs the navigation. */
+  onGuideClick(id: SpineStageId): void {
+    this.openGuide.emit(stageGuideLink(id));
   }
 
   // ── COMPACT density ──────────────────────────────────────────────────────────────────────────────
