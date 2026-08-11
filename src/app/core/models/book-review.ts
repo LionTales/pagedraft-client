@@ -119,6 +119,16 @@ export interface BookReviewStatusDto {
   hasReview: boolean;
   /** Total persisted findings for (bookId, language). */
   findingCount: number;
+  /**
+   * Wave 3 / w1 (work item M3). Findings still at status `open`.
+   *
+   * NOT derivable from `findingCount - resolvedFindingCount`: `acknowledged` is a THIRD bucket counted by
+   * neither field. Both counts follow the same `FindingStatusPartition` the findings ledger renders, so the
+   * spine and the ledger cannot disagree one click apart. Render only what these fields say.
+   */
+  openFindingCount: number;
+  /** Wave 3 / w1 (M3). Findings at status `dismissed` or `done`, i.e. worked through. */
+  resolvedFindingCount: number;
   /** UTC ISO timestamp of the last review build, or null if never built. */
   lastUpdatedAt: string | null;
   /**

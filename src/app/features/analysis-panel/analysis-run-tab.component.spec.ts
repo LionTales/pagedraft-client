@@ -344,7 +344,10 @@ describe('AnalysisRunTabComponent', () => {
 
       const note = query('[data-testid="no-run-yet-linguistic-note"]');
       expect(note).not.toBeNull();
-      expect(note.nativeElement.textContent).toContain('קו הבסיס הסגנוני');
+      // w5: the artifact's user-facing name changed with its move ("style baseline" was engineering
+      // vocabulary), and the note now also says WHERE it is built, since it is no longer built here.
+      expect(note.nativeElement.textContent).toContain('סגנון הכתיבה של הספר');
+      expect(note.nativeElement.textContent).toContain('בלוח הספר');
       expect(note.nativeElement.getAttribute('dir')).toBe('rtl');
     });
 
@@ -356,7 +359,8 @@ describe('AnalysisRunTabComponent', () => {
 
       const note = query('[data-testid="no-run-yet-linguistic-note"]');
       expect(note).not.toBeNull();
-      expect(note.nativeElement.textContent).toContain('style baseline');
+      expect(note.nativeElement.textContent).toContain("Your book's writing style");
+      expect(note.nativeElement.textContent).toContain('built on the book dashboard');
     });
 
     it('does NOT show the linguistic clarifying note for a non-linguistic type (Proofread)', () => {
@@ -780,197 +784,36 @@ describe('AnalysisRunTabComponent', () => {
   });
 
   // =========================================================================
-  // Style baseline status row (a3/a4)
+  // The book-wide writing style, as this per-chapter surface may still speak about it
   // =========================================================================
 
-  describe('style baseline status row', () => {
+  // Wave 3 / w5 (MOVE-1 + MOVE-2 + the D13 retarget). `describe('style baseline status row')` LIVED HERE
+  // and covered a row that no longer exists on this per-chapter surface: the status row, its build and
+  // refresh actions, its consent gate, its estimate, its paid-tier note and its cross-model warning all
+  // moved to the book dashboard, and that coverage moved WITH them (see
+  // `book-style-baseline-status-row.component.spec.ts`). What remains here is the cross-scope POINTER the
+  // audit deliberately keeps, and the guarantee that nothing on a chapter surface can start a book build.
+  describe('w5: the writing-style build is gone from the Run tab; the deviations pointer is retargeted', () => {
     beforeEach(() => {
-      // The row only renders for LinguisticAnalysis.
       component.selectedAnalysisType = 'LinguisticAnalysis';
     });
 
-    it('does not render when the analysis type is not LinguisticAnalysis', () => {
-      component.selectedAnalysisType = 'Proofread';
-      component.styleBaselineStatus = makeBaselineStatus();
-      fixture.detectChanges();
-      expect(query('[data-testid="style-baseline-row"]')).toBeNull();
-    });
-
-    it('does not render while the status is still unknown (null)', () => {
-      component.styleBaselineStatus = null;
-      component.styleBaselineBuilding = false;
-      fixture.detectChanges();
-      expect(query('[data-testid="style-baseline-row"]')).toBeNull();
-    });
-
-    it('NOT BUILT: shows "Build now" and reports the not-built state', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-        hasBaseline: false,
-        ready: false,
-        builtChapters: 0,
-        staleCount: 0,
-        lastUpdatedAt: null,
-        chaptersToBuild: 5,
-        estimatedSeconds: 120,
-      });
-      fixture.detectChanges();
-
-      expect(component.baselineState).toBe('not-built');
-      expect(query('[data-testid="sb-not-built"]')).not.toBeNull();
-      expect(query('[data-testid="sb-build-now"]')).not.toBeNull();
-    });
-
-    it('BUILDING: shows the building status and a progress percent when present', () => {
+    it('renders NO writing-style status row, and no build or consent affordance, on any pass', () => {
       component.styleBaselineStatus = makeBaselineStatus({ hasBaseline: false, ready: false, builtChapters: 0 });
-      component.styleBaselineBuilding = true;
-      component.styleBaselineProgressPercent = 42;
       fixture.detectChanges();
 
-      expect(component.baselineState).toBe('building');
-      const el = query('[data-testid="sb-building"]');
-      expect(el).not.toBeNull();
-      expect(el.nativeElement.textContent).toContain('42%');
-      // The build action must not be offered while building.
+      expect(query('[data-testid="style-baseline-row"]')).toBeNull();
       expect(query('[data-testid="sb-build-now"]')).toBeNull();
-    });
-
-    it('READY: shows coverage N/N and an "updated" relative time', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-        builtChapters: 4,
-        totalChapters: 4,
-        lastUpdatedAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
-      });
-      fixture.detectChanges();
-
-      expect(component.baselineState).toBe('ready');
-      const el = query('[data-testid="sb-ready"]');
-      expect(el).not.toBeNull();
-      expect(el.nativeElement.textContent).toContain('4/4');
-      expect(component.baselineUpdatedRelative).not.toBe('');
-    });
-
-    it('STALE: shows the changed-chapter count and a "Refresh" action', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-        ready: false,
-        staleCount: 2,
-        chaptersToBuild: 2,
-        estimatedSeconds: 90,
-      });
-      fixture.detectChanges();
-
-      expect(component.baselineState).toBe('stale');
-      const el = query('[data-testid="sb-stale"]');
-      expect(el).not.toBeNull();
-      expect(el.nativeElement.textContent).toContain('2');
-      expect(query('[data-testid="sb-refresh"]')).not.toBeNull();
-    });
-
-    it('CONSENT gate: build is NOT emitted until the user confirms', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-        hasBaseline: false,
-        ready: false,
-        builtChapters: 0,
-        chaptersToBuild: 3,
-        estimatedSeconds: 75,
-      });
-      let emittedCount = 0;
-      component.buildStyleBaseline.subscribe(() => emittedCount++);
-      fixture.detectChanges();
-
-      // Open the consent prompt: still no emit.
-      query('[data-testid="sb-build-now"]').nativeElement.click();
-      fixture.detectChanges();
-      expect(query('[data-testid="sb-consent"]')).not.toBeNull();
-      expect(emittedCount).toBe(0);
-
-      // Estimate text: "~3 chapters, ~2 min" (75s -> ceil = 2). No "$" because estimatedUsd is null.
-      const estimate = query('[data-testid="sb-consent-estimate"]').nativeElement.textContent;
-      expect(estimate).toContain('3');
-      expect(estimate).toContain('2');
-      expect(estimate).not.toContain('$');
-
-      // Confirm -> emit fires exactly once and the prompt closes.
-      query('[data-testid="sb-consent-confirm"]').nativeElement.click();
-      fixture.detectChanges();
-      expect(emittedCount).toBe(1);
-      expect(component.showBaselineConsent).toBeFalse();
-    });
-
-    it('CONSENT cancel: closes the prompt without emitting build', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-      hasBaseline: false, ready: false, builtChapters: 0, chaptersToBuild: 1, estimatedSeconds: 30,
-      });
-      let emittedCount = 0;
-      component.buildStyleBaseline.subscribe(() => emittedCount++);
-      fixture.detectChanges();
-
-      query('[data-testid="sb-build-now"]').nativeElement.click();
-      fixture.detectChanges();
-      query('[data-testid="sb-consent-cancel"]').nativeElement.click();
-      fixture.detectChanges();
-
-      expect(emittedCount).toBe(0);
+      expect(query('[data-testid="sb-refresh"]')).toBeNull();
       expect(query('[data-testid="sb-consent"]')).toBeNull();
-    });
-
-    it('CONSENT estimate: appends "~$" only for paid providers (estimatedUsd != null)', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-        hasBaseline: false, ready: false, builtChapters: 0,
-        chaptersToBuild: 10, estimatedSeconds: 600, estimatedUsd: 0.12,
-      });
-      fixture.detectChanges();
-      query('[data-testid="sb-build-now"]').nativeElement.click();
-      fixture.detectChanges();
-
-      const estimate = query('[data-testid="sb-consent-estimate"]').nativeElement.textContent;
-      expect(estimate).toContain('$0.12');
-    });
-
-    /**
-     * p3-4: a book on the thinking tier is the reason estimatedUsd stops being null, so the paid figure now
-     * arrives with an explanation of WHERE the money and the text go. A price with no explanation is not
-     * consent. The note is keyed on the SAME predicate as the figure, so the two cannot appear apart.
-     */
-    it('CONSENT paid note: explains the cost and the privacy cost only when there IS a figure', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-        hasBaseline: false, ready: false, builtChapters: 0,
-        chaptersToBuild: 10, estimatedSeconds: 600, estimatedUsd: 0.12,
-      });
-      fixture.detectChanges();
-      query('[data-testid="sb-build-now"]').nativeElement.click();
-      fixture.detectChanges();
-
-      const note = query('[data-testid="sb-consent-paid-note"]').nativeElement.textContent as string;
-      expect(note).toContain('שכבת חשיבה');
-      expect(note).toContain('צד שלישי');
-
-      // A free (local) build quotes no price, so it must not show the paid explanation either.
-      query('[data-testid="sb-consent-cancel"]').nativeElement.click();
-      component.styleBaselineStatus = makeBaselineStatus({
-        hasBaseline: false, ready: false, builtChapters: 0,
-        chaptersToBuild: 10, estimatedSeconds: 600, estimatedUsd: null,
-      });
-      fixture.detectChanges();
-      query('[data-testid="sb-build-now"]').nativeElement.click();
-      fixture.detectChanges();
-
-      expect(query('[data-testid="sb-consent-estimate"]').nativeElement.textContent).not.toContain('$');
+      expect(query('[data-testid="sb-consent-estimate"]')).toBeNull();
       expect(query('[data-testid="sb-consent-paid-note"]')).toBeNull();
+      expect(query('[data-testid="sb-cross-model-warning"]')).toBeNull();
     });
 
-    it('CONSENT paid note: has he/en parity and no em-dash', () => {
-      for (const [lang, needle] of [['he', 'שכבת חשיבה'], ['en', 'thinking tier']] as const) {
-        component.bookLanguage = lang;
-        const note = component.baselineLabel('consentPaidNote');
-        expect(note).withContext(`${lang} note`).not.toBe('consentPaidNote');
-        expect(note).withContext(`${lang} note`).toContain(needle);
-        expect(note).withContext(`${lang} note`).not.toContain('—');
-      }
-    });
-
-    it('deviations empty-state hint shows when the baseline is missing/insufficient', () => {
+    it('deviations empty-state hint still shows when the writing style is missing/insufficient', () => {
       component.styleBaselineStatus = makeBaselineStatus({
-      hasBaseline: false, ready: false, builtChapters: 0,
+        hasBaseline: false, ready: false, builtChapters: 0,
       });
       component.latestResult = makeLinguisticResult(
         JSON.stringify({ deviations: [], consistencyIssues: [] })
@@ -982,7 +825,7 @@ describe('AnalysisRunTabComponent', () => {
       expect(query('[data-testid="sb-deviations-hint"]')).not.toBeNull();
     });
 
-    it('deviations empty-state hint is absent when the baseline is ready', () => {
+    it('deviations empty-state hint is absent when the writing style is ready', () => {
       component.styleBaselineStatus = makeBaselineStatus();
       component.latestResult = makeLinguisticResult(
         JSON.stringify({ deviations: [], consistencyIssues: [] })
@@ -994,126 +837,62 @@ describe('AnalysisRunTabComponent', () => {
       expect(query('[data-testid="sb-deviations-hint"]')).toBeNull();
     });
 
-    // ---- DEF-1: cross-model staleness warning ----------------------------
-    it('CROSS-MODEL: shows the warning line (he) and keeps a Refresh affordance when builtWithDifferentModel', () => {
+    it('RETARGET: the hint action raises openStyleBaselineHome instead of opening a whole-book consent', () => {
+      let raised = 0;
+      component.openStyleBaselineHome.subscribe(() => raised++);
       component.styleBaselineStatus = makeBaselineStatus({
-        ready: false,
-        staleCount: 3,
-        builtWithDifferentModel: true,
-        chaptersToBuild: 3,
-        estimatedSeconds: 90,
+        hasBaseline: false, ready: false, builtChapters: 0,
       });
+      component.latestResult = makeLinguisticResult(
+        JSON.stringify({ deviations: [], consistencyIssues: [] })
+      );
+      component.streamingText = '';
       fixture.detectChanges();
 
-      const warning = query('[data-testid="sb-cross-model-warning"]');
-      expect(warning).not.toBeNull();
-      expect(warning.nativeElement.textContent).toContain('מודל אחר');
-      expect(warning.nativeElement.getAttribute('dir')).toBe('rtl');
-      // The stale state offers Refresh; that affordance must remain reachable.
-      expect(component.baselineState).toBe('stale');
-      expect(query('[data-testid="sb-refresh"]')).not.toBeNull();
-    });
+      const action = query('[data-testid="sb-deviations-hint-action"]');
+      expect(action).not.toBeNull();
+      action.nativeElement.click();
 
-    it('CROSS-MODEL: warning is reachable even if staleCount somehow reads 0 (state forced to stale)', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-        ready: false,
-        staleCount: 0,
-        builtWithDifferentModel: true,
-        chaptersToBuild: 1,
-        estimatedSeconds: 30,
-      });
+      expect(raised).toBe(1);
+      // And it opened nothing here: the destination is the dashboard, not this panel.
       fixture.detectChanges();
-
-      expect(component.baselineState).toBe('stale');
-      expect(query('[data-testid="sb-cross-model-warning"]')).not.toBeNull();
-      expect(query('[data-testid="sb-refresh"]')).not.toBeNull();
-    });
-
-    it('CROSS-MODEL (en): renders the English warning copy', () => {
-      component.bookLanguage = 'en';
-      component.styleBaselineStatus = makeBaselineStatus({
-        language: 'en',
-        ready: false,
-        staleCount: 2,
-        builtWithDifferentModel: true,
-        chaptersToBuild: 2,
-        estimatedSeconds: 60,
-      });
-      fixture.detectChanges();
-
-      const warning = query('[data-testid="sb-cross-model-warning"]');
-      expect(warning).not.toBeNull();
-      expect(warning.nativeElement.textContent).toContain('different model');
-      expect(warning.nativeElement.getAttribute('dir')).toBe('ltr');
-    });
-
-    it('CROSS-MODEL absent: no warning when builtWithDifferentModel is false', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-        ready: false,
-        staleCount: 2,
-        builtWithDifferentModel: false,
-        chaptersToBuild: 2,
-        estimatedSeconds: 60,
-      });
-      fixture.detectChanges();
-
-      expect(component.baselineBuiltWithDifferentModel).toBeFalse();
-      expect(query('[data-testid="sb-cross-model-warning"]')).toBeNull();
-    });
-
-    // ---- Bug 1: the consent prompt must not stay confirmable while a build is in flight ----
-    it('BUILDING: hides the consent prompt even if showBaselineConsent is still true', () => {
-      component.styleBaselineStatus = makeBaselineStatus({
-      ready: false, staleCount: 2, chaptersToBuild: 2, estimatedSeconds: 90,
-      });
-      component.showBaselineConsent = true;   // prompt was opened...
-      component.styleBaselineBuilding = true;  // ...then a build started / reattached (DEF-2)
-      fixture.detectChanges();
-
-      // Gated on !styleBaselineBuilding so a lingering prompt cannot be confirmed mid-build.
       expect(query('[data-testid="sb-consent"]')).toBeNull();
+    });
 
-      // Once the build is no longer in flight, the still-open prompt is shown again.
-      component.styleBaselineBuilding = false;
+    it('the stale reading points at the same home, with stale-flavoured copy (he and en)', () => {
+      const stale = { hasBaseline: true, ready: false, staleCount: 3, builtChapters: 5 };
+      component.styleBaselineStatus = makeBaselineStatus(stale);
+      component.latestResult = makeLinguisticResult(
+        JSON.stringify({ deviations: [], consistencyIssues: [] })
+      );
+      component.streamingText = '';
       fixture.detectChanges();
-      expect(query('[data-testid="sb-consent"]')).not.toBeNull();
+
+      expect(component.baselineState).toBe('stale');
+      const heHint = query('[data-testid="sb-deviations-hint"]').nativeElement.textContent as string;
+      expect(heHint).toContain('אינו עדכני');
+      expect(heHint).toContain(component.baselineLabel('hintGoToHome'));
+
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      const enHint = query('[data-testid="sb-deviations-hint"]').nativeElement.textContent as string;
+      expect(enHint).toContain('out of date');
+      expect(enHint).toContain('Open the book dashboard');
     });
 
-    it('confirmBaselineBuild is a no-op while building (closes the prompt, emits no duplicate build)', () => {
-      let emitted = 0;
-      component.buildStyleBaseline.subscribe(() => emitted++);
-      component.showBaselineConsent = true;
-      component.styleBaselineBuilding = true;
-
-      component.confirmBaselineBuild();
-
-      expect(emitted).toBe(0);
-      expect(component.showBaselineConsent).toBeFalse();
-    });
-
-    // ---- Bug 2: the consent prompt is dismissed when the (book, language) context changes ----
-    it('clears an open consent prompt when the book changes', () => {
-      component.showBaselineConsent = true;
-      component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
-      expect(component.showBaselineConsent).toBeFalse();
-    });
-
-    it('clears an open consent prompt when the book language changes', () => {
-      component.showBaselineConsent = true;
-      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
-      expect(component.showBaselineConsent).toBeFalse();
-    });
-
-    it('clears an open consent prompt once a build becomes in flight (reattach)', () => {
-      component.showBaselineConsent = true;
-      component.ngOnChanges({ styleBaselineBuilding: new SimpleChange(false, true, false) });
-      expect(component.showBaselineConsent).toBeFalse();
-    });
-
-    it('does NOT clear the consent prompt on an unrelated input change', () => {
-      component.showBaselineConsent = true;
-      component.ngOnChanges({ sceneId: new SimpleChange(null, 'scene-9', false) });
-      expect(component.showBaselineConsent).toBeTrue();
+    it('the pointer copy carries no em-dash and no model identity, in either language', () => {
+      const keys = ['hintBuild', 'hintRefresh', 'hintGoToHome', 'linguisticNoRunNote'];
+      for (const lang of ['he', 'en']) {
+        component.bookLanguage = lang;
+        for (const key of keys) {
+          const text = component.baselineLabel(key);
+          expect(text).not.toContain('\u2014');
+          expect(text).not.toContain('\u2013');
+          expect(text.toLowerCase()).not.toContain('gpt');
+          expect(text.toLowerCase()).not.toContain('gemma');
+          expect(text.toLowerCase()).not.toContain('ollama');
+        }
+      }
     });
   });
 

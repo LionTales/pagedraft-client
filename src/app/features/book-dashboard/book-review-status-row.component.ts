@@ -6,6 +6,7 @@ import { BookReviewService } from '../../core/services/book-review.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
+import { BuildInputs, buildInputsFor, buildIsRefused } from '../../shared/stage-spine/stage-spine.model';
 
 /** Derived review state for the whole-book developmental review. Single source of truth shared by the
  *  status row (@Output) and the dashboard host (field + handler types). */
@@ -32,6 +33,25 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
   @Input() bookId: string | null = null;
   /** Book language (e.g. 'he', 'en'). Defaults to 'he'. Drives localization, [dir], and the status key. */
   @Input() bookLanguage: string | null = null;
+  /**
+   * How many chapters the book has, from the host's already-loaded chapter list. This row already refuses
+   * a build when the briefs are missing, but on a book with ZERO chapters that refusal named a prerequisite
+   * the author could not walk either: the briefs row is itself refused on the same screen. With no chapters
+   * the gate names the import instead, which is the one action that is actually available, and matches what
+   * the stage spine above renders on all four of its blocked stages.
+   *
+   * `null` means NOT KNOWN YET, never empty. Only an explicit `0` changes anything.
+   */
+  @Input() chapterCount: number | null = null;
+  /**
+   * How many of those chapters carry any text, from the same host getter. The same argument as above, one
+   * step further out (final-r02): a book whose chapters were all created empty passed the zero-chapter gate,
+   * so this row pointed the author at a briefs row that was itself enabled and would have built nothing.
+   * Both counts go through {@link buildInputsFor}, the predicate the spine's own stages read.
+   *
+   * `null` means NOT KNOWN YET, never zero.
+   */
+  @Input() chaptersWithText: number | null = null;
 
   /**
    * Emits the current derived review state on every successful status read (wb3-c02 seam): the host uses it
@@ -54,8 +74,29 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
    */
   @Output() tierChanged = new EventEmitter<void>();
 
+  /**
+   * Wave 3 / w2. The raw status DTO, every time it changes (including to null on a context reset).
+   *
+   * The stage spine derives stage 3 from the WHOLE payload: `blocked` from `hasBriefs`, `behind` with its
+   * reason from `staleVsBriefs` / `builtWithDifferentModel`, and the working-through progress from
+   * `resolvedFindingCount` over `findingCount`. The coarse {@link BookReviewState} the sibling output
+   * carries collapses all of that, and the counts are not on it at all. This row is already the single
+   * fetcher of the payload, so the spine reads it here rather than polling the same endpoint again.
+   */
+  @Output() statusChange = new EventEmitter<BookReviewStatusDto | null>();
+
+  /** Backing field for {@link bookReviewStatus}; mutated only via the setter so the change emits. */
+  private _bookReviewStatus: BookReviewStatusDto | null = null;
+
   /** Latest book-review status read for the current book (null while loading / no book). */
-  bookReviewStatus: BookReviewStatusDto | null = null;
+  get bookReviewStatus(): BookReviewStatusDto | null {
+    return this._bookReviewStatus;
+  }
+  set bookReviewStatus(value: BookReviewStatusDto | null) {
+    if (this._bookReviewStatus === value) return;
+    this._bookReviewStatus = value;
+    this.publishStatus();
+  }
   /** True while a review build job is in flight (drives the BUILDING state). */
   bookReviewBuilding = false;
   /** Live review build progress 0..100 (null = indeterminate). */
@@ -120,22 +161,74 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
   }
 
   ngOnChanges(changes: SimpleChanges): void {
-    // The review is keyed by (book, language); a change to EITHER invalidates the current build/poll.
-    if (changes['bookId'] || changes['bookLanguage']) {
-      // Dismiss any open consent for the PREVIOUS book/language so it cannot be confirmed into the new one.
-      this.showBookReviewConsent = false;
-      this.resetBookReviewBuildState();
-      if (this.bookId) {
-        this.loadBookReviewStatus();
+    // c03: everything inside this hook runs INSIDE the host's change-detection pass (see the publishing
+    // block below). The reset is synchronous - this row must be honestly empty the instant its context
+    // changes - but the status it publishes to the host is published only once the pass is over.
+    this.inHostChangeDetection = true;
+    try {
+      // The review is keyed by (book, language); a change to EITHER invalidates the current build/poll.
+      if (changes['bookId'] || changes['bookLanguage']) {
+        // Dismiss any open consent for the PREVIOUS book/language so it cannot be confirmed into the new one.
+        this.showBookReviewConsent = false;
+        this.resetBookReviewBuildState();
+        if (this.bookId) {
+          this.loadBookReviewStatus();
+        }
       }
+    } finally {
+      this.inHostChangeDetection = false;
     }
   }
 
   ngOnDestroy(): void {
+    this.destroyed = true;
     this.stopBookReviewProgress();
     this.bookReviewSub?.unsubscribe();
     this.bookReviewStatusSub?.unsubscribe();
     this.bookReviewHandledTerminalJobId = null;
+  }
+
+  // ── c03: publishing to the host without writing its bindings mid-pass ────────────────────────────────
+  //
+  // `ngOnChanges` is called INSIDE the host's change-detection pass, so a status published from there lands
+  // on host state while that pass is half finished. The dashboard binds {@link statusChange} into
+  // `spineSignals`, and `<app-stage-spine [signals]>` is declared ABOVE this row in its template - already
+  // checked against the previous object by the time our hook runs. So a synchronous emit from the context
+  // reset is a write to an already-checked binding: it leaves the spine rendering an object the host has
+  // already superseded (corrected for only on some LATER pass), and it is the shape Angular raises NG0100
+  // for. It does not raise it here today only because the one binding involved is an OBJECT, and the
+  // dev-mode verification pass (`devModeEqual`) treats any two objects as equal; the first primitive the
+  // host derives from a row status - a count, a state chip, a badge above the rows - makes it throw.
+  //
+  // The deferred publish drains on the microtask queue, i.e. after the pass completes and before the
+  // browser paints, so the write is picked up by a fresh pass instead of invalidating the current one. It
+  // is COALESCED and re-reads the CURRENT status rather than replaying the value it was scheduled with, so
+  // a status that answers before it drains supersedes it instead of being clobbered by a stale null. The
+  // twin of this block lives in the briefs row, which also publishes its building flag.
+
+  /** True only while {@link ngOnChanges} is running, i.e. while we are inside the host's CD pass. */
+  private inHostChangeDetection = false;
+  /** The status value last EMITTED on {@link statusChange}. */
+  private publishedStatus: BookReviewStatusDto | null = null;
+  /** True while one deferred status publish is queued. */
+  private statusPublishQueued = false;
+  /** Set on destroy so a queued publish cannot emit out of a dead row. */
+  private destroyed = false;
+
+  /** Publish the current status to the host - now, or after the host's pass when called from within one. */
+  private publishStatus(): void {
+    if (this.inHostChangeDetection) {
+      if (this.statusPublishQueued) return;
+      this.statusPublishQueued = true;
+      Promise.resolve().then(() => {
+        this.statusPublishQueued = false;
+        if (!this.destroyed) this.publishStatus();
+      });
+      return;
+    }
+    if (this.publishedStatus === this._bookReviewStatus) return;
+    this.publishedStatus = this._bookReviewStatus;
+    this.statusChange.emit(this._bookReviewStatus);
   }
 
   // ── Status load + reset ─────────────────────────────────────────────────────
@@ -393,6 +486,38 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
     return s.hasReview ? 'stale' : 'not-built';
   }
 
+  /**
+   * What this build would have to read, from the shared spine predicate - one authority for the spine's
+   * stages and this row.
+   */
+  get buildInputs(): BuildInputs {
+    return buildInputsFor(this.chapterCount, this.chaptersWithText);
+  }
+
+  /**
+   * Nothing on this row can run: the book has no chapters, or its chapters carry no text. Disabled with
+   * the reason, never hidden. A null on either count answers `unknown`, never a refusal, so an unarrived
+   * chapter list cannot disable a build.
+   */
+  get blockedByImport(): boolean {
+    return buildIsRefused(this.buildInputs);
+  }
+
+  /** The sentence beside the disabled action: the book has no chapters, or its chapters are empty. */
+  get blockedReason(): string {
+    return this.bookReviewLabel(this.buildInputs === 'no-text' ? 'needsText' : 'needsImport');
+  }
+
+  /**
+   * The gate sentence for the `needs-summary` state. It names the BRIEFS when the briefs are the real
+   * prerequisite, and the import or the writing when there is nothing to build briefs FROM - because in
+   * those cases the briefs cannot be built either, and pointing the author at a refused row is a diagnosis
+   * with no fix attached.
+   */
+  get bookReviewGateHint(): string {
+    return this.blockedByImport ? this.blockedReason : this.bookReviewLabel('needsSummary');
+  }
+
   /** True when the review exists but was built with a different model (drives the cross-model warning). */
   get bookReviewBuiltWithDifferentModel(): boolean {
     return !!this.bookReviewStatus?.builtWithDifferentModel;
@@ -425,6 +550,10 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       cancel: 'ביטול',
       crossModelWarning: 'הסקירה נבנתה עם מודל אחר מהפעיל כעת. רעננו אותה לקבלת תוצאות מדויקות.',
       needsSummary: 'הסקירה ההתפתחותית דורשת תקצירי ספר. בנו תחילה את תקצירי הספר.',
+      // The zero-chapter gate: naming the briefs there would point at a row that is refused too.
+      needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
+      // final-r02: the same gate one step further out - the chapters exist, the words do not. DRAFT Hebrew.
+      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או לייבא כתב יד.',
       buildFailed: 'בניית הסקירה נכשלה: אף ממד לא הניב ממצאים. נסו שוב; אם התקלה חוזרת ייתכן שהספר גדול מדי עבור המודל.',
       buildDegraded: 'הסקירה נבנתה חלקית: חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
       buildDegradedWithCount: 'הסקירה נבנתה חלקית: {count} ממצאים נשמרו, אך חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
@@ -452,6 +581,8 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       cancel: 'Cancel',
       crossModelWarning: 'The review was built with a different model than the one now active. Refresh it for accurate results.',
       needsSummary: 'The developmental review requires book briefs. Build the book summary first.',
+      needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
+      needsText: 'The chapters in this book are still empty. Write in them or import a manuscript first.',
       buildFailed: 'The review build failed: no dimension produced findings. Try again; if it persists the book may be too large for the model.',
       buildDegraded: 'The review built partially: some dimensions failed. Results may be incomplete; refresh to try again.',
       buildDegradedWithCount: 'The review built partially: {count} findings were saved, but some dimensions failed. Results may be incomplete; refresh to try again.',
@@ -544,8 +675,13 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
 
   // ── Consent gate ────────────────────────────────────────────────────────────
 
-  /** Open the book-review consent prompt. Guard: must not open if briefs are missing (build is gated). */
+  /**
+   * Open the book-review consent prompt. Guards: must not open if briefs are missing (build is gated), and
+   * must not open on a book this build cannot read at all (no chapters, or chapters with no text in them),
+   * where a consent prompt would offer to analyse nothing.
+   */
   openBookReviewConsent(): void {
+    if (this.blockedByImport) return;
     if (this.bookReviewStatus && !this.bookReviewStatus.hasBriefs) return;
     this.showBookReviewConsent = true;
   }

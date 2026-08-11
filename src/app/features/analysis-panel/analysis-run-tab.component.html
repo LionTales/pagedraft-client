@@ -1,9 +1,12 @@
 <section class="run-tab-content">
   <!-- The model tier for THIS edit type (tier-ux-rework c3). Bound to the selected analysis type, which the
        toggle resolves to its routing task: several analysis types (Literary, Overview, Character, Story) run
-       as LinguisticAnalysis and therefore share ONE setting, and a type with no tier control (Summarize,
-       Custom) renders nothing. It re-derives from the snapshot in hand when the picker changes; only a book
-       or language change re-reads. -->
+       as LinguisticAnalysis and therefore share ONE setting. The two types with no tier control (Summarize,
+       Custom) render a DISABLED control with a reason - Wave 3 / w5 replaced the earlier silent vanish,
+       which read as a rendering bug; this comment described that older behaviour until c08. Every value the
+       picker can hold is in the client's known partition (`ai-task-key.ts`), so nothing bound here can reach
+       the render-nothing branch that an UNRECOGNIZED task takes. It re-derives from the snapshot in hand
+       when the picker changes; only a book or language change re-reads. -->
   <app-tier-toggle
     [bookId]="bookId"
     [bookLanguage]="bookLanguage"
@@ -11,102 +14,11 @@
     (tierChanged)="tierChanged.emit()">
   </app-tier-toggle>
 
-  <!-- Style baseline status row (a3/a4). Only meaningful for LinguisticAnalysis, where deviations are
-       computed against the book baseline; show it on the Linguistic run so the user can build/refresh. -->
-  <div
-    class="style-baseline-row"
-    *ngIf="selectedAnalysisType === 'LinguisticAnalysis' && baselineState !== 'unknown'"
-    [attr.dir]="baselineDir"
-    data-testid="style-baseline-row">
-    <div class="sb-line">
-      <span class="sb-title">{{ baselineLabel('title') }}</span>
-
-      <!-- NOT BUILT -->
-      <ng-container *ngIf="baselineState === 'not-built'">
-        <span class="sb-status sb-not-built" data-testid="sb-not-built">{{ baselineLabel('notBuilt') }}</span>
-        <button
-          type="button"
-          class="run-btn sb-action"
-          data-testid="sb-build-now"
-          (click)="openBaselineConsent()">
-          {{ baselineLabel('buildNow') }}
-        </button>
-      </ng-container>
-
-      <!-- BUILDING -->
-      <ng-container *ngIf="baselineState === 'building'">
-        <span class="sb-status sb-building" data-testid="sb-building">
-          {{ baselineLabel('building') }}
-          <ng-container *ngIf="styleBaselineProgressPercent != null"> ({{ styleBaselineProgressPercent }}%)</ng-container>
-        </span>
-        <span class="sb-spinner" aria-hidden="true"></span>
-      </ng-container>
-
-      <!-- READY -->
-      <ng-container *ngIf="baselineState === 'ready'">
-        <span class="sb-status sb-ready" data-testid="sb-ready">
-          {{ baselineLabel('coverage') }} {{ baselineCoverage }}
-          <ng-container *ngIf="baselineUpdatedRelative">
-            · {{ baselineLabel('updated') }} {{ baselineUpdatedRelative }}
-          </ng-container>
-        </span>
-      </ng-container>
-
-      <!-- STALE -->
-      <ng-container *ngIf="baselineState === 'stale'">
-        <span class="sb-status sb-stale" data-testid="sb-stale">
-          {{ baselineLabel('stalePrefix') }} {{ styleBaselineStatus?.staleCount }}
-        </span>
-        <button
-          type="button"
-          class="run-btn sb-action"
-          data-testid="sb-refresh"
-          (click)="openBaselineConsent()">
-          {{ baselineLabel('refresh') }}
-        </button>
-      </ng-container>
-    </div>
-
-    <!-- DEF-1: cross-model staleness. The baseline exists but was built with a different model than the
-         one now active; the stale row above already offers Refresh, so this is just the reason line. -->
-    <p
-      class="sb-cross-model-warning muted"
-      *ngIf="baselineBuiltWithDifferentModel"
-      [attr.dir]="baselineDir"
-      data-testid="sb-cross-model-warning">
-      {{ baselineLabel('crossModelWarning') }}
-    </p>
-
-    <!-- CONSENT prompt: a4 estimate, gated. Build endpoint is NOT called until Confirm. Hidden while a
-         build is in flight so a lingering prompt cannot be confirmed into interrupting / duplicating it. -->
-    <div class="sb-consent" *ngIf="showBaselineConsent && !styleBaselineBuilding" data-testid="sb-consent" [attr.dir]="baselineDir">
-      <p class="sb-consent-title">{{ baselineLabel('consentTitle') }}</p>
-      <p class="sb-consent-body">{{ baselineLabel('consentBody') }}</p>
-      <p class="sb-consent-estimate" data-testid="sb-consent-estimate">{{ baselineConsentEstimate }}</p>
-      <!-- p3-4: a book on the thinking tier makes estimatedUsd non-null, so this prompt starts quoting a
-           real price. A number with no explanation is not consent, so the paid case says WHY there is a
-           cost and that the text leaves the machine. Rendered only when there is actually a figure. -->
-      <p class="sb-consent-paid-note" data-testid="sb-consent-paid-note" *ngIf="baselineConsentIsPaid">
-        {{ baselineLabel('consentPaidNote') }}
-      </p>
-      <div class="sb-consent-actions">
-        <button
-          type="button"
-          class="run-btn"
-          data-testid="sb-consent-confirm"
-          (click)="confirmBaselineBuild()">
-          {{ baselineLabel('confirm') }}
-        </button>
-        <button
-          type="button"
-          class="run-btn secondary"
-          data-testid="sb-consent-cancel"
-          (click)="cancelBaselineConsent()">
-          {{ baselineLabel('cancel') }}
-        </button>
-      </div>
-    </div>
-  </div>
+  <!-- Wave 3 / w5 (MOVE-1 + MOVE-2): the book-wide writing-style STATUS ROW, its build action, its consent
+       prompt, its cost estimate and its paid-tier note USED TO SIT HERE, gated behind selecting one
+       particular pass on a panel whose own pill reads "This chapter". They now live on the book dashboard
+       beside the other whole-book builds. What stays on this per-chapter surface is the cross-scope
+       POINTER below (the deviations hint), which the audit explicitly keeps and only retargets. -->
 
   <!-- Proofread: show suggestion cards from diff (only when type picker is Proofread and the
        result is reliable; an unreliable result suppresses the cards and shows a warning instead). -->
@@ -186,8 +98,11 @@
     <h4>{{ analysisTypeLabel(latestResult.analysisType || latestResult.type) }}</h4>
     <p class="run-duration muted" *ngIf="lastRunDurationLabel">{{ runLabel('runTime') }} {{ lastRunDurationLabel }}</p>
     <app-linguistic-result [result]="latestResult"></app-linguistic-result>
-    <!-- Deviations rely on the book style baseline; when it is missing/stale, hint the user to build it
-         and (since the status row above offers the action) reuse the same Build/Refresh trigger. -->
+    <!-- D13, RETARGETED (w5). Deviations are measured against the book-wide writing style, so when that is
+         missing or out of date this per-chapter result says so. The audit keeps this pointer in place
+         deliberately - it is a legitimate cross-scope pointer - and asks only that it point at the
+         artifact's NEW home. It therefore no longer opens a whole-book consent prompt from a chapter
+         surface; it takes the author to the row that owns the build, on the book dashboard. -->
     <p
       class="sb-deviations-hint muted"
       *ngIf="baselineMissingOrInsufficient"
@@ -198,8 +113,8 @@
         type="button"
         class="sb-hint-link"
         data-testid="sb-deviations-hint-action"
-        (click)="openBaselineConsent()">
-        {{ baselineState === 'stale' ? baselineLabel('refresh') : baselineLabel('buildNow') }}
+        (click)="openStyleBaselineHome.emit()">
+        {{ baselineLabel('hintGoToHome') }}
       </button>
     </p>
     <!-- Consistency issues: navigable + dismissable suggestion cards (single source of truth = result.suggestions).

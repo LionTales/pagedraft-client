@@ -179,7 +179,7 @@
           [attr.data-testid]="'anchor-chip-' + f.id + '-' + a.chapterId"
           (click)="onAnchorClick(a, f)">
           <span class="jump-icon" aria-hidden="true">📖</span>
-          <span class="jump-label">{{ a.order }}. {{ a.title }}</span>
+          <span class="jump-label">{{ chapterNumber(a.order) }}. {{ a.title }}</span>
         </button>
       </span>
     </div>

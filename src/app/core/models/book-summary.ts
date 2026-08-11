@@ -28,6 +28,16 @@ export interface BookSummaryStatusDto {
    */
   builtWithDifferentModel: boolean;
   /**
+   * Wave 3 / w1. True when the composed book-level brief was built over ALL the chapters whose own briefs
+   * are currently fresh; false when the rollup is narrower than the per-chapter work behind it.
+   *
+   * It is one of the three inputs to `ready` and was computed all along but dropped before the DTO, which
+   * left a client that renders `behind` on `hasSummary && !ready` able to land in the state "out of date,
+   * zero chapters moved, same configuration" with nothing true to say about WHY. Read it as a REASON only
+   * alongside `hasSummary`: with no summary it is false, and that state is `not-started`, not `behind`.
+   */
+  summaryCoversBuiltChapters: boolean;
+  /**
    * If a build is currently running (possibly started in another tab/session), the jobId to attach to
    * for live progress. Null when no build is running.
    */

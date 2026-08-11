@@ -52,6 +52,12 @@
   color: var(--pd-improve);   // amber: needs refresh
 }
 
+// c04: the status read itself failed. Red rather than amber - amber is "this needs refreshing", and here
+// the row knows nothing at all.
+.sb-status.sb-error {
+  color: var(--pd-cut);
+}
+
 // Inline hint (e.g. "build summary first") — muted secondary text.
 .sb-hint-inline {
   font-size: var(--pd-text-caption);
@@ -70,6 +76,22 @@
   margin: 0;
   font-size: var(--pd-text-caption);
   color: var(--pd-improve);
+}
+
+// ── "What this build is" line (w5: the relocated writing-style row explains itself) ────────────
+
+.sb-what {
+  margin: 0;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-muted);
+}
+
+// ── Paid-tier note (w5: travels with the relocated consent prompt, MOVE-2) ─────────────────────
+
+.sb-consent-paid-note {
+  margin: 0;
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
 }
 
 // ── Build-outcome banners ─────────────────────────────────────────────────────

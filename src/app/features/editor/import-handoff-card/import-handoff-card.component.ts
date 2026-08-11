@@ -14,6 +14,7 @@ import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { BookSummaryService } from '../../../core/services/book-summary.service';
 import { JobRegistryService } from '../../../core/services/job-registry.service';
+import { BookProfileContinuationService } from '../../../core/services/book-profile-continuation.service';
 import { BookSummaryStatusDto } from '../../../core/models/book-summary';
 
 /**
@@ -69,6 +70,7 @@ export class ImportHandoffCardComponent implements OnChanges, OnDestroy {
   constructor(
     private bookSummaryService: BookSummaryService,
     private jobRegistry: JobRegistryService,
+    private profileContinuation: BookProfileContinuationService,
     private cdr: ChangeDetectorRef,
   ) {}
 
@@ -225,6 +227,17 @@ export class ImportHandoffCardComponent implements OnChanges, OnDestroy {
    * - READY / BUILDING: skip POST, emit startReview immediately.
    * - NOT_BUILT / STALE / UNKNOWN: POST buildBookSummary (registers job in registry),
    *   then emit startReview regardless of when the job finishes (background build).
+   *
+   * c04 - THE BOOK PROFILE. This card is a full arrival path for the whole-book build, not just the
+   * briefs half, and it used to chain nothing: post-import "Start review" built briefs and left the book
+   * with no profile, which made the dashboard's own hint ("the book profile is built together with the
+   * book briefs") false on the most common first-run path in the product. It does not re-implement that
+   * decision here. Where this card produces a briefs JOB it registers it, and
+   * {@link BookProfileContinuationService} runs the continuation off the job reaching its terminal -
+   * which is what makes it survive the user leaving this screen the moment they press the button, as this
+   * card's whole design intends. Where there is no job because nothing needed building, the card reports
+   * that arrival explicitly, and the service's gate decides (it refreshes only if there is no profile at
+   * all).
    */
   onStartReview(): void {
     if (this.disabledStartReview) return;
@@ -236,6 +249,13 @@ export class ImportHandoffCardComponent implements OnChanges, OnDestroy {
       // Already done or in flight: no build needed. If building, register/reattach in the registry.
       if (state === 'building' && this.bookId && this.summaryStatus?.activeBuildJobId) {
         this.jobRegistry.track('summary', this.bookId, this.summaryStatus.activeBuildJobId);
+      } else if (state === 'ready' && this.bookId) {
+        // READY: the briefs are fresh and no job will ever be tracked for this arrival, so nothing else
+        // can chain the profile. A book imported and reviewed before the fold, or one whose briefs a
+        // second tab already built, reaches its profile only here.
+        this.profileContinuation
+          .ensureAfterBriefs({ bookId: this.bookId, language: this.lang, reason: 'briefs-already-fresh' })
+          .subscribe();
       }
       this.startReview.emit();
       return;
@@ -257,9 +277,15 @@ export class ImportHandoffCardComponent implements OnChanges, OnDestroy {
       next: (resp) => {
         if (this.bookId !== bookId) return; // stale guard
         if (!resp.noOp && resp.jobId) {
-          // Register in the job registry so the editor's "review running" affordance lights up
-          // and so the book-summary-status-row can reattach when the dashboard mounts.
+          // Register in the job registry so the editor's "review running" affordance lights up, so the
+          // book-summary-status-row can reattach when the dashboard mounts, and (c04) so the profile
+          // continuation runs off this build's terminal whether or not anything is still mounted here.
           this.jobRegistry.track('summary', bookId, resp.jobId);
+        } else {
+          // A no-op build: the briefs were already fresh, so no job exists to chain the profile off.
+          this.profileContinuation
+            .ensureAfterBriefs({ bookId, language, reason: 'briefs-already-fresh' })
+            .subscribe();
         }
         this.buildStarting = false;
         this.cdr.detectChanges();

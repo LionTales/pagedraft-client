@@ -191,8 +191,8 @@ export class JobRegistryService {
    * running" affordance reads.
    *
    * It counts ONLY the {@link WHOLE_BOOK_BUILD_KINDS} - NOT every tracked job. Chapter `proofread`
-   * runs, `style-baseline` builds, and the reserved `whole-book-analysis` kind are also published to
-   * the registry (for the Activity Center), but they are not a summary/review build and must not light
+   * runs and `style-baseline` builds are also published to the registry (for the Activity Center), but
+   * they are not a summary/review build and must not light
    * the review affordance. Without this scoping, starting a chapter proofread or a style-baseline build
    * would falsely turn "review running" on.
    */
@@ -304,8 +304,7 @@ export class JobRegistryService {
         return this.progress.pollBookReviewProgress(bookId, jobId, stop$);
       case 'style-baseline':
         return this.progress.pollStyleBaselineProgress(bookId, jobId, stop$);
-      case 'proofread':
-      case 'whole-book-analysis': {
+      case 'proofread': {
         // Chapter-scoped async analysis. The chapterId lives on the tracked job (set at reattach/track
         // time from the source). Fall back defensively; the poller URL needs it.
         const chapterId = this.findJob(jobId)?.chapterId ?? '';
@@ -440,19 +439,40 @@ export class JobRegistryService {
 
 /**
  * The FE's normalized kinds of background job.
- * `whole-book-analysis` is RESERVED for Phase 2 and is type-PARAMETERIZED via `analysisType` (it is
- * NOT proofread-specific); it shares the chapter/analysis progress shape.
+ *
+ * Wave 3 / w5: a fifth member, `whole-book-analysis`, was REMOVED. It was reserved for a Phase 2 that
+ * never landed: it carried a title, an icon, a scope label and a chunk-count entry, and a sweep of every
+ * `track(` call site in the client found no caller that could ever produce one. The audit's own words for
+ * it are "a dead label in the one surface whose job is to name what is happening", and shipping vocabulary
+ * for a capability that does not exist is the same defect class the whole wave exists to remove. If a
+ * whole-book analysis kind is ever built, it comes back WITH its producer, not before it.
  */
-export type JobKind = 'summary' | 'review' | 'proofread' | 'style-baseline' | 'whole-book-analysis';
+export type JobKind = 'summary' | 'review' | 'proofread' | 'style-baseline';
 
 /**
  * The JobKinds that count as a whole-book BUILD for the editor's "review running" affordance: the book
  * summary rollup and the developmental review. Single source of truth for {@link
- * JobRegistryService.anyRunningForBook$}. Chapter `proofread` runs, `style-baseline` builds, and the
- * reserved `whole-book-analysis` kind are tracked for the Activity Center but are NOT a summary/review
- * build, so they are deliberately excluded here.
+ * JobRegistryService.anyRunningForBook$}. Chapter `proofread` runs and `style-baseline` builds are
+ * tracked for the Activity Center but are NOT a summary/review build, so they are deliberately excluded
+ * here.
  */
 const WHOLE_BOOK_BUILD_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['summary', 'review']);
+
+/**
+ * The JobKinds that can carry a `chapterId` and therefore belong in a book's PER-CHAPTER running
+ * breakdown (the spine's stage 4, hosted by both `book-dashboard.component.ts` and
+ * `editor-page.component.ts`). `proofread` is the only chapter/scene-scoped async analysis path today
+ * (Proofread, LineEdit and the single-shot whole-chapter types all share it, distinguished by
+ * `analysisType`) - see {@link analysisJobToSource}, the one place a `TrackedJob.chapterId` is ever set.
+ *
+ * Mirrors {@link WHOLE_BOOK_BUILD_KINDS}: an explicit allowlist, not "any job that happens to carry a
+ * chapterId". Both hosts used to read the per-chapter breakdown off that absence rather than off this
+ * set, two functions away from the idiom this constant establishes - true today only because no other
+ * kind's `track()` call site ever passes `chapterId`, a fact enforced by nothing. Exported so the two
+ * hosts read the SAME allowlist rather than each re-deriving "chapter-scoped" from the negative space of
+ * {@link WHOLE_BOOK_BUILD_KINDS}.
+ */
+export const CHAPTER_SCOPED_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['proofread']);
 
 /**
  * c02 (2026-08-03): the JobKinds whose `totalChunks` denominator is a unit a reader can identify from
@@ -489,9 +509,6 @@ const WHOLE_BOOK_BUILD_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['summary'
  */
 const CHUNK_COUNT_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
   'proofread',
-  // Reserved Phase-2 kind. It rides the chapter-analysis progress shape (see `progressStreamFor`,
-  // which polls it through `pollProgress`), so its counts are text chunks like `proofread`'s.
-  'whole-book-analysis',
   'summary',
   'style-baseline',
 ]);
@@ -567,7 +584,12 @@ export interface TrackedJob {
   chapterId?: string;
   /** Where "view" navigates when done. Best-effort; the Activity Center (rf-f01) consumes it. */
   resultRoute?: string;
-  /** Phase-2 whole-book-analysis type parameter (e.g. 'Proofread'); undefined for the built-in kinds. */
+  /**
+   * The analysis type behind a chapter-scoped `proofread` job (e.g. 'Summarization', 'LineEdit');
+   * undefined for the book-level build kinds. Chapter/scene analysis rides ONE JobKind for every type, so
+   * this is the only field that distinguishes them, and it drives both the row title and (since w5) the
+   * row ICON.
+   */
   analysisType?: string;
 }
 
@@ -712,8 +734,7 @@ function analysisJobToSource(j: ActiveAnalysisJobDto): ReattachSource {
   return {
     // Chapter/scene async analysis is the `proofread` kind today: Proofread, LineEdit, and the
     // single-shot whole-chapter types (Linguistic, Literary, Summarization, Custom) all share this
-    // async path, distinguished by `analysisType`. Phase 2's `whole-book-analysis` is book-scoped and
-    // does not arrive here.
+    // async path, distinguished by `analysisType`.
     kind: 'proofread',
     jobId: j.jobId,
     // Scope label must match what the live `job-started` path sets in AnalysisPanelComponent: a
@@ -755,13 +776,34 @@ function nowIso(): string {
  * No em-dash in any user-facing string.
  */
 // DRAFT he - needs native review
-const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
+export const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
   'summary': { he: 'בניית סיכום הספר', en: 'Building book summary' },
   'review': { he: 'סקירת הספר', en: 'Reviewing book' },
   'proofread': { he: 'הגהה', en: 'Proofreading' },
-  'style-baseline': { he: 'בניית קו סגנון', en: 'Building style baseline' },
-  'whole-book-analysis': { he: 'ניתוח הספר כולו', en: 'Analyzing whole book' },
+  // w5: renamed to match the row's new user-comprehensible name on the book dashboard, so the activity
+  // entry and the build it reports name the same thing. DRAFT he - needs native review.
+  'style-baseline': { he: 'בניית סגנון הכתיבה של הספר', en: "Building your book's writing style" },
 };
+
+/**
+ * EVERY member of {@link JobKind}, DISCOVERED from {@link DEFAULT_TITLES} rather than restated.
+ *
+ * The union has no runtime representation, so a test that wants to iterate it has to get the members from
+ * somewhere. Hand-writing the list is what finding 33 caught: `const kinds: JobKind[] = ['summary', ...]`
+ * assigns cleanly for a union of ANY size, so such a list silently goes stale the moment a member lands
+ * and asserts nothing about the union at all.
+ *
+ * `Record<JobKind, ...>` is different: TypeScript DOES reject a Record that is missing a member, so a new
+ * kind cannot reach a build without an entry here, and once it has one this array grows on its own. That
+ * makes this the discovered side of the completeness oracle in `job-registry.service.spec.ts` (one side
+ * must be discovered, never both hand-authored), and it is the reason `DEFAULT_TITLES` is exported: not
+ * because a caller needs the strings, but because the KEY SET is the mechanical enumeration.
+ *
+ * Frozen, and typed as readonly, so a consumer cannot mutate the enumeration it is asking about.
+ */
+export const ALL_JOB_KINDS: readonly JobKind[] = Object.freeze(
+  Object.keys(DEFAULT_TITLES) as JobKind[],
+);
 
 /**
  * Title (he/en) for a NEW tracked job. Chapter/scene async analysis rides ONE JobKind (`proofread`) for
@@ -788,7 +830,6 @@ function defaultScopeLabel(kind: JobKind): string {
     case 'summary':
     case 'review':
     case 'style-baseline':
-    case 'whole-book-analysis':
       return 'הספר כולו'; // "Whole book"
     case 'proofread':
       return 'פרק'; // "Chapter"

@@ -18,6 +18,7 @@ import {
   Verdict,
 } from '../../core/models/book-review';
 import { BookReviewService } from '../../core/services/book-review.service';
+import { chapterDisplayNumber } from '../../core/utils/chapter-number';
 
 /** The thread-state vocabulary the Threads section groups by (style-sheet ledger). */
 export type ThreadState = 'open' | 'resolved' | 'dangling';
@@ -256,6 +257,14 @@ export class BookStoryBibleComponent implements OnChanges, OnDestroy {
   /** Emit the navigation seam for wb3-f01 (no navigation invented here). */
   onAnchorClick(anchor: ChapterAnchor): void {
     this.openChapter.emit(anchor);
+  }
+
+  /**
+   * c07: the anchor chip used to render the raw zero-based `ChapterAnchor.order` directly, one number off
+   * from the export picker and the spine. One shared helper now decides the number every surface shows.
+   */
+  chapterNumber(order: number): number {
+    return chapterDisplayNumber(order);
   }
 
   // ── Localization ─────────────────────────────────────────────────────────────

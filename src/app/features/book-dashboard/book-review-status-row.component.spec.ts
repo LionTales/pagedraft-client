@@ -13,8 +13,8 @@
  *    failed/clear-on-ready reconcile (ported from the c03 describe block). The progress Subject is held
  *    OPEN across assertions so the terminal/error emit lands inside the real in-flight window.
  */
-import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { SimpleChange } from '@angular/core';
+import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { Component, SimpleChange } from '@angular/core';
 import { By } from '@angular/platform-browser';
 import { NEVER, Subject, of, throwError } from 'rxjs';
 import { BookReviewStatusRowComponent } from './book-review-status-row.component';
@@ -31,6 +31,8 @@ function makeBookReviewStatus(
     language: 'he',
     hasReview: true,
     findingCount: 12,
+    openFindingCount: 12,
+    resolvedFindingCount: 0,
     lastUpdatedAt: new Date().toISOString(),
     builtWithDifferentModel: false,
     staleVsBriefs: false,
@@ -46,6 +48,33 @@ function makeBookReviewStatus(
     failedWindows: 0,
     ...overrides,
   };
+}
+
+/**
+ * c03. The dashboard's anatomy in miniature: something the host derives from this row's status, rendered
+ * ABOVE the row, so it is already checked when the row's `ngOnChanges` runs. The real host binds an object
+ * (`spineSignals`) there; this one binds a string, which is the same write with the failure Angular
+ * actually reports.
+ */
+@Component({
+  standalone: true,
+  imports: [BookReviewStatusRowComponent],
+  template: `
+    <p data-testid="host-probe">{{ probe }}</p>
+    <app-book-review-status-row
+      [bookId]="bookId"
+      [bookLanguage]="bookLanguage"
+      (statusChange)="onStatus($event)">
+    </app-book-review-status-row>
+  `,
+})
+class StatusAboveRowHostComponent {
+  bookId: string | null = 'book-1';
+  bookLanguage = 'he';
+  probe = 'no status';
+  onStatus(status: BookReviewStatusDto | null): void {
+    this.probe = status ? 'status loaded' : 'no status';
+  }
 }
 
 describe('BookReviewStatusRowComponent (wb3-c01)', () => {
@@ -1305,5 +1334,277 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
       expect(component.showBookReviewConsent).toBeFalse();
       expect(emitted).toContain('building');
     });
+  });
+
+  // ── Wave 3 fixes / c02: the gate must name a prerequisite the author can actually walk ─────────────
+
+  describe('c02: with NO chapters the gate names the import, not the briefs', () => {
+    it('swaps the gate sentence, because the briefs row is refused on that book too', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: false });
+      component.chapterCount = 5;
+      fixture.detectChanges();
+      const withChapters = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      component.chapterCount = 0;
+      fixture.detectChanges();
+      const withNone = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(component.bookReviewState).toBe('needs-summary');
+      expect(withNone).not.toBe(withChapters);
+      expect(withNone).toBe(component.bookReviewLabel('needsImport'));
+      expect(withChapters).toBe(component.bookReviewLabel('needsSummary'));
+    });
+
+    it('keeps the briefs wording while the chapter count is not known yet (null is not empty)', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: false });
+      component.chapterCount = null;
+      fixture.detectChanges();
+
+      expect(component.blockedByImport).toBeFalse();
+      expect((query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim())
+        .toBe(component.bookReviewLabel('needsSummary'));
+    });
+
+    it('refuses the consent prompt on a zero-chapter book even when the briefs gate would allow it', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      component.chapterCount = 0;
+
+      component.openBookReviewConsent();
+
+      expect(component.showBookReviewConsent).toBeFalse();
+    });
+
+    it('states the import reason in both languages (he/en parity)', () => {
+      component.bookLanguage = 'he';
+      const he = component.bookReviewLabel('needsImport');
+      component.bookLanguage = 'en';
+      const en = component.bookReviewLabel('needsImport');
+
+      expect(he).not.toBe('needsImport');
+      expect(en).not.toBe('needsImport');
+      expect(he).not.toBe(en);
+      expect(he).not.toContain('—');
+      expect(en).not.toContain('—');
+    });
+
+    /**
+     * The row's THREE actions are all bound to `blockedByImport`, but only the consent gate was asserted:
+     * flipping the getter to a constant `false` left every rendered button's disabled state green. The
+     * summary row already pins all of its states this way; this is the same fence on this row, plus the
+     * reason beside them, so no state can show a disabled build with nothing explaining it.
+     */
+    it('disables the BUILD and the REFRESH actions, each with the reason beside it', () => {
+      component.chapterCount = 0;
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect((query('[data-testid="brev-needs-import"]').nativeElement as HTMLElement).textContent!.trim())
+        .toBe(component.bookReviewLabel('needsImport'));
+
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: true, ready: false, hasBriefs: true, staleVsBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-refresh"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="brev-needs-import"]')).not.toBeNull();
+    });
+
+    it('leaves both actions ENABLED while the chapter count is not known yet (null is not empty)', () => {
+      component.chapterCount = null;
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="brev-needs-import"]')).toBeNull();
+    });
+  });
+
+  // ── final-r02: the same gate on a book whose chapters exist but carry no text ──────────────────────
+  //
+  // c02 closed the zero-chapter book; c01 had already taught the spine to read the TEXT count as well.
+  // On a book with three chapters created empty the two answers diverged: the spine said nothing had been
+  // written while this row still pointed at the briefs, and the briefs row itself sat enabled. The briefs
+  // this review needs cannot be built from empty chapters, so naming them here is a fix that cannot be
+  // walked - the same walkability rule c02 applied to the zero-chapter book.
+
+  describe('final-r02: with rows but no text the gate names the writing, not the briefs', () => {
+    function rowsButNoText(): void {
+      component.chapterCount = 3;
+      component.chaptersWithText = 0;
+    }
+
+    it('swaps the gate sentence, because the briefs row is refused on that book too', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: false });
+      component.chapterCount = 3;
+      component.chaptersWithText = 3;
+      fixture.detectChanges();
+      const withText = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      rowsButNoText();
+      fixture.detectChanges();
+      const withNoText = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(component.bookReviewState).toBe('needs-summary');
+      expect(withNoText).not.toBe(withText);
+      expect(withNoText).toBe(component.bookReviewLabel('needsText'));
+      expect(withText).toBe(component.bookReviewLabel('needsSummary'));
+    });
+
+    it('says something different from the no-chapters sentence: this author already added chapters', () => {
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: false });
+      component.chapterCount = 0;
+      component.chaptersWithText = 0;
+      fixture.detectChanges();
+      const noChapters = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      rowsButNoText();
+      fixture.detectChanges();
+      const noText = (query('[data-testid="brev-needs-summary-hint"]').nativeElement as HTMLElement).textContent!.trim();
+
+      expect(noChapters.length).toBeGreaterThan(0);
+      expect(noChapters).toBe(component.bookReviewLabel('needsImport'));
+      expect(noText).toBe(component.bookReviewLabel('needsText'));
+      expect(noText).not.toBe(noChapters);
+    });
+
+    it('disables the BUILD and the REFRESH actions, each with the reason beside it', () => {
+      rowsButNoText();
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect((query('[data-testid="brev-needs-import"]').nativeElement as HTMLElement).textContent!.trim())
+        .toBe(component.bookReviewLabel('needsText'));
+
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: true, ready: false, hasBriefs: true, staleVsBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-refresh"]').nativeElement as HTMLButtonElement).disabled).toBeTrue();
+      expect(query('[data-testid="brev-needs-import"]')).not.toBeNull();
+    });
+
+    it('refuses the consent prompt even when the briefs gate would allow it', () => {
+      rowsButNoText();
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+
+      component.openBookReviewConsent();
+
+      expect(component.showBookReviewConsent).toBeFalse();
+    });
+
+    it('leaves both actions ENABLED while the TEXT count is not known yet (null is not zero)', () => {
+      component.chapterCount = 3;
+      component.chaptersWithText = null;
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="brev-needs-import"]')).toBeNull();
+    });
+
+    it('leaves both actions ENABLED as soon as one chapter carries text', () => {
+      component.chapterCount = 3;
+      component.chaptersWithText = 1;
+      component.bookReviewStatus = makeBookReviewStatus({ hasReview: false, ready: false, hasBriefs: true });
+      fixture.detectChanges();
+      expect((query('[data-testid="brev-build-now"]').nativeElement as HTMLButtonElement).disabled).toBeFalse();
+      expect(query('[data-testid="brev-needs-import"]')).toBeNull();
+    });
+
+    it('states the no-text reason in both languages (he/en parity, no em-dash)', () => {
+      component.bookLanguage = 'he';
+      const he = component.bookReviewLabel('needsText');
+      component.bookLanguage = 'en';
+      const en = component.bookReviewLabel('needsText');
+
+      expect(he).not.toBe('needsText');
+      expect(en).not.toBe('needsText');
+      expect(he).not.toBe(en);
+      expect(he).not.toContain('—');
+      expect(en).not.toContain('—');
+    });
+  });
+
+  /**
+   * c03. `ngOnChanges` runs INSIDE the host's change-detection pass, and `statusChange` is bound into host
+   * state the stage spine - declared ABOVE this row in the host template, so already checked in that same
+   * pass - renders from. Publishing the context reset synchronously from there writes to a checked binding
+   * and the host dies on NG0100 (the host spec drives the whole shape).
+   *
+   * These cases pin the row's half: the reset stays synchronous, only the PUBLISH is deferred to the
+   * microtask queue, and the deferred publish carries the row's CURRENT status rather than the value it
+   * was scheduled with.
+   */
+  describe('c03: the context reset publishes outside the host change-detection pass', () => {
+    it('does not emit statusChange synchronously from ngOnChanges, and does emit it one microtask later', fakeAsync(() => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+      component.bookReviewStatus = makeBookReviewStatus();
+      const emitted: (BookReviewStatusDto | null)[] = [];
+      component.statusChange.subscribe((s) => emitted.push(s));
+
+      component.bookLanguage = 'en';
+      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+
+      expect(component.bookReviewStatus)
+        .withContext('the reset itself is synchronous: the row must not keep rendering the old language')
+        .toBeNull();
+      expect(emitted)
+        .withContext('emitting here would write to a host binding the spine above this row already checked')
+        .toEqual([]);
+
+      tick();
+
+      expect(emitted)
+        .withContext('the host still has to learn the previous status is gone, just not mid-pass')
+        .toEqual([null]);
+    }));
+
+    /**
+     * The dashboard's own spine binding is an OBJECT, and Angular's dev-mode verification treats any two
+     * objects as equal, so the shipped host survives the mid-pass write with a stale binding rather than an
+     * error. This host derives a PRIMITIVE from the same output, exactly as any count, chip or badge placed
+     * above the rows would, and that is a hard NG0100. It pins the rule (do not write the host's state from
+     * inside its pass) instead of the current tolerance.
+     */
+    it('does not break a host that derives a primitive above this row (ExpressionChanged)', async () => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      const read$ = new Subject<BookReviewStatusDto>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(read$.asObservable());
+
+      const host = TestBed.createComponent(StatusAboveRowHostComponent);
+      host.detectChanges();
+      // The status answers OUTSIDE a change-detection pass, the way a real HTTP response does.
+      read$.next(makeBookReviewStatus());
+      host.detectChanges();
+      expect(host.componentInstance.probe)
+        .withContext('precondition: the host renders something derived from the row status')
+        .toBe('status loaded');
+
+      host.componentInstance.bookLanguage = 'en';
+
+      // Update pass then verification pass: exactly what a dev-mode ApplicationRef.tick() runs.
+      expect(() => { host.detectChanges(); host.checkNoChanges(); }).not.toThrow();
+
+      // ...and the host still learns about the reset, one microtask later.
+      await host.whenStable();
+      host.detectChanges();
+      expect(host.componentInstance.probe).toBe('no status');
+    });
+
+    it('lets a status that answers before the deferred publish drains win over the reset null', fakeAsync(() => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      const enStatus = makeBookReviewStatus({ language: 'en' });
+      const enRead$ = new Subject<BookReviewStatusDto>();
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(enRead$.asObservable());
+      component.bookReviewStatus = makeBookReviewStatus({ language: 'he' });
+      const emitted: (BookReviewStatusDto | null)[] = [];
+      component.statusChange.subscribe((s) => emitted.push(s));
+
+      component.bookLanguage = 'en';
+      component.ngOnChanges({ bookLanguage: new SimpleChange('he', 'en', false) });
+      // The new language answers while the reset's publish is still queued.
+      enRead$.next(enStatus);
+      tick();
+
+      expect(emitted[emitted.length - 1])
+        .withContext('a queued null from the reset must never clobber the answer for the new language')
+        .toBe(enStatus);
+      expect(component.bookReviewStatus).toBe(enStatus);
+    }));
   });
 });

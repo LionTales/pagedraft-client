@@ -1,14 +1,19 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import {
+  ChapterSummaryDto,
   ImportPreviewResponseDto,
   ImportPreviewChapterDto,
   ImportConfirmationRequest,
 } from '../../core/models/book';
 import { ImportService } from '../../core/services/import.service';
 import { BookService } from '../../core/services/book.service';
+import { CHAPTER_SCOPED_KINDS, JobRegistryService } from '../../core/services/job-registry.service';
+import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
+import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 
 interface ImportChapterView extends ImportPreviewChapterDto {
   include: boolean;
@@ -83,7 +88,7 @@ const LABELS_EN: Record<string, string> = {
 @Component({
   selector: 'app-import-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, StageSpineComponent],
   template: `
     <div class="import-page" [attr.dir]="dir">
       <header class="import-header">
@@ -93,6 +98,17 @@ const LABELS_EN: Record<string, string> = {
         </div>
         <a class="pd-btn pd-btn-ghost" [routerLink]="['/books', bookId]">{{ t('backToBook') }}</a>
       </header>
+
+      <!-- Wave 3 / w3: the COMPACT spine. This is one of the two screens where a stage actually HAPPENS
+           and where the product previously showed no stage indicator at all. Its signals come from the
+           book payload this page already loads for its own language, so it costs no request; the two
+           book-level statuses are not on that payload and are not fetched for a widget. -->
+      <app-stage-spine
+        class="import-spine"
+        density="compact"
+        [bookLanguage]="bookLanguage"
+        [signals]="spineSignals">
+      </app-stage-spine>
 
       <section class="dropzone-section">
         <div
@@ -207,6 +223,16 @@ const LABELS_EN: Record<string, string> = {
       }
       .import-header h2 {
         margin: 0;
+      }
+      /* The compact spine sits under the header as its own band. It carries its own [dir] (it follows the
+         book, which on this route is also this page's language), so it needs no direction rule here. */
+      .import-spine {
+        display: block;
+        padding: var(--pd-space-3) var(--pd-space-4);
+        margin-block-end: var(--pd-space-6);
+        background: var(--pd-surface-sunken);
+        border: 1px solid var(--pd-border);
+        border-radius: var(--pd-radius-md);
       }
       .subtitle {
         margin: var(--pd-space-2) 0 0;
@@ -330,7 +356,7 @@ const LABELS_EN: Record<string, string> = {
     `,
   ],
 })
-export class ImportPageComponent implements OnInit {
+export class ImportPageComponent implements OnInit, OnDestroy {
   bookId: string | null = null;
   preview: ImportPreviewResponseDto | null = null;
   chapters: ImportChapterView[] = [];
@@ -344,11 +370,35 @@ export class ImportPageComponent implements OnInit {
   /** Book language ('he' | 'en' | ...). Book-scoped chrome follows it; Hebrew-default until loaded. */
   bookLanguage: string | null = null;
 
+  // ── Wave 3 / w3: the compact stage spine ───────────────────────────────────────────────────────
+  //
+  // Everything it renders comes from the ONE book request this page already makes for its own language.
+  // `BookDetailDto` carries the chapter list, so stages 1 and 4 are real here; the briefs and review
+  // statuses are not on that payload, are not worth a request for a widget, and therefore render the
+  // honest "not known here" rather than a guess. The job registry (no request) can raise a stage to
+  // `running` but can never claim one is idle.
+
+  /** The spine's signals. A FIELD, so the spine gets a stable object identity per real change. */
+  spineSignals: StageSpineSignals = emptyStageSpineSignals();
+  /** Chapter count / with-text count from the loaded book. Null until it lands. */
+  private loadedChapters: ChapterSummaryDto[] | null = null;
+  private briefsRunning = false;
+  private reviewRunning = false;
+  /**
+   * NIT 51: chapter-scoped jobs in flight for THIS book, so stage 4's per-chapter breakdown can mark a
+   * running chapter the same way book-dashboard and editor-page do (the `CHAPTER_SCOPED_KINDS` idiom).
+   * This page hardcoded `running: false` on every chapter signal, the one shape the model file forbids -
+   * "nothing here may be synthesized by the host".
+   */
+  private runningChapterIds = new Set<string>();
+  private jobsSub: Subscription | null = null;
+
   constructor(
     private route: ActivatedRoute,
     private router: Router,
     private importService: ImportService,
-    private bookService: BookService
+    private bookService: BookService,
+    private jobRegistry: JobRegistryService
   ) {}
 
   ngOnInit(): void {
@@ -357,10 +407,59 @@ export class ImportPageComponent implements OnInit {
     // the labels stay at the Hebrew default and the import flow is unaffected.
     if (this.bookId) {
       this.bookService.getById(this.bookId).subscribe({
-        next: (book) => (this.bookLanguage = book.language ?? 'he'),
-        error: () => (this.bookLanguage = 'he'),
+        next: (book) => {
+          this.bookLanguage = book.language ?? 'he';
+          this.loadedChapters = book.chapters ?? [];
+          this.rebuildSpineSignals();
+        },
+        error: () => {
+          this.bookLanguage = 'he';
+          // The chapters are UNKNOWN, not empty: the spine renders loading rather than "no chapters".
+          this.loadedChapters = null;
+          this.rebuildSpineSignals();
+        },
       });
     }
+    this.jobsSub = this.jobRegistry.activeJobs$.subscribe((jobs) => {
+      this.briefsRunning = jobs.some((j) => j.bookId === this.bookId && j.kind === 'summary');
+      this.reviewRunning = jobs.some((j) => j.bookId === this.bookId && j.kind === 'review');
+      this.runningChapterIds = new Set(
+        jobs
+          .filter((j) => j.bookId === this.bookId && CHAPTER_SCOPED_KINDS.has(j.kind) && j.chapterId)
+          .map((j) => j.chapterId as string),
+      );
+      this.rebuildSpineSignals();
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.jobsSub?.unsubscribe();
+    this.jobsSub = null;
+  }
+
+  private rebuildSpineSignals(): void {
+    const chapters = this.loadedChapters;
+    this.spineSignals = {
+      chapters: chapters
+        ? chapters
+            .slice()
+            .sort((a, b) => a.order - b.order)
+            .map((c) => ({
+              chapterId: c.id,
+              title: c.title,
+              order: c.order,
+              running: this.runningChapterIds.has(c.id),
+            }))
+        : null,
+      chapterCount: chapters ? chapters.length : null,
+      chaptersWithText: chapters ? chapters.filter((c) => c.wordCount > 0).length : null,
+      summary: null,
+      review: null,
+      summaryRunning: this.briefsRunning,
+      reviewRunning: this.reviewRunning,
+      // w4's export screen exists; stage 5 reads the chapter list this page already loaded.
+      exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
+    };
   }
 
   /** Whether to use Hebrew labels (RTL). Default Hebrew unless the book language is English. */

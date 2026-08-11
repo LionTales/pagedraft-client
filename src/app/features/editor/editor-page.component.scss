@@ -244,10 +244,21 @@
   color: var(--pd-primary-700);
 }
 
+/* Collapsed-state zone: the re-open affordance. c05 removed the compact stage spine that used to mount
+   here for the no-chapter case - this zone requires the panel to be CLOSED, so it could not cover the
+   panel-open half of that state. The empty writing pane (.editor-empty) carries every no-chapter case. */
+.review-reopen-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--pd-space-3);
+  padding: var(--pd-space-4);
+  overflow-y: auto;
+}
+
 /* Collapsed-state re-open affordance. */
 .review-reopen {
   align-self: flex-start;
-  margin: var(--pd-space-4);
   padding: var(--pd-space-3) var(--pd-space-5);
   border: 1px solid var(--pd-border);
   border-radius: var(--pd-radius-md);
@@ -260,7 +271,6 @@
 }
 .review-reopen:hover { background: var(--pd-primary-50); }
 .review-reopen:focus-visible { outline: none; box-shadow: var(--pd-ring); }
-/* P2-6: the reopen affordance lays out its label + the running dot inline. */
 .review-reopen {
   display: inline-flex;
   align-items: center;
@@ -268,30 +278,18 @@
 }
 .review-reopen-label { cursor: pointer; }
 
-/* P2-6: "a whole-book build is running" affordance — a small pulsing dot on the chrome
-   (reopen button + focus toggle) that stays visible while the dashboard is unmounted. */
-.review-running-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: var(--pd-radius-pill);
-  background: var(--pd-primary-600);
-  flex: 0 0 auto;
-  animation: pd-review-running-pulse 1.4s var(--pd-ease) infinite;
-}
-.focus-btn.review-running .review-running-dot {
-  margin-inline-start: var(--pd-space-2);
-}
-/* On the active (filled-primary) focus button the dot needs the on-primary color to stay visible. */
-.focus-btn.active .review-running-dot {
-  background: var(--pd-on-primary);
-}
-@keyframes pd-review-running-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .review-running-dot { animation: none; }
+/* Wave 3 / w3 (Q12b): the P2-6 `.review-running-dot` and its pulse keyframes lived here - a bespoke
+   whole-book-build indicator hung on the focus toggle and the reopen button. Both dots are gone; the
+   signal is now the stage spine's `running` state, rendered by the compact spine mounted in the editor
+   status bar (when a chapter is open) or in the empty writing pane (when none is). The focus BUTTON and
+   focus mode are untouched by that removal, by owner decision. */
+.editor-status .status-spine {
+  display: block;
+  flex: 1 1 220px;
+  min-inline-size: 0;
+  /* The status bar is justified to its end; the spine takes the free space at the reading start so the
+     save/back/focus controls keep their position exactly. */
+  margin-inline-end: auto;
 }
 
 .review-body app-analysis-panel,
@@ -494,12 +492,28 @@
   box-shadow: var(--pd-ring);
 }
 
-/* Empty-state hint shown when no chapter/scene is open. */
-.editor-area > p {
+/* Empty-state pane shown when no chapter/scene is open: the hint, plus (c05) compact spine placement B,
+   which is the only stage guidance on screen in this state. Centred in the writing column so it reads as
+   the pane's content rather than as chrome, and width-capped so the spine keeps the same narrow measure
+   it holds in the status bar. */
+.editor-empty {
   margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--pd-space-5);
+  inline-size: 100%;
+  max-inline-size: 420px;
+}
+.editor-empty > p {
+  margin: 0;
   color: var(--pd-text-muted);
   font-size: var(--pd-text-body);
   text-align: center;
+}
+.editor-empty .empty-spine {
+  display: block;
+  inline-size: 100%;
 }
 
 /*

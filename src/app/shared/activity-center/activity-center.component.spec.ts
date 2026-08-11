@@ -22,10 +22,11 @@ import { BehaviorSubject } from 'rxjs';
 import { provideRouter } from '@angular/router';
 
 import { ActivityCenterComponent, LABELS_HE, LABELS_EN } from './activity-center.component';
-import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { ALL_JOB_KINDS, JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
+import { ANALYSIS_TYPE_LABELS } from '../../core/models/analysis';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -362,7 +363,10 @@ describe('ActivityCenterComponent (rf-f01)', () => {
       const keys = [
         'panelTitle', 'emptyState', 'view',
         'running', 'pending', 'succeeded', 'failed', 'canceled',
-        'summary', 'review', 'proofread', 'style-baseline', 'whole-book-analysis',
+        // w5: `whole-book-analysis` is gone from this list because the KIND is gone. It was vocabulary
+        // for a capability nothing in the client could ever produce, which is the defect class this wave
+        // removes; a label with no producer is not parity, it is a dead label.
+        'summary', 'review', 'proofread', 'style-baseline',
       ];
       for (const key of keys) {
         const label = component.label(key);
@@ -466,6 +470,74 @@ describe('ActivityCenterComponent (rf-f01)', () => {
       const icon = fixture.debugElement.query(By.css('.ac-kind-icon'));
       expect(icon).not.toBeNull();
       expect(icon.nativeElement.textContent.trim().length).toBeGreaterThan(0);
+    });
+
+    /**
+     * Wave 3 / w5, the audit's second Activity Center content fix. EVERY chapter or scene analysis rides
+     * the single `proofread` job kind, so a per-KIND icon gave an in-flight Summarize a proofreading
+     * pencil beside a correct title. The row title already discriminates on `analysisType`; the icon now
+     * uses the same discriminator, so the two cannot disagree.
+     */
+    it('does not dress an in-flight Summarize as a proofread run', () => {
+      const summarize = component.kindIcon({ kind: 'proofread', analysisType: 'Summarization' });
+      const proofread = component.kindIcon({ kind: 'proofread', analysisType: 'Proofread' });
+
+      expect(summarize).not.toBe(proofread);
+      expect(summarize.trim().length).toBeGreaterThan(0);
+    });
+
+    it('gives every analysis type sharing the proofread kind its own glyph', () => {
+      // f03 (nit 60): the type list is DISCOVERED from ANALYSIS_TYPE_LABELS.he - the same mechanical
+      // source titleForJob (job-registry.service.ts) already keys off - rather than restated here by
+      // hand. A hand-written array would keep passing forever even if a seventh analysis type shipped
+      // with no icon entry, because it would simply never be asked about. Keying off the real source
+      // means a new type is included automatically and this test goes red the moment it has no glyph
+      // of its own (see the ANALYSIS_TYPE_ICONS fallback test below for what "no glyph of its own" means
+      // in practice: it silently reuses the proofread kind's glyph, which is exactly the collision this
+      // guard exists to catch).
+      const types = Object.keys(ANALYSIS_TYPE_LABELS.he);
+      const icons = types.map((analysisType) => component.kindIcon({ kind: 'proofread', analysisType }));
+      expect(new Set(icons).size).withContext('one glyph per type, none shared').toBe(types.length);
+    });
+
+    it('assigns no glyph collisions across whole-book job kinds and analysis types combined', () => {
+      // f03 (nit 61): the test above only compares the six analysis types WITH EACH OTHER, which is why
+      // style-baseline (a job KIND) was free to reuse LinguisticAnalysis's glyph (a job TYPE) undetected
+      // - a style-baseline build and an in-flight Linguistic chapter run looked identical in the panel.
+      // This widens the same assertion to the full combined set actually rendered in the Activity Center.
+      //
+      // 'proofread' is excluded from the kind side on purpose, not an oversight: kindIcon() resolves the
+      // analysisType first and only falls back to the kind glyph when analysisType is absent/unknown, so
+      // the bare 'proofread' kind glyph is BY CONSTRUCTION the same glyph as the 'Proofread' analysis
+      // type (both mean "proofread"). Comparing it against itself would make this test permanently
+      // fail on a deliberate identity rather than catch an accidental one.
+      const wholeBookKinds = ALL_JOB_KINDS.filter((kind) => kind !== 'proofread');
+      const kindIcons = wholeBookKinds.map((kind) => component.kindIcon({ kind, analysisType: undefined }));
+      const typeIcons = Object.keys(ANALYSIS_TYPE_LABELS.he)
+        .map((analysisType) => component.kindIcon({ kind: 'proofread', analysisType }));
+
+      const combined = [...kindIcons, ...typeIcons];
+      expect(new Set(combined).size)
+        .withContext('one glyph per kind/type across the combined set, none shared')
+        .toBe(combined.length);
+    });
+
+    it('falls back to the KIND glyph for an unknown or absent analysis type', () => {
+      const byKind = component.kindIcon({ kind: 'proofread', analysisType: undefined });
+      expect(component.kindIcon({ kind: 'proofread', analysisType: 'SomethingNew' })).toBe(byKind);
+      expect(byKind.trim().length).toBeGreaterThan(0);
+    });
+
+    it('renders the per-type glyph in the row, not just from the helper', () => {
+      stub.setJobs([
+        makeJob({ id: 'j1', kind: 'proofread', analysisType: 'Summarization', titleHe: 'סיכום', titleEn: 'Summarize' }),
+      ]);
+      component.panelOpen = true;
+      fixture.detectChanges();
+
+      const icon = fixture.debugElement.query(By.css('.ac-kind-icon'));
+      expect(icon.nativeElement.textContent.trim())
+        .toBe(component.kindIcon({ kind: 'proofread', analysisType: 'Summarization' }));
     });
   });
 

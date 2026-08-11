@@ -22,6 +22,7 @@ import {
 } from '../../core/models/book-review';
 import { BookReviewService } from '../../core/services/book-review.service';
 import { ReviseContextService } from '../../core/services/revise-context.service';
+import { chapterDisplayNumber } from '../../core/utils/chapter-number';
 import { MarkdownTextComponent } from '../analysis-panel/markdown-text.component';
 
 /** The PATCH verb the lifecycle control runs for a target status (mirrors the service signature). */
@@ -319,6 +320,15 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
     const oneLiner = truncateOneLiner(finding.rationale);
     this.reviseContext.set({ findingId: finding.id, oneLiner, chapterId: anchor.chapterId });
     this.openChapter.emit(anchor);
+  }
+
+  /**
+   * c07: the anchor chip used to render the raw zero-based `ChapterAnchor.order` directly ("2. הסופה"),
+   * while the export picker and the spine numbered the SAME chapter "3. הסופה" (`order + 1`). One shared
+   * helper now decides the number every surface shows.
+   */
+  chapterNumber(order: number): number {
+    return chapterDisplayNumber(order);
   }
 
   // ── Status lifecycle (optimistic + reconcile; mirrors the suggestion-outcome idiom) ─────────────

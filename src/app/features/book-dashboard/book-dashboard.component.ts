@@ -1,9 +1,11 @@
 import { CommonModule } from '@angular/common';
-import { Component, ElementRef, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { BookService } from '../../core/services/book.service';
 import {
   BookProfileDto,
+  ChapterSummaryDto,
   CharacterAnalysisResult,
   StoryAnalysisResult,
   CharacterEntry,
@@ -12,15 +14,20 @@ import {
   ConflictEntry
 } from '../../core/models/book';
 import { AnalysisResultDto } from '../../core/models/analysis';
-import { ChapterAnchor } from '../../core/models/book-review';
+import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
+import { BookSummaryStatusDto } from '../../core/models/book-summary';
+import { CHAPTER_SCOPED_KINDS, JobRegistryService } from '../../core/services/job-registry.service';
 import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
+import { BookStyleBaselineStatusRowComponent } from './book-style-baseline-status-row.component';
 import { BookReviewState, BookReviewStatusRowComponent } from './book-review-status-row.component';
 import { BookReviewFindingsComponent } from './book-review-findings.component';
 import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
 import { CharacterRegisterComponent } from './character-register.component';
-import { FunnelStepperComponent } from './funnel-stepper.component';
+import { StageActionEvent, StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
+import { ChapterPassSignal, EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
+import { CollapsibleSectionComponent } from '../../shared/collapsible-section/collapsible-section.component';
 
 /** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
 type ReviewTab = 'findings' | 'bible';
@@ -29,7 +36,7 @@ type ReviewTab = 'findings' | 'bible';
  * Dashboard chrome strings, keyed for label(). This card region was originally Hebrew-only (the container
  * was hardcoded dir="rtl" and every string was a literal), which broke the book-scoped chrome rule: chrome
  * inside a book follows the BOOK language, so an English book must render English chrome. The child
- * components on this page (funnel stepper, status rows, chapter summaries, Story Bible) always honored that
+ * components on this page (the stage spine, status rows, chapter summaries, Story Bible) always honored that
  * via [bookLanguage]; only this component's own profile card did not, so an English book rendered a
  * half-Hebrew page. Hoisted to module scope rather than rebuilt per call because the template resolves
  * roughly 30 labels on every change-detection tick.
@@ -40,20 +47,23 @@ type ReviewTab = 'findings' | 'bible';
  * of restating it, and can assert at runtime that the two maps hold the same key set.
  */
 export type DashboardLabelKey =
-  | 'title' | 'refresh' | 'loading' | 'emptyHint'
+  | 'title' | 'loading' | 'emptyHint'
   | 'overview' | 'genre' | 'subGenre' | 'targetAudience' | 'literatureLevel' | 'languageRegister'
   | 'synopsis' | 'less' | 'more' | 'noSynopsis'
   | 'characters' | 'relationships' | 'charactersUnparseable' | 'noCharacters'
   | 'plotStructure' | 'setup' | 'risingAction' | 'climax' | 'fallingAction' | 'resolution'
   | 'pacing' | 'conflicts' | 'storyUnparseable' | 'noStory'
   | 'ask' | 'askPlaceholder' | 'asking' | 'citations'
-  | 'profileLoadError' | 'profileRefreshError' | 'askFailed' | 'chapter';
+  | 'profileLoadError' | 'askFailed' | 'chapter'
+  | 'export'
+  // Wave 3 / w5: the stage-2 row group (Q8-C) and the collapse directive's section headings.
+  | 'inputsToThisBuild' | 'inputsExplainer' | 'reviewSection' | 'characterRegister' | 'settings';
 
 export const DASHBOARD_LABELS_HE: Record<DashboardLabelKey, string> = {
   title: 'לוח ספר',
-  refresh: 'רענן פרופיל',
   loading: 'טוען…',
-  emptyHint: 'לחץ על ⟳ כדי לנתח את הספר (סיכום פרקים ובניית פרופיל).',
+  // Q4-A: the bare arrow is gone, so this hint points at the one build row that now produces the profile.
+  emptyHint: 'פרופיל הספר ייבנה יחד עם תקצירי הספר. השתמשו בכפתור הבנייה בשורת "תקצירי ספר" שלמעלה.',
   overview: 'סקירה',
   genre: 'ז\'אנר',
   subGenre: 'תת-ז\'אנר',
@@ -83,16 +93,21 @@ export const DASHBOARD_LABELS_HE: Record<DashboardLabelKey, string> = {
   asking: 'מחפש תשובה…',
   citations: 'ציטוט מפרקים:',
   profileLoadError: 'שגיאה בטעינת הפרופיל',
-  profileRefreshError: 'שגיאה ברענון הפרופיל',
   askFailed: 'שגיאה בשאלה',
   chapter: 'פרק',
+  export: 'ייצוא',
+  // Wave 3 / w5. DRAFT Hebrew - w8 native sweep.
+  inputsToThisBuild: 'הקלט לבנייה הזו',
+  inputsExplainer: 'תקציר הפרק הוא הקלט שממנו נבנים תקצירי הספר והסקירה ההתפתחותית. עריכה ידנית כאן משנה את מה שהבנייה קוראת.',
+  reviewSection: 'ממצאי הסקירה',
+  characterRegister: 'מרשם הדמויות',
+  settings: 'הגדרות',
 };
 
 export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
   title: 'Book dashboard',
-  refresh: 'Refresh profile',
   loading: 'Loading…',
-  emptyHint: 'Click ⟳ to analyze the book (chapter summaries and profile build).',
+  emptyHint: 'The book profile is built together with the book briefs. Use the build action on the "Book briefs" row above.',
   overview: 'Overview',
   genre: 'Genre',
   subGenre: 'Sub-genre',
@@ -122,9 +137,14 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
   asking: 'Looking for an answer…',
   citations: 'Cited from chapters:',
   profileLoadError: 'Could not load the profile',
-  profileRefreshError: 'Could not refresh the profile',
   askFailed: 'Could not answer the question',
   chapter: 'Chapter',
+  export: 'Export',
+  inputsToThisBuild: 'The inputs to this build',
+  inputsExplainer: 'A chapter brief is the input the book briefs and the developmental review are built from. Editing one by hand changes what the build reads.',
+  reviewSection: 'Review findings',
+  characterRegister: 'Character register',
+  settings: 'Settings',
 };
 
 @Component({
@@ -139,56 +159,97 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     BookStoryBibleComponent,
     BookChapterSummariesComponent,
     CharacterRegisterComponent,
-    FunnelStepperComponent,
+    StageSpineComponent,
     TierToggleComponent,
+    BookStyleBaselineStatusRowComponent,
+    CollapsibleSectionComponent,
   ],
   template: `
     <div class="book-dashboard" [attr.dir]="bookDir">
       <header class="dashboard-header">
         <h3 class="dashboard-title">{{ label('title') }}: {{ bookTitle }}</h3>
-        <button
-          type="button"
-          class="refresh-btn"
-          [disabled]="refreshing"
-          (click)="onRefresh()"
-          [title]="label('refresh')">
-          {{ refreshing ? '…' : '⟳' }}
-        </button>
+        <div class="header-actions">
+          <!-- Wave 3 / w4: the second way to reach export, beside the spine's own stage-5 action. It
+               raises the SAME output, so both land on /books/:bookId/export. Always enabled: the export
+               screen states the no-chapters case itself, and a disabled button here would need a reason
+               tooltip to be honest, which the 2.6 constraint rules out. -->
+          <button
+            type="button"
+            class="pd-btn pd-btn-ghost export-btn"
+            data-testid="dashboard-export-btn"
+            (click)="openExport.emit()">
+            {{ label('export') }}
+          </button>
+          <!-- Wave 3 / w5 (Q4-A): the bare circular-arrow refresh USED TO SIT HERE. It triggered an
+               expensive whole-book run with no status, no consent, no estimate and no activity entry. It
+               is folded into the Book briefs row below, which now runs the profile build as its second
+               phase under one consent and one status. Do not reintroduce an icon-only build here. -->
+        </div>
       </header>
 
-      <!-- rf-f02: funnel stepper — the visible "editing journey" spine pinned above the status rows.
-           Fully presentational: all inputs derived from existing dashboard state so no new polls.
-           NON-BLOCKING: advisory only; never gates the rest of the UI.
-           The [dir] on the stepper itself follows bookLanguage (book-scoped chrome). -->
-      <app-funnel-stepper
+      <!-- Wave 3 / w2: THE STAGE SPINE, replacing the four-step funnel stepper outright. Five stages,
+           one state vocabulary, every state computed from a real payload the rows below already fetch
+           (no new polls). It is also the guided surface: each row explains itself, names its
+           prerequisite when blocked, and offers the next action.
+           NON-BLOCKING: advisory only; it never gates the rest of the UI.
+           The [dir] inside the spine follows bookLanguage (book-scoped chrome). -->
+      <app-stage-spine
         [bookLanguage]="bookLanguage"
-        [summaryRunning]="stepperSummaryRunning"
-        [reviewRunning]="stepperReviewRunning"
-        [summaryReady]="stepperSummaryReady"
-        [reviewReady]="stepperReviewReady"
-        [hasBriefs]="stepperHasBriefs"
-        (assessRequested)="onStepperAssessRequested()"
-        (reviseRequested)="onStepperReviseRequested()">
-      </app-funnel-stepper>
+        [signals]="spineSignals"
+        (stageAction)="onSpineAction($event)"
+        (openChapter)="onSpineOpenChapter($event)">
+      </app-stage-spine>
 
       <!-- Book-scoped status rows (wb3-c01): summary/briefs + developmental review build + status.
            A finished summary build clears the review's "build briefs first" gate, so its terminal
            event refreshes the review row. -->
-      <!-- rf-f02: anchor for the stepper CTA scroll-to. -->
+      <!-- Anchor for the spine's build-briefs action scroll-to. -->
       <div #statusRowsAnchor></div>
       <section class="card book-status-card">
+        <!-- STAGE 2's ROW GROUP. Q8-C: the per-chapter brief editing card is not a chapter surface that
+             wandered into the book tab set, it is THE INPUT to this build, so it lives inside this build's
+             group and says so. That framing is the whole cost the owner accepted with option C: the copy
+             has to carry the explanation, which is why the group heading and the explainer below are not
+             decoration and must not be trimmed to a title. -->
         <app-book-summary-status-row
           #summaryRow
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
+          [chapterCount]="chapterCount"
+          [chaptersWithText]="chaptersWithText"
           (summaryTerminal)="onSummaryTerminal()"
+          (statusChange)="onSummaryStatusChange($event)"
           (buildingChange)="onSummaryBuildingChange($event)">
         </app-book-summary-status-row>
+
+        <!-- Q8-C + the collapse directive. A long per-chapter list, so it is one of the two sections that
+             DEFAULT to collapsed; the explainer sits OUTSIDE the fold, so the relationship it states
+             ("these are the inputs") is legible even when the list itself is folded away. -->
+        <div class="inputs-to-build" [attr.dir]="bookDir" data-testid="inputs-to-this-build">
+          <p class="inputs-explainer">{{ label('inputsExplainer') }}</p>
+          <app-collapsible-section
+            sectionId="inputs"
+            [bookId]="bookId"
+            [dir]="bookDir"
+            [heading]="label('inputsToThisBuild')"
+            [defaultCollapsed]="true">
+            <app-book-chapter-summaries
+              [bookId]="bookId"
+              [bookLanguage]="bookLanguage"
+              [chapters]="chapters"
+              [refreshSignal]="summaryDerivedRefresh">
+            </app-book-chapter-summaries>
+          </app-collapsible-section>
+        </div>
+
         <app-book-review-status-row
           #reviewRow
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
+          [chapterCount]="chapterCount"
+          [chaptersWithText]="chaptersWithText"
           (reviewStateChange)="onReviewStateChange($event)"
+          (statusChange)="onReviewStatusChange($event)"
           (tierChanged)="onTierChanged()">
         </app-book-review-status-row>
 
@@ -198,57 +259,68 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
              READY/STALE so the not-built / briefs-missing / building states stay owned by the status row
              above. A lightweight tab toggles between the two views of the same review findings. -->
         @if (showFindings) {
-          <div class="review-tabs" role="tablist" [attr.dir]="reviewDir">
-            <button
-              type="button"
-              class="review-tab"
-              role="tab"
-              [class.active]="reviewTab === 'findings'"
-              [attr.aria-selected]="reviewTab === 'findings'"
-              data-testid="review-tab-findings"
-              (click)="reviewTab = 'findings'">
-              {{ reviewTabLabel('findings') }}
-            </button>
-            <button
-              type="button"
-              class="review-tab"
-              role="tab"
-              [class.active]="reviewTab === 'bible'"
-              [attr.aria-selected]="reviewTab === 'bible'"
-              data-testid="review-tab-bible"
-              (click)="reviewTab = 'bible'">
-              {{ reviewTabLabel('bible') }}
-            </button>
-          </div>
+          <!-- Collapsible, DEFAULT EXPANDED: this is content the author already sees today and the wave's
+               rule for defaults is "the current layout". The status ROW above stays outside the fold, so a
+               blocked / stale / building review can never be hidden by a collapse. -->
+          <app-collapsible-section
+            sectionId="review-findings"
+            [bookId]="bookId"
+            [dir]="reviewDir"
+            [heading]="label('reviewSection')">
+            <div class="review-tabs" role="tablist" [attr.dir]="reviewDir">
+              <button
+                type="button"
+                class="review-tab"
+                role="tab"
+                [class.active]="reviewTab === 'findings'"
+                [attr.aria-selected]="reviewTab === 'findings'"
+                data-testid="review-tab-findings"
+                (click)="reviewTab = 'findings'">
+                {{ reviewTabLabel('findings') }}
+              </button>
+              <button
+                type="button"
+                class="review-tab"
+                role="tab"
+                [class.active]="reviewTab === 'bible'"
+                [attr.aria-selected]="reviewTab === 'bible'"
+                data-testid="review-tab-bible"
+                (click)="reviewTab = 'bible'">
+                {{ reviewTabLabel('bible') }}
+              </button>
+            </div>
 
-          @if (reviewTab === 'findings') {
-            <app-book-review-findings
-              [bookId]="bookId"
-              [bookLanguage]="bookLanguage"
-              [refreshToken]="findingsRefreshToken"
-              (openChapter)="onOpenChapterFromFinding($event)">
-            </app-book-review-findings>
-          } @else {
-            <app-book-story-bible
-              [bookId]="bookId"
-              [bookLanguage]="bookLanguage"
-              [refreshToken]="findingsRefreshToken"
-              [refreshSignal]="summaryDerivedRefresh"
-              (openChapter)="onOpenChapterFromFinding($event)">
-            </app-book-story-bible>
-          }
+            @if (reviewTab === 'findings') {
+              <app-book-review-findings
+                [bookId]="bookId"
+                [bookLanguage]="bookLanguage"
+                [refreshToken]="findingsRefreshToken"
+                (openChapter)="onOpenChapterFromFinding($event)">
+              </app-book-review-findings>
+            } @else {
+              <app-book-story-bible
+                [bookId]="bookId"
+                [bookLanguage]="bookLanguage"
+                [refreshToken]="findingsRefreshToken"
+                [refreshSignal]="summaryDerivedRefresh"
+                (openChapter)="onOpenChapterFromFinding($event)">
+              </app-book-story-bible>
+            }
+          </app-collapsible-section>
         }
-      </section>
 
-      <!-- Chapter summaries (wb3-c04): per-chapter user-authoritative summary view + inline edit + the
-           explicit "re-derive analysis" offer, so the user's edited summary drives what the whole-book
-           review sees. Coexists with the c02 Findings / c03 Story Bible review surfaces above. -->
-      <section class="card chapter-summaries-card">
-        <app-book-chapter-summaries
+        <!-- Wave 3 / w5 (MOVE-1 + MOVE-2, Q6-A): the book-wide writing-style build, moved out of the
+             per-chapter analysis Run tab to sit BESIDE the other whole-book builds, with the same row
+             anatomy they have. It is a status row, so like its two neighbours it is never wrapped in a
+             collapsible: a build that needs attention must not be foldable out of sight. -->
+        <app-book-style-baseline-status-row
+          #baselineRow
           [bookId]="bookId"
           [bookLanguage]="bookLanguage"
-          [refreshSignal]="summaryDerivedRefresh">
-        </app-book-chapter-summaries>
+          [chapterCount]="chapterCount"
+          [chaptersWithText]="chaptersWithText"
+          [focusToken]="focusBaselineToken">
+        </app-book-style-baseline-status-row>
       </section>
 
       @if (loading && !profile) {
@@ -258,8 +330,16 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
       } @else if (!profile) {
         <p class="empty-hint">{{ label('emptyHint') }}</p>
       } @else {
+        <!-- The four profile cards + Ask are the SECOND level the collapse directive asks for: elements
+             inside a major part. Each defaults to expanded (the current layout) and each remembers its own
+             fold per book. None of them is a build status, a prerequisite warning or a consent prompt, so
+             none of them is in the never-collapse class. -->
         <section class="card overview-card">
-          <h4>{{ label('overview') }}</h4>
+          <app-collapsible-section
+            sectionId="overview"
+            [bookId]="bookId"
+            [dir]="bookDir"
+            [heading]="label('overview')">
           <div class="overview-grid">
             <div class="overview-item"><span class="label">{{ label('genre') }}</span><span class="value">{{ profile.genre ?? '-' }}</span></div>
             <div class="overview-item"><span class="label">{{ label('subGenre') }}</span><span class="value">{{ profile.subGenre ?? '-' }}</span></div>
@@ -272,10 +352,15 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
             </div>
             <div class="overview-item"><span class="label">{{ label('languageRegister') }}</span><span class="value">{{ profile.languageRegister ?? '-' }}</span></div>
           </div>
+          </app-collapsible-section>
         </section>
 
         <section class="card synopsis-card">
-          <h4>{{ label('synopsis') }}</h4>
+          <app-collapsible-section
+            sectionId="synopsis"
+            [bookId]="bookId"
+            [dir]="bookDir"
+            [heading]="label('synopsis')">
           @if (profile.synopsis) {
             <div class="synopsis-text">
               @if (synopsisExpanded) {
@@ -291,10 +376,15 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           } @else {
             <p class="muted">{{ label('noSynopsis') }}</p>
           }
+          </app-collapsible-section>
         </section>
 
         <section class="card characters-card">
-          <h4>{{ label('characters') }}</h4>
+          <app-collapsible-section
+            sectionId="characters"
+            [bookId]="bookId"
+            [dir]="bookDir"
+            [heading]="label('characters')">
           @if (charactersParsed) {
             <div class="characters-scroll">
               @for (c of charactersParsed.characters; track c.name) {
@@ -318,10 +408,15 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           } @else {
             <p class="muted">{{ label('noCharacters') }}</p>
           }
+          </app-collapsible-section>
         </section>
 
         <section class="card story-card">
-          <h4>{{ label('plotStructure') }}</h4>
+          <app-collapsible-section
+            sectionId="plot"
+            [bookId]="bookId"
+            [dir]="bookDir"
+            [heading]="label('plotStructure')">
           @if (storyParsed) {
             <div class="plot-timeline">
               @if (storyParsed.plotStructure) {
@@ -379,10 +474,15 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           } @else {
             <p class="muted">{{ label('noStory') }}</p>
           }
+          </app-collapsible-section>
         </section>
 
         <section class="card ask-card">
-          <h4>{{ label('ask') }}</h4>
+          <app-collapsible-section
+            sectionId="ask"
+            [bookId]="bookId"
+            [dir]="bookDir"
+            [heading]="label('ask')">
           <div class="ask-input-row">
             <input
               type="text"
@@ -404,6 +504,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
               }
             </div>
           }
+          </app-collapsible-section>
         </section>
       }
 
@@ -418,11 +519,19 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
            Deliberately OUTSIDE the profile guard above: the register exists independently of the book
            profile, so it must still render (including its never-built empty state) for a book that has no
            profile yet. -->
+      <!-- The second long content list, so it is the other section that DEFAULTS to collapsed. -->
       <section class="card character-register-card">
-        <app-character-register
+        <app-collapsible-section
+          sectionId="character-register"
           [bookId]="bookId"
-          [bookLanguage]="bookLanguage">
-        </app-character-register>
+          [dir]="bookDir"
+          [heading]="label('characterRegister')"
+          [defaultCollapsed]="true">
+          <app-character-register
+            [bookId]="bookId"
+            [bookLanguage]="bookLanguage">
+          </app-character-register>
+        </app-collapsible-section>
       </section>
 
       <!-- tier-ux-rework c3: the BOOK DEFAULT tier, demoted from the dashboard hero position to a small
@@ -434,7 +543,25 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
            book-tier-default-card carries no CSS of its own (.card alone styles it, same as the predecessor
            .book-ai-tier-card) - it exists as a spec selector hook to identify this section as the foot-of-page
            tier row, so keep it even though it looks unstyled. -->
+      <!-- COLLAPSE VERDICT for the settings section: NEVER COLLAPSE (wave3-spine fixes c08, finding 25).
+           It was the one section of the nine with no recorded verdict, and it was wrapped. Two reasons,
+           either of which is sufficient:
+             1. It CARRIES A SERVER-DRIVEN WARNING. The tier toggle renders its fallback warning ("this is
+                set to thinking, but the task is actually running on the fast tier") off a flag that
+                arrives on the ai-tier GET with NO user action - so a fold the author performed weeks ago,
+                on a different topic, would hide the only place the app admits the book default is not
+                what will run. The save error and the consent prompt live in here too. That puts this
+                section squarely in the same class as a status row's blocked warning and an open consent
+                prompt, which the collapse directive's own qualifier keeps out of the fold.
+             2. Folding it SIMPLIFIES NOTHING. The directive's brief is "collapsible WHERE IT SIMPLIFIES";
+                the body here is one line (two words and an info affordance), so the fold traded a warning
+                surface for roughly one line of scroll.
+           A stale settings key may still sit in a reader's stored collapse map from before this verdict;
+           it is inert (no section reads it) and the map is best-effort by design, so it is left alone.
+           Pinned by book-dashboard.component.spec.ts, "the never-collapse class", which asserts the whole
+           class against the rendered DOM rather than trusting this comment. -->
       <section class="card book-tier-default-card">
+        <h4 class="settings-heading">{{ label('settings') }}</h4>
         <app-tier-toggle
           scope="book"
           [bookId]="bookId"
@@ -467,18 +594,31 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
       font-weight: var(--pd-weight-bold);
       color: var(--pd-text);
     }
-    .refresh-btn {
-      padding: var(--pd-space-2) var(--pd-space-4);
-      border: 1px solid var(--pd-border);
-      background: var(--pd-surface);
-      cursor: pointer;
-      border-radius: var(--pd-radius-sm);
-      font-size: var(--pd-text-body);
-      color: var(--pd-text-secondary);
-      transition: background var(--pd-dur-fast) var(--pd-ease);
+    /* The header's action cluster. A plain flex row, so it MIRRORS with the header's [dir] and the two
+       buttons keep their reading order in Hebrew without a physical left/right anywhere. */
+    .header-actions {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: var(--pd-space-2);
+      flex: 0 0 auto;
     }
-    .refresh-btn:hover:not(:disabled) { background: var(--pd-surface-sunken); }
-    .refresh-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .export-btn { white-space: nowrap; }
+    /* Q8-C: the inputs-to-this-build group. It is INDENTED from the build row above it with a start-side
+       rule, which is an INLINE (logical) border, so it mirrors with the book language rather than sitting
+       physically left in Hebrew. */
+    .inputs-to-build {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pd-space-3);
+      padding-inline-start: var(--pd-space-4);
+      border-inline-start: 2px solid var(--pd-divider);
+    }
+    .inputs-explainer {
+      margin: 0;
+      font-size: var(--pd-text-caption);
+      color: var(--pd-text-muted);
+    }
     .card {
       background: var(--pd-surface);
       border: 1px solid var(--pd-border);
@@ -685,11 +825,34 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     .citations { font-size: var(--pd-text-caption); color: var(--pd-text-muted); margin-top: var(--pd-space-3); }
   `]
 })
-export class BookDashboardComponent implements OnInit, OnChanges {
+export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   @Input() bookId!: string;
   @Input() bookTitle: string = '';
   /** Book language (e.g. 'he', 'en'); drives the book-scoped status rows' localization + status key. */
   @Input() bookLanguage: string | null = null;
+  /**
+   * Wave 3 / w2. The book's chapters, bound from the host's already-loaded `BookDetailDto.chapters`.
+   *
+   * The spine's stage 1 (Import) and stage 4 (Chapter editing passes) are derived from these, and from
+   * nothing else. TWO numbers come off this list, not one: how many chapters there are and how many of them
+   * carry text, which together are `buildInputsFor`'s whole input - `not-started` for Import and `blocked`
+   * for everything gated on it, whether the book has no rows OR has rows with nothing written in them.
+   * Stage 4 renders the chapters themselves rather than a book-level tick it cannot compute. This
+   * is a BINDING of data the host already holds, deliberately not a fetch: the dashboard adding its own
+   * chapter request would make the spine's stage 1 disagree with the chapter tree beside it.
+   *
+   * Null means the host has not loaded the book yet, which the spine renders as "not known", never as
+   * "empty" - an empty book is `[]`.
+   */
+  @Input() chapters: ChapterSummaryDto[] | null = null;
+
+  /**
+   * Wave 3 / w5. Bumped by the host when a per-chapter surface asked to be sent to the relocated
+   * writing-style row (the Linguistic result's "deviations need the baseline" hint, which the audit keeps
+   * in place and only RETARGETS at the artifact's new home). Passed straight through to the row, which
+   * owns the scroll: the dashboard does not know where inside that row the pointer should land.
+   */
+  @Input() focusBaselineToken = 0;
 
   /**
    * wb3-f01 navigation output: bubbles a chapter-anchor click up to the host (editor-page) so it can
@@ -699,13 +862,25 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   @Output() openChapter = new EventEmitter<ChapterAnchor>();
 
   /**
-   * rf-f02: emitted when the funnel stepper's Assess (or Revise) CTA is clicked. The host
-   * (editor-page) handles it by switching to Review mode (onReviewModeChange('review')) and
-   * scrolling to the status rows anchor. The dashboard itself does not own the mode-switch —
-   * that lives in the editor's SegmentedControl — so it delegates upward via this output,
-   * reusing the EXISTING onReviewModeChange path with no new coupling.
+   * Emitted when a spine stage's action needs the review surfaces in view. The host (editor-page)
+   * handles it by switching to Review mode (onReviewModeChange('review')); the dashboard itself does not
+   * own the mode-switch, that lives in the editor's SegmentedControl, so it delegates upward via this
+   * output and reuses the EXISTING onReviewModeChange path with no new coupling.
    */
   @Output() switchToReview = new EventEmitter<void>();
+
+  /**
+   * Wave 3 / w2: the spine's Import stage asked to go to the import screen. Routing lives on the host
+   * (editor-page owns the Router and already has `goToImport()`); the dashboard only names the intent.
+   */
+  @Output() openImport = new EventEmitter<void>();
+
+  /**
+   * Wave 3 / w4: go to the export screen. Raised by the spine's Export stage AND by the header button, for
+   * the same reason `openImport` exists: the Router lives on the host, and the dashboard only names intent.
+   * One output for both entry points, so the two cannot drift to different destinations.
+   */
+  @Output() openExport = new EventEmitter<void>();
 
   /**
    * rf-c02: the "review running" affordance is NO LONGER emitted from here. It is now derived by the editor
@@ -721,7 +896,14 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   /** The hosted summary row; refreshed when a tier change moves the active model (tier-ux-rework fixes c04). */
   @ViewChild('summaryRow') summaryRow?: BookSummaryStatusRowComponent;
 
-  /** rf-f02: anchor element at the top of the status-rows section; scrolled to when a stepper CTA is clicked. */
+  /**
+   * The relocated writing-style row (w5 / MOVE-1). Refreshed on a tier change for the same reason its two
+   * neighbours are: its `builtWithDifferentModel` flag is computed against the ACTIVE model, so a tier
+   * write on this page makes it stale the moment it lands.
+   */
+  @ViewChild('baselineRow') baselineRow?: BookStyleBaselineStatusRowComponent;
+
+  /** Anchor at the top of the status-rows section; scrolled to when a spine build action is pressed. */
   @ViewChild('statusRowsAnchor') statusRowsAnchor?: ElementRef<HTMLElement>;
 
   /** rf-f04: anchor element just above the findings/bible tabs; scrolled to when the Revise CTA is clicked. */
@@ -748,7 +930,6 @@ export class BookDashboardComponent implements OnInit, OnChanges {
 
   profile: BookProfileDto | null = null;
   loading = true;
-  refreshing = false;
   error: string | null = null;
 
   synopsisExpanded = false;
@@ -763,10 +944,21 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   lastAnswer: AnalysisResultDto | null = null;
   citationChapterIds: string[] = [];
 
-  constructor(private bookService: BookService) {}
+  constructor(
+    private bookService: BookService,
+    /** Read ONLY for the spine's stage-4 running marks; the status rows still own their own builds. */
+    private jobRegistry: JobRegistryService,
+  ) {}
 
   ngOnInit(): void {
     this.loadProfile();
+    this.watchRunningChapters();
+    this.rebuildSpineSignals();
+  }
+
+  ngOnDestroy(): void {
+    this.runningChaptersSub?.unsubscribe();
+    this.runningChaptersSub = null;
   }
 
   /**
@@ -797,14 +989,26 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     if (contextChanged) {
       this.resetOwnState();
       this.loadProfile();
+      // The registry watch is filtered by the CURRENT bookId, so a book switch must re-scope it or the
+      // previous book's in-flight chapter runs would keep marking rows in the new book's stage 4.
+      this.watchRunningChapters();
+    }
+    // The chapter list drives stages 1 and 4 directly, so any rebinding of it (including the host's
+    // in-place mutations after a create/delete/reorder, which arrive as a new array) refreshes the spine.
+    if (contextChanged || changes['chapters']) {
+      this.rebuildSpineSignals();
     }
   }
 
   /**
    * Clear the dashboard-owned transient state that is NOT re-derived from an @Input on its own, so a
-   * book switch does not show the previous book's profile/answer/tab. loadProfile() resets profile +
-   * parsed structured fields, so this covers the rest: the Ask question/answer, expansion toggles, and
-   * the active review tab (back to the default Findings view). findingsRefreshToken is owned by the
+   * book switch does not show the previous book's profile/answer/tab. `loadProfile()` only ASSIGNS
+   * `this.profile` from its `next` handler (or nulls it on a 404) - it never nulls the field up front,
+   * because the OTHER caller (`onSummaryBuildingChange`, a same-book refresh after a briefs build
+   * completes) deliberately relies on that to keep the current profile visible with no flash while the
+   * new one loads. A book switch has the opposite requirement, so `profile` and the fields parsed from
+   * it are nulled HERE instead: the Ask question/answer, expansion toggles, and the active review tab
+   * (back to the default Findings view) are cleared the same way. findingsRefreshToken is owned by the
    * hosted review row's re-emit on its own OnChanges, so it self-corrects.
    *
    * The cached whole-book-build inputs (reviewState + summaryBuilding) are reset HERE rather than left to
@@ -834,7 +1038,16 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     this.reviewState = 'unknown';
     this.summaryBuilding = false;
     this.loading = false;
-    this.refreshing = false;
+    // Drop the previous book's profile card (and anything parsed from it) so it cannot keep rendering
+    // under the new book's title while the switch's loadProfile() GET is still in flight.
+    this.profile = null;
+    this.charactersParsed = null;
+    this.storyParsed = null;
+    // The two spine payloads belong to the PREVIOUS book: drop them so the spine renders "not known"
+    // until the rows answer for the new one, rather than describing book A's briefs on book B's page.
+    this.summaryStatus = null;
+    this.reviewStatus = null;
+    this.runningChapterIds = new Set<string>();
   }
 
   /**
@@ -865,6 +1078,10 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   onTierChanged(): void {
     this.summaryRow?.loadBookSummaryStatus();
     this.reviewRow?.loadBookReviewStatus();
+    // w5: the relocated writing-style row is the THIRD model-dependent status on this page now. It joined
+    // the same fan-out rather than getting a branch of its own, for the reason stated above: a dispatch
+    // whose branches diverge is how this codebase already shipped one refresh twice.
+    this.baselineRow?.onTierChanged();
   }
 
   /**
@@ -883,6 +1100,8 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   onReviewStateChange(state: BookReviewState): void {
     const wasShowing = this.showFindings;
     this.reviewState = state;
+    // The spine reads 'building' as stage 3's `running`, so it has to move with this too.
+    this.rebuildSpineSignals();
     if (this.showFindings && !wasShowing) {
       // Transitioned into a findings-bearing state: force a re-read (covers the build-just-finished case;
       // a fresh mount loads on its own ngOnChanges, but a token bump is harmless and covers re-entry).
@@ -897,6 +1116,9 @@ export class BookDashboardComponent implements OnInit, OnChanges {
   onSummaryBuildingChange(building: boolean): void {
     const wasBuilding = this.summaryBuilding;
     this.summaryBuilding = building;
+    // The spine reads this as stage 2's `running` the instant the build POST returns, rather than waiting
+    // a poll interval for `activeBuildJobId` to appear in the next status read.
+    this.rebuildSpineSignals();
     // Build just COMPLETED (true -> false): fan out to EVERY summary-derived surface so none shows stale
     // "no summary yet" for briefs that finished after it mounted (rf-f04). The bump drives the child surfaces
     // that expose a refreshSignal @Input (chapter-summaries + Story Bible) to re-fetch in place; the
@@ -923,75 +1145,161 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     return this.summaryBuilding || this.reviewState === 'building';
   }
 
-  // ── rf-f02: funnel stepper inputs (derived from existing dashboard state) ─────
+  // ── Wave 3 / w2: the stage spine ────────────────────────────────────────────
 
   /**
-   * True when the book has usable chapter briefs (hasBriefs). Derived from reviewState:
-   * 'needs-summary' and 'unknown' mean no briefs; all other states mean briefs exist.
-   * The stepper uses this to show the right CTA label on the Assess step.
+   * The signals the spine renders from. Held as a FIELD and rebuilt only when one of its inputs really
+   * changes, rather than assembled in a getter: a getter would hand the spine a fresh object identity on
+   * every change-detection tick, which re-runs its derivation continuously for no reason.
    */
-  get stepperHasBriefs(): boolean {
-    return this.reviewState !== 'needs-summary' && this.reviewState !== 'unknown';
+  spineSignals: StageSpineSignals = emptyStageSpineSignals();
+
+  /**
+   * How many chapters this book has, or `null` while the chapter list has not arrived. ONE authority, read
+   * by the spine's stage-1 signal AND by the three build rows' import precondition, because those two are
+   * required to agree: the live defect this closes was a spine rendering `blocked` by Import while the
+   * build buttons 200px below it stayed enabled and offered to analyse the chapters of a book with none.
+   * Two independently computed copies of "how many chapters" is how that comes back.
+   */
+  get chapterCount(): number | null {
+    return this.chapters ? this.chapters.length : null;
   }
 
   /**
-   * True when the book summary (briefs) is complete enough for the review to be built.
-   * Derived from reviewState: 'needs-summary' means no summary; 'unknown' = loading.
-   * For the stepper, summaryReady = briefs are present (reviewState not needs-summary or unknown).
+   * How many of those chapters carry any text, or `null` while the chapter list has not arrived. THE OTHER
+   * HALF OF THE SAME AUTHORITY, for the same reason (final-r02): `chapterCount` alone answered only the
+   * empty book, so a book with three chapters created empty rendered a spine saying "there are 3 chapters
+   * but nothing has been written in them, so a file made now would be empty" while the three build rows a
+   * couple of hundred pixels below it stayed enabled and offered to spend a real model run on them.
+   *
+   * Read by BOTH the spine's stage-1/2/3/5 derivation and the three rows' `blockedByImport`, through the
+   * one shared predicate (`buildInputsFor`). The `wordCount > 0` test is the server's own `has text`
+   * definition (`BooksController`'s `chaptersWithTextCount`), which is what the books list feeds the same
+   * spine from - so this page and that one answer the same question the same way.
    */
-  get stepperSummaryReady(): boolean {
-    return this.stepperHasBriefs;
+  get chaptersWithText(): number | null {
+    return this.chapters ? this.chapters.filter(c => c.wordCount > 0).length : null;
+  }
+
+  /** Latest raw briefs status from the hosted summary row. The spine's whole stage 2. */
+  private summaryStatus: BookSummaryStatusDto | null = null;
+  /** Latest raw review status from the hosted review row. The spine's whole stage 3. */
+  private reviewStatus: BookReviewStatusDto | null = null;
+  /** Chapter ids with an analysis job in flight right now; the one thing stage 4 CAN know book-wide. */
+  private runningChapterIds = new Set<string>();
+  /** The job-registry subscription behind {@link runningChapterIds}. */
+  private runningChaptersSub: Subscription | null = null;
+
+  /**
+   * Rebuild {@link spineSignals}. Every field is a payload this page already has: the chapter list bound
+   * from the host, the two status DTOs the rows fetch, and the registry's in-flight chapter jobs. Nothing
+   * here is synthesized, and nothing is fetched a second time.
+   *
+   * `exportSurfaceAvailable` is the shared build fact ({@link EXPORT_SURFACE_AVAILABLE}), true since w4
+   * built `/books/:bookId/export`. Stage 5 is therefore computed from this page's chapter list like every
+   * other stage, off BOTH counts: `blocked` by Import with no chapters and, since c01, `blocked` again when
+   * the chapters exist but carry no text - the server's own two 409 answers (`noChapters`,
+   * `nothingWritten`) - and `ready` only when a file made now would hold something.
+   */
+  private rebuildSpineSignals(): void {
+    const chapters: ChapterPassSignal[] | null = this.chapters
+      ? this.chapters
+          .slice()
+          .sort((a, b) => a.order - b.order)
+          .map(c => ({
+            chapterId: c.id,
+            title: c.title,
+            order: c.order,
+            running: this.runningChapterIds.has(c.id),
+          }))
+      : null;
+    this.spineSignals = {
+      chapters,
+      chapterCount: this.chapterCount,
+      chaptersWithText: this.chaptersWithText,
+      summary: this.summaryStatus,
+      review: this.reviewStatus,
+      summaryRunning: this.summaryBuilding,
+      reviewRunning: this.reviewState === 'building',
+      exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
+    };
   }
 
   /**
-   * True when the whole-book review is ready (reviewState === 'ready').
-   * Drives Assess step: done => Revise becomes the lit next-step.
+   * Track which chapters have an analysis pass in flight, so stage 4's per-chapter breakdown can mark
+   * them. `activeJobs$` is already filtered to non-terminal jobs; {@link CHAPTER_SCOPED_KINDS} is the
+   * explicit allowlist of kinds that can carry a `chapterId` (the `WHOLE_BOOK_BUILD_KINDS` idiom, applied
+   * to the chapter-scoped side), and the book filter keeps another book's run out of this book's spine.
    */
-  get stepperReviewReady(): boolean {
-    return this.reviewState === 'ready';
+  private watchRunningChapters(): void {
+    this.runningChaptersSub?.unsubscribe();
+    this.runningChaptersSub = this.jobRegistry.activeJobs$.subscribe(jobs => {
+      const next = new Set<string>();
+      for (const job of jobs) {
+        if (job.bookId === this.bookId && CHAPTER_SCOPED_KINDS.has(job.kind) && job.chapterId) next.add(job.chapterId);
+      }
+      this.runningChapterIds = next;
+      this.rebuildSpineSignals();
+    });
+  }
+
+  /** The hosted summary row published a new briefs status payload. */
+  onSummaryStatusChange(status: BookSummaryStatusDto | null): void {
+    this.summaryStatus = status;
+    this.rebuildSpineSignals();
+  }
+
+  /** The hosted review row published a new review status payload. */
+  onReviewStatusChange(status: BookReviewStatusDto | null): void {
+    this.reviewStatus = status;
+    this.rebuildSpineSignals();
   }
 
   /**
-   * True while a summary job is running (from the summary row's buildingChange output).
-   * The registry also tracks it but the dashboard already has the flag directly.
+   * A spine stage's action was pressed. The spine names the INTENT; this maps it onto the mechanisms the
+   * page already has, so no action opens a second way of doing something the status rows own.
+   *
+   *  - `open-import`    leaves the page, so it goes up to the host, which owns the Router. It is also what
+   *                     every blocked stage offers on a book with NO chapters, because it is the only
+   *                     action the author can actually walk from there.
+   *  - `build-briefs`   scrolls to the briefs row, which owns the build, its consent and its estimate.
+   *                     This is the FIX offered by a review stage blocked on MISSING BRIEFS - the case
+   *                     where chapters exist and the briefs row can genuinely build.
+   *  - `build-review`   scrolls to the same status block, where the review row's build lives.
+   *  - `open-findings`  selects the Findings tab and scrolls to the ledger.
+   *  - `open-export`    leaves the page for `/books/:bookId/export`, so like `open-import` it goes up to the
+   *                     host, which owns the Router. The spine and the header button raise the SAME output,
+   *                     so the two ways to reach export cannot land in different places.
    */
-  get stepperSummaryRunning(): boolean {
-    return this.summaryBuilding;
+  onSpineAction(event: StageActionEvent): void {
+    switch (event.action) {
+      case 'open-import':
+        this.openImport.emit();
+        return;
+      case 'build-briefs':
+      case 'build-review':
+        this.switchToReview.emit();
+        this.scrollToStatusRows();
+        return;
+      case 'open-findings':
+        this.switchToReview.emit();
+        this.reviewTab = 'findings';
+        this.scrollToFindings();
+        return;
+      case 'open-export':
+        this.openExport.emit();
+        return;
+    }
   }
 
-  /**
-   * True while a review job is running (reviewState === 'building').
-   */
-  get stepperReviewRunning(): boolean {
-    return this.reviewState === 'building';
-  }
-
-  /**
-   * rf-f02: the funnel stepper's Assess (or Revise) CTA was clicked. Bubble up to the host
-   * (editor-page) via @Output() switchToReview so the editor can call onReviewModeChange('review')
-   * and scroll to the status rows. The dashboard is already in review mode when this component is
-   * mounted, so the primary effect is the scroll; the editor's mode-switch is a no-op if already
-   * in review mode but is safe to re-emit.
-   */
-  onStepperAssessRequested(): void {
-    this.switchToReview.emit();
-    this.scrollToStatusRows();
-  }
-
-  /**
-   * rf-f04: Revise CTA clicked — select the Findings sub-tab and scroll to the findings ledger anchor.
-   * This honors the CTA label ("Go to findings" / "עבור לממצאים") rather than just scrolling to the
-   * status-rows header like the Assess CTA does.
-   */
-  onStepperReviseRequested(): void {
-    this.switchToReview.emit();
-    this.reviewTab = 'findings';
-    this.scrollToFindings();
+  /** A chapter was picked out of stage 4's per-chapter breakdown: open it, via the existing seam. */
+  onSpineOpenChapter(chapter: ChapterPassSignal): void {
+    this.openChapter.emit({ chapterId: chapter.chapterId, order: chapter.order, title: chapter.title });
   }
 
   /**
    * Scroll the status-rows anchor into view so the user sees the summary/review rows after
-   * clicking the stepper CTA. Uses the #statusRowsAnchor template ref.
+   * pressing a spine build action. Uses the #statusRowsAnchor template ref.
    */
   private scrollToStatusRows(): void {
     this.statusRowsAnchor?.nativeElement?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1180,27 +1488,13 @@ export class BookDashboardComponent implements OnInit, OnChanges {
     this.expandedPlotNode = this.expandedPlotNode === node ? null : node;
   }
 
-  /** Rebuild the profile in the CURRENT language. Guarded per the stale-response contract on loadProfile. */
-  onRefresh(): void {
-    if (!this.bookId || this.refreshing) return;
-    const bookId = this.bookId;
-    const lang = this.language;
-    this.refreshing = true;
-    this.error = null;
-    this.bookService.refreshProfile(bookId, lang).subscribe({
-      next: (p) => {
-        if (this.bookId !== bookId || this.language !== lang) return;
-        this.profile = p;
-        this.parseStructured();
-        this.refreshing = false;
-      },
-      error: (err) => {
-        if (this.bookId !== bookId || this.language !== lang) return;
-        this.error = this.failureMessage(err, 'profileRefreshError', 'profile refresh');
-        this.refreshing = false;
-      }
-    });
-  }
+  // Wave 3 / w5 (Q4-A): `onRefresh()` LIVED HERE. It was the bare circular arrow's handler, and it was
+  // the only whole-book build in the product with no status row, no consent, no cost estimate and no
+  // activity entry. Its work (re-summarize stale chapters, then rebuild the book profile) did not
+  // disappear with it: the Book briefs row runs it as the second phase of its own consented build, so the
+  // profile cards on this page still have exactly one writer and now have a ceremony. This page re-reads
+  // the rebuilt profile through the summary row's completion fan-out (`onSummaryBuildingChange`), which is
+  // why there is no refreshProfile call left on this component.
 
   /** Ask the book a question in the CURRENT language. Guarded per the stale-response contract on loadProfile. */
   onAsk(): void {

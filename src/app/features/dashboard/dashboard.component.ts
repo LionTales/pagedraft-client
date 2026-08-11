@@ -1,14 +1,37 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { BookService } from '../../core/services/book.service';
+import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookDto } from '../../core/models/book';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
+import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
+import { clearCollapseState } from '../../shared/collapsible-section/collapse-store';
+
+/**
+ * NIT 52. `spineSignalsFor`'s fallback runs on every change-detection tick for any row not yet in the
+ * map (the brief race between the list rendering and `rebuildSpineSignals` landing). Calling the factory
+ * there handed the spine a NEW object identity on every such tick, which re-runs `deriveStageSpine`
+ * continuously for no reason - exactly the class of waste `rebuildSpineSignals`'s own doc comment already
+ * calls out for the map itself. One frozen instance, read-only, shared across every row that needs it.
+ */
+const EMPTY_SPINE_SIGNALS: Readonly<StageSpineSignals> = Object.freeze(emptyStageSpineSignals());
+
+/**
+ * NIT 53. Every bookId whose membership differs between two snapshots of a running-job set, added into
+ * `into` (a shared accumulator, so the briefs diff and the review diff land in one set together).
+ */
+function collectChangedIds(previous: ReadonlySet<string>, next: ReadonlySet<string>, into: Set<string>): void {
+  for (const id of previous) if (!next.has(id)) into.add(id);
+  for (const id of next) if (!previous.has(id)) into.add(id);
+}
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [RouterLink, FormsModule],
+  imports: [RouterLink, FormsModule, StageSpineComponent],
   template: `
     <div class="dashboard" [attr.dir]="dir">
       <header class="dash-header">
@@ -44,6 +67,15 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
               <a [routerLink]="['/books', b.id]">{{ b.title }}</a>
               <span class="meta">{{ b.author || label('noAuthor') }} &middot; {{ relativeTime(b.updatedAt, b.language) }}</span>
             </div>
+            <!-- Wave 3 / w3: the COMPACT spine, one per book. Everything it renders comes from the single
+                 books-list response this page already made plus the in-memory job registry; there is no
+                 per-row request, and where a stage cannot be computed from that it says so rather than
+                 fetching. Language follows THE BOOK, exactly as the title and timestamp above it do. -->
+            <app-stage-spine
+              density="compact"
+              [bookLanguage]="b.language"
+              [signals]="spineSignalsFor(b)">
+            </app-stage-spine>
             <div class="book-actions">
               <button type="button" class="pd-btn pd-btn-ghost" (click)="openBook(b.id)">{{ label('open') }}</button>
               <button type="button" class="pd-btn pd-btn-ghost" (click)="goToImport(b.id)">{{ label('importDocx') }}</button>
@@ -102,6 +134,12 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
       gap: var(--pd-space-3);
       flex-wrap: wrap;
     }
+    /* The compact spine is advisory chrome inside the row: it never competes with the row's own actions
+       for width, and it carries its own [dir] because it follows the BOOK rather than this page. */
+    .book-list li app-stage-spine {
+      display: block;
+      max-inline-size: 100%;
+    }
     .btn-delete {
       color: var(--pd-cut);
       border-color: var(--pd-cut-border);
@@ -150,7 +188,7 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
     }
   `]
 })
-export class DashboardComponent implements OnInit {
+export class DashboardComponent implements OnInit, OnDestroy {
   books: BookDto[] = [];
   showCreateForm = false;
   newBookTitle = '';
@@ -219,10 +257,121 @@ export class DashboardComponent implements OnInit {
     return formatRelativeTime(iso, lang === 'he' ? 'he' : 'en');
   }
 
-  constructor(private bookService: BookService, private router: Router) {}
+  // ── Wave 3 / w3: the compact stage spine, one per book row ────────────────────────────────────
+  //
+  // WHAT COMPACT SHOWS HERE, AND WHY IT IS NOT MORE. The books list makes exactly ONE request
+  // (`GET /api/books`) and this todo did not add a second. That payload carries `chapterCount` and
+  // `chaptersWithTextCount` (Wave 3 / M1), which is the whole of stage 1 and, when a book has no
+  // chapters, the honest `blocked` on the three stages that need one. It carries nothing about the
+  // briefs or the review, and asking would cost one status request PER ROW - so those stages render a
+  // hollow pip that says "not known here". Showing less is the rule; guessing and fetching are both
+  // ruled out.
+  //
+  // The one thing that legitimately upgrades a row past that is the JOB REGISTRY, which is an in-memory
+  // view-model of builds this client already knows about and costs no request at all. It can only ever
+  // say "running", never "not running": a book with no tracked job stays at "not known here" rather
+  // than being claimed idle. `reattach` is deliberately NOT called from this page - it would fan out
+  // four reads per book, which is exactly the N-per-row cost this design exists to avoid.
+
+  /** Signals per book id, rebuilt only when the list or the set of running jobs changes. */
+  private spineSignals = new Map<string, StageSpineSignals>();
+  /**
+   * Book ids with a build in flight right now, PER KIND. Two sets rather than one "something is running"
+   * flag on purpose: a briefs build and a review build are different stages, and lighting both from one
+   * flag would claim a stage is running that is not.
+   */
+  private runningBriefs = new Set<string>();
+  private runningReview = new Set<string>();
+  private jobsSub: Subscription | null = null;
+
+  constructor(
+    private bookService: BookService,
+    private router: Router,
+    private jobRegistry: JobRegistryService,
+  ) {}
 
   ngOnInit(): void {
-    this.bookService.getAll().subscribe(list => this.books = list);
+    this.bookService.getAll().subscribe(list => {
+      this.books = list;
+      // The list itself changed (rows added/removed/reordered): every row's signals are candidates.
+      this.rebuildSpineSignals();
+    });
+    // No request: activeJobs$ is the registry's in-memory view-model of jobs already being tracked.
+    this.jobsSub = this.jobRegistry.activeJobs$.subscribe(jobs => {
+      const briefs = new Set<string>();
+      const review = new Set<string>();
+      for (const job of jobs) {
+        if (job.kind === 'summary') briefs.add(job.bookId);
+        if (job.kind === 'review') review.add(job.bookId);
+      }
+      // NIT 53: a registry emission fires on every job tick, not only when a book's OWN running flag
+      // flips - most emissions change nothing for most books. Diff the two running sets against their
+      // previous values and rebuild only the bookIds whose membership actually moved, so an unrelated
+      // book's spine keeps the exact same signals object (and does not re-derive) on every unrelated tick.
+      const affected = new Set<string>();
+      collectChangedIds(this.runningBriefs, briefs, affected);
+      collectChangedIds(this.runningReview, review, affected);
+      this.runningBriefs = briefs;
+      this.runningReview = review;
+      if (affected.size > 0) this.rebuildSpineSignals(affected);
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.jobsSub?.unsubscribe();
+    this.jobsSub = null;
+  }
+
+  /**
+   * Rebuild the given rows' signals (every row when `bookIds` is omitted, which is right for a books-list
+   * change). Held in a MAP rather than assembled in the template getter, so a row hands the spine a STABLE
+   * object identity across change-detection ticks instead of a fresh one that would re-run the derivation
+   * continuously - and, per NIT 53, an untouched row keeps its EXISTING object reference rather than being
+   * reallocated alongside whichever row actually changed.
+   *
+   * A SCOPED rebuild carries the previous map forward (that is the point); a FULL one starts empty, so a
+   * book that has left the list - deleted, or absent from a reloaded list - takes its entry with it rather
+   * than being retained for an id that can never be rendered again.
+   */
+  private rebuildSpineSignals(bookIds?: ReadonlySet<string>): void {
+    const next = bookIds
+      ? new Map<string, StageSpineSignals>(this.spineSignals)
+      : new Map<string, StageSpineSignals>();
+    const ids = bookIds ?? new Set(this.books.map(b => b.id));
+    for (const id of ids) {
+      const b = this.books.find(x => x.id === id);
+      if (!b) {
+        next.delete(id);
+        continue;
+      }
+      next.set(b.id, {
+        // No chapter list on this surface, and none is fetched: stage 4 makes no claim at all.
+        chapters: null,
+        chapterCount: b.chapterCount,
+        chaptersWithText: b.chaptersWithTextCount,
+        // The two book-level statuses are not on this payload and are not worth a request per row.
+        summary: null,
+        review: null,
+        // The registry can only raise these, never lower them: see the note above.
+        summaryRunning: this.runningBriefs.has(b.id),
+        reviewRunning: this.runningReview.has(b.id),
+        // w4's export screen exists, and stage 5 needs nothing this row does not already have: it derives
+        // from the SAME TWO M1 counts stage 1 does (`chapterCount` and `chaptersWithTextCount`, both set
+        // above), so it is REAL on the books list for free - ready once some chapter carries text, blocked
+        // by Import both when there are no chapters and when none of them has been written in. It read
+        // `chapterCount` alone until c01, which is how a book of empty chapters used to render stage 1
+        // "no text yet" and stage 5 "ready" side by side in this very list.
+        exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
+      });
+    }
+    this.spineSignals = next;
+  }
+
+  /** This row's spine signals. Never null once the list has landed; an empty fallback keeps a race safe. */
+  spineSignalsFor(book: BookDto): StageSpineSignals {
+    // NIT 52: the SHARED frozen instance, not a call to the factory - a fresh object here on every
+    // change-detection tick is how a race-window row re-derives its spine continuously for no reason.
+    return this.spineSignals.get(book.id) ?? EMPTY_SPINE_SIGNALS;
   }
 
   cancelCreate(): void {
@@ -258,7 +407,12 @@ export class DashboardComponent implements OnInit {
     this.bookService.delete(book.id).subscribe({
       next: () => {
         this.books = this.books.filter(b => b.id !== book.id);
+        this.rebuildSpineSignals();
         this.deletingId = null;
+        // f02/63: the collapse map is keyed per book id and nothing else ever removes a row, so a
+        // deleted book's row would otherwise linger in localStorage forever for an id that can never
+        // be reopened.
+        clearCollapseState(book.id);
       },
       error: () => { this.deletingId = null; }
     });

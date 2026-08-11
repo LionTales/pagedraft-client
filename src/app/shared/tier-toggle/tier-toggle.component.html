@@ -12,6 +12,38 @@
       <span class="tt-title" data-testid="tier-toggle-title">{{ label('bookDefaultTitle') }}</span>
     }
 
+    <!-- Wave 3 / w5, the Q11-A residue: the two passes with no tier at all (Summarization, Custom) used to
+         make this whole control vanish, which reads as a rendering bug rather than as an answer. They now
+         get a disabled control WITH a reason. Neither option is marked selected: the server reports no
+         tier row for these tasks, so claiming one would be inventing an answer. Both options are
+         aria-disabled rather than natively disabled, matching the rest of this control, so a keyboard user
+         can still reach and read them. -->
+    @if (noTierControl) {
+      <div class="tt-seg" role="radiogroup" [attr.aria-label]="groupAriaLabel" data-testid="tier-toggle-no-control">
+        <button
+          type="button"
+          role="radio"
+          class="tt-opt"
+          aria-checked="false"
+          aria-disabled="true"
+          [attr.title]="label('reasonNoTierControl')"
+          data-testid="tier-toggle-fast">
+          {{ label('tierFast') }}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          class="tt-opt"
+          aria-checked="false"
+          aria-disabled="true"
+          [attr.title]="label('reasonNoTierControl')"
+          data-testid="tier-toggle-thinking">
+          {{ label('tierThinking') }}
+        </button>
+      </div>
+      <span class="tt-reason" data-testid="tier-toggle-reason">{{ label('reasonNoTierControl') }}</span>
+    } @else {
+
     @if (loading) {
       <span class="tt-status" data-testid="tier-toggle-loading">{{ label('loading') }}</span>
     }
@@ -134,6 +166,8 @@
           </button>
         </span>
       </span>
+    }
+
     }
   </div>
 }

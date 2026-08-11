@@ -30,6 +30,7 @@ import { HttpClientTestingModule, HttpTestingController, TestRequest } from '@an
 import { HttpRequest } from '@angular/common/http';
 import { TierToggleComponent, TIER_TOGGLE_LABEL_KEYS, TIER_TOGGLE_LABELS_HE, TIER_TOGGLE_LABELS_EN } from './tier-toggle.component';
 import { AiTierService } from '../../core/services/ai-tier.service';
+import { NO_TIER_TASK_VALUES } from '../../core/utils/ai-task-key';
 import { BookAiTierDto, BookAiTierTaskDto } from '../../core/models/book';
 
 /**
@@ -237,11 +238,76 @@ describe('TierToggleComponent (tier-ux-rework c3)', () => {
     expect(put.request.body).toEqual({ tier: 'thinking', task: 'LinguisticAnalysis' });
   });
 
-  it('renders NOTHING for an analysis type the server reports no tier for', () => {
-    for (const analysisType of ['Summarization', 'Custom', '']) {
+  /**
+   * Wave 3 / w5, THE Q11-A RESIDUE. This test used to assert that the control rendered NOTHING for the two
+   * passes the server reports no tier for. The owner's answer to Q11 kept the control at the point of use
+   * and named exactly one thing to fix: those two passes get a disabled state WITH a reason instead of an
+   * unexplained absence, because a control that silently vanishes reads as a rendering bug.
+   */
+  it('Q11-A residue: renders a DISABLED control with a reason for the two passes with no tier', () => {
+    for (const analysisType of ['Summarization', 'Custom']) {
       mount(makeDto(), analysisType);
-      expect(component.visible).withContext(analysisType).toBeFalse();
-      expect(exists('tier-toggle')).withContext(analysisType).toBeFalse();
+      expect(component.visible).withContext(analysisType).toBeTrue();
+      expect(component.noTierControl).withContext(analysisType).toBeTrue();
+      expect(exists('tier-toggle')).withContext(analysisType).toBeTrue();
+      expect(exists('tier-toggle-no-control')).withContext(analysisType).toBeTrue();
+      expect(exists('tier-toggle-reason')).withContext(analysisType).toBeTrue();
+    }
+  });
+
+  it('Q11-A residue: the disabled control claims NO selected tier (the server reported none)', () => {
+    mount(makeDto(), 'Summarization');
+    const fast = fixture.debugElement.query(By.css('[data-testid="tier-toggle-fast"]'));
+    const thinking = fixture.debugElement.query(By.css('[data-testid="tier-toggle-thinking"]'));
+
+    expect(fast.nativeElement.getAttribute('aria-checked')).toBe('false');
+    expect(thinking.nativeElement.getAttribute('aria-checked')).toBe('false');
+    expect(fast.nativeElement.getAttribute('aria-disabled')).toBe('true');
+    expect(thinking.nativeElement.getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('Q11-A residue: the reason has he/en parity, no em-dash, and names no model or provider', () => {
+    for (const [lang, needle] of [['he', 'שכבת מודל'], ['en', 'model tier']] as const) {
+      mount(makeDto(), 'Custom', lang);
+      const reason = fixture.debugElement.query(By.css('[data-testid="tier-toggle-reason"]'))
+        .nativeElement.textContent as string;
+      expect(reason).withContext(lang).toContain(needle);
+      expect(reason).withContext(lang).not.toContain('—');
+      expect(reason).withContext(lang).not.toContain('–');
+    }
+  });
+
+  it('still renders nothing at all when no task is bound (there is no pass to explain)', () => {
+    mount(makeDto(), '');
+    expect(component.visible).toBeFalse();
+    expect(exists('tier-toggle')).toBeFalse();
+  });
+
+  /**
+   * wave3-spine fixes c08, finding 27. `noTierControl` used to be "a non-empty task that did not resolve",
+   * so ANY unrecognized string - a typo, a binding that was never a task, a seventh analysis type shipped
+   * without a map entry - rendered the assertive sentence "The server does not report a tier for it, so
+   * there is nothing to change here". That is a claim about the SERVER derived from a gap in the CLIENT's
+   * table, and for a task the server does report a tier for it is flatly wrong. The explained-absence shape
+   * is now reserved for `NO_TIER_TASK_VALUES`; everything else renders nothing, exactly as an unbound task
+   * does. Silence says nothing untrue.
+   */
+  it('says NOTHING for a task it does not recognize, rather than asserting the server reports no tier', () => {
+    for (const unknown of ['Nonsense', 'proofread', 'QA-2', 'Synopsis']) {
+      mount(makeDto(), unknown);
+      expect(component.noTierControl).withContext(unknown).toBeFalse();
+      expect(component.visible).withContext(unknown).toBeFalse();
+      expect(exists('tier-toggle')).withContext(unknown).toBeFalse();
+      expect(exists('tier-toggle-no-control')).withContext(unknown).toBeFalse();
+      expect(exists('tier-toggle-reason')).withContext(unknown).toBeFalse();
+    }
+  });
+
+  it('keeps the explained absence for every KNOWN no-tier pass, including the QA task name', () => {
+    for (const known of NO_TIER_TASK_VALUES) {
+      mount(makeDto(), known);
+      expect(component.noTierControl).withContext(known).toBeTrue();
+      expect(exists('tier-toggle-no-control')).withContext(known).toBeTrue();
     }
   });
 

@@ -17,15 +17,25 @@
  */
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, provideRouter } from '@angular/router';
-import { Subject, of } from 'rxjs';
+import { BehaviorSubject, Subject, of } from 'rxjs';
 import { ImportPageComponent } from './import-page.component';
 import { ImportService } from '../../core/services/import.service';
 import { BookService } from '../../core/services/book.service';
+import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import {
   BookDetailDto,
   ImportPreviewChapterDto,
   ImportPreviewResponseDto,
 } from '../../core/models/book';
+
+function makeJob(overrides: Partial<TrackedJob> = {}): TrackedJob {
+  return {
+    id: 'j', kind: 'proofread', bookId: 'book-1', scopeLabel: 'פרק', titleHe: 'הגהה', titleEn: 'Proofread',
+    status: 'running', percent: 10, completedChunks: null, totalChunks: null, chunkClock: EMPTY_CHUNK_CLOCK,
+    message: '', startedAt: '', updatedAt: '', ...overrides,
+  };
+}
 
 function makeChapter(overrides: Partial<ImportPreviewChapterDto> = {}): ImportPreviewChapterDto {
   return {
@@ -72,6 +82,8 @@ describe('ImportPageComponent (c04)', () => {
   let fixture: ComponentFixture<ImportPageComponent>;
   let navigateSpy: jasmine.Spy;
   let book$: Subject<BookDetailDto>;
+  /** Wave 3 / w3: the registry stream the hosted compact spine reads. Empty unless a test pushes a job. */
+  let activeJobs$: BehaviorSubject<TrackedJob[]>;
 
   /**
    * Build the TestBed with a held-open Subject for the book-language fetch (so ngOnInit does not
@@ -80,6 +92,7 @@ describe('ImportPageComponent (c04)', () => {
    */
   async function setup(bookId: string | null = 'book-1'): Promise<void> {
     book$ = new Subject<BookDetailDto>();
+    activeJobs$ = new BehaviorSubject<TrackedJob[]>([]);
 
     await TestBed.configureTestingModule({
       imports: [ImportPageComponent],
@@ -99,6 +112,10 @@ describe('ImportPageComponent (c04)', () => {
           },
         },
         { provide: BookService, useValue: { getById: () => book$.asObservable() } },
+        // Wave 3 / w3: the page hosts the compact stage spine, whose `running` state comes from the job
+        // registry. The stub emits no jobs, which is the honest default: the spine can only ever be
+        // RAISED to running by a tracked build, never claimed idle by the absence of one.
+        { provide: JobRegistryService, useValue: { activeJobs$: activeJobs$.asObservable() } },
       ],
     }).compileComponents();
 
@@ -280,6 +297,7 @@ describe('ImportPageComponent (c04)', () => {
           useValue: { uploadForPreview: () => new Subject(), confirmImport: () => of({}) },
         },
         { provide: BookService, useValue: { getById: () => err$.asObservable() } },
+        { provide: JobRegistryService, useValue: { activeJobs$: of([]) } },
       ],
     }).compileComponents();
 
@@ -360,5 +378,125 @@ describe('ImportPageComponent (c04)', () => {
     const text = component.summaryText;
     expect(text).toContain('3 chapters'); // detected count = all rows
     expect(text).toContain('2 selected'); // selected respects include-filter
+  });
+
+  // ── Wave 3 / w3: the COMPACT stage spine on the import screen ────────────────────────────────────
+  //
+  // This is the second of the two app-level surfaces the compact spine mounts on, and the reason is the
+  // same as the books list: a stage HAPPENS here (Import is this screen) and the product previously showed
+  // no stage indicator on it at all. Its signals come from the book payload the page already loads for its
+  // own language - no request is added - so what it can say is bounded by that payload, and it says the
+  // rest is not known rather than fetching it.
+
+  describe('the compact stage spine (w3)', () => {
+    function compactSpine(): HTMLElement | null {
+      return fixture.nativeElement.querySelector('[data-testid="stage-spine-compact"]');
+    }
+
+    function pipState(stage: string): string {
+      return (compactSpine()!.querySelector(`[data-testid="spine-compact-pip-${stage}"]`) as HTMLElement)
+        .dataset['state'] ?? '';
+    }
+
+    it('renders on the import screen', async () => {
+      await setup('book-1');
+      book$.next(makeBook('he'));
+      fixture.detectChanges();
+      expect(compactSpine()).not.toBeNull();
+    });
+
+    it('computes Import from the loaded book chapters, with NO extra request', async () => {
+      await setup('book-1');
+      book$.next({
+        ...makeBook('he'),
+        chapters: [
+          { id: 'c1', title: 'One', partName: null, order: 0, wordCount: 900, updatedAt: '' },
+          { id: 'c2', title: 'Two', partName: null, order: 1, wordCount: 0, updatedAt: '' },
+        ],
+      });
+      fixture.detectChanges();
+      expect(pipState('import')).toBe('ready');
+      // The book-level statuses are not on that payload and are not worth a request for a widget.
+      expect(pipState('briefs')).toBe('unknown');
+      expect(pipState('review')).toBe('unknown');
+    });
+
+    it('a book with no chapters reads not-started here, which is the action this screen offers', async () => {
+      await setup('book-1');
+      book$.next(makeBook('he')); // chapters: []
+      fixture.detectChanges();
+      expect(pipState('import')).toBe('not-started');
+      // Nothing on the screen may read done: the whole point of the page is that nothing is imported yet.
+      expect(compactSpine()!.querySelectorAll('[data-state="ready"]').length).toBe(0);
+    });
+
+    it('follows the BOOK language, in both languages', async () => {
+      await setup('book-1');
+      book$.next(makeBook('en'));
+      fixture.detectChanges();
+      expect(compactSpine()!.getAttribute('dir')).toBe('ltr');
+      expect(compactSpine()!.textContent).toContain('Import');
+
+      TestBed.resetTestingModule();
+      await setup('book-1');
+      book$.next(makeBook('he'));
+      fixture.detectChanges();
+      expect(compactSpine()!.getAttribute('dir')).toBe('rtl');
+      expect(compactSpine()!.textContent).toContain('ייבוא');
+    });
+  });
+
+  // ── NIT 51: the per-chapter `running` mark is read from the registry, not hardcoded ─────────────────
+  //
+  // `rebuildSpineSignals` used to set `running: false` on every chapter signal unconditionally - the one
+  // shape `StageSpineSignals` forbids ("nothing here may be synthesized by the host"). It now mirrors
+  // book-dashboard's and editor-page's `CHAPTER_SCOPED_KINDS` idiom.
+
+  describe('finding 51: the chapter breakdown reads real running state from the registry', () => {
+    it('marks a chapter running when a CHAPTER_SCOPED_KINDS job (proofread) targets it', async () => {
+      await setup('book-1');
+      book$.next({
+        ...makeBook('he'),
+        chapters: [
+          { id: 'c1', title: 'One', partName: null, order: 0, wordCount: 10, updatedAt: '' },
+          { id: 'c2', title: 'Two', partName: null, order: 1, wordCount: 10, updatedAt: '' },
+        ],
+      });
+      fixture.detectChanges();
+
+      activeJobs$.next([makeJob({ id: 'j-1', kind: 'proofread', bookId: 'book-1', chapterId: 'c1' })]);
+      fixture.detectChanges();
+
+      expect(component.spineSignals.chapters?.find((c) => c.chapterId === 'c1')?.running).toBeTrue();
+      expect(component.spineSignals.chapters?.find((c) => c.chapterId === 'c2')?.running).toBeFalse();
+    });
+
+    it('does not mark a chapter running for a kind outside CHAPTER_SCOPED_KINDS', async () => {
+      await setup('book-1');
+      book$.next({
+        ...makeBook('he'),
+        chapters: [{ id: 'c1', title: 'One', partName: null, order: 0, wordCount: 10, updatedAt: '' }],
+      });
+      fixture.detectChanges();
+
+      activeJobs$.next([makeJob({ id: 'j-2', kind: 'style-baseline', bookId: 'book-1', chapterId: 'c1' })]);
+      fixture.detectChanges();
+
+      expect(component.spineSignals.chapters?.find((c) => c.chapterId === 'c1')?.running).toBeFalse();
+    });
+
+    it('does not mark a chapter running for a job scoped to a DIFFERENT book', async () => {
+      await setup('book-1');
+      book$.next({
+        ...makeBook('he'),
+        chapters: [{ id: 'c1', title: 'One', partName: null, order: 0, wordCount: 10, updatedAt: '' }],
+      });
+      fixture.detectChanges();
+
+      activeJobs$.next([makeJob({ id: 'j-3', kind: 'proofread', bookId: 'other-book', chapterId: 'c1' })]);
+      fixture.detectChanges();
+
+      expect(component.spineSignals.chapters?.find((c) => c.chapterId === 'c1')?.running).toBeFalse();
+    });
   });
 });

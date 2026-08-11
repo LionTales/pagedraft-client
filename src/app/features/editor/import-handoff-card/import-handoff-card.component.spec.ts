@@ -5,6 +5,11 @@ import { of, throwError, Subject } from 'rxjs';
 import { ImportHandoffCardComponent } from './import-handoff-card.component';
 import { BookSummaryService } from '../../../core/services/book-summary.service';
 import { JobRegistryService } from '../../../core/services/job-registry.service';
+import {
+  BookProfileContinuationService,
+  ProfileContinuationOutcome,
+  ProfileContinuationRequest,
+} from '../../../core/services/book-profile-continuation.service';
 import { BookSummaryStatusDto, StartBookSummaryBuildResponse } from '../../../core/models/book-summary';
 
 // ── Factories ────────────────────────────────────────────────────────────────
@@ -20,6 +25,7 @@ function makeStatus(overrides: Partial<BookSummaryStatusDto> = {}): BookSummaryS
     ready: false,
     lastUpdatedAt: null,
     builtWithDifferentModel: false,
+    summaryCoversBuiltChapters: false,
     activeBuildJobId: null,
     chaptersToBuild: 5,
     estimatedSeconds: 120,
@@ -54,6 +60,16 @@ describe('ImportHandoffCardComponent', () => {
   let fixture: ComponentFixture<ImportHandoffCardComponent>;
   let summaryServiceSpy: jasmine.SpyObj<BookSummaryService>;
   let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
+  /**
+   * c04. This card is a full arrival path for the whole-book build and used to chain nothing, which made
+   * the dashboard's own hint ("the book profile is built together with the book briefs") false on the most
+   * common first-run path in the product. It reports arrivals here; the gate lives in the service.
+   */
+  let continuationSpy: jasmine.SpyObj<BookProfileContinuationService>;
+  /** The arrivals this card reported, in order. */
+  function arrivals(): ProfileContinuationRequest[] {
+    return continuationSpy.ensureAfterBriefs.calls.allArgs().map(args => args[0] as ProfileContinuationRequest);
+  }
 
   beforeEach(async () => {
     summaryServiceSpy = jasmine.createSpyObj('BookSummaryService', [
@@ -61,6 +77,12 @@ describe('ImportHandoffCardComponent', () => {
       'buildBookSummary',
     ]);
     jobRegistrySpy = jasmine.createSpyObj('JobRegistryService', ['track']);
+    continuationSpy = jasmine.createSpyObj<BookProfileContinuationService>(
+      'BookProfileContinuationService',
+      // Held OPEN: an arrival must not settle synchronously, or a card destroyed mid-refresh would look
+      // safe in a test while the real one is not.
+      { ensureAfterBriefs: new Subject<ProfileContinuationOutcome>().asObservable() },
+    );
 
     // Default: status returns not-built
     summaryServiceSpy.getBookSummaryStatus.and.returnValue(of(makeStatus()));
@@ -70,6 +92,7 @@ describe('ImportHandoffCardComponent', () => {
       providers: [
         { provide: BookSummaryService, useValue: summaryServiceSpy },
         { provide: JobRegistryService, useValue: jobRegistrySpy },
+        { provide: BookProfileContinuationService, useValue: continuationSpy },
       ],
     }).compileComponents();
 
@@ -227,6 +250,84 @@ describe('ImportHandoffCardComponent', () => {
     expect(summaryServiceSpy.buildBookSummary).not.toHaveBeenCalled();
     expect(jobRegistrySpy.track).toHaveBeenCalledWith('summary', 'book-1', 'job-running');
     expect(emitted).toBe(true);
+  });
+
+  // ── c04: the book profile, which this card used to leave unbuilt ──────────────
+  //
+  // Post-import "Start review" is the most common first-run path in the product. It POSTed the briefs
+  // build and chained nothing, so the book ended up with briefs and no profile - and the dashboard's own
+  // empty-state hint said the profile "is built together with the book briefs", which was simply false
+  // there. Each branch below now reaches the shared continuation; NONE of them decides for itself whether
+  // a refresh is owed (that gate is the service's, and is proven in its spec).
+
+  describe('c04: the profile continuation reaches every branch of Start review', () => {
+    it('NOT_BUILT: the tracked job is what carries the continuation, so the card adds no second trigger', fakeAsync(() => {
+      summaryServiceSpy.buildBookSummary.and.returnValue(of(makeBuildResponse()));
+
+      component.onStartReview();
+      tick();
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('summary', 'book-1', 'job-1');
+      expect(arrivals())
+        .withContext('the registry watch runs the continuation off this job reaching its terminal, which '
+          + 'is what makes it survive the user leaving this screen - a second trigger here would only be '
+          + 'a second way to pay for the same build')
+        .toEqual([]);
+    }));
+
+    it('NO-OP build: reports the arrival, because no job will ever exist to chain it', fakeAsync(() => {
+      summaryServiceSpy.buildBookSummary.and.returnValue(of(makeBuildResponse({ noOp: true, jobId: null })));
+
+      component.onStartReview();
+      tick();
+
+      expect(jobRegistrySpy.track).not.toHaveBeenCalled();
+      expect(arrivals()).toEqual([
+        { bookId: 'book-1', language: 'he', reason: 'briefs-already-fresh' },
+      ]);
+    }));
+
+    it('READY: reports the arrival, so a book whose briefs are already fresh can still get a profile', () => {
+      summaryServiceSpy.getBookSummaryStatus.and.returnValue(of(makeReadyStatus()));
+      component.ngOnChanges({ bookId: { currentValue: 'book-1', previousValue: null, firstChange: false, isFirstChange: () => false } });
+
+      component.onStartReview();
+
+      expect(summaryServiceSpy.buildBookSummary).not.toHaveBeenCalled();
+      expect(arrivals()).toEqual([
+        { bookId: 'book-1', language: 'he', reason: 'briefs-already-fresh' },
+      ]);
+    });
+
+    it('BUILDING: adds no trigger, because the job it reattaches to carries the continuation', () => {
+      summaryServiceSpy.getBookSummaryStatus.and.returnValue(of(makeBuildingStatus('job-running')));
+      component.ngOnChanges({ bookId: { currentValue: 'book-1', previousValue: null, firstChange: false, isFirstChange: () => false } });
+
+      component.onStartReview();
+
+      expect(jobRegistrySpy.track).toHaveBeenCalledWith('summary', 'book-1', 'job-running');
+      expect(arrivals()).toEqual([]);
+    });
+
+    it('threads the CURRENT book language into the arrival', () => {
+      component.bookLanguage = 'en';
+      summaryServiceSpy.getBookSummaryStatus.and.returnValue(of(makeReadyStatus()));
+      component.ngOnChanges({ bookLanguage: { currentValue: 'en', previousValue: 'he', firstChange: false, isFirstChange: () => false } });
+
+      component.onStartReview();
+
+      expect(arrivals().length).withContext('the READY branch must report an arrival').toBe(1);
+      expect(arrivals()[0].language).toBe('en');
+    });
+
+    it('reports nothing when the build POST fails: no briefs, so no profile continuation is owed', fakeAsync(() => {
+      summaryServiceSpy.buildBookSummary.and.returnValue(throwError(() => new Error('build failed')));
+
+      component.onStartReview();
+      tick();
+
+      expect(arrivals()).toEqual([]);
+    }));
   });
 
   // ── Double-fire guard ─────────────────────────────────────────────────────────

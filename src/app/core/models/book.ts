@@ -89,7 +89,14 @@ export interface BookAiTierDto {
   tasks: BookAiTierTaskDto[];
 }
 
-export interface BookDto {
+/**
+ * The fields every book payload carries, list or detail. Extracted in Wave 3 / w3 so the two payloads can
+ * differ HONESTLY: the list carries the M1 counts and no chapters, the detail carries the chapters and
+ * deliberately no counts (one authority per fact, see the API's BookDetailDto doc). Before this split
+ * `BookDetailDto extends BookDto`, which would have made the detail payload advertise two count fields the
+ * server does not send - a typed lie in exactly the class this wave exists to remove.
+ */
+export interface BookBaseDto {
   id: string;
   title: string;
   author: string | null;
@@ -104,7 +111,30 @@ export interface BookDto {
   aiTier: AiTierValue;
 }
 
-export interface BookDetailDto extends BookDto {
+/**
+ * GET /api/books (the books list) and POST/PUT /api/books. Carries the two Wave 3 / M1 counts.
+ *
+ * WHY THEY ARE HERE AND NOT DERIVED: the books list is the one surface where importing is the next action,
+ * and it never loads a chapter list. Without these two numbers the stage spine's first stage is
+ * uncomputable exactly where it matters, which is how the retired stepper ended up hardcoding a "done".
+ * They cost no extra request: the server projects both inside the single books query.
+ */
+export interface BookDto extends BookBaseDto {
+  /** How many chapters the book has. 0 means nothing has been imported yet. */
+  chapterCount: number;
+  /**
+   * How many of those chapters carry text (WordCount > 0). "Has chapter rows" and "has a manuscript" are
+   * different states: chapters created empty are not imported in any sense a user would recognise.
+   */
+  chaptersWithTextCount: number;
+}
+
+/**
+ * GET /api/books/{bookId}. Carries the chapter list, from which both M1 counts are derivable, so the server
+ * deliberately does NOT duplicate them here. A client computing the Import stage on a book surface counts
+ * `chapters`; on the books list it reads {@link BookDto.chapterCount} / {@link BookDto.chaptersWithTextCount}.
+ */
+export interface BookDetailDto extends BookBaseDto {
   chapters: ChapterSummaryDto[];
 }
 
