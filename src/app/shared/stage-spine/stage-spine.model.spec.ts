@@ -700,6 +700,26 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       expect(focusStageId(all)).toBe('import');
     });
 
+    /**
+     * w8 / E1. The fallback used to be "any stage unknown -> stage 1", which reads as a first-paint guard
+     * but is not one: on the books-list payload (two counts, no statuses) stages 2 to 5 are unknown
+     * FOREVER, so the fallback fired forever and named a stage that is already `ready`. Compact renders
+     * the focus stage behind the word `הבא:` / "Next:", so that was a finished stage called next.
+     *
+     * The premise lines below are what keep this test honest: it is only a real test of the fallback if
+     * the `find` for a wanting stage genuinely misses AND stage 1 is genuinely settled.
+     */
+    it('does not name a SETTLED stage on the books-list payload, where later stages are unknown forever', () => {
+      const all = deriveStageSpine(signals({ chapters: null, chapterCount: 5, chaptersWithText: 5 }));
+      expect(stage(all, 'import').state).toBe('ready');
+      expect(all.every(s => s.state === null || !['blocked', 'not-started', 'running', 'behind'].includes(s.state)))
+        .toBeTrue();
+      expect(stage(all, 'briefs').unknown).toBeTrue();
+
+      expect(focusStageId(all)).not.toBe('import');
+      expect(focusStageId(all)).toBe('briefs');
+    });
+
     it('still prefers a stage that wants something over the loading fallback', () => {
       // Half-landed: the chapters and the briefs status are in, the review status is not. Stage 2 wants a
       // build, and that beats both fallbacks while stage 3 is still loading.

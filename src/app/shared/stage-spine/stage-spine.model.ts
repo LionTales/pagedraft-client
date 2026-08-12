@@ -626,15 +626,35 @@ function emptyStatus(id: SpineStageId): StageStatus {
 /**
  * The stage whose row opens expanded, so the user always sees one self-explaining row without clicking:
  * the FIRST stage in canonical order that wants something from them. `ready`, `unavailable` and the
- * still-loading stages want nothing.
+ * per-chapter stage want nothing.
  *
  * When every stage is GENUINELY SETTLED the focus falls to stage 4, because that is where the ongoing
  * work lives once the book-level builds are current. It is a default, not a claim: stage 4 still shows no
  * tick. That default is guarded to fire only on real settlement, not merely on "nothing wants attention
- * yet" - the signals not having landed also produces a `find` miss (every stage reads `unknown`, `state`
- * is `null` on all five), and defaulting to stage 4 there would open "Chapter editing passes" on first
- * paint and then visibly jump to whichever stage actually wants attention the instant real data lands.
- * While any stage is still `unknown`, this lands on stage 1 instead: the neutral, canonical starting point.
+ * yet" - the signals not having landed also produces a `find` miss (an `unknown` stage carries `state`
+ * `null`), and defaulting to stage 4 there would open "Chapter editing passes" on first paint and then
+ * visibly jump to whichever stage actually wants attention the instant real data lands.
+ *
+ * ── THE UNKNOWN FALLBACK, AND WHY IT IS NOT STAGE 1 (w8 / E1) ────────────────────────────────────
+ * This used to fall back to stage 1 whenever ANY stage read `unknown`, which is a permanent condition on
+ * every surface the COMPACT density mounts on: the books list, the import screen and the export screen
+ * all hold enough payload to settle stage 1 and nothing at all about stages 2 to 5. So the fallback did
+ * not fire on first paint only - it fired forever, and because {@link compactSummaryLine} prefixes the
+ * focus stage with "Next", a books-list row with an imported manuscript read `הבא: ייבוא, מוכן`:
+ * a FINISHED stage announced as the next thing to do.
+ *
+ * The fallback is now the first stage that is still `unknown`, in canonical order. That preserves the
+ * behaviour the paragraph above argues for - on genuine first paint every stage is `unknown`, so the
+ * first one IS stage 1 - while on a surface that has settled the stages it can, the focus moves past
+ * them to the first one this screen cannot speak for. That is the honest reading of "the first stage
+ * that wants something": a settled `ready` stage wants nothing and must never be named as next, and an
+ * unknown stage is the earliest point at which something may still be wanted. Compact renders it with
+ * `COMPACT_UNKNOWN_LABEL` ("not known here"), so the line says which stage is next and admits it cannot
+ * report its state from this screen, rather than making a false claim about a finished one.
+ *
+ * A RUNNING stage still wins ahead of all of this. It wins here positionally (`running` is in `wants`),
+ * and the compact density additionally hoists a running stage over the focus stage regardless of order,
+ * because carrying the running signal on every route is that density's job.
  */
 export function focusStageId(statuses: StageStatus[]): SpineStageId {
   const wants: ReadonlySet<StageState> = new Set<StageState>([
@@ -645,6 +665,6 @@ export function focusStageId(statuses: StageStatus[]): SpineStageId {
   ]);
   const found = statuses.find(s => s.state !== null && wants.has(s.state));
   if (found) return found.id;
-  const stillLoading = statuses.some(s => s.unknown);
-  return stillLoading ? 'import' : 'chapter-passes';
+  const firstUnknown = statuses.find(s => s.unknown);
+  return firstUnknown ? firstUnknown.id : 'chapter-passes';
 }

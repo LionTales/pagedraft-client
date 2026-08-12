@@ -10,6 +10,7 @@ import { guidesString } from '../../core/i18n/guides-strings';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
 import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { clearCollapseState } from '../../shared/collapsible-section/collapse-store';
+import { clearOrientationState } from '../book-dashboard/orientation-store';
 
 /**
  * NIT 52. `spineSignalsFor`'s fallback runs on every change-detection tick for any row not yet in the
@@ -453,6 +454,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
         // deleted book's row would otherwise linger in localStorage forever for an id that can never
         // be reopened.
         clearCollapseState(book.id);
+        // w6: the first-run orientation flag is keyed the same way and has the same problem.
+        clearOrientationState(book.id);
       },
       error: () => { this.deletingId = null; }
     });

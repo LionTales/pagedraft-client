@@ -103,6 +103,17 @@
     [attr.dir]="bookSummaryDir"
     data-testid="bsum-builds">{{ bookSummaryLabel('builds') }}</p>
 
+  <!-- Wave 3 / w6 (Q9-C): THE SAME RELATIONSHIP STATEMENT, at the point of confusion. This row is where
+       an author who ran the chapter recap on every chapter comes to ask why the briefs are still not
+       built, so it says so here as well as on the pass itself. One shared constant, two surfaces
+       (CHAPTER_RECAP_RELATIONSHIP, core/models/analysis.ts), so the two ends cannot drift.
+       RTL: MIRRORS with the row's bound [dir]; nothing physically pinned. -->
+  <p
+    class="sb-what"
+    *ngIf="!showStatusReadError"
+    [attr.dir]="bookSummaryDir"
+    data-testid="bsum-not-the-recap">{{ chapterRecapNote }}</p>
+
   <!-- The profile half failed while the briefs half succeeded. Reported separately so the row never
        claims the whole build failed, and never quietly reports success for half of it. -->
   <p

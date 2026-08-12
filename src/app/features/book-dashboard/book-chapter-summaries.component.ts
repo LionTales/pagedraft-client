@@ -867,17 +867,18 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
 
   // ── Localization ─────────────────────────────────────────────────────────────
 
-  /** Localized re-derive terminal-result label. */
+  /** Localized re-derive terminal-result label. DRAFT Hebrew - flag for native-speaker review before sign-off. */
   rederiveResultLabel(result: 'done' | 'partial' | 'error'): string {
+    // DRAFT he - needs native review
     const he: Record<string, string> = {
-      done: 'הניתוח עודכן מהסיכום שלך. בנו מחדש את סקירת הספר כדי לשקף זאת.',
-      partial: 'הסיכום נשמר, אך לא ניתן היה לעדכן את הניתוח כעת. נסו שוב מאוחר יותר.',
-      error: 'שגיאה בעדכון הניתוח. הסיכום שלכם נשמר.',
+      done: 'הניתוח עודכן מהתקציר שלך. בנו מחדש את סקירת הספר כדי לשקף זאת.',
+      partial: 'התקציר נשמר, אך לא ניתן היה לעדכן את הניתוח כעת. נסו שוב מאוחר יותר.',
+      error: 'שגיאה בעדכון הניתוח. התקציר שלכם נשמר.',
     };
     const en: Record<string, string> = {
-      done: 'Analysis updated from your summary. Rebuild the book review to reflect it.',
-      partial: 'Summary saved, but the analysis could not be updated right now. Try again later.',
-      error: 'Error updating the analysis. Your summary was saved.',
+      done: 'Analysis updated from your brief. Rebuild the book review to reflect it.',
+      partial: 'Brief saved, but the analysis could not be updated right now. Try again later.',
+      error: 'Error updating the analysis. Your brief was saved.',
     };
     return (this.langKey === 'he' ? he : en)[result] ?? result;
   }
@@ -919,32 +920,32 @@ export class BookChapterSummariesComponent implements OnChanges, OnDestroy {
       expandRow: 'הצג/הסתר פרק',
     };
     const en: Record<string, string> = {
-      title: 'Chapter summaries',
+      title: 'Chapter briefs',
       loading: 'Loading...',
       listError: 'Failed to load the chapter list. Try again.',
-      rowError: 'Failed to load the summary. Try again.',
+      rowError: 'Failed to load the brief. Try again.',
       empty: 'No chapters to show.',
-      noSummary: 'No summary yet.',
+      noSummary: 'No brief yet.',
       analysisBadge: 'From analysis',
-      analysisNote: 'Summary from the automatic analysis. Edit to create your own.',
+      analysisNote: 'Brief from the automatic analysis. Edit to create your own.',
       digestPlot: 'Plot events:',
       digestCharacters: 'Characters:',
       digestThemes: 'Themes and motifs:',
       digestTone: 'Tone:',
       digestOpenThreads: 'Open threads:',
       edit: 'Edit',
-      add: 'Add summary',
+      add: 'Add brief',
       save: 'Save',
       saving: 'Saving...',
       cancel: 'Cancel',
-      editAria: 'Edit the chapter summary',
+      editAria: 'Edit the chapter brief',
       editedBadge: 'Manually edited',
       staleBadge: 'Analysis out of date',
-      rederivePrompt: 'Summary saved. Update the analysis so the book review reflects your change?',
+      rederivePrompt: 'Brief saved. Update the analysis so the book review reflects your change?',
       rederive: 'Update analysis',
       rederiving: 'Updating...',
       rederiveLater: 'Not now',
-      saveError: 'Failed to save the summary. Try again.',
+      saveError: 'Failed to save the brief. Try again.',
       collapseAll: 'Collapse all',
       expandAll: 'Expand all',
       expandRow: 'Toggle chapter',

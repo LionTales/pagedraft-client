@@ -1503,6 +1503,26 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
     this.router.navigate(['/books', this.bookId, 'export']);
   }
 
+  /**
+   * Wave 3 / w6 (Q13-A): open a served guide in the reader chatbot phase A.2 mounted at `/help/:guideId`.
+   *
+   * Raised by the book dashboard, from either of its two guide entry points (a spine row's stage guide and
+   * the orientation panel's whole-guide link). NO SECOND READER AND NO SECOND SERVING PATH is built here -
+   * the todo's dependency was that A.2 had landed precisely so this is one navigation.
+   *
+   * The `lang` query parameter is the BOOK's language, chosen by the dashboard. That does not change the
+   * reader's own rule (it is app-level chrome and stays Hebrew-default when nothing asks otherwise); it
+   * uses the parameter A.2 built so a link keeps the language it was opened in, which for a link pressed
+   * inside a book is the language that book is written in.
+   *
+   * Deliberately does NOT save first, for the same reason {@link goToExport} does not: reading a guide is
+   * not an operation on the manuscript, and the editor's canDeactivate guard still asks about unsaved work.
+   */
+  goToGuide(target: { guideId: string; lang: 'he' | 'en' }): void {
+    if (!target?.guideId) return;
+    this.router.navigate(['/help', target.guideId], { queryParams: { lang: target.lang } });
+  }
+
   onEditorCreated(): void {
     if (!this.docEditor) return;
     const ed = this.docEditor.documentEditor;

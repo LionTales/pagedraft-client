@@ -28,6 +28,9 @@ import { AnalysisProgressService } from '../../core/services/analysis-progress.s
 import { ChapterSummaryService } from '../../core/services/chapter-summary.service';
 import { CharacterRegisterService } from '../../core/services/character-register.service';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { GuidesService } from '../../core/services/guides.service';
+import { orientationStorageKey } from './orientation-store';
+import { stageGuideLink } from '../../shared/stage-spine/stage-guide';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
@@ -54,6 +57,12 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
+        // w6: the first-run orientation panel reads the served guides through GuidesService, which
+        // injects HttpClient. Stubbed in EVERY TestBed in this file rather than only in the ones that
+        // render the panel: the "new constructor dep breaks the TestBed" trap names the transitive dep
+        // (HttpClient), not the component that introduced it, so a future test that happens to open the
+        // panel would fail somewhere that reads nothing like this change.
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
         { provide: JobRegistryService, useValue: jobRegistrySpy },
         {
           provide: BookService,
@@ -164,6 +173,81 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     (toggle.nativeElement as HTMLButtonElement).click();
     fixture.detectChanges();
   }
+
+  /**
+   * w8, THE 300px LAYOUT CONTRACT FOR THE HEADER (brief section 2.6, the same constraint the spine's own
+   * suite pins for the five stage names).
+   *
+   * The header holds the book title plus an action cluster that does not shrink, and the cluster grew a
+   * second button in w6 ("How this works" beside "Export"). At the 300px minimum panel width in ENGLISH
+   * the two labels measure roughly 211px of the roughly 257px of content width available, so the row
+   * could not fit on one line: the header overflowed its own container (`scrollWidth` past `clientWidth`)
+   * by 41px, in a panel the user cannot widen without a drag. Because the Export button is the LAST
+   * control in the row, its right edge IS the row's own overflow edge, so "the Export button was drawn
+   * 41px past the panel" names the same 41px, not a second number - see the non-vacuity note below for
+   * the measured coordinates. The live gate found it; the fix is `flex-wrap` on the header and on the
+   * cluster, so the cluster takes its own line instead of pushing a control out of view.
+   *
+   * ENGLISH IS THE CASE THAT FAILS, and it is asserted first for that reason: the Hebrew labels are
+   * shorter and fitted on one line the whole time, so a Hebrew-only test would have passed over the
+   * defect. Hebrew is asserted after it, as the mirror.
+   *
+   * This measures real layout - Karma runs Chrome and the TestBed applies the component's own styles -
+   * rather than asserting the CSS property, because what matters is that nothing lands outside the box.
+   *
+   * NON-VACUITY, CHECKED RATHER THAN ASSUMED (RE-MEASURED r01, replacing an earlier hand-copied figure
+   * that had drifted from this same repro - see `wave3-w6-orientation-fixes-2026-08-11.plan.md`). With
+   * the header CSS as it stood before this contract (`.dashboard-header` and `.header-actions` not
+   * wrapping, and `.dashboard-title` at its default `min-width: auto`) the English case fails here
+   * exactly as it failed in the browser: header `scrollWidth` 298 against a `clientWidth` of 257, i.e.
+   * overflowing its own container by 41px, with the Export button - the row's last control, so its right
+   * edge is the row's own overflow edge - drawn from 223 to 298, the same 41px outside the panel.
+   * Hebrew passes either way, which is why the English case is the one that had to exist.
+   */
+  describe('the 300px header layout contract (brief section 2.6)', () => {
+    /**
+     * THE HOST IS 257px, NOT 300px, AND THAT NUMBER IS THE POINT. 300 is the width of the PANEL; the
+     * dashboard is drawn inside it, and the panel's own padding takes roughly 21px a side, so the content
+     * box this component actually lays out in measures 257px. Measured on the running app at :4201 with
+     * the panel dragged to its minimum: `aside.review-panel` 300, `.review-body` 299, `.book-dashboard`
+     * 257. Asserting at a 300px host would be a test of a width the component never gets, and it would
+     * pass over the defect this contract exists to hold: 213px of buttons and a title fit in 300 and do
+     * not fit in 257, which is exactly the band the bug lived in.
+     */
+    const PANEL_MIN_CONTENT_WIDTH = '257px';
+
+    function headerAt300(lang: string): HTMLElement {
+      const host = fixture.nativeElement as HTMLElement;
+      host.style.width = PANEL_MIN_CONTENT_WIDTH;
+      host.style.boxSizing = 'border-box';
+      component.bookLanguage = lang;
+      component.bookTitle = lang === 'en' ? 'c4 EN verification book' : 'ספר בדיקה ארוך למדי';
+      fixture.detectChanges();
+      return fixture.debugElement.query(By.css('.dashboard-header')).nativeElement as HTMLElement;
+    }
+
+    function assertInside(header: HTMLElement, testid: string, lang: string): void {
+      const el = fixture.debugElement.query(By.css(`[data-testid="${testid}"]`)).nativeElement as HTMLElement;
+      const box = el.getBoundingClientRect();
+      const bounds = header.getBoundingClientRect();
+      expect(box.width).withContext(`${lang} ${testid} has no width`).toBeGreaterThan(8);
+      expect(box.left).withContext(`${lang} ${testid} starts before the header`).toBeGreaterThanOrEqual(bounds.left - 0.5);
+      expect(box.right).withContext(`${lang} ${testid} runs past the header`).toBeLessThanOrEqual(bounds.right + 0.5);
+    }
+
+    (['en', 'he'] as const).forEach(lang => {
+      it(`keeps the whole header inside 300px in ${lang}, with both actions drawn in the panel`, () => {
+        const header = headerAt300(lang);
+
+        expect(header.scrollWidth)
+          .withContext(`${lang} header overflows its own container`)
+          .toBeLessThanOrEqual(header.clientWidth + 0.5);
+
+        assertInside(header, 'dashboard-orientation-btn', lang);
+        assertInside(header, 'dashboard-export-btn', lang);
+      });
+    });
+  });
 
   it('constructs the dashboard and its hosted status-row children without a NullInjector error', () => {
     expect(component).toBeTruthy();
@@ -1244,6 +1328,12 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
+        // w6: the first-run orientation panel reads the served guides through GuidesService, which
+        // injects HttpClient. Stubbed in EVERY TestBed in this file rather than only in the ones that
+        // render the panel: the "new constructor dep breaks the TestBed" trap names the transitive dep
+        // (HttpClient), not the component that introduced it, so a future test that happens to open the
+        // panel would fail somewhere that reads nothing like this change.
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
         { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
@@ -1382,6 +1472,12 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
+        // w6: the first-run orientation panel reads the served guides through GuidesService, which
+        // injects HttpClient. Stubbed in EVERY TestBed in this file rather than only in the ones that
+        // render the panel: the "new constructor dep breaks the TestBed" trap names the transitive dep
+        // (HttpClient), not the component that introduced it, so a future test that happens to open the
+        // panel would fail somewhere that reads nothing like this change.
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
         { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
@@ -1562,6 +1658,12 @@ describe('BookDashboardComponent threads the book language into its server calls
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
+        // w6: the first-run orientation panel reads the served guides through GuidesService, which
+        // injects HttpClient. Stubbed in EVERY TestBed in this file rather than only in the ones that
+        // render the panel: the "new constructor dep breaks the TestBed" trap names the transitive dep
+        // (HttpClient), not the component that introduced it, so a future test that happens to open the
+        // panel would fail somewhere that reads nothing like this change.
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
         { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
@@ -1711,6 +1813,12 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
+        // w6: the first-run orientation panel reads the served guides through GuidesService, which
+        // injects HttpClient. Stubbed in EVERY TestBed in this file rather than only in the ones that
+        // render the panel: the "new constructor dep breaks the TestBed" trap names the transitive dep
+        // (HttpClient), not the component that introduced it, so a future test that happens to open the
+        // panel would fail somewhere that reads nothing like this change.
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
         { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
@@ -1968,6 +2076,12 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
+        // w6: the first-run orientation panel reads the served guides through GuidesService, which
+        // injects HttpClient. Stubbed in EVERY TestBed in this file rather than only in the ones that
+        // render the panel: the "new constructor dep breaks the TestBed" trap names the transitive dep
+        // (HttpClient), not the component that introduced it, so a future test that happens to open the
+        // panel would fail somewhere that reads nothing like this change.
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
         { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
@@ -2194,6 +2308,12 @@ describe('BookDashboardComponent survives an in-session language change with loa
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
+        // w6: the first-run orientation panel reads the served guides through GuidesService, which
+        // injects HttpClient. Stubbed in EVERY TestBed in this file rather than only in the ones that
+        // render the panel: the "new constructor dep breaks the TestBed" trap names the transitive dep
+        // (HttpClient), not the component that introduced it, so a future test that happens to open the
+        // panel would fail somewhere that reads nothing like this change.
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
         { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
@@ -2346,6 +2466,12 @@ describe('BookDashboardComponent finding 19: the chapter breakdown reads an expl
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
+        // w6: the first-run orientation panel reads the served guides through GuidesService, which
+        // injects HttpClient. Stubbed in EVERY TestBed in this file rather than only in the ones that
+        // render the panel: the "new constructor dep breaks the TestBed" trap names the transitive dep
+        // (HttpClient), not the component that introduced it, so a future test that happens to open the
+        // panel would fail somewhere that reads nothing like this change.
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
         { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$, jobs$: of([]) }) },
         {
           provide: BookService,
@@ -2404,5 +2530,333 @@ describe('BookDashboardComponent finding 19: the chapter breakdown reads an expl
 
     const running = component.spineSignals.chapters?.filter(c => c.running).map(c => c.chapterId);
     expect(running).toEqual(['ch-1']);
+  });
+});
+
+// ─── Wave 3 / w6 (Q10-D): the first-run orientation lifecycle ────────────────────────────────────────
+//
+// The panel itself is pinned by `first-run-orientation.component.spec.ts`. What is pinned HERE is the
+// half the page owns and the panel cannot see: WHEN it is offered, that a dismissal is permanent and per
+// book, that the re-open affordance survives that dismissal, and that a status which has not arrived is
+// never read as "no builds".
+describe('BookDashboardComponent w6: first-run orientation', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  /**
+   * The two status reads the hosted rows issue, as Subjects that stay OPEN. Reassignable, because a
+   * Subject that has errored is dead and the retry path re-subscribes; the service stubs read the
+   * variable at call time, so a fresh Subject assigned before a retry is the one that retry gets.
+   */
+  let summaryStatus$: Subject<BookSummaryStatusDto>;
+  let reviewStatus$: Subject<BookReviewStatusDto>;
+
+  function w6Summary(overrides: Partial<BookSummaryStatusDto> = {}): BookSummaryStatusDto {
+    return {
+      bookId: 'book-1', language: 'he', totalChapters: 2, builtChapters: 0, staleCount: 0,
+      hasSummary: false, ready: false, lastUpdatedAt: null, builtWithDifferentModel: false,
+      summaryCoversBuiltChapters: true, activeBuildJobId: null, chaptersToBuild: 2,
+      estimatedSeconds: 0, estimatedUsd: null, ...overrides,
+    };
+  }
+
+  function w6Review(overrides: Partial<BookReviewStatusDto> = {}): BookReviewStatusDto {
+    return {
+      bookId: 'book-1', language: 'he', hasReview: false, findingCount: 0, openFindingCount: 0,
+      resolvedFindingCount: 0, lastUpdatedAt: null, builtWithDifferentModel: false,
+      staleVsBriefs: false, hasBriefs: false, activeBuildJobId: null, ready: false,
+      chaptersReviewed: 0, chaptersTotal: 2, windowCount: 0, ranSynthesis: false,
+      ranContinuityReduce: false, failedWindows: 0, ...overrides,
+    };
+  }
+
+  /** Deliver both statuses, which is what unlocks the orientation decision. */
+  function landStatuses(summary = w6Summary(), review = w6Review()): void {
+    component.onSummaryStatusChange(summary);
+    component.onReviewStatusChange(review);
+    fixture.detectChanges();
+  }
+
+  function panel() {
+    return fixture.debugElement.query(By.css('[data-testid="first-run-orientation"]'));
+  }
+
+  function reopenBtn(): HTMLElement {
+    return fixture.debugElement.query(By.css('[data-testid="dashboard-orientation-btn"]'))
+      .nativeElement as HTMLElement;
+  }
+
+  beforeEach(async () => {
+    localStorage.removeItem(orientationStorageKey('book-1'));
+    localStorage.removeItem(orientationStorageKey('book-2'));
+    summaryStatus$ = new Subject<BookSummaryStatusDto>();
+    reviewStatus$ = new Subject<BookReviewStatusDto>();
+
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER }),
+        },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // An un-fed Subject behaves exactly like the NEVER these were: the read is issued and stays
+        // outstanding, which is the state every test below that does not touch it relies on.
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => summaryStatus$, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => reviewStatus$, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        { provide: CharacterRegisterService, useValue: { getRegister: () => NEVER, applyEdits: () => NEVER } },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+    component.bookLanguage = 'he';
+    component.chapters = [];
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    localStorage.removeItem(orientationStorageKey('book-1'));
+    localStorage.removeItem(orientationStorageKey('book-2'));
+  });
+
+  // ── FIRST VISIT ──────────────────────────────────────────────────────────────────────────────────
+
+  it('offers the panel on a first visit to a book with no builds', () => {
+    expect(panel()).withContext('nothing may be decided before the statuses land').toBeNull();
+
+    landStatuses();
+
+    expect(panel()).toBeTruthy();
+  });
+
+  /**
+   * THE NULL RULE, the same one the spine derives its stages by: a status that has not arrived is the
+   * ABSENCE of an answer, never the answer "nothing is built". Judging first-run off an unarrived payload
+   * would flash the panel over a fully built book on every page load.
+   */
+  it('decides nothing while either status is still unknown', () => {
+    component.onSummaryStatusChange(w6Summary());
+    fixture.detectChanges();
+    expect(panel()).withContext('one status is not both').toBeNull();
+
+    component.onReviewStatusChange(w6Review());
+    fixture.detectChanges();
+    expect(panel()).toBeTruthy();
+  });
+
+  // ── A READ THAT FAILED IS NOT A READ THAT HAS NOT ANSWERED (w6 fixes c01) ────────────────────────
+  //
+  // Both status rows used to publish NOTHING when their status GET failed, so the host's payload stayed
+  // null for the life of the mount and the decision deferred forever - on the one book the panel exists
+  // for, in a state that renders exactly like a decided-closed one, which is why nothing surfaced it.
+  //
+  // These drive the REAL rows over Subjects held OPEN across the assertions. A synchronous `of()` or
+  // `throwError()` would collapse the very window the defect lives in: the point is the interval during
+  // which one half has answered and the other has not, and what the page concludes when the second half
+  // ends in a failure instead of an answer.
+
+  it('resolves the decision when a status read FAILS, instead of deferring it forever', () => {
+    reviewStatus$.next(w6Review());
+    fixture.detectChanges();
+    expect(component.orientationDecided)
+      .withContext('the briefs read is still outstanding, so there is nothing to decide from')
+      .toBeFalse();
+
+    summaryStatus$.error(new HttpErrorResponse({ status: 500, statusText: 'Server Error' }));
+    fixture.detectChanges();
+
+    expect(component.orientationDecided)
+      .withContext('the briefs read is OVER and it failed, so the question has its answer')
+      .toBeTrue();
+    expect(panel())
+      .withContext('and the answer is NOT offered: an unreadable book may well be a built one')
+      .toBeNull();
+  });
+
+  /** The review row is the worse half: it renders nothing on a failed read, so it is silent on both ends. */
+  it('resolves the decision when it is the REVIEW read that fails', () => {
+    summaryStatus$.next(w6Summary());
+    fixture.detectChanges();
+    expect(component.orientationDecided).toBeFalse();
+
+    reviewStatus$.error(new HttpErrorResponse({ status: 500, statusText: 'Server Error' }));
+    fixture.detectChanges();
+
+    expect(component.orientationDecided).toBeTrue();
+    expect(panel()).toBeNull();
+  });
+
+  /**
+   * THE OTHER DIRECTION, and the one the fix must not trade away: a read that has simply not come back
+   * yet still decides nothing. The window is held open by an un-fed Subject for the whole assertion,
+   * exactly as a slow network holds it open in the product.
+   */
+  it('still defers while a status is merely outstanding, and resolves when it lands', () => {
+    reviewStatus$.next(w6Review());
+    fixture.detectChanges();
+
+    expect(component.orientationDecided)
+      .withContext('an outstanding read is the ABSENCE of an answer, never the answer "nothing is built"')
+      .toBeFalse();
+    expect(panel()).toBeNull();
+
+    summaryStatus$.next(w6Summary());
+    fixture.detectChanges();
+
+    expect(component.orientationDecided).toBeTrue();
+    expect(panel()).withContext('both halves answered, and both say untouched').toBeTruthy();
+  });
+
+  /**
+   * The not-offered answer taken on an unreadable half is PROVISIONAL: it was taken under a fault the
+   * row offers a retry for. This is behavior the page had BEFORE the fix (the state was still undecided
+   * when the retry answered), so resolving the decision must not cost it.
+   */
+  it('re-takes the decision when the failed read is retried and answers', () => {
+    reviewStatus$.next(w6Review());
+    summaryStatus$.error(new HttpErrorResponse({ status: 500, statusText: 'Server Error' }));
+    fixture.detectChanges();
+    expect(panel()).toBeNull();
+
+    // The briefs row's own retry control re-issues the same read; give it a live Subject to land on.
+    summaryStatus$ = new Subject<BookSummaryStatusDto>();
+    component.summaryRow!.loadBookSummaryStatus();
+    summaryStatus$.next(w6Summary());
+    fixture.detectChanges();
+
+    expect(panel())
+      .withContext('the retry answered, and it says the book is untouched: this IS a first run')
+      .toBeTruthy();
+  });
+
+  it('does not offer the panel on a book that already has briefs', () => {
+    landStatuses(w6Summary({ hasSummary: true }), w6Review());
+    expect(panel()).withContext('briefs exist, so this is not a first run').toBeNull();
+  });
+
+  it('does not offer the panel on a book whose review exists', () => {
+    landStatuses(w6Summary(), w6Review({ hasReview: true }));
+    expect(panel()).toBeNull();
+  });
+
+  /**
+   * It does not vanish under the author because a build they started while reading it finished. Builds
+   * take minutes and the panel must survive them; a panel that disappeared mid-sentence would be the
+   * blocking failure Q10 constraint names, in its other direction.
+   */
+  it('stays open once offered, even after the book gains a build', () => {
+    landStatuses();
+    expect(panel()).toBeTruthy();
+
+    landStatuses(w6Summary({ hasSummary: true }), w6Review({ hasBriefs: true }));
+
+    expect(panel()).toBeTruthy();
+  });
+
+  // ── DISMISS, AND RE-OPEN ─────────────────────────────────────────────────────────────────────────
+
+  it('dismisses permanently, per book, and remembers it in storage', () => {
+    landStatuses();
+    expect(panel()).toBeTruthy();
+
+    component.onOrientationDismissed();
+    fixture.detectChanges();
+
+    expect(panel()).toBeNull();
+    expect(localStorage.getItem(orientationStorageKey('book-1'))).toBe('1');
+  });
+
+  it('does not offer the panel again on a book that was already dismissed', () => {
+    localStorage.setItem(orientationStorageKey('book-1'), '1');
+
+    landStatuses();
+
+    expect(panel()).toBeNull();
+  });
+
+  /**
+   * THE FAILURE MODE THE BRIEF NAMES for option C, "undiscoverable when they want it back". The re-open
+   * control is in the header, in every state, and it works after a permanent dismissal.
+   */
+  it('keeps a visible re-open affordance, and it works after the dismissal', () => {
+    landStatuses();
+    component.onOrientationDismissed();
+    fixture.detectChanges();
+    expect(panel()).toBeNull();
+
+    expect(reopenBtn()).withContext('the re-open control must survive the dismissal').toBeTruthy();
+    reopenBtn().click();
+    fixture.detectChanges();
+
+    expect(panel()).toBeTruthy();
+  });
+
+  it('shows the re-open affordance even before any status has landed', () => {
+    expect(panel()).toBeNull();
+    expect(reopenBtn()).toBeTruthy();
+    expect(reopenBtn().textContent!.trim().length).toBeGreaterThan(0);
+  });
+
+  /** A second book is a second first run: the flag is keyed per book and the decision is re-taken. */
+  it('re-decides on a book switch, so a dismissal on one book does not silence another', () => {
+    landStatuses();
+    component.onOrientationDismissed();
+    fixture.detectChanges();
+    expect(panel()).toBeNull();
+
+    component.bookId = 'book-2';
+    component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
+    fixture.detectChanges();
+    expect(panel()).withContext('undecided until the new book answers').toBeNull();
+
+    landStatuses(w6Summary({ bookId: 'book-2' }), w6Review({ bookId: 'book-2' }));
+
+    expect(panel()).toBeTruthy();
+  });
+
+  // ── The guide pointers this page owns ────────────────────────────────────────────────────────────
+
+  it('raises ONE output for both guide entry points, carrying the book language', () => {
+    const opened: { guideId: string; lang: string }[] = [];
+    component.openGuide.subscribe(e => opened.push(e));
+
+    component.onOpenGuide('workflow-overview');
+    component.onSpineOpenGuide(stageGuideLink('briefs'));
+
+    expect(opened).toEqual([
+      { guideId: 'workflow-overview', lang: 'he' },
+      { guideId: 'book-setup-and-intelligence', lang: 'he' },
+    ]);
+  });
+
+  it('opens a guide in an ENGLISH book in English, leaving the reader default alone', () => {
+    const opened: { guideId: string; lang: string }[] = [];
+    component.bookLanguage = 'en';
+    component.openGuide.subscribe(e => opened.push(e));
+
+    component.onSpineOpenGuide(stageGuideLink('export'));
+
+    expect(opened).toEqual([{ guideId: 'export', lang: 'en' }]);
   });
 });

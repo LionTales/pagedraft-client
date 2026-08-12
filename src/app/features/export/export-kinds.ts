@@ -70,7 +70,7 @@ export const EXPORT_KINDS: readonly ExportKind[] = [
     format: 'DOCX',
     name: { he: 'הספר כולו', en: 'The whole book' },
     description: {
-      he: 'כל הפרקים לפי הסדר, בקובץ Word אחד, בדיוק כפי שהם שמורים כעת.',
+      he: 'כל הפרקים לפי הסדר, בקובץ וורד אחד, בדיוק כפי שהם שמורים כעת.',
       en: 'Every chapter in order, in one Word file, exactly as they are saved right now.',
     },
     availability: { available: true },
@@ -81,7 +81,7 @@ export const EXPORT_KINDS: readonly ExportKind[] = [
     format: 'DOCX',
     name: { he: 'פרק אחד', en: 'A single chapter' },
     description: {
-      he: 'פרק אחד לבחירתכם, בקובץ Word שנקרא על שם הפרק.',
+      he: 'פרק אחד לבחירתכם, בקובץ וורד שנקרא על שם הפרק.',
       en: 'One chapter of your choosing, in a Word file named after the chapter.',
     },
     availability: { available: true },
@@ -97,7 +97,7 @@ export const EXPORT_KINDS: readonly ExportKind[] = [
 export const EXPORT_COPY = {
   title: { he: 'ייצוא', en: 'Export' },
   subtitle: {
-    he: 'הורדת הספר, או פרק אחד ממנו, כקובץ Word.',
+    he: 'הורדת הספר, או פרק אחד ממנו, כקובץ וורד.',
     en: 'Download the book, or a single chapter of it, as a Word file.',
   },
   backToBook: { he: 'חזרה לספר', en: 'Back to book' },
@@ -122,10 +122,10 @@ export const EXPORT_COPY = {
   },
   /** No chapters: stated once at the top of the screen, and every kind is disabled with the same reason. */
   noChapters: {
-    he: 'אין עדיין פרקים בספר הזה, ולכן אין מה לייצא. ייבוא כתב יד יפתח את המסך הזה.',
+    he: 'אין עדיין פרקים בספר הזה, ולכן אין מה לייצא. העלאת כתב יד תפתח את המסך הזה.',
     en: 'This book has no chapters yet, so there is nothing to export. Importing a manuscript opens this screen up.',
   },
-  goToImport: { he: 'מעבר לייבוא', en: 'Go to import' },
+  goToImport: { he: 'מעבר להעלאה', en: 'Go to import' },
 } satisfies Record<string, Bi>;
 
 // ─── Failure copy ─────────────────────────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ export const EXPORT_COPY = {
 export const EXPORT_ERRORS = {
   /** 409 with `reason: noChapters` - the book emptied out between loading this screen and pressing. */
   noChapters: {
-    he: 'אין פרקים לייצוא. ייבוא כתב יד או הוספת פרק, ואז אפשר לנסות שוב.',
+    he: 'אין פרקים לייצוא. העלאת כתב יד או הוספת פרק, ואז אפשר לנסות שוב.',
     en: 'There are no chapters to export. Import a manuscript or add a chapter, then try again.',
   },
   /**
@@ -146,7 +146,7 @@ export const EXPORT_ERRORS = {
    * the next action is different: there is nothing to import, there is something to write.
    */
   nothingWrittenBook: {
-    he: 'יש פרקים בספר, אך עדיין לא נכתב בהם דבר, ולכן הקובץ היה יוצא ריק. אפשר לכתוב באחד הפרקים, או לייבא כתב יד, ואז לנסות שוב.',
+    he: 'יש פרקים בספר, אך עדיין לא נכתב בהם דבר, ולכן הקובץ היה יוצא ריק. אפשר לכתוב באחד הפרקים, או להעלות כתב יד, ואז לנסות שוב.',
     en: 'The book has chapters, but nothing has been written in them yet, so the file would have come out empty. Write in a chapter, or import a manuscript, then try again.',
   },
   /**

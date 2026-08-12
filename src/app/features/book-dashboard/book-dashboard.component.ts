@@ -25,7 +25,14 @@ import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
 import { CharacterRegisterComponent } from './character-register.component';
 import { StageActionEvent, StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
+import { StageGuideLink } from '../../shared/stage-spine/stage-guide';
 import { ChapterPassSignal, EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
+import {
+  FirstRunOrientationComponent,
+  OrientationLang,
+  orientationString,
+} from './first-run-orientation.component';
+import { dismissOrientation, orientationDismissed } from './orientation-store';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 import { CollapsibleSectionComponent } from '../../shared/collapsible-section/collapsible-section.component';
 
@@ -163,12 +170,26 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     TierToggleComponent,
     BookStyleBaselineStatusRowComponent,
     CollapsibleSectionComponent,
+    FirstRunOrientationComponent,
   ],
   template: `
     <div class="book-dashboard" [attr.dir]="bookDir">
       <header class="dashboard-header">
         <h3 class="dashboard-title">{{ label('title') }}: {{ bookTitle }}</h3>
         <div class="header-actions">
+          <!-- Wave 3 / w6 (Q10-D): THE RE-OPEN AFFORDANCE for the first-run orientation. Permanent, in
+               the header, in every state including long after the panel was dismissed. The brief names
+               option C's failure mode explicitly - "undiscoverable when they want it back" - so this is
+               deliberately not in a menu, not behind a hover and not inside a collapsible section.
+               RTL: MIRRORS with the header row, like the Export button beside it. -->
+          <button
+            type="button"
+            class="pd-btn pd-btn-ghost orientation-reopen-btn"
+            data-testid="dashboard-orientation-btn"
+            [attr.aria-label]="orientationLabel('reopenAria')"
+            (click)="openOrientation()">
+            {{ orientationLabel('reopen') }}
+          </button>
           <!-- Wave 3 / w4: the second way to reach export, beside the spine's own stage-5 action. It
                raises the SAME output, so both land on /books/:bookId/export. Always enabled: the export
                screen states the no-chapters case itself, and a disabled button here would need a reason
@@ -193,11 +214,27 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
            prerequisite when blocked, and offers the next action.
            NON-BLOCKING: advisory only; it never gates the rest of the UI.
            The [dir] inside the spine follows bookLanguage (book-scoped chrome). -->
+      <!-- Wave 3 / w6 (Q10-D's overlay half). ABOVE the spine, because it points DOWN at the spine and
+           the build rows and the pointer reads backwards otherwise. It is an in-flow panel, not a modal:
+           nothing behind it is inert, no build is gated on it, and it can be ignored indefinitely.
+           Mounted inside the @if so a dashboard that is not offering orientation constructs nothing and
+           issues no guides request. -->
+      @if (orientationOpen) {
+        <app-first-run-orientation
+          [bookId]="bookId"
+          [bookLanguage]="bookLanguage"
+          [open]="orientationOpen"
+          (dismissed)="onOrientationDismissed()"
+          (openGuide)="onOpenGuide($event)">
+        </app-first-run-orientation>
+      }
+
       <app-stage-spine
         [bookLanguage]="bookLanguage"
         [signals]="spineSignals"
         (stageAction)="onSpineAction($event)"
-        (openChapter)="onSpineOpenChapter($event)">
+        (openChapter)="onSpineOpenChapter($event)"
+        (openGuide)="onSpineOpenGuide($event)">
       </app-stage-spine>
 
       <!-- Book-scoped status rows (wb3-c01): summary/briefs + developmental review build + status.
@@ -219,6 +256,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           [chaptersWithText]="chaptersWithText"
           (summaryTerminal)="onSummaryTerminal()"
           (statusChange)="onSummaryStatusChange($event)"
+          (statusUnreadable)="onSummaryStatusUnreadable($event)"
           (buildingChange)="onSummaryBuildingChange($event)">
         </app-book-summary-status-row>
 
@@ -250,6 +288,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           [chaptersWithText]="chaptersWithText"
           (reviewStateChange)="onReviewStateChange($event)"
           (statusChange)="onReviewStatusChange($event)"
+          (statusUnreadable)="onReviewStatusUnreadable($event)"
           (tierChanged)="onTierChanged()">
         </app-book-review-status-row>
 
@@ -581,29 +620,48 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
       max-height: 100%;
       font-family: var(--pd-font-ui);
     }
+    /* WRAPS, and that is the 2.6 constraint reaching the header. The row holds a book title plus an
+       action cluster, and the cluster does not shrink; in a 300px panel with English labels
+       ("How this works" + "Export" = roughly 211px of the 257px available) the two could not share a
+       line, so the header overflowed its own container (scrollWidth past clientWidth) by 41px - and
+       because the Export button is the row's LAST control, its right edge is the row's own overflow
+       edge, so it was drawn the same 41px past the panel. The fix is the same one the spine uses for its
+       five names: give the content its own line rather than clipping it. flex-wrap moves the cluster
+       below the title exactly when it no longer fits, at any width and in either language, and changes
+       nothing on a wide panel. Measured via book-dashboard.component.spec.ts's own 257px repro seam
+       (r01); see that file's non-vacuity comment for the coordinates. */
     .dashboard-header {
       display: flex;
+      flex-wrap: wrap;
       justify-content: space-between;
       align-items: center;
       gap: var(--pd-space-3);
     }
     .dashboard-title {
       margin: 0;
+      /* Takes the line it is on, and wraps inside it rather than forcing the row wider than the panel. */
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-wrap: break-word;
       font-size: var(--pd-text-h5);
       line-height: var(--pd-lh-h5);
       font-weight: var(--pd-weight-bold);
       color: var(--pd-text);
     }
     /* The header's action cluster. A plain flex row, so it MIRRORS with the header's [dir] and the two
-       buttons keep their reading order in Hebrew without a physical left/right anywhere. */
+       buttons keep their reading order in Hebrew without a physical left/right anywhere. It wraps
+       INTERNALLY too, so a future third action (or a longer translation) breaks onto a second line
+       instead of pushing the last button out of the panel. */
     .header-actions {
       display: flex;
       flex-direction: row;
+      flex-wrap: wrap;
       align-items: center;
       gap: var(--pd-space-2);
       flex: 0 0 auto;
     }
     .export-btn { white-space: nowrap; }
+    .orientation-reopen-btn { white-space: nowrap; }
     /* Q8-C: the inputs-to-this-build group. It is INDENTED from the build row above it with a start-side
        rule, which is an INLINE (logical) border, so it mirrors with the book language rather than sitting
        physically left in Hebrew. */
@@ -883,6 +941,19 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   @Output() openExport = new EventEmitter<void>();
 
   /**
+   * Wave 3 / w6 (Q13-A): open a served guide in the `/help/:guideId` reader that chatbot phase A.2 built.
+   *
+   * Raised by BOTH guide entry points on this page - a spine row's "read the guide for this stage" and the
+   * orientation panel's "read the whole guide" - for the same reason `openExport` is one output for two
+   * entry points: the Router lives on the host, and two outputs would be two places for the destination to
+   * drift. The payload carries the language the guide should OPEN IN, which is this book's language: the
+   * reader is app-level and Hebrew-default on its own, and `?lang=` is the parameter A.2 built for exactly
+   * this, so a link from a book-scoped surface opens the book's language without changing the reader's
+   * own rule.
+   */
+  @Output() openGuide = new EventEmitter<{ guideId: string; lang: 'he' | 'en' }>();
+
+  /**
    * rf-c02: the "review running" affordance is NO LONGER emitted from here. It is now derived by the editor
    * directly from the single job registry ({@link JobRegistryService.anyRunningForBook$}), which the status
    * rows publish to via track() on build start and which survives this dashboard being @if-destroyed (close
@@ -1047,7 +1118,17 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
     // until the rows answer for the new one, rather than describing book A's briefs on book B's page.
     this.summaryStatus = null;
     this.reviewStatus = null;
+    // A read failure belonged to the previous book's rows too. The rows clear their own latches on the
+    // same context change, but the host must not sit on a stale "unreadable" in the window before those
+    // publishes drain, or the new book's decision could resolve on the old book's fault.
+    this.summaryStatusUnreadable = false;
+    this.reviewStatusUnreadable = false;
     this.runningChapterIds = new Set<string>();
+    // w6: the orientation decision belonged to the PREVIOUS book. Back to undecided (not to closed), so
+    // the new book gets its own first run judged from its own statuses and its own stored dismissal - a
+    // second book is a second first run, which is the whole reason the flag is keyed per book.
+    this.orientationOpenState = null;
+    this.orientationDecidedOnUnreadableStatus = false;
   }
 
   /**
@@ -1185,6 +1266,15 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   private summaryStatus: BookSummaryStatusDto | null = null;
   /** Latest raw review status from the hosted review row. The spine's whole stage 3. */
   private reviewStatus: BookReviewStatusDto | null = null;
+  /**
+   * The briefs row's status READ FAILED, as opposed to not having answered yet. Read only by
+   * {@link maybeOfferOrientation}; the spine deliberately keeps treating an unread status as unknown,
+   * because "we could not read it" is not a stage state and inventing one would put a fault in a row
+   * whose whole job is to describe the book.
+   */
+  private summaryStatusUnreadable = false;
+  /** The review row's status READ FAILED, under the same rule as {@link summaryStatusUnreadable}. */
+  private reviewStatusUnreadable = false;
   /** Chapter ids with an analysis job in flight right now; the one thing stage 4 CAN know book-wide. */
   private runningChapterIds = new Set<string>();
   /** The job-registry subscription behind {@link runningChapterIds}. */
@@ -1247,12 +1337,32 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   onSummaryStatusChange(status: BookSummaryStatusDto | null): void {
     this.summaryStatus = status;
     this.rebuildSpineSignals();
+    this.maybeOfferOrientation();
   }
 
   /** The hosted review row published a new review status payload. */
   onReviewStatusChange(status: BookReviewStatusDto | null): void {
     this.reviewStatus = status;
     this.rebuildSpineSignals();
+    this.maybeOfferOrientation();
+  }
+
+  /**
+   * The hosted briefs row reported whether its status read has FAILED (w6 fixes c01).
+   *
+   * The spine is not rebuilt from this: an unreadable status is still an unknown one as far as a stage
+   * is concerned. The one consumer is the first-run decision, which needs to tell a fetch that is over
+   * and failed from one still in flight.
+   */
+  onSummaryStatusUnreadable(unreadable: boolean): void {
+    this.summaryStatusUnreadable = unreadable;
+    this.maybeOfferOrientation();
+  }
+
+  /** The hosted review row reported the same thing about its own status read. */
+  onReviewStatusUnreadable(unreadable: boolean): void {
+    this.reviewStatusUnreadable = unreadable;
+    this.maybeOfferOrientation();
   }
 
   /**
@@ -1295,6 +1405,146 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   /** A chapter was picked out of stage 4's per-chapter breakdown: open it, via the existing seam. */
   onSpineOpenChapter(chapter: ChapterPassSignal): void {
     this.openChapter.emit({ chapterId: chapter.chapterId, order: chapter.order, title: chapter.title });
+  }
+
+  // ── Wave 3 / w6: the guide pointers and the first-run orientation panel ──────────────────────────
+
+  /** A spine row asked for the guide that answers its stage. */
+  onSpineOpenGuide(link: StageGuideLink): void {
+    this.onOpenGuide(link.guideId);
+  }
+
+  /** Open one guide in the reader, in THIS BOOK's language. Routing belongs to the host. */
+  onOpenGuide(guideId: string): void {
+    this.openGuide.emit({ guideId, lang: this.orientationLang });
+  }
+
+  /**
+   * Whether the orientation panel is on screen.
+   *
+   * `null` means the host has not decided yet, which is not the same as "no": the decision needs status
+   * payloads that have LANDED, and a page that guessed `false` would never offer orientation on the one
+   * book it exists for, while a page that guessed `true` would flash the panel over a fully built book.
+   * {@link maybeOfferOrientation} resolves it to a boolean the moment there is a fact to resolve it with,
+   * and {@link openOrientation} sets it directly when the author asks.
+   */
+  private orientationOpenState: boolean | null = null;
+
+  /**
+   * The current answer was reached only because one of the two statuses could NOT BE READ, so it is
+   * provisional: see {@link maybeOfferOrientation}. False whenever the answer came from real payloads,
+   * from the stored dismissal, or from the author's own open.
+   */
+  private orientationDecidedOnUnreadableStatus = false;
+
+  /** Template hook. Null (undecided) renders exactly like closed: nothing on screen, nothing fetched. */
+  get orientationOpen(): boolean {
+    return this.orientationOpenState === true;
+  }
+
+  /**
+   * Whether the first-run question has an answer at all yet.
+   *
+   * Undecided and decided-closed render IDENTICALLY (both are "no panel"), which is exactly why a
+   * decision that never resolved could sit there unnoticed. This getter is the only place the two are
+   * distinguishable, and it is what the regression test asserts on.
+   */
+  get orientationDecided(): boolean {
+    return this.orientationOpenState !== null;
+  }
+
+  /** The book's language, for the panel's chrome and for the language a guide link opens in. */
+  private get orientationLang(): OrientationLang {
+    return (this.bookLanguage ?? '').trim().toLowerCase().startsWith('en') ? 'en' : 'he';
+  }
+
+  /** The re-open button's own strings, from the panel's map so the two cannot drift. */
+  orientationLabel(key: 'reopen' | 'reopenAria'): string {
+    return orientationString(this.orientationLang, key);
+  }
+
+  /**
+   * THE FIRST-RUN TRIGGER: first visit to a book with no builds.
+   *
+   * Both halves are required, and both are read from facts rather than from absence:
+   *  - NOT DISMISSED for this book (`orientation-store.ts`, per book, fails open to "not dismissed").
+   *  - NO BUILDS, judged from the two status payloads THIS PAGE ALREADY FETCHES. A payload that has not
+   *    arrived is `null`, and a null is not "no builds" - it is the absence of an answer - so this
+   *    declines to decide until both have landed. That is the same rule the spine derives its stages by,
+   *    and it is what keeps the panel off a book whose briefs turn out to be built.
+   *
+   * Once decided the answer STICKS for this mount: the panel does not vanish under the author because a
+   * build they started while reading it finished. A book switch re-opens the question, and so does the
+   * one provisional answer described below.
+   *
+   * ── w6 fixes c01: A READ THAT FAILED IS NOT A READ THAT HAS NOT ANSWERED ─────────────────────────
+   *
+   * The rule above is about a payload that has not ARRIVED. A row whose status GET FAILED is in a
+   * different state, and it used to be indistinguishable here: neither row published anything on a
+   * status error, so the host's payload stayed `null` for the life of the mount and this method deferred
+   * forever, on the one book the panel exists for, in a state that renders identically to closed. Both
+   * rows now publish `statusUnreadable`, so a half is UNKNOWN only while it is neither answered nor
+   * known-unreadable.
+   *
+   * DOES AN UNREADABLE BOOK COUNT AS A FIRST RUN? NO, deliberately. A failed read is not evidence that
+   * nothing is built; it is a stronger absence than an unarrived one, since the fetch is over and it
+   * told us nothing. Offering the panel there would be the same failure the null rule exists to prevent
+   * (flashing it over a book that turns out to be built) and would spend the author's one first run on
+   * it. So an unreadable half resolves the question to NOT OFFERED. What changes is that it RESOLVES.
+   *
+   * That particular answer is PROVISIONAL, and it is the one case where "the answer sticks" bends. An
+   * answer taken from two real payloads must not be re-taken, or the panel could vanish under an author
+   * mid-sentence. An answer taken because a payload could not be READ was taken under a fault, and that
+   * fault is retryable (the briefs row's own retry control, and this page's `onSummaryTerminal` /
+   * `onTierChanged` re-reads). So when the missing status finally lands, the question is re-taken from
+   * the facts, which is the behaviour this page already had before the fault could be seen at all. The
+   * re-take can only turn a not-offered into an offered for a book that really is untouched, and both
+   * author-driven answers ({@link openOrientation}, {@link onOrientationDismissed}) clear the flag, so
+   * nothing the author did can be overwritten by a late payload.
+   */
+  private maybeOfferOrientation(): void {
+    if (this.orientationOpenState !== null && !this.orientationDecidedOnUnreadableStatus) return;
+    if (!this.bookId) return;
+    if (orientationDismissed(this.bookId)) {
+      this.orientationOpenState = false;
+      this.orientationDecidedOnUnreadableStatus = false;
+      return;
+    }
+    const summary = this.summaryStatus;
+    const review = this.reviewStatus;
+    // Not known yet = no answer AND no failure. A read still in flight decides nothing, as before.
+    if (!summary && !this.summaryStatusUnreadable) return;
+    if (!review && !this.reviewStatusUnreadable) return;
+    if (!summary || !review) {
+      // One half is known-unreadable: this book cannot be shown to be a first run, so it is not offered.
+      this.orientationOpenState = false;
+      this.orientationDecidedOnUnreadableStatus = true;
+      return;
+    }
+    this.orientationOpenState = !summary.hasSummary && !review.hasReview;
+    this.orientationDecidedOnUnreadableStatus = false;
+  }
+
+  /** The re-open affordance. Always available, including after a permanent dismissal. */
+  openOrientation(): void {
+    this.orientationOpenState = true;
+    // The author asked for it, so this is no longer a provisional answer a late status may re-take.
+    this.orientationDecidedOnUnreadableStatus = false;
+  }
+
+  /**
+   * The author closed the panel. The dismissal is PERMANENT for this book and is written here rather
+   * than inside the panel: the panel renders and fetches, the page owns what the author has seen.
+   *
+   * Only a real close writes the flag. A panel that failed to load its guide and was never actually read
+   * still has to be closed by hand to count, so a broken corpus cannot silently spend the author's one
+   * first run.
+   */
+  onOrientationDismissed(): void {
+    this.orientationOpenState = false;
+    // A dismissal is the author's own answer and is final for this book, so no late status re-takes it.
+    this.orientationDecidedOnUnreadableStatus = false;
+    dismissOrientation(this.bookId);
   }
 
   /**

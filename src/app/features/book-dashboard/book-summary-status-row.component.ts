@@ -1,6 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { Subject, Subscription } from 'rxjs';
+import { CHAPTER_RECAP_RELATIONSHIP } from '../../core/models/analysis';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import {
@@ -108,6 +109,21 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
    * second poll of the same endpoint.
    */
   @Output() statusChange = new EventEmitter<BookSummaryStatusDto | null>();
+  /**
+   * Wave 3 / w6 fixes c01. Whether this row's status READ has FAILED, as distinct from not having
+   * answered yet.
+   *
+   * {@link statusChange} cannot carry this. A failed read leaves the status at `null`, and a `null` on
+   * that output already means "no answer", which is the state a read still in flight is in - so the host
+   * cannot tell a fetch that is over and failed from one that is still running. That gap is not academic:
+   * the dashboard's first-run orientation decision waits for BOTH book statuses before it decides
+   * anything, so a failed read used to leave it undecided for the life of the mount, on a book that
+   * renders identically to a decided-closed one.
+   *
+   * `true` when a read errors, `false` on the way into every read (including the retry) and on every
+   * (book, language) reset. It says nothing about what the status IS - only that this row cannot say.
+   */
+  @Output() statusUnreadable = new EventEmitter<boolean>();
 
   /** Backing field for {@link bookSummaryStatus}; mutated only via the setter so the change emits. */
   private _bookSummaryStatus: BookSummaryStatusDto | null = null;
@@ -163,8 +179,21 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
    * into this row, this row is the only path to the whole build ceremony, briefs AND book profile: a row
    * that silently does not exist is a book that cannot be built at all until the page is reloaded. So the
    * failure now renders in place of the status, with a retry that re-issues the same read.
+   *
+   * w6 fixes c01: this latch is ALSO the host's signal, through {@link statusUnreadable}. It is backed by
+   * a setter for that reason rather than carrying a second copy beside it - one latch, so the sentence
+   * this row renders and the fact the host decides on cannot disagree.
    */
-  bookSummaryStatusError = false;
+  get bookSummaryStatusError(): boolean {
+    return this._bookSummaryStatusError;
+  }
+  set bookSummaryStatusError(value: boolean) {
+    if (this._bookSummaryStatusError === value) return;
+    this._bookSummaryStatusError = value;
+    this.publishUnreadable();
+  }
+  /** Backing field for {@link bookSummaryStatusError}; mutated only via the setter so the change emits. */
+  private _bookSummaryStatusError = false;
 
   /** Stops the active summary progress poll; nulled when no poll is running. */
   private bookSummaryProgressStop$: Subject<void> | null = null;
@@ -195,7 +224,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   ngOnChanges(changes: SimpleChanges): void {
     // c03: everything inside this hook runs INSIDE the host's change-detection pass (see the publishing
     // block below). The reset is synchronous - this row must be honestly empty the instant its context
-    // changes - but the two @Outputs it moves are published only once the pass is over.
+    // changes - but every @Output it moves is published only once the pass is over.
     this.inHostChangeDetection = true;
     try {
       // The summary is keyed by (book, language); a change to EITHER invalidates the current build/poll.
@@ -228,8 +257,9 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   // ── c03: publishing to the host without writing its bindings mid-pass ────────────────────────────────
   //
   // `ngOnChanges` is called INSIDE the host's change-detection pass, so anything this row emits from there
-  // lands on host state while that pass is half finished. The dashboard binds both of these outputs into
-  // `spineSignals`, and `<app-stage-spine [signals]>` is declared ABOVE this row in its template - already
+  // lands on host state while that pass is half finished. The dashboard binds the status and building
+  // outputs into `spineSignals` (and the read-failed one into its first-run decision, which the same pass
+  // can reach), and `<app-stage-spine [signals]>` is declared ABOVE this row in its template - already
   // checked against the previous object by the time our hook runs. So a synchronous emit from the context
   // reset is a write to an already-checked binding: it leaves the spine rendering an object the host has
   // already superseded (corrected for only on some LATER pass), and it is the shape Angular raises
@@ -257,6 +287,10 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
   private publishedBuilding = false;
   /** True while one deferred building publish is queued. */
   private buildingPublishQueued = false;
+  /** The value last EMITTED on {@link statusUnreadable}. */
+  private publishedUnreadable = false;
+  /** True while one deferred unreadable publish is queued. */
+  private unreadablePublishQueued = false;
   /** Set on destroy so a queued publish cannot emit out of a dead row. */
   private destroyed = false;
 
@@ -290,6 +324,27 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     if (this.publishedBuilding === this._bookSummaryBuilding) return;
     this.publishedBuilding = this._bookSummaryBuilding;
     this.buildingChange.emit(this._bookSummaryBuilding);
+  }
+
+  /**
+   * Publish the read-failed latch to the host, under the same rule as {@link publishStatus}.
+   *
+   * It needs the deferral for the same reason the other two do: the (book, language) reset in
+   * `ngOnChanges` clears this latch, and that clear runs inside the host's change-detection pass.
+   */
+  private publishUnreadable(): void {
+    if (this.inHostChangeDetection) {
+      if (this.unreadablePublishQueued) return;
+      this.unreadablePublishQueued = true;
+      Promise.resolve().then(() => {
+        this.unreadablePublishQueued = false;
+        if (!this.destroyed) this.publishUnreadable();
+      });
+      return;
+    }
+    if (this.publishedUnreadable === this._bookSummaryStatusError) return;
+    this.publishedUnreadable = this._bookSummaryStatusError;
+    this.statusUnreadable.emit(this._bookSummaryStatusError);
   }
 
   // ── Status load + reset ─────────────────────────────────────────────────────
@@ -338,7 +393,9 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
         // Drop a stale failure after the user switched books OR languages, exactly as the next handler does.
         if (this.bookId !== bookId || this.summaryLanguage !== lang) return;
         // Say so instead of vanishing. The status stays null (this row must not describe briefs it could
-        // not read), but the error + retry render in its place - see bookSummaryStatusError.
+        // not read), but the error + retry render in its place - see bookSummaryStatusError. Setting the
+        // latch also publishes `statusUnreadable`, which is how the host learns the read is over and
+        // failed rather than still running.
         this.bookSummaryStatusError = true;
         this.cdr.detectChanges();
       },
@@ -562,9 +619,29 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
 
   // ── Derived view state ──────────────────────────────────────────────────────
 
+  /** 'en' when the book language is English, 'he' otherwise (default). The single language decision
+   *  that both the rendering direction and the recap-language pick read from, so neither can drift
+   *  from `summaryLanguage` on its own. */
+  private get summaryLangKey(): 'he' | 'en' {
+    return this.summaryLanguage.toLowerCase().startsWith('en') ? 'en' : 'he';
+  }
+
   /** 'rtl' for Hebrew (default), 'ltr' for English. Drives [dir] on the summary status row. */
   get bookSummaryDir(): 'rtl' | 'ltr' {
-    return this.summaryLanguage.toLowerCase().startsWith('en') ? 'ltr' : 'rtl';
+    return this.summaryLangKey === 'en' ? 'ltr' : 'rtl';
+  }
+
+  /**
+   * Wave 3 / w6 (Q9-C): the briefs-side half of the renamed pass's relationship statement, in the book's
+   * language.
+   *
+   * It is NOT in this component's own label map, deliberately. The other half of the same sentence pair
+   * renders on the chapter analysis Run tab, and the whole point of Q9-C is that the product says one
+   * consistent thing about the two artifacts; a second copy here is how the two ends eventually disagree
+   * about which pass feeds which build.
+   */
+  get chapterRecapNote(): string {
+    return CHAPTER_RECAP_RELATIONSHIP.briefs[this.summaryLangKey];
   }
 
   /**
@@ -652,10 +729,13 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
     const he: Record<string, string> = {
       title: 'תקצירי ספר',
       notBuilt: 'טרם נבנה',
-      buildNow: 'בנה עכשיו',
-      building: 'בונה תקצירים...',
-      refresh: 'רענן',
-      rebuild: 'בנה מחדש',
+      // w8 native sweep (docs/HEBREW_NATIVE_REVIEW.md #11): GERUND, not imperative, matching the
+      // style-baseline row's בנייה / בנייה מחדש / רענון and the spine's own בניית… / בנייה מחדש של… forms.
+      // The app's ellipsis character replaces three ASCII dots in the "building" copy.
+      buildNow: 'בנייה',
+      building: 'בונה תקצירים…',
+      refresh: 'רענון',
+      rebuild: 'בנייה מחדש',
       coverage: 'כיסוי',
       updated: 'עודכן',
       stalePrefix: 'פרקים שהשתנו:',
@@ -663,15 +743,20 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       consentBody: 'פעולה זו תנתח את פרקי הספר כדי לבנות תקציר לכל פרק, תקציר ברמת הספר, ואת כרטיסי הפרופיל שבהמשך הדף (סקירה, תקציר, דמויות ומבנה עלילה).',
       confirm: 'אישור',
       cancel: 'ביטול',
-      crossModelWarning: 'התקצירים נבנו עם מודל אחר מהפעיל כעת. רעננו אותם לקבלת תוצאות מדויקות.',
+      // w8 native sweep: no model, provider or version identity may reach a client surface, so this says
+      // that the configuration differs and not what differs. Worded to match the spine's own
+      // `configuration-changed` sentence and its two sibling rows; pinned across all three by
+      // book-dashboard-status-row-label-consistency.spec.ts.
+      crossModelWarning: 'התקצירים נבנו בהגדרה שונה מזו הפעילה כעת. רעננו אותם לקבלת תוצאות מדויקות.',
       // Q4-A: the folded whole-book build. DRAFT Hebrew - w8 native sweep.
       builds: 'הבנייה הזו מייצרת תקציר לכל פרק, תקציר ברמת הספר, ואת כרטיסי הפרופיל שבהמשך הדף.',
-      buildingProfile: 'בונה את פרופיל הספר...',
+      // The app's ellipsis character, not three ASCII dots (same normalization as `building` above).
+      buildingProfile: 'בונה את פרופיל הספר…',
       profileFailed: 'התקצירים נבנו, אך בניית פרופיל הספר נכשלה. אפשר לנסות שוב.',
       // The blocked-by-import reason, said in the same words the spine's blocked row uses. DRAFT Hebrew.
-      needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
+      needsImport: 'אין עדיין פרקים בספר. צריך קודם להעלות כתב יד או להוסיף פרק.',
       // final-r02: the SECOND refusal - the chapters are there, the words are not. DRAFT Hebrew.
-      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או לייבא כתב יד.',
+      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או להעלות כתב יד.',
       // c04: the status read failed. DRAFT Hebrew - w8 native sweep.
       statusError: 'לא הצלחנו לקרוא את מצב תקצירי הספר.',
       retry: 'נסו שוב',
@@ -690,7 +775,7 @@ export class BookSummaryStatusRowComponent implements OnChanges, OnDestroy {
       consentBody: 'This will analyze the book chapters to build a brief for each chapter, one book-level brief, and the profile cards further down this page (overview, synopsis, characters and plot structure).',
       confirm: 'Confirm',
       cancel: 'Cancel',
-      crossModelWarning: 'The briefs were built with a different model than the one now active. Refresh them for accurate results.',
+      crossModelWarning: 'The briefs were built under a different configuration than the one now active. Refresh them for accurate results.',
       builds: 'This build produces a brief for each chapter, one book-level brief, and the profile cards further down this page.',
       buildingProfile: 'Building the book profile...',
       profileFailed: 'The briefs were built, but the book profile build failed. You can run it again.',

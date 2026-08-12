@@ -27,6 +27,7 @@ import {
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
 import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
+import { CHAPTER_RECAP_RELATIONSHIP } from '../../core/models/analysis';
 
 function makeBookSummaryStatus(
   overrides: Partial<BookSummaryStatusDto> = {}
@@ -185,6 +186,42 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
     component.bookSummaryStatus = makeBookSummaryStatus();
     fixture.detectChanges();
     expect(query('[data-testid="book-summary-row"]')).not.toBeNull();
+  });
+
+  // ── Wave 3 / w6 (Q9-C): the relationship statement, at the point of confusion ──
+
+  describe('the chapter recap relationship statement', () => {
+    /**
+     * This row is where an author who ran the recap pass on every chapter comes to ask why the briefs are
+     * still not built, so the statement is here as well as on the pass. It is the SHARED constant, not a
+     * paraphrase: the two ends of one explanation must not drift into disagreeing about which pass feeds
+     * which build.
+     */
+    it('states, in the book language, that the briefs are a separate build', () => {
+      component.bookSummaryStatus = makeBookSummaryStatus();
+      component.bookLanguage = 'he';
+      fixture.detectChanges();
+
+      const note = query('[data-testid="bsum-not-the-recap"]');
+      expect(note).not.toBeNull();
+      expect((note.nativeElement as HTMLElement).textContent!.trim())
+        .toBe(CHAPTER_RECAP_RELATIONSHIP.briefs.he);
+
+      component.bookLanguage = 'en';
+      fixture.detectChanges();
+      expect((query('[data-testid="bsum-not-the-recap"]').nativeElement as HTMLElement).textContent!.trim())
+        .toBe(CHAPTER_RECAP_RELATIONSHIP.briefs.en);
+    });
+
+    /** A row that could not read its status has no build to explain, so it explains nothing. */
+    it('is absent when the status read failed and the row is showing its error instead', () => {
+      component.bookSummaryStatus = null;
+      component.bookSummaryStatusError = true;
+      fixture.detectChanges();
+
+      expect(query('[data-testid="bsum-status-error"]')).not.toBeNull();
+      expect(query('[data-testid="bsum-not-the-recap"]')).toBeNull();
+    });
   });
 
   // ── NOT BUILT ──────────────────────────────────────────────────────────────
@@ -435,7 +472,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
 
     const warning = query('[data-testid="bsum-cross-model-warning"]');
     expect(warning).not.toBeNull();
-    expect(warning.nativeElement.textContent).toContain('מודל אחר');
+    expect(warning.nativeElement.textContent).toContain('בהגדרה שונה');
     expect(warning.nativeElement.getAttribute('dir')).toBe('rtl');
     expect(component.bookSummaryState).toBe('stale');
     expect(query('[data-testid="bsum-refresh"]')).not.toBeNull();
@@ -469,7 +506,7 @@ describe('BookSummaryStatusRowComponent (wb3-c01)', () => {
 
     const warning = query('[data-testid="bsum-cross-model-warning"]');
     expect(warning).not.toBeNull();
-    expect(warning.nativeElement.textContent).toContain('different model');
+    expect(warning.nativeElement.textContent).toContain('different configuration');
     expect(warning.nativeElement.getAttribute('dir')).toBe('ltr');
   });
 

@@ -1,6 +1,11 @@
 import { CommonModule } from '@angular/common';
 import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
-import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion } from '../../core/models/analysis';
+import {
+  ANALYSIS_TYPE_LABELS,
+  AnalysisResultDto,
+  AnalysisSuggestion,
+  CHAPTER_RECAP_RELATIONSHIP,
+} from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { resolveCardLang } from './card-lang';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
@@ -144,6 +149,15 @@ export class AnalysisRunTabComponent implements OnChanges {
   analysisTypeLabel(value: string): string {
     const map = ANALYSIS_TYPE_LABELS[this.chromeLang];
     return map[value] ?? value;
+  }
+
+  /**
+   * Wave 3 / w6 (Q9-C): what the renamed recap pass does, and what it does NOT feed, in the book's
+   * language. Read from the shared constant rather than restated here, because the book-briefs row on the
+   * dashboard renders the other half of the same statement and the two must not drift.
+   */
+  get chapterRecapNote(): string {
+    return CHAPTER_RECAP_RELATIONSHIP.pass[this.chromeLang];
   }
 
   // ── The book-wide writing style, as this per-chapter surface may speak of it ──

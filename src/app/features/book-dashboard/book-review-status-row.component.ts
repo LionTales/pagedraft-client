@@ -85,6 +85,21 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
    */
   @Output() statusChange = new EventEmitter<BookReviewStatusDto | null>();
 
+  /**
+   * Wave 3 / w6 fixes c01. Whether this row's status READ has FAILED, as distinct from not having
+   * answered yet. The twin of the briefs row's output of the same name.
+   *
+   * Neither {@link statusChange} nor {@link reviewStateChange} can carry this. A failed read leaves the
+   * status `null` and the derived state `unknown`, which is exactly what a read still in flight looks
+   * like - and on the failure path this row emits neither, so the host keeps whatever it already had.
+   * The dashboard's first-run orientation decision waits for BOTH book statuses, so a failed review read
+   * used to leave it undecided for the life of the mount, in a state that renders identically to closed.
+   *
+   * `true` when a read errors, `false` on the way into every read and on every (book, language) reset.
+   * It says nothing about what the review IS - only that this row cannot say.
+   */
+  @Output() statusUnreadable = new EventEmitter<boolean>();
+
   /** Backing field for {@link bookReviewStatus}; mutated only via the setter so the change emits. */
   private _bookReviewStatus: BookReviewStatusDto | null = null;
 
@@ -212,6 +227,17 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
   private publishedStatus: BookReviewStatusDto | null = null;
   /** True while one deferred status publish is queued. */
   private statusPublishQueued = false;
+  /** The value last EMITTED on {@link statusUnreadable}. */
+  private publishedUnreadable = false;
+  /** True while one deferred unreadable publish is queued. */
+  private unreadablePublishQueued = false;
+  /**
+   * Backing field for {@link statusUnreadable}. PRIVATE, unlike the briefs row's public
+   * `bookSummaryStatusError`, because this row renders nothing for it: a failed review status read is
+   * silent on screen (the row hides) and this latch only carries the fact to the host. Giving the row its
+   * own error line with a retry, the way the briefs row has one, is a separate change.
+   */
+  private _statusUnreadable = false;
   /** Set on destroy so a queued publish cannot emit out of a dead row. */
   private destroyed = false;
 
@@ -231,6 +257,34 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
     this.statusChange.emit(this._bookReviewStatus);
   }
 
+  /**
+   * Set the read-failed latch and publish it to the host, under the same rule as {@link publishStatus}.
+   *
+   * It needs the deferral for the same reason the status does: the (book, language) reset in
+   * `ngOnChanges` clears this latch, and that clear runs inside the host's change-detection pass.
+   */
+  private setStatusUnreadable(value: boolean): void {
+    this._statusUnreadable = value;
+    this.publishUnreadable();
+  }
+
+  /** Publish {@link _statusUnreadable}, deferring out of the host's pass and de-duplicating on what was
+   *  last EMITTED, exactly as {@link publishStatus} does. */
+  private publishUnreadable(): void {
+    if (this.inHostChangeDetection) {
+      if (this.unreadablePublishQueued) return;
+      this.unreadablePublishQueued = true;
+      Promise.resolve().then(() => {
+        this.unreadablePublishQueued = false;
+        if (!this.destroyed) this.publishUnreadable();
+      });
+      return;
+    }
+    if (this.publishedUnreadable === this._statusUnreadable) return;
+    this.publishedUnreadable = this._statusUnreadable;
+    this.statusUnreadable.emit(this._statusUnreadable);
+  }
+
   // ── Status load + reset ─────────────────────────────────────────────────────
 
   /**
@@ -242,6 +296,10 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
    * arrives first does the reconcile even if an overlapping ordinary refresh cancels the terminal's fetch.
    */
   loadBookReviewStatus(): void {
+    // A read is (re)starting, so the last read's failure is no longer this row's answer. Cleared on the
+    // way IN, exactly as the briefs row clears its own error latch, so a retry that fails again re-raises
+    // it rather than leaving a stale one - and so the host goes back to "not known yet" while it runs.
+    this.setStatusUnreadable(false);
     if (!this.bookId) {
       this.bookReviewStatus = null;
       return;
@@ -289,7 +347,14 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
         this.reviewStateChange.emit(this.bookReviewState);
         this.cdr.detectChanges();
       },
-      error: () => { /* leave current; row hides when status is null */ },
+      error: () => {
+        // Drop a stale failure after the user switched books OR languages, as the next handler does.
+        if (this.bookId !== bookId || this.reviewLanguage !== lang) return;
+        // Leave the current status alone (this row must not describe a review it could not read) and keep
+        // hiding the row, but TELL THE HOST the read is over and failed. Without that the host cannot tell
+        // this from a read still in flight, and its first-run orientation decision waits forever.
+        this.setStatusUnreadable(true);
+      },
     });
   }
 
@@ -311,6 +376,8 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
     this.bookReviewProgressPercent = null;
     this.bookReviewProgressMessage = '';
     this.bookReviewStatus = null;
+    // The previous context's read failure says nothing about the new one: back to "not known yet".
+    this.setStatusUnreadable(false);
     this.bookReviewHandledTerminalJobId = null;
     this.bookReviewBuildOutcome = null;
     this.bookReviewBuildOutcomeMessage = '';
@@ -539,21 +606,28 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
     const he: Record<string, string> = {
       title: 'עריכה התפתחותית',
       notBuilt: 'טרם נבנה',
-      buildNow: 'בנה עכשיו',
-      building: 'בונה סקירה...',
-      refresh: 'רענן',
+      // w8 native sweep (docs/HEBREW_NATIVE_REVIEW.md #11): GERUND, not imperative, matching the
+      // style-baseline row's בנייה / רענון and the spine's own בניית… / בנייה מחדש של… forms. The app's
+      // ellipsis character replaces three ASCII dots in the "building" copy.
+      buildNow: 'בנייה',
+      building: 'בונה סקירה…',
+      refresh: 'רענון',
       updated: 'עודכן',
       findings: 'ממצאים',
       consentTitle: 'בניית סקירה התפתחותית',
       consentBody: 'פעולה זו תנתח את הספר ותזהה ממצאים עריכתיים לפי ממד: עלילה, דמויות, קצב, טון, נושא ורציפות.',
       confirm: 'אישור',
       cancel: 'ביטול',
-      crossModelWarning: 'הסקירה נבנתה עם מודל אחר מהפעיל כעת. רעננו אותה לקבלת תוצאות מדויקות.',
+      // w8 native sweep: no model, provider or version identity may reach a client surface, so this says
+      // that the configuration differs and not what differs. Worded to match the spine's own
+      // `configuration-changed` sentence and its two sibling rows; pinned across all three by
+      // book-dashboard-status-row-label-consistency.spec.ts.
+      crossModelWarning: 'הסקירה נבנתה בהגדרה שונה מזו הפעילה כעת. רעננו אותה לקבלת תוצאות מדויקות.',
       needsSummary: 'הסקירה ההתפתחותית דורשת תקצירי ספר. בנו תחילה את תקצירי הספר.',
       // The zero-chapter gate: naming the briefs there would point at a row that is refused too.
-      needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
+      needsImport: 'אין עדיין פרקים בספר. צריך קודם להעלות כתב יד או להוסיף פרק.',
       // final-r02: the same gate one step further out - the chapters exist, the words do not. DRAFT Hebrew.
-      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או לייבא כתב יד.',
+      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או להעלות כתב יד.',
       buildFailed: 'בניית הסקירה נכשלה: אף ממד לא הניב ממצאים. נסו שוב; אם התקלה חוזרת ייתכן שהספר גדול מדי עבור המודל.',
       buildDegraded: 'הסקירה נבנתה חלקית: חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
       buildDegradedWithCount: 'הסקירה נבנתה חלקית: {count} ממצאים נשמרו, אך חלק מהממדים נכשלו. התוצאות עשויות להיות חסרות; רעננו כדי לנסות שוב.',
@@ -579,7 +653,7 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
       consentBody: 'This will analyze the book and identify editorial findings across plot, character, pacing, tone, theme, and continuity.',
       confirm: 'Confirm',
       cancel: 'Cancel',
-      crossModelWarning: 'The review was built with a different model than the one now active. Refresh it for accurate results.',
+      crossModelWarning: 'The review was built under a different configuration than the one now active. Refresh it for accurate results.',
       needsSummary: 'The developmental review requires book briefs. Build the book summary first.',
       needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
       needsText: 'The chapters in this book are still empty. Write in them or import a manuscript first.',

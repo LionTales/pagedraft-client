@@ -368,10 +368,11 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       title: 'סגנון הכתיבה של הספר',
       what: 'מדידה של האופן שבו הספר כתוב בדרך כלל, כדי שניתוח לשוני של פרק יוכל לסמן פרק שחורג ממנו.',
       notBuilt: 'טרם נבנה',
-      buildNow: 'בנה עכשיו',
-      building: 'בונה...',
-      refresh: 'רענן',
-      rebuild: 'בנה מחדש',
+      // w8 native sweep: GERUND, not imperative, matching the stage spine's בניית… / בנייה מחדש של… forms.
+      buildNow: 'בנייה',
+      building: 'בונה…',
+      refresh: 'רענון',
+      rebuild: 'בנייה מחדש',
       coverage: 'כיסוי',
       updated: 'עודכן',
       stalePrefix: 'פרקים שהשתנו:',
@@ -380,11 +381,13 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       consentPaidNote: 'הסכום מוצג משום שהספר מוגדר לשכבת חשיבה, שרצה על מודל בענן. טקסט הפרקים יישלח לספק צד שלישי ויוצא מהמחשב הזה. אפשר לשנות זאת בקטע ההגדרות בהמשך הדף.',
       confirm: 'אישור',
       cancel: 'ביטול',
-      crossModelWarning: 'המדידה נבנתה עם מודל אחר מהפעיל כעת. רעננו אותה לקבלת תוצאות מדויקות.',
+      // w8 native sweep: aligned to the spine's `configuration-changed` sentence, and the word מודל is
+      // gone - no model, provider or version identity may reach a client surface.
+      crossModelWarning: 'המדידה נבנתה בהגדרה שונה מזו הפעילה כעת. רעננו אותה לקבלת תוצאות מדויקות.',
       // The blocked-by-import reason, in the same words the briefs row and the spine's blocked row use.
-      needsImport: 'אין עדיין פרקים בספר. צריך קודם לייבא כתב יד או להוסיף פרק.',
+      needsImport: 'אין עדיין פרקים בספר. צריך קודם להעלות כתב יד או להוסיף פרק.',
       // final-r02: the SECOND refusal - the chapters are there, the words are not. DRAFT Hebrew.
-      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או לייבא כתב יד.',
+      needsText: 'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או להעלות כתב יד.',
     };
     const en: Record<string, string> = {
       title: "Your book's writing style",
@@ -402,7 +405,7 @@ export class BookStyleBaselineStatusRowComponent implements OnChanges, OnDestroy
       consentPaidNote: 'The amount is shown because this book is set to the thinking tier, which runs on a cloud model. The chapter text is sent to a third-party provider and leaves this machine. You can change this in the Settings section further down this page.',
       confirm: 'Confirm',
       cancel: 'Cancel',
-      crossModelWarning: 'The measurement was built with a different model than the one now active. Refresh it for accurate results.',
+      crossModelWarning: 'The measurement was built under a different configuration than the one now active. Refresh it for accurate results.',
       needsImport: 'This book has no chapters yet. Import a manuscript or add a chapter first.',
       needsText: 'The chapters in this book are still empty. Write in them or import a manuscript first.',
     };

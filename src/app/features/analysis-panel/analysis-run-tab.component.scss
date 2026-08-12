@@ -150,3 +150,15 @@
   text-decoration: underline;
   padding: 0;
 }
+
+// ── Wave 3 / w6 (Q9-C): the renamed pass's scope statement ───────────────────
+// A calm note, not a warning: nothing is wrong, the sentence simply says what this pass produces and
+// what it does not feed. It sits directly under the tier control so it reads before the run rather
+// than after it. Tokens only. RTL: MIRRORS - a plain block with a bound [dir] and a logical
+// inline-start accent, nothing physically pinned.
+.recap-scope-note {
+  margin: 0.4rem 0 0;
+  padding-inline-start: var(--pd-space-3);
+  border-inline-start: 2px solid var(--pd-border);
+  line-height: var(--pd-lh-caption);
+}

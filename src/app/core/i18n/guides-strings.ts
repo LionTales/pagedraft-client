@@ -24,7 +24,10 @@
  * `chat-strings.ts`: a stage this build does not know is still a real group of real documents, and
  * hiding it would hide guides. This map is a CROSS-REPO MIRROR of the `stage:` frontmatter values in
  * `Pagedraft.Api/Content/guides/*.md`; adding a stage there without adding it here degrades to the raw
- * slug rather than breaking.
+ * slug rather than breaking. The server side of that mirror is pinned (w6/c03) by
+ * `Pagedraft.Api.Tests/ProductChatCorpusTests.EveryShippedGuidesIdAndStage_IsWhatTheClientsStageGuideAndStageLabelMapsMirror`,
+ * which fails on the PR that renames or adds a stage. It pins the corpus's own set; it does not read
+ * this map, so the labels below are still checked only by `guides-strings.spec.ts`.
  */
 
 import type { ChatChromeLang } from './chat-strings';
