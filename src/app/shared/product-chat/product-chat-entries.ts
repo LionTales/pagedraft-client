@@ -131,6 +131,12 @@ export interface FaultEntry {
   id: number;
   reason: string;
   question: string;
+  /**
+   * The book this question was ASKED in, or null outside one. Carried for the same reason the clarify
+   * chips carry it: a fault outlives a book switch, and retrying it would re-ask against whatever book
+   * is open now, quietly turning a question about one manuscript into a question about another.
+   */
+  bookId: string | null;
 }
 
 export type ChatEntry = UserEntry | AssistantEntry | FaultEntry | BookMarkerEntry;

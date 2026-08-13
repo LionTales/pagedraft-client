@@ -292,7 +292,9 @@
             <div class="pc-fault-text">
               <p class="pc-fault-title">{{ label('faultTitle') }}</p>
               <p class="pc-fault-reason">{{ faultText(fault.reason) }}</p>
-              <button class="pc-retry" type="button" [disabled]="pending" (click)="retry(fault)">
+              <!-- Disabled once the book has moved on: a fault outlives a book switch, and retrying it
+                   would re-ask against whatever is open now. `retry` refuses as well. -->
+              <button class="pc-retry" type="button" [disabled]="!canRetry(fault)" (click)="retry(fault)">
                 {{ label('retry') }}
               </button>
             </div>

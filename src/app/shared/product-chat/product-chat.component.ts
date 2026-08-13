@@ -732,11 +732,23 @@ export class ProductChatComponent implements OnDestroy {
    */
   retry(entry: FaultEntry): void {
     if (this.pending) return;
+    // A fault outlives a book switch, so retrying one raised in another book would re-ask it against
+    // whatever is open now, quietly turning a question about one manuscript into a question about
+    // another. Same rule, and the same reason, as the clarify chips.
+    if (entry.bookId !== this.bookId) return;
     const at = this.entries.indexOf(entry);
     if (at < 0) return;
     const from = at > 0 && this.entries[at - 1].kind === 'user' ? at - 1 : at;
-    this.entries = this.entries.slice(0, from);
+    // CUT THE PAIR OUT, do not truncate the tail. A fault is no longer necessarily the last entry:
+    // `fileForRequest` files a late one ABOVE any marker written while it was in flight, so a
+    // `slice(0, from)` would take the marker and every turn after it with it.
+    this.entries = [...this.entries.slice(0, from), ...this.entries.slice(at + 1)];
     this.ask(entry.question);
+  }
+
+  /** Whether a failed exchange still belongs to the book on screen, and may be retried. */
+  canRetry(entry: FaultEntry): boolean {
+    return !this.pending && entry.bookId === this.bookId;
   }
 
   /**
@@ -817,7 +829,7 @@ export class ProductChatComponent implements OnDestroy {
       .pipe(takeUntil(this.destroy$), takeUntil(this.reset$))
       .subscribe({
         next: res => this.acceptResponse(res, question, bookId, askedAt),
-        error: () => this.acceptFault('network', question, askedAt),
+        error: () => this.acceptFault('network', question, askedAt, bookId),
       });
   }
 
@@ -856,7 +868,7 @@ export class ProductChatComponent implements OnDestroy {
     askedAt: number
   ): void {
     if (!res?.isGrounded) {
-      this.acceptFault(res?.faultReason ?? 'unknown', question, askedAt);
+      this.acceptFault(res?.faultReason ?? 'unknown', question, askedAt, bookId);
       return;
     }
     this.fileForRequest(
@@ -909,8 +921,8 @@ export class ProductChatComponent implements OnDestroy {
     return { question, choices: chapters, bookId };
   }
 
-  private acceptFault(reason: string, question: string, askedAt: number): void {
-    this.fileForRequest({ kind: 'fault', id: this.nextId++, reason, question }, askedAt);
+  private acceptFault(reason: string, question: string, askedAt: number, bookId: string | null): void {
+    this.fileForRequest({ kind: 'fault', id: this.nextId++, reason, question, bookId }, askedAt);
     this.settle();
   }
 

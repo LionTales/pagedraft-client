@@ -848,4 +848,73 @@ describe('ProductChatComponent, book-aware (chatbot phase B)', () => {
       expect(component.showBookEmptyState).toBeFalse();
     });
   });
+
+  /**
+   * A SECOND ROUND FROM THE SAME BOT, on the fix for the first: filing a late entry mid-transcript
+   * broke `retry`, which had only ever seen a fault as the LAST entry and truncated the tail to drop it.
+   */
+  describe('retrying a failed exchange (CR bot round 2, PR #41)', () => {
+    function fail(): void {
+      http.expectOne('/api/product-chat').flush('nope', { status: 500, statusText: 'Server Error' });
+      fixture.detectChanges();
+    }
+
+    it('cuts out only the failed pair, keeping a marker filed after it', () => {
+      openDrawer();
+      enterBook(BOOK_A);
+      ask('what happens here?');
+
+      books.subject.next({ bookId: BOOK_B, title: 'Second', language: 'he' });
+      fixture.detectChanges();
+      http.expectOne(r => r.url.includes(`/api/books/${BOOK_B}/summary`)).flush({
+        hasSummary: true,
+        builtChapters: 3,
+      });
+      fixture.detectChanges();
+
+      fail();
+
+      // The fault is filed ABOVE the marker, so it is no longer the last entry.
+      const faultEntry = component.entries.find(e => e.kind === 'fault') as {
+        kind: 'fault';
+        bookId: string | null;
+        question: string;
+        id: number;
+        reason: string;
+      };
+      expect(faultEntry).toBeDefined();
+
+      // Retrying it while book B is open is refused outright, so nothing is destroyed and no request
+      // goes out. Book A's question must not be re-asked against book B.
+      component.retry(faultEntry as never);
+      fixture.detectChanges();
+      http.expectNone('/api/product-chat');
+      expect(component.entries.some(e => e.kind === 'book-marker'))
+        .withContext('a refused retry must not take the transcript apart')
+        .toBeTrue();
+
+      // Back in book A, the retry is allowed, and it must remove ONLY the user turn and its fault.
+      books.subject.next({ bookId: BOOK_A, title: 'A Study in Drafts', language: 'he' });
+      fixture.detectChanges();
+      http.expectOne(r => r.url.includes(`/api/books/${BOOK_A}/summary`)).flush({
+        hasSummary: true,
+        builtChapters: 12,
+      });
+      fixture.detectChanges();
+
+      component.retry(faultEntry as never);
+      fixture.detectChanges();
+
+      expect(component.entries.some(e => e.kind === 'book-marker'))
+        .withContext(
+          'retry must CUT OUT the failed pair, not truncate the tail: a late fault is filed above the ' +
+            'marker, so slicing from it would drop the marker and every turn after it'
+        )
+        .toBeTrue();
+      expect(component.entries.filter(e => e.kind === 'fault').length).toBe(0);
+
+      http.expectOne('/api/product-chat').flush(grounded());
+      fixture.detectChanges();
+    });
+  });
 });
