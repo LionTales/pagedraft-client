@@ -21,6 +21,8 @@ import { SfdtManipulationService, SCROLL_TARGET_BOOKMARK } from '../../core/serv
 import { EditorTextService } from '../../core/services/editor-text.service';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 import { ReviseContextService } from '../../core/services/revise-context.service';
+import { BookSurfaceFocusService } from '../../core/services/book-surface-focus.service';
+import { AmbientChapterService } from '../../core/services/ambient-chapter.service';
 import { AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { AnalysisResultDto } from '../../core/models/analysis';
 import { AnalysisRunDialogComponent, RUN_DIALOG_LABELS_HE } from '../../shared/analysis-run-dialog/analysis-run-dialog.component';
@@ -73,7 +75,7 @@ describe('EditorPageComponent (focused logic)', () => {
     await TestBed.configureTestingModule({
       imports: [EditorPageComponent],
       providers: [
-        { provide: ActivatedRoute, useValue: { params: of({}), snapshot: { queryParams: {} } } },
+        { provide: ActivatedRoute, useValue: { params: of({}), queryParams: of({}), snapshot: { queryParams: {} } } },
         { provide: Router, useValue: { navigate: jasmine.createSpy(), getCurrentNavigation: () => null } },
         { provide: BookService, useValue: { getById: () => EMPTY } },
         // P2-6: the editor reconciles the whole-book build affordance via these when the dashboard is
@@ -1250,7 +1252,17 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
     await TestBed.configureTestingModule({
       imports: [EditorPageComponent],
       providers: [
-        { provide: ActivatedRoute, useValue: { params: routeParams$.asObservable(), snapshot: { queryParams: {} } } },
+        {
+          provide: ActivatedRoute,
+          // `queryParams` is read as an OBSERVABLE by the chatbot phase-B focus deep link, beside the
+          // existing snapshot read the imported signal uses. A stub with only the snapshot leaves
+          // ngOnInit dereferencing undefined.
+          useValue: {
+            params: routeParams$.asObservable(),
+            queryParams: of({}),
+            snapshot: { queryParams: {} },
+          },
+        },
         { provide: Router, useValue: { navigate: jasmine.createSpy(), getCurrentNavigation: () => null } },
         // Held-open book load: the controlled Subject lets us assert the in-between state
         // (bookId set, book not yet resolved) before emitting.
@@ -2391,7 +2403,7 @@ function buildImportTestBed(queryParams: Record<string, string>, navState: Recor
     providers: [
       {
         provide: ActivatedRoute,
-        useValue: { params: of({}), snapshot: { queryParams } },
+        useValue: { params: of({}), queryParams: of(queryParams), snapshot: { queryParams } },
       },
       {
         provide: Router,
@@ -2564,7 +2576,7 @@ describe('EditorPageComponent rf-f03 handoff handlers (focused logic)', () => {
     await TestBed.configureTestingModule({
       imports: [EditorPageComponent],
       providers: [
-        { provide: ActivatedRoute, useValue: { params: of({}), snapshot: { queryParams: {} } } },
+        { provide: ActivatedRoute, useValue: { params: of({}), queryParams: of({}), snapshot: { queryParams: {} } } },
         { provide: Router, useValue: { navigate: jasmine.createSpy(), getCurrentNavigation: () => null } },
         { provide: BookService, useValue: { getById: () => EMPTY } },
         { provide: ChapterService, useValue: { update: () => of({}), create: () => EMPTY, delete: () => EMPTY, getById: () => EMPTY, reorder: () => EMPTY } },
@@ -2649,7 +2661,11 @@ describe('EditorPageComponent rf-f03 imported signal — fresh router state pres
   beforeEach(async () => {
     const stateData = { importedChapters: 7, importedWords: 15000, importedParts: 3 };
     const routerWithState = { navigate: jasmine.createSpy(), getCurrentNavigation: () => ({ extras: { state: stateData } }) };
-    const routeWithParam = { params: of({}), snapshot: { queryParams: { imported: '1' } } };
+    const routeWithParam = {
+      params: of({}),
+      queryParams: of({ imported: '1' }),
+      snapshot: { queryParams: { imported: '1' } },
+    };
 
     await TestBed.configureTestingModule({
       imports: [EditorPageComponent],
@@ -2681,7 +2697,11 @@ describe('EditorPageComponent rf-f03 imported signal — refresh (no router stat
 
   beforeEach(async () => {
     const routerNoState = { navigate: jasmine.createSpy(), getCurrentNavigation: () => null };
-    const routeWithParam = { params: of({}), snapshot: { queryParams: { imported: '1' } } };
+    const routeWithParam = {
+      params: of({}),
+      queryParams: of({ imported: '1' }),
+      snapshot: { queryParams: { imported: '1' } },
+    };
 
     await TestBed.configureTestingModule({
       imports: [EditorPageComponent],
@@ -2699,5 +2719,610 @@ describe('EditorPageComponent rf-f03 imported signal — refresh (no router stat
 
   it('does NOT set showHandoffCard when imported param is present but router state is absent (refresh fallback)', () => {
     expect(component.showHandoffCard).toBe(false);
+  });
+});
+
+// ── Chatbot phase B: the `focus` deep link a citation chip navigates to ──────────────────────────────
+//
+// The chip is only as good as what happens when it lands. These pin the three halves of that: the param
+// is CONSUMED (mode + panel), it is STRIPPED (the `imported=1` lesson: a sticky param re-forces itself on
+// every refresh and overrides a later choice), and it is read as a STREAM rather than a snapshot, because
+// the commonest click is a chip pressed while already on this book's page, which changes only the query
+// params and never re-runs ngOnInit.
+describe('EditorPageComponent chatbot phase B: the focus deep link', () => {
+  let component: EditorPageComponent;
+  let fixture: ComponentFixture<EditorPageComponent>;
+  let queryParams$: BehaviorSubject<Record<string, string>>;
+  let routerSpy: { navigate: jasmine.Spy; getCurrentNavigation: () => null };
+  let focus: BookSurfaceFocusService;
+
+  beforeEach(async () => {
+    queryParams$ = new BehaviorSubject<Record<string, string>>({});
+    routerSpy = { navigate: jasmine.createSpy('navigate'), getCurrentNavigation: () => null };
+    const route = {
+      params: of({}),
+      queryParams: queryParams$.asObservable(),
+      snapshot: { queryParams: {} },
+    };
+
+    await TestBed.configureTestingModule({
+      imports: [EditorPageComponent],
+      providers: sharedHandoffProviders(routerSpy, route),
+    })
+      .overrideComponent(EditorPageComponent, { set: { template: '<div></div>', imports: [] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(EditorPageComponent);
+    component = fixture.componentInstance;
+    focus = TestBed.inject(BookSurfaceFocusService);
+    fixture.detectChanges();
+  });
+
+  afterEach(() => fixture.destroy());
+
+  it('opens the review panel in REVIEW mode for a dashboard surface', fakeAsync(() => {
+    component.reviewMode = 'edit';
+    component.closeReviewPanel();
+
+    queryParams$.next({ focus: 'findings' });
+    tick();
+
+    expect(component.reviewMode).toBe('review');
+    expect(component.reviewPanelOpen).toBeTrue();
+  }));
+
+  it('HOLDS the request until the dashboard exists, then publishes it', fakeAsync(() => {
+    // Measured live: a plain setTimeout fired BEFORE the @if mounted the dashboard, so the request went
+    // to nobody and the chip navigated correctly and then did nothing. Waiting on the ViewChild is a
+    // fact about the view rather than a guess about task ordering.
+    const seen: unknown[] = [];
+    focus.focus$.subscribe(r => seen.push(r));
+
+    queryParams$.next({ focus: 'status-review' });
+    tick();
+    expect(seen)
+      .withContext('no dashboard in this fixture yet, so nothing may be published')
+      .toEqual([]);
+
+    component.dashboardComp = {} as never;
+    fixture.detectChanges();
+    tick();
+
+    expect(seen).toEqual([{ target: 'status', stage: 'review' }]);
+  }));
+
+  it('publishes a held request exactly ONCE, however many view checks follow', fakeAsync(() => {
+    const seen: unknown[] = [];
+    focus.focus$.subscribe(r => seen.push(r));
+
+    queryParams$.next({ focus: 'findings' });
+    component.dashboardComp = {} as never;
+    fixture.detectChanges();
+    tick();
+    fixture.detectChanges();
+    tick();
+
+    expect(seen.length).toBe(1);
+  }));
+
+  it('STRIPS the params it consumed, keeping every other one', fakeAsync(() => {
+    queryParams$.next({ focus: 'register' });
+    tick();
+
+    expect(routerSpy.navigate).toHaveBeenCalled();
+    const extras = routerSpy.navigate.calls.mostRecent().args[1];
+    expect(extras.queryParams).toEqual({ focus: null, chapter: null });
+    expect(extras.queryParamsHandling).toBe('merge');
+    expect(extras.replaceUrl).toBeTrue();
+  }));
+
+  it('IGNORES an unknown token entirely, rather than landing somewhere arbitrary', fakeAsync(() => {
+    const seen: unknown[] = [];
+    focus.focus$.subscribe(r => seen.push(r));
+    component.reviewMode = 'edit';
+
+    queryParams$.next({ focus: 'everything' });
+    tick();
+
+    expect(seen).toEqual([]);
+    expect(component.reviewMode).toBe('edit');
+    expect(routerSpy.navigate).not.toHaveBeenCalled();
+  }));
+
+  it('reacts to a SECOND chip pressed while already on the page', fakeAsync(() => {
+    const seen: unknown[] = [];
+    focus.focus$.subscribe(r => seen.push(r));
+    component.dashboardComp = {} as never;
+
+    queryParams$.next({ focus: 'findings' });
+    fixture.detectChanges();
+    tick();
+    queryParams$.next({});
+    queryParams$.next({ focus: 'register' });
+    fixture.detectChanges();
+    tick();
+
+    expect(seen).toEqual([{ target: 'findings' }, { target: 'register' }]);
+  }));
+
+  describe('a CHAPTER-TEXT chip', () => {
+    const chapters = [
+      { id: 'ch-a', title: 'One', order: 0 },
+      { id: 'ch-b', title: 'Seven', order: 6 },
+    ];
+
+    it('opens the chapter at that 0-based order, and does NOT force review mode', fakeAsync(() => {
+      // The author asked to see the writing, so this one stays in the editor.
+      component.book = { id: 'book-1', title: 'B', language: 'he', chapters } as never;
+      component.reviewMode = 'edit';
+      const select = spyOn(component, 'selectChapter');
+
+      queryParams$.next({ focus: 'chapter', chapter: '6' });
+      tick();
+
+      expect(select).toHaveBeenCalledWith(jasmine.objectContaining({ id: 'ch-b' }));
+      expect(component.reviewMode).toBe('edit');
+    }));
+
+    it('does NOTHING when no chapter carries that order, rather than opening a neighbour', fakeAsync(() => {
+      component.book = { id: 'book-1', title: 'B', language: 'he', chapters } as never;
+      const select = spyOn(component, 'selectChapter');
+
+      queryParams$.next({ focus: 'chapter', chapter: '99' });
+      tick();
+
+      expect(select).not.toHaveBeenCalled();
+    }));
+
+    it('is IGNORED when the chapter param is missing or not a number', fakeAsync(() => {
+      component.book = { id: 'book-1', title: 'B', language: 'he', chapters } as never;
+      const select = spyOn(component, 'selectChapter');
+
+      queryParams$.next({ focus: 'chapter' });
+      tick();
+      queryParams$.next({ focus: 'chapter', chapter: 'six' });
+      tick();
+
+      expect(select).not.toHaveBeenCalled();
+      expect(routerSpy.navigate).not.toHaveBeenCalled();
+    }));
+  });
+});
+
+/**
+ * c02 (review finding #9): THE TWO FOCUS ONE-SHOTS AND THEIR DIFFERENT RESET RULES.
+ *
+ * Both are set in one place and consumed in another, and the whole defect lives in the INTERVAL between
+ * the two. So the interval is driven here with Subjects that stay open across assertions - the book load
+ * is a `Subject` created per `getById` call and resolved by hand, and the route params and query params
+ * are Subjects too. A synchronous `of()` would collapse the interval into a single tick and every one of
+ * these specs would pass against the un-reset code.
+ *
+ * The asymmetry is the point, and it is pinned from both sides: a DASHBOARD focus is discarded by a
+ * switch back to Edit (the author has changed their mind about looking at the dashboard) and a CHAPTER
+ * focus is NOT, because a chapter focus deliberately never forces Review mode and Edit is where it is
+ * supposed to land. A rule that treated them alike would break the working case.
+ */
+describe('EditorPageComponent c02: the focus one-shots and their reset rules', () => {
+  let component: EditorPageComponent;
+  let fixture: ComponentFixture<EditorPageComponent>;
+  let params$: Subject<Record<string, string>>;
+  let queryParams$: Subject<Record<string, string>>;
+  let published: unknown[];
+  /** One entry per `getById` call, each holding its own OPEN subject. Resolved when a spec says so. */
+  let loads: { id: string; subject: Subject<BookDetailDto> }[];
+
+  const bookA = {
+    id: 'book-a',
+    title: 'A',
+    language: 'he',
+    chapters: [
+      { id: 'a-first', title: 'One', order: 0, wordCount: 100 },
+      { id: 'a-six', title: 'Seven', order: 6, wordCount: 100 },
+    ],
+  };
+  const bookB = {
+    id: 'book-b',
+    title: 'B',
+    language: 'he',
+    chapters: [
+      { id: 'b-first', title: 'One', order: 0, wordCount: 100 },
+      { id: 'b-six', title: 'Seven', order: 6, wordCount: 100 },
+    ],
+  };
+
+  beforeEach(async () => {
+    params$ = new Subject();
+    queryParams$ = new Subject();
+    loads = [];
+    const routerSpy = { navigate: jasmine.createSpy('navigate'), getCurrentNavigation: () => null };
+    const route = {
+      params: params$.asObservable(),
+      queryParams: queryParams$.asObservable(),
+      snapshot: { queryParams: {} },
+    };
+
+    await TestBed.configureTestingModule({
+      imports: [EditorPageComponent],
+      providers: [
+        ...sharedHandoffProviders(routerSpy, route),
+        {
+          provide: BookService,
+          useValue: {
+            getById: (id: string) => {
+              const subject = new Subject<BookDetailDto>();
+              loads.push({ id, subject });
+              return subject.asObservable();
+            },
+          },
+        },
+      ],
+    })
+      .overrideComponent(EditorPageComponent, { set: { template: '<div></div>', imports: [] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(EditorPageComponent);
+    component = fixture.componentInstance;
+    published = [];
+    TestBed.inject(BookSurfaceFocusService).focus$.subscribe(r => published.push(r));
+    fixture.detectChanges();
+  });
+
+  afterEach(() => fixture.destroy());
+
+  /** Deliver the payload for the most recent load of `id`. The subject was opened at navigation time. */
+  function resolveLatestLoad(id: string, dto: object): void {
+    const entry = [...loads].reverse().find(l => l.id === id);
+    expect(entry).withContext(`no open load for ${id}`).toBeDefined();
+    entry!.subject.next(dto as BookDetailDto);
+  }
+
+  /** Navigate to a book. The load it starts is left OPEN on purpose. */
+  function navigateTo(bookId: string): void {
+    params$.next({ bookId });
+    tick();
+    fixture.detectChanges();
+  }
+
+  /** One more change-detection pass plus its timers, which is where a held request is published. */
+  function settle(): void {
+    fixture.detectChanges();
+    tick();
+  }
+
+  describe('a DASHBOARD focus', () => {
+    it('is DROPPED by a book switch, and does not fire when a dashboard later mounts for the new book', fakeAsync(() => {
+      navigateTo('book-a');
+      queryParams$.next({ focus: 'findings' });
+      settle();
+      expect(published)
+        .withContext('no dashboard yet, so the request is still held')
+        .toEqual([]);
+
+      navigateTo('book-b');
+
+      // The new book's dashboard mounts. The gesture belonged to book A and must be gone.
+      component.dashboardComp = {} as never;
+      settle();
+
+      expect(published)
+        .withContext('a focus raised on book A must not scroll book B')
+        .toEqual([]);
+    }));
+
+    it('SURVIVES the load of the book it was raised for, on a cold deep link where no book id was known yet', fakeAsync(() => {
+      // ngOnInit subscribes to queryParams BEFORE route.params, so on a fresh navigation into
+      // `?focus=...` the chip is consumed while bookId is still null. The first load adopts it.
+      queryParams$.next({ focus: 'findings' });
+      settle();
+      navigateTo('book-a');
+      resolveLatestLoad('book-a', bookA);
+      component.dashboardComp = {} as never;
+      settle();
+
+      expect(published).toEqual([{ target: 'findings' }]);
+    }));
+
+    it('is DISCARDED when the author switches back to Edit before the dashboard mounts', fakeAsync(() => {
+      navigateTo('book-a');
+      queryParams$.next({ focus: 'register' });
+      settle();
+      expect(component.reviewMode).toBe('review');
+      expect(published).toEqual([]);
+
+      component.onReviewModeChange('edit');
+      settle();
+
+      // Back to Review much later, for their own reasons: the old gesture must not be waiting there.
+      component.onReviewModeChange('review');
+      component.dashboardComp = {} as never;
+      settle();
+
+      expect(published)
+        .withContext('the author said Edit, which is them changing their mind about the dashboard')
+        .toEqual([]);
+    }));
+
+    it('is KEPT when the panel is merely CLOSED, which is not a change of mind about what to show', fakeAsync(() => {
+      navigateTo('book-a');
+      queryParams$.next({ focus: 'register' });
+      settle();
+
+      component.closeReviewPanel();
+      settle();
+      component.openReviewPanel();
+      component.dashboardComp = {} as never;
+      settle();
+
+      expect(published).toEqual([{ target: 'register' }]);
+    }));
+
+    it('fires exactly ONCE, however many view checks and book loads follow', fakeAsync(() => {
+      navigateTo('book-a');
+      queryParams$.next({ focus: 'findings' });
+      component.dashboardComp = {} as never;
+      settle();
+      expect(published.length).toBe(1);
+
+      resolveLatestLoad('book-a', bookA);
+      settle();
+      settle();
+
+      expect(published.length).toBe(1);
+    }));
+  });
+
+  describe('a CHAPTER focus', () => {
+    it('SURVIVES to its own book\'s load and opens that chapter when the payload finally lands', fakeAsync(() => {
+      navigateTo('book-a');
+      const select = spyOn(component, 'selectChapter');
+
+      // The chapter list has not arrived, so the request is held rather than dropped.
+      queryParams$.next({ focus: 'chapter', chapter: '6' });
+      settle();
+      expect(select).not.toHaveBeenCalled();
+
+      resolveLatestLoad('book-a', bookA);
+      settle();
+
+      expect(select).toHaveBeenCalledWith(jasmine.objectContaining({ id: 'a-six' }));
+    }));
+
+    it('is NOT discarded by a switch to Edit mode: Edit is where a chapter focus is SUPPOSED to land', fakeAsync(() => {
+      // The asymmetry with the dashboard focus above, stated as a test so a later uniform rule goes red.
+      navigateTo('book-a');
+      const select = spyOn(component, 'selectChapter');
+      queryParams$.next({ focus: 'chapter', chapter: '6' });
+      settle();
+
+      component.onReviewModeChange('edit');
+      settle();
+      resolveLatestLoad('book-a', bookA);
+      settle();
+
+      expect(select).toHaveBeenCalledWith(jasmine.objectContaining({ id: 'a-six' }));
+    }));
+
+    it('is DROPPED when a DIFFERENT book loads, rather than opening that book\'s chapter 6', fakeAsync(() => {
+      navigateTo('book-a');
+      const select = spyOn(component, 'selectChapter');
+      queryParams$.next({ focus: 'chapter', chapter: '6' });
+      settle();
+
+      navigateTo('book-b');
+      resolveLatestLoad('book-b', bookB);
+      settle();
+
+      expect(select).not.toHaveBeenCalledWith(jasmine.objectContaining({ id: 'b-six' }));
+      // The ordinary first-chapter default still runs, so the page is not left blank.
+      expect(select).toHaveBeenCalledWith(jasmine.objectContaining({ id: 'b-first' }));
+    }));
+
+    it('is applied exactly ONCE, and a later load of the same book does not yank the author back', fakeAsync(() => {
+      navigateTo('book-a');
+      // The fake carries the ONE side effect the rest of the load path reads back: without it the
+      // "no chapter selected yet" default would fire on top of the focus and count as a second call.
+      const select = spyOn(component, 'selectChapter').and.callFake(ch => {
+        component.selectedChapterId = ch.id;
+      });
+      queryParams$.next({ focus: 'chapter', chapter: '6' });
+      settle();
+      resolveLatestLoad('book-a', bookA);
+      settle();
+      expect(select.calls.count()).toBe(1);
+
+      // The author has moved on to another chapter; a second load of the same book must respect that.
+      component.selectedChapterId = 'a-first';
+      navigateTo('book-a');
+      resolveLatestLoad('book-a', bookA);
+      settle();
+
+      expect(select.calls.count()).toBe(1);
+    }));
+  });
+});
+
+/**
+ * THE AMBIENT OPEN CHAPTER, published outward for the assistant drawer (chatbot phase B, a2).
+ *
+ * This is the publication seam d2 section (0) found missing: the open chapter lived in this component
+ * and nothing app-level could read it, so a question that said "this chapter" resolved nothing. What is
+ * pinned here is the lifecycle (open, switch, leave to the dashboard, leave the page) and the two rules
+ * that cannot be enforced anywhere else - the dashboard carve-out, which the server has no way to
+ * verify, and the freshness of the pair after the chapter list moves under it.
+ */
+describe('EditorPageComponent chatbot phase B: the ambient open chapter', () => {
+  let component: EditorPageComponent;
+  let fixture: ComponentFixture<EditorPageComponent>;
+  let ambient: AmbientChapterService;
+  let reordered$: Subject<{ bookId: string; newOrder: { chapterId: string; order: number }[] }>;
+
+  const CHAPTERS = [
+    { id: 'ch-a', title: 'One', order: 0, wordCount: 100 },
+    { id: 'ch-b', title: 'Two', order: 1, wordCount: 200 },
+  ];
+
+  beforeEach(async () => {
+    reordered$ = new Subject();
+    const routerSpy = { navigate: jasmine.createSpy('navigate'), getCurrentNavigation: () => null };
+    const route = { params: of({}), queryParams: of({}), snapshot: { queryParams: {} } };
+
+    await TestBed.configureTestingModule({
+      imports: [EditorPageComponent],
+      providers: [
+        ...sharedHandoffProviders(routerSpy, route),
+        {
+          provide: SyncService,
+          useValue: {
+            connect: () => Promise.resolve(),
+            joinBook: () => {},
+            leaveBook: () => {},
+            chapterUpdated$: EMPTY,
+            chapterCreated$: EMPTY,
+            chapterReordered$: reordered$.asObservable(),
+            sceneCreated$: EMPTY,
+            sceneUpdated$: EMPTY,
+            sceneDeleted$: EMPTY,
+            scenesCleared$: EMPTY,
+            scenesReordered$: EMPTY,
+          },
+        },
+      ],
+    })
+      .overrideComponent(EditorPageComponent, { set: { template: '<div></div>', imports: [] } })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(EditorPageComponent);
+    component = fixture.componentInstance;
+    ambient = TestBed.inject(AmbientChapterService);
+    fixture.detectChanges();
+  });
+
+  /** Put the page in the state the real one reaches after a book load with a chapter selected. */
+  function loadBookWithChapter(chapterId = 'ch-a'): void {
+    component.bookId = 'book-1';
+    component.book = {
+      id: 'book-1',
+      title: 'B',
+      language: 'he',
+      chapters: CHAPTERS.map(c => ({ ...c })),
+    } as never;
+    component.selectedChapterId = chapterId;
+    fixture.detectChanges();
+  }
+
+  it('publishes NOTHING while there is no book id: a snapshot with the wrong book is worse than none', () => {
+    expect(ambient.ambient).toBeNull();
+  });
+
+  it('publishes the open chapter, with its id AND its 0-based order', () => {
+    loadBookWithChapter('ch-b');
+    expect(ambient.ambient).toEqual({
+      bookId: 'book-1',
+      openChapter: { id: 'ch-b', order: 1, title: 'Two' },
+      chapters: [
+        { id: 'ch-a', order: 0, title: 'One' },
+        { id: 'ch-b', order: 1, title: 'Two' },
+      ],
+    });
+  });
+
+  it('follows the author from one chapter to the next', () => {
+    loadBookWithChapter('ch-a');
+    component.selectedChapterId = 'ch-b';
+    fixture.detectChanges();
+    expect(ambient.ambient?.openChapter?.id).toBe('ch-b');
+  });
+
+  it('publishes a NULL chapter with the book still named when nothing is selected', () => {
+    // An empty book, or the deleted-with-no-replacement state. The book is still open, so this is not
+    // the same as no surface publishing at all, and the wire keeps that difference.
+    loadBookWithChapter('ch-a');
+    component.selectedChapterId = null;
+    fixture.detectChanges();
+
+    expect(ambient.ambient?.bookId).toBe('book-1');
+    expect(ambient.ambient?.openChapter).toBeNull();
+  });
+
+  it('publishes a NULL chapter in BOOK-REVIEW mode, whatever selectedChapterId still holds', () => {
+    // THE DASHBOARD CARVE-OUT. `reviewMode` does not clear the selection, so a naive read would keep
+    // reporting a chapter while the author is looking at whole-book findings, and a deictic question
+    // asked from there would silently ground in a chapter they are not reading. The server cannot catch
+    // this: it can verify only that the id names a chapter of this book.
+    loadBookWithChapter('ch-a');
+    expect(ambient.ambient?.openChapter?.id).toBe('ch-a');
+
+    component.onReviewModeChange('review');
+    fixture.detectChanges();
+
+    expect(ambient.ambient?.openChapter).toBeNull();
+    expect(component.selectedChapterId)
+      .withContext('the carve-out is about what is PUBLISHED, not about clearing editor state')
+      .toBe('ch-a');
+    expect(ambient.ambient?.chapters.length)
+      .withContext('the author is still inside the book, so a clarify still has chapters to offer')
+      .toBe(2);
+  });
+
+  it('restores the chapter on returning to edit mode', () => {
+    loadBookWithChapter('ch-a');
+    component.onReviewModeChange('review');
+    fixture.detectChanges();
+    component.onReviewModeChange('edit');
+    fixture.detectChanges();
+
+    expect(ambient.ambient?.openChapter?.id).toBe('ch-a');
+  });
+
+  it('re-publishes after a REORDER, which moves the order without touching the id', () => {
+    // The one mutation that changes the value the server keys selection and escalation on while leaving
+    // every reference this page holds identical. A stale order here is how a chapter moved since load
+    // grounds an answer in whichever chapter now holds that number.
+    loadBookWithChapter('ch-b');
+    expect(ambient.ambient?.openChapter?.order).toBe(1);
+
+    reordered$.next({
+      bookId: 'book-1',
+      newOrder: [{ chapterId: 'ch-b', order: 0 }, { chapterId: 'ch-a', order: 1 }],
+    });
+    fixture.detectChanges();
+
+    expect(ambient.ambient?.openChapter?.order).toBe(0);
+    expect(ambient.ambient?.chapters.map(c => c.id)).toEqual(['ch-b', 'ch-a']);
+  });
+
+  it('re-publishes after a RENAME, so the drawer cannot name a chapter by a dropped name', () => {
+    // A rename mutates the title IN PLACE, which a reference comparison cannot see. The revision bump
+    // at that write site is what makes it visible; this drives the same pair of writes directly, since
+    // the ChapterService stub here returns an empty update.
+    loadBookWithChapter('ch-a');
+    (component.book as unknown as { chapters: { title: string }[] }).chapters[0].title = 'One, revised';
+    (component as unknown as { chapterListRevision: number }).chapterListRevision++;
+    fixture.detectChanges();
+
+    expect(ambient.ambient?.openChapter?.title).toBe('One, revised');
+  });
+
+  it('publishes NOTHING more once the page is torn down', () => {
+    // What makes the import and export pages report no ambient chapter: they are book-scoped routes
+    // where the book context still names the book, so without this the last chapter the author had open
+    // would keep riding on requests made from a page that is not showing it.
+    loadBookWithChapter('ch-a');
+    expect(ambient.ambient).not.toBeNull();
+
+    fixture.destroy();
+    expect(ambient.ambient).toBeNull();
+  });
+
+  it('does not re-publish on a change-detection pass that moved nothing', () => {
+    loadBookWithChapter('ch-a');
+    const seen: unknown[] = [];
+    ambient.ambient$.subscribe(s => seen.push(s));
+    fixture.detectChanges();
+    fixture.detectChanges();
+    expect(seen.length)
+      .withContext('the replayed current value only; this page re-checks constantly under Syncfusion')
+      .toBe(1);
   });
 });
