@@ -24,6 +24,65 @@
   flex-direction: column;
 }
 
+/* ── Book context line (phase B) ──────────────────────────────────────────── */
+
+/* A FACT, styled like one: a quiet strip under the dock's tabs, no border box, no chevron, nothing
+   interactive. It reads as a caption on the panel rather than as a control that opens a book picker.
+   The row wraps rather than truncating, because a long book title cut off mid-word states the fact
+   worse than a second line does, and this panel is narrow by default. */
+.pc-book-context {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pd-space-2);
+  padding: var(--pd-space-3) var(--pd-space-6) 0;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+}
+
+.pc-book-context-icon {
+  flex: 0 0 auto;
+  font-size: 8px;
+  color: var(--pd-primary-400);
+}
+
+.pc-book-context-label {
+  color: var(--pd-text-muted);
+}
+
+/* The book's own name, in the book's own direction (dir="auto" in the template). `min-width: 0` plus
+   the wrapping row is what lets a long title use the width it has instead of pushing the label out. */
+.pc-book-context-title {
+  min-width: 0;
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text);
+  overflow-wrap: anywhere;
+}
+
+/* ── The open chapter on the context line (phase B, a2) ───────────────────── */
+
+/* A neutral dot between the book and the chapter. NOT a chevron: this line states a fact and a chevron
+   would read as navigation into something. `aria-hidden` in the template, so the separation is carried
+   for a screen reader by the line's composed aria-label instead. */
+.pc-book-context-sep {
+  flex: 0 0 auto;
+  color: var(--pd-text-muted);
+}
+
+/* The chapter's own name, in the book's direction (dir="auto" in the template). Quieter than the book
+   title beside it, because the book is the subject of the line and the chapter narrows it, and because
+   two values at the same weight would read as one run-on name. `min-width: 0` plus the wrapping row on
+   `.pc-book-context` is what lets a long Hebrew chapter title beside a long book title take its own row
+   at a narrow width rather than pushing the label out of the line. */
+.pc-book-context-chapter {
+  min-width: 0;
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text-secondary);
+  overflow-wrap: anywhere;
+}
+
 /* ── Start over bar (A.1, w2) ─────────────────────────────────────────────── */
 
 /* A quiet strip above the transcript, aligned to the inline-END side, which is where this surface
@@ -211,6 +270,47 @@
   box-shadow: var(--pd-ring);
 }
 
+/* ── The tutoring empty state (phase B) ───────────────────────────────────── */
+
+/* The build affordance. A PRIMARY-weight control, because this panel's whole job in this state is to
+   get the author to it: an empty state that explains a gap and offers nothing to close it is the
+   apologetic shape the todo rules out. */
+.pc-empty-action {
+  display: inline-block;
+  margin: 0 0 var(--pd-space-6);
+  padding: var(--pd-space-3) var(--pd-space-5);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-primary-600);
+  color: var(--pd-on-primary);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  font-weight: var(--pd-weight-medium);
+  text-decoration: none;
+}
+
+.pc-empty-action:hover {
+  background: var(--pd-primary-500);
+}
+
+.pc-empty-action:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+/* The example questions here are a PREVIEW of what becomes answerable, not send buttons: with no
+   briefs built, sending one would spend a model call to be told what this panel already says. Styled
+   as a plain list so nothing about them invites a click. */
+.pc-example-previews {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-2);
+  font-size: var(--pd-text-body-sm);
+  color: var(--pd-text-secondary);
+}
+
 /* ── Turns ────────────────────────────────────────────────────────────────── */
 
 .pc-turn {
@@ -262,6 +362,18 @@
   border-start-start-radius: var(--pd-radius-sm);
   /* app-markdown-text supplies its own block spacing. */
   white-space: normal;
+}
+
+/* a2: "this turn was about <chapter>", under the author's own bubble, on a turn re-asked from a clarify
+   chip. Caption-sized and muted so it annotates the turn rather than competing with it; it is a note
+   about scope, not something anybody said. `.pc-turn--user` already aligns it to the inline-END edge. */
+.pc-turn-scope {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  color: var(--pd-text-muted);
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* Carries the ANSWER's own direction (from the server's `language`), so the prose reads correctly
@@ -329,6 +441,156 @@
 .pc-citation-chip:focus-visible {
   outline: none;
   box-shadow: var(--pd-ring);
+}
+
+/* ── Book-artifact citation (phase B) ─────────────────────────────────────── */
+
+/* Its own row above the guide row, separated by nothing but order and colour: two sources, two rows.
+   The book row sits FIRST because on a book question it is the one that answers, and the guide row
+   beneath it is the supporting product context. */
+.pc-citation--book {
+  /* The row above already drew the rule, so a second border here would box the citations in. */
+  border-block-start: none;
+  padding-block-start: 0;
+}
+
+/* Warm rather than blue: at a glance the author can tell a manuscript citation from a guide citation
+   without reading either. Same shape, same size, same affordance - only the tint differs, because the
+   two are the same KIND of thing pointing at different places. */
+.pc-citation-chip--book {
+  border-color: var(--pd-border-strong);
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text-secondary);
+}
+
+.pc-citation-chip--book:hover {
+  background: var(--pd-neutral-100);
+}
+
+/* An artifact with NO destination. Deliberately not a disabled link and not greyed out to the point of
+   looking broken: it is a real citation of real grounding, it simply has nowhere to send you. So it
+   keeps the chip's shape and loses only the affordances that would promise navigation. */
+.pc-citation-chip--plain {
+  cursor: default;
+  border-style: dashed;
+  color: var(--pd-text-muted);
+}
+
+.pc-citation-chip--plain:hover {
+  background: var(--pd-surface-sunken);
+  text-decoration: none;
+}
+
+/* ── The clarifying question's chapter chips (phase B, a2) ────────────────── */
+
+/* Inside the answer card, directly under the prose that asked the question, because it is the ANSWER to
+   that sentence and putting it below the citations would separate a question from its own options. */
+.pc-clarify {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pd-space-2) var(--pd-space-3);
+  margin-block-start: var(--pd-space-4);
+}
+
+.pc-clarify-label {
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  color: var(--pd-text-muted);
+}
+
+.pc-clarify-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pd-space-2);
+  min-width: 0;
+}
+
+/* Shaped like a citation chip on purpose (same pill, same caption size), because it is the same KIND of
+   object on this surface: a named thing you can act on. Tinted with the PRIMARY colour rather than the
+   citation's neutral, because unlike a citation it is an action with a consequence - it spends a model
+   call - and the author should be able to tell the two apart without reading either.
+
+   `max-width` plus `overflow-wrap` rather than an ellipsis: a chapter title truncated in the middle is
+   a chapter the author cannot identify, which is exactly what the chip exists to let them do. Long
+   Hebrew titles wrap instead. */
+.pc-clarify-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 1px var(--pd-space-3);
+  border: 1px solid var(--pd-primary-200);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-info-bg);
+  color: var(--pd-primary-700);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  font-weight: var(--pd-weight-medium);
+  line-height: 18px;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.pc-clarify-chip:hover:not(:disabled) {
+  background: var(--pd-primary-100);
+}
+
+.pc-clarify-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+/* Disabled while a request is in flight, matching every other send affordance on this surface: a second
+   question cannot be sent while one is running, and a chip that looked live would just be ignored. */
+.pc-clarify-chip:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* ── "Thinner than usual" note (phase B) ──────────────────────────────────── */
+
+/* Inside the answer card, under the prose. Muted and small: it QUALIFIES an answer that stands, so it
+   must not compete with the answer, and it must not look like the warning-tinted fault block, which
+   means something categorically different. */
+.pc-book-thin {
+  margin: var(--pd-space-3) 0 0;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  color: var(--pd-text-muted);
+}
+
+/* ── Book context-change marker (phase B) ─────────────────────────────────── */
+
+/* A rule across the full width of the transcript with the sentence sitting in it. Full width and
+   centred on purpose: it is a boundary between two stretches of conversation, not a message from
+   either speaker, so it belongs to neither side of the column. */
+.pc-book-marker {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-3);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  color: var(--pd-text-muted);
+}
+
+.pc-book-marker::before,
+.pc-book-marker::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--pd-divider);
+}
+
+.pc-book-marker-text {
+  flex: 0 1 auto;
+  min-width: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 /* ── In-flight ────────────────────────────────────────────────────────────── */

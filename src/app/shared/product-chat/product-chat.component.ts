@@ -10,67 +10,56 @@ import {
 } from '@angular/core';
 import { AsyncPipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterLink } from '@angular/router';
+import { Params, RouterLink } from '@angular/router';
 import { Subject, takeUntil } from 'rxjs';
 
 import { MarkdownTextComponent } from '../../features/analysis-panel/markdown-text.component';
 import { AppOverlayService } from '../../core/services/app-overlay.service';
+import {
+  AmbientChapterChoice,
+  AmbientChapterService,
+  AmbientChapterState,
+} from '../../core/services/ambient-chapter.service';
+import { BookContextService, CurrentBook } from '../../core/services/book-context.service';
+import { BookSummaryService } from '../../core/services/book-summary.service';
 import { ProductChatService } from '../../core/services/product-chat.service';
 import {
+  AmbientChapterKey,
   ChatLanguage,
   ProductChatResponseDto,
   ProductChatTurnDto,
 } from '../../core/models/product-chat';
+import { ChatArtifactRef, parseArtifactRefs } from '../../core/models/chat-artifact-ref';
+import { chatArtifactDestination } from '../../core/models/chat-artifact-routing';
+import { bookSurfaceFocusToken } from '../../core/services/book-surface-focus.service';
 import {
   ChatChromeLang,
   ChatStringKey,
+  ambientChapterName,
+  artifactChipLabel,
+  bookLeftMarker,
+  bookSwitchMarker,
   chatString,
   faultMessage,
   guideTitle,
 } from '../../core/i18n/chat-strings';
+// The transcript's entry types. Re-exported below so this component stays the one import site for
+// anything that renders a transcript, which is what it was before the file-size split moved them.
+import {
+  AssistantEntry,
+  BookMarkerEntry,
+  ChatEntry,
+  FaultEntry,
+  UserEntry,
+} from './product-chat-entries';
 
-// ── Transcript entries ────────────────────────────────────────────────────────────────────────────
-
-/** Something the author typed. */
-export interface UserEntry {
-  kind: 'user';
-  id: number;
-  text: string;
-}
-
-/**
- * Something the assistant actually said, grounded in guides. `guideIds` may be empty in principle,
- * but a grounded answer from this server always names at least one guide; the template renders the
- * citation block only when there is something to cite rather than an empty label.
- */
-export interface AssistantEntry {
-  kind: 'assistant';
-  id: number;
-  text: string;
-  guideIds: string[];
-  language: ChatLanguage;
-}
-
-/**
- * The assistant DECLINING to speak. Not an assistant turn, and rendered nothing like one.
- *
- * This is the entry type the whole feature is built around. `isGrounded: false` means the server
- * refused to put an ungrounded answer in front of the author, and if the client rendered that refusal
- * in an assistant bubble it would have undone the refusal - the author would read a message from the
- * assistant and treat it as one. So a fault gets its own entry kind, its own block, its own copy, and
- * is never fed back into the history sent to the server.
- *
- * `question` is kept so the author can retry the exact thing they asked instead of retyping it.
- * `reason` is the raw wire code (or the client-side `network`), resolved to prose at render time.
- */
-export interface FaultEntry {
-  kind: 'fault';
-  id: number;
-  reason: string;
-  question: string;
-}
-
-export type ChatEntry = UserEntry | AssistantEntry | FaultEntry;
+export type {
+  AssistantEntry,
+  BookMarkerEntry,
+  ChatEntry,
+  FaultEntry,
+  UserEntry,
+} from './product-chat-entries';
 
 /**
  * The product assistant: the ASSISTANT TAB of the app dock, answering questions about PageDraft from
@@ -135,6 +124,62 @@ export type ChatEntry = UserEntry | AssistantEntry | FaultEntry;
  *
  * No streaming: the citation is only known once the answer completes, and a streamed reply would put
  * prose the author can act on on screen before anything said where it came from.
+ *
+ * ── BOOK CONTEXT (phase B, c2) ─────────────────────────────────────────────────────────────────────
+ * The drawer is still app chrome. What changed is that it now KNOWS when it is open inside a book: the
+ * bookId rides on every request from there, a compact line under the dock's tab states which book that
+ * is, and answers can cite the manuscript's own artifacts as chips beside the guide chips. Outside a
+ * book nothing about phase A moves - no bookId on the wire, no context line, no artifact chips, and the
+ * server's book-question refusal stands exactly as it shipped.
+ *
+ * THE BOOK ID COMES FROM THE ROUTE, through {@link BookContextService}, not from a component input.
+ * This surface has no host to give it one: it is mounted once by the dock for the life of the app,
+ * across every route.
+ *
+ * ── THE OPEN CHAPTER (phase B, a2) ─────────────────────────────────────────────────────────────────
+ * The bookId alone was not enough, and a live owner session is what proved it: asked "זה פרק שעבר
+ * עריכה..." about the chapter on screen, Show had the book and answered from a product guide, because
+ * nothing on the wire said which chapter "זה" was. So the drawer now also knows the open chapter,
+ * through {@link AmbientChapterService} - pushed by the editor page rather than derived from the route,
+ * because there is no chapter route segment to derive it from.
+ *
+ * TWO RULES GOVERN IT, and they outrank every other consideration on this surface:
+ *
+ *  1. AUTOMATIC FIRST. If the chapter is open on screen, the answer is about it and Show does not ask.
+ *     The clarifying question is what happens when nothing resolves, never what happens instead of
+ *     resolving, so this component's job is to make sure the key is actually on the wire; a client that
+ *     fails to send it turns the whole feature into a prompt.
+ *  2. EXPLICIT BEATS AMBIENT. The server enforces this for a chapter NAMED in the question; the client
+ *     enforces it for a chapter the author TAPPED on a clarify chip (see {@link chooseChapter}).
+ *
+ * The context line grew a second value for the same reason it exists at all: once Show can answer about
+ * one chapter rather than the whole book, an author who cannot see WHICH chapter cannot tell those two
+ * answers apart. It stays a fact and not a setting - the way to change the chapter Show sees is to open
+ * a different one.
+ *
+ * ── DECISION: a book switch KEEPS the transcript, and scopes the HISTORY ───────────────────────────
+ * The alternative on the table was a hard reset. It was rejected because it throws away product Q&A
+ * that is still perfectly valid - "how do I export?" does not stop being answered because the author
+ * opened a different manuscript - and because a conversation that silently empties itself when you
+ * navigate is a surface the author stops trusting with anything long.
+ *
+ * But keeping the transcript raises the exact risk the todo names: the previous book's answers must not
+ * SILENTLY carry over. So the switch is handled on two levels, and both are needed:
+ *
+ *  1. VISIBLY, for the author: a {@link BookMarkerEntry} is inserted at the switch point, saying which
+ *     book is in force from here on. Everything above it stays readable and is plainly marked as
+ *     belonging to before.
+ *  2. ON THE WIRE, for the model: {@link historyForServer} sends only turns whose captured `bookId`
+ *     matches the current one, plus every turn taken OUTSIDE a book (those are product Q&A by
+ *     definition and are what the "keep it" argument is about). So book A's answers are visible to the
+ *     author and invisible to the model once the author is in book B. A marker alone would have left
+ *     the model reading book A's chapter summaries while answering about book B, which is fabrication
+ *     with a receipt.
+ *
+ * The one deliberate over-drop: a PRODUCT question asked while book A happened to be open is tagged
+ * with book A and is dropped from the wire after a switch. It is the conservative direction, and
+ * separating "product question asked inside a book" from "book question" would mean re-deriving on the
+ * client the classification the server's prompt owns.
  */
 @Component({
   selector: 'app-product-chat',
@@ -147,6 +192,9 @@ export type ChatEntry = UserEntry | AssistantEntry | FaultEntry;
 export class ProductChatComponent implements OnDestroy {
   private readonly chat = inject(ProductChatService);
   private readonly overlays = inject(AppOverlayService);
+  private readonly bookContext = inject(BookContextService);
+  private readonly ambientChapters = inject(AmbientChapterService);
+  private readonly summaries = inject(BookSummaryService);
   private readonly cdr = inject(ChangeDetectorRef);
 
   private readonly destroy$ = new Subject<void>();
@@ -204,6 +252,32 @@ export class ProductChatComponent implements OnDestroy {
    */
   private nextId = 1;
 
+  /**
+   * The book the drawer is currently looking at, or null outside one (phase B). Mirrored from
+   * {@link BookContextService} so the OnPush template reads a plain field.
+   */
+  book: CurrentBook | null = null;
+
+  /**
+   * The chapter surface's latest snapshot, or null when no book surface is publishing one (phase B,
+   * a2). Mirrored from {@link AmbientChapterService} so the OnPush template reads a plain field.
+   *
+   * NOT read directly by anything that matters: every consumer goes through {@link ambient}, which
+   * additionally checks the snapshot belongs to the book the drawer currently names. The two services
+   * move on different ticks during a book switch, and for one frame this can hold the PREVIOUS book's
+   * chapter while {@link book} already holds the next one.
+   */
+  private ambientState: AmbientChapterState | null = null;
+
+  /**
+   * Whether the current book has book briefs built, or null while unknown.
+   *
+   * NULL IS NOT "NO". The tutoring empty state is shown only on a definite false, so a book whose
+   * status read has not landed (or failed) gets the ordinary greeting rather than being told its briefs
+   * are missing on no evidence. Same rule the dashboard's own first-run panel follows.
+   */
+  briefsBuilt: boolean | null = null;
+
   constructor() {
     // Disarm on leaving the tab. Without this the confirmation could sit armed behind a closed drawer
     // and be completed days later by a click the author no longer connects to the question, which is
@@ -214,6 +288,96 @@ export class ProductChatComponent implements OnDestroy {
         this.cdr.markForCheck();
       }
     });
+
+    this.bookContext.currentBook$
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(book => this.onBookContextChanged(book));
+
+    // a2: the open chapter, pushed by the editor page. Its own subscription rather than a combineLatest
+    // with the book above, because the two are genuinely independent facts arriving on their own ticks
+    // and the reconciliation between them is a READ-time check (see {@link ambient}), not a join.
+    this.ambientChapters.ambient$.pipe(takeUntil(this.destroy$)).subscribe(state => {
+      this.ambientState = state;
+      this.cdr.markForCheck();
+    });
+  }
+
+  // ── Book context (phase B) ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * The book changed, or its title landed.
+   *
+   * The MARKER is keyed on the id, not on the emission: the service emits a second time when the title
+   * arrives, and writing a marker for that would put two rules in the transcript for one switch. A
+   * marker is also not written for the FIRST book of an empty transcript - there is nothing above it to
+   * separate from, and a conversation that opens with "from here on I am looking at X" before a word
+   * has been said reads as noise rather than as a boundary.
+   */
+  private onBookContextChanged(book: CurrentBook | null): void {
+    const previousId = this.book?.bookId ?? null;
+    const nextId = book?.bookId ?? null;
+    this.book = book;
+
+    if (previousId !== nextId) {
+      this.briefsBuilt = null;
+      if (this.entries.length > 0) {
+        this.entries = [
+          ...this.entries,
+          { kind: 'book-marker', id: this.nextId++, bookId: nextId, title: book?.title ?? null },
+        ];
+        this.scrollToLatest();
+      }
+      this.loadBriefsState(book);
+    } else if (book && this.book) {
+      // Same book, title landed: update the LAST marker for this book in place, so a marker written
+      // before the title arrived does not keep saying "this book" forever.
+      for (let i = this.entries.length - 1; i >= 0; i--) {
+        const entry = this.entries[i];
+        if (entry.kind !== 'book-marker') continue;
+        if (entry.bookId === book.bookId && entry.title === null && book.title) {
+          this.entries = [
+            ...this.entries.slice(0, i),
+            { ...entry, title: book.title },
+            ...this.entries.slice(i + 1),
+          ];
+        }
+        break;
+      }
+    }
+
+    this.cdr.markForCheck();
+  }
+
+  /**
+   * Read whether this book has briefs, for the tutoring empty state.
+   *
+   * The BRIEFS STATUS and not a general book read, because that is the one fact the empty state turns
+   * on. A failure leaves {@link briefsBuilt} null, which renders the ordinary greeting: telling an
+   * author their briefs are missing because a status GET failed would be the surface fabricating a
+   * state, which is the same class of error the whole feature exists to avoid, just in chrome.
+   */
+  private loadBriefsState(book: CurrentBook | null): void {
+    if (!book) return;
+    const bookId = book.bookId;
+
+    this.summaries
+      .getBookSummaryStatus(bookId, book.language?.trim() || 'he')
+      .pipe(takeUntil(this.destroy$))
+      .subscribe({
+        next: status => {
+          if (this.book?.bookId !== bookId) return;
+          // "Built" means there is something to answer FROM, which is per-chapter brief coverage. A
+          // book mid-build (some chapters done) is not in the never-built state the empty state
+          // describes, so it is not offered the build affordance.
+          this.briefsBuilt = !!status && (status.hasSummary || status.builtChapters > 0);
+          this.cdr.markForCheck();
+        },
+        error: () => {
+          if (this.book?.bookId !== bookId) return;
+          this.briefsBuilt = null;
+          this.cdr.markForCheck();
+        },
+      });
   }
 
   /** Dir on the host, so this surface mirrors with the app language even mounted on its own. */
@@ -242,6 +406,145 @@ export class ProductChatComponent implements OnDestroy {
   /** The display title of a cited guide, falling back to the raw id for a guide we do not know. */
   citationTitle(id: string): string {
     return guideTitle(this.appLang, id);
+  }
+
+  // ── The context line, the marker and the book-artifact chips (phase B) ──────────────────────────
+
+  /** The id to send with the next question, or null outside a book. */
+  get bookId(): string | null {
+    return this.book?.bookId ?? null;
+  }
+
+  /**
+   * The book's name for the context line, falling back to "this book".
+   *
+   * The FALLBACK RATHER THAN HIDING THE LINE: a book IS open, that is the fact the line states, and a
+   * line that appeared a moment after the drawer opened would read as a flicker instead of as a state.
+   */
+  get bookTitleLabel(): string {
+    return this.book?.title?.trim() || this.label('bookContextUnnamed');
+  }
+
+  // ── The ambient open chapter (phase B, a2) ──────────────────────────────────────────────────────
+
+  /**
+   * The chapter snapshot, ONLY when it belongs to the book this drawer currently names.
+   *
+   * The book-id agreement is the whole guard. `BookContextService` derives from the router and
+   * `AmbientChapterService` is pushed by the editor's change detection, so on a book switch there is a
+   * window in which they disagree. Sending the pair from that window would put book A's chapter on a
+   * request about book B, which is the same wrong-chapter fabrication as answering about chapter 3 when
+   * the author named chapter 5, with the books swapped instead of the chapters.
+   */
+  private get ambient(): AmbientChapterState | null {
+    return this.ambientChapters.forBook(this.book?.bookId ?? null);
+  }
+
+  /**
+   * The chapter Show is looking at, or null when none is.
+   *
+   * Null covers three different real states and deliberately does not distinguish between them here,
+   * because the SURFACE treats them identically (no chapter half on the context line): a book with no
+   * chapters, the book-review dashboard (where the editor publishes null by contract), and a
+   * book-scoped page that is not the editor at all (import, export), where nothing is publishing.
+   * The WIRE keeps the distinction that matters, sending an explicit null rather than omitting the key.
+   */
+  get ambientChapter(): AmbientChapterChoice | null {
+    return this.ambient?.openChapter ?? null;
+  }
+
+  /** The open chapter's display name for the context line, or null when there is no chapter. */
+  get ambientChapterLabel(): string | null {
+    const chapter = this.ambientChapter;
+    return chapter ? ambientChapterName(this.appLang, chapter) : null;
+  }
+
+  /**
+   * The context line's accessible name.
+   *
+   * Composed rather than a fixed string once a chapter is in play, because the line renders two values
+   * separated by nothing but a dot: sighted readers get the separation from the layout, and a screen
+   * reader would otherwise hear a book title and a chapter title run together with no indication which
+   * is which. With NO chapter it is byte-identical to what phase B's c2 shipped, so the book-only line
+   * is unchanged.
+   */
+  get bookContextAriaLabel(): string {
+    const base = this.label('bookContextAria');
+    const chapter = this.ambientChapterLabel;
+    if (!chapter) return base;
+    return `${base}: ${this.bookTitleLabel}. ${this.label('bookContextChapterAria')}: ${chapter}`;
+  }
+
+  /** How a clarify chip and an "about" tag name a chapter. One function, so they cannot disagree. */
+  chapterChoiceLabel(chapter: AmbientChapterChoice): string {
+    return ambientChapterName(this.appLang, chapter);
+  }
+
+  /** The "this turn was about X" tag on a turn re-asked from a clarify chip. */
+  askedAboutLabel(chapter: string): string {
+    return this.label('askedAboutChapter').replace('{0}', chapter);
+  }
+
+  /** The sentence a context-change marker shows. */
+  markerText(entry: BookMarkerEntry): string {
+    return entry.bookId
+      ? bookSwitchMarker(this.appLang, entry.title)
+      : bookLeftMarker(this.appLang);
+  }
+
+  /** A book-artifact chip's visible name. Falls back to the raw ref for a type we do not know. */
+  artifactLabel(ref: ChatArtifactRef): string {
+    return artifactChipLabel(this.appLang, ref);
+  }
+
+  /**
+   * Where a chip goes, or null when it must render UNLINKED.
+   *
+   * Routed against the ANSWER's book, not the current one - see {@link AssistantEntry.bookId}.
+   */
+  artifactLink(ref: ChatArtifactRef, bookId: string | null): unknown[] | null {
+    return chatArtifactDestination(ref, bookId)?.link ?? null;
+  }
+
+  /** The query params that go with {@link artifactLink}. Empty object when there is no destination. */
+  artifactQueryParams(ref: ChatArtifactRef, bookId: string | null): Params {
+    return chatArtifactDestination(ref, bookId)?.queryParams ?? {};
+  }
+
+  /** The "this answer is thinner than usual" sentence, for a partial book fault on a good answer. */
+  get bookThinNote(): string {
+    return this.label('bookThinNote');
+  }
+
+  // ── The tutoring empty state (phase B) ──────────────────────────────────────────────────────────
+
+  /**
+   * Whether the empty state should be the BOOK one: inside a book, definitely nothing built.
+   *
+   * Requires a definite `false` on {@link briefsBuilt}. Unknown renders the app-level greeting, which
+   * is the honest thing to show when the surface does not know what it would be claiming.
+   */
+  get showBookEmptyState(): boolean {
+    return !!this.book && this.briefsBuilt === false;
+  }
+
+  /**
+   * The build affordance's destination: the BOOK BRIEFS STATUS ROW.
+   *
+   * DECISION, since "the build affordance" could have meant a button here that starts the build. It
+   * does not, and that is deliberate. The briefs row owns the consent prompt, the wall-clock estimate,
+   * the cost estimate, the live progress and the job-registry tracking. A second build trigger in the
+   * drawer would either bypass all of that (starting an unestimated, unconsented build from a chat
+   * panel) or duplicate it, and a duplicated consent flow is one that will drift from the real one.
+   * Taking the author TO the control is actionable: it is one click, it lands on the thing that builds,
+   * and it is the same place every other "build your briefs" affordance in the app points at.
+   */
+  get buildBriefsLink(): unknown[] | null {
+    return this.bookId ? ['/books', this.bookId] : null;
+  }
+
+  get buildBriefsQueryParams(): Params {
+    return { focus: bookSurfaceFocusToken({ target: 'status', stage: 'summary' }) };
   }
 
   /** The singular or plural citation label, so one guide does not get introduced as several. */
@@ -295,6 +598,10 @@ export class ProductChatComponent implements OnDestroy {
 
   asFault(entry: ChatEntry): FaultEntry | null {
     return entry.kind === 'fault' ? entry : null;
+  }
+
+  asMarker(entry: ChatEntry): BookMarkerEntry | null {
+    return entry.kind === 'book-marker' ? entry : null;
   }
 
   // ── Showing / hiding ────────────────────────────────────────────────────────────────────────────
@@ -411,21 +718,62 @@ export class ProductChatComponent implements OnDestroy {
     this.ask(entry.question);
   }
 
-  private ask(question: string): void {
+  /**
+   * The author answered a clarifying question by tapping a chapter (phase B, a2).
+   *
+   * IT RE-ASKS THE SAME SENTENCE WITH THE CHOSEN CHAPTER AS THE AMBIENT KEY, rather than rewriting the
+   * question to name a chapter number, and that is the substantive decision here. Appending "(chapter
+   * 3)" would push the answer through the server's EXPLICIT number path, where a 1-based label against
+   * a 0-based order is genuinely ambiguous and can resolve to two chapters. Supplying the id and order
+   * instead resolves exactly one chapter by identity, which is the whole reason the ambient key carries
+   * an id at all. The question the author typed is left untouched.
+   */
+  chooseChapter(clarify: { question: string }, chapter: AmbientChapterChoice): void {
+    if (this.pending) return;
+    this.ask(clarify.question, chapter);
+  }
+
+  /**
+   * @param chapterOverride A chapter the author picked EXPLICITLY from a clarify chip. It outranks the
+   * ambient one, which is the client's half of "explicit beats ambient": the author has just answered
+   * the question of which chapter they meant, so whatever happens to be open must not overrule them.
+   */
+  private ask(question: string, chapterOverride?: AmbientChapterChoice | null): void {
     // Sending is an answer to "did you mean to start over?" as clearly as Cancel is.
     this.confirmingReset = false;
     const history = this.historyForServer();
-    this.entries = [...this.entries, { kind: 'user', id: this.nextId++, text: question }];
+    // CAPTURED, not re-read on arrival. The author can navigate to another book while the answer is in
+    // flight, and this answer is about the book it was ASKED in; re-reading the current book on arrival
+    // would file it under the wrong manuscript and route its chips there too.
+    const bookId = this.bookId;
+    // Captured for the same reason and read ONCE, so the chapter this question is answered about is the
+    // chapter that was on screen when it was asked. Reading it again on arrival would let an author who
+    // switched chapters mid-answer get a reply filed under a chapter they had already left.
+    const chapter = chapterOverride ?? this.ambientChapter;
+    this.entries = [
+      ...this.entries,
+      {
+        kind: 'user',
+        id: this.nextId++,
+        text: question,
+        bookId,
+        askedAboutChapter: chapterOverride ? this.chapterChoiceLabel(chapterOverride) : null,
+      },
+    ];
     this.pending = true;
     this.scrollToLatest();
 
+    const ambient: AmbientChapterKey | null = chapter
+      ? { id: chapter.id, order: chapter.order }
+      : null;
+
     this.chat
-      .ask(question, history, this.appLang)
+      .ask(question, history, this.appLang, bookId, ambient)
       // `reset$` as well as `destroy$`: a reset ends this request outright, so its answer cannot be
       // appended to the transcript that replaced the one it was asked in.
       .pipe(takeUntil(this.destroy$), takeUntil(this.reset$))
       .subscribe({
-        next: res => this.acceptResponse(res, question),
+        next: res => this.acceptResponse(res, question, bookId),
         error: () => this.acceptFault('network', question),
       });
   }
@@ -439,7 +787,11 @@ export class ProductChatComponent implements OnDestroy {
    * has only two fail-safe sentences for four fault codes, so the client's per-reason copy says more,
    * and putting server prose in the failure block would make it read like a short answer.
    */
-  private acceptResponse(res: ProductChatResponseDto, question: string): void {
+  private acceptResponse(
+    res: ProductChatResponseDto,
+    question: string,
+    bookId: string | null
+  ): void {
     if (!res?.isGrounded) {
       this.acceptFault(res?.faultReason ?? 'unknown', question);
       return;
@@ -452,9 +804,44 @@ export class ProductChatComponent implements OnDestroy {
         text: res.answer ?? '',
         guideIds: res.guideIds ?? [],
         language: res.language === 'en' ? 'en' : 'he',
+        bookId,
+        // Parsed here rather than at render time so the template does not re-parse on every change
+        // detection pass, and so an unknown ref is resolved once into the "renders unlinked" shape.
+        artifactRefs: parseArtifactRefs(res.artifactRefs),
+        // A fault on a GROUNDED answer is the partial case: the answer stands and one source was
+        // unreadable. Carried onto the entry so the note travels with the answer it qualifies.
+        bookFaultReason: res.bookFaultReason ?? null,
+        clarify: this.clarifyFor(res, question, bookId),
       },
     ];
     this.settle();
+  }
+
+  /**
+   * The clarify chips this answer should carry, or null (phase B, a2, d2 section (5)).
+   *
+   * THREE GUARDS, and each one closes a different way this could put an absurd question in front of the
+   * author:
+   *
+   *  1. The SERVER has to have asked. The flag is computed from the selection, never from the answer's
+   *     prose, so it is false by construction whenever a chapter resolved - which is what makes "Show
+   *     never asks while the chapter is open on screen" a property rather than a hope.
+   *  2. The chapter list has to belong to THIS answer's book, checked against the id captured when the
+   *     question was sent rather than against whatever book is open now.
+   *  3. THERE HAS TO BE MORE THAN ONE CHAPTER TO CHOOSE BETWEEN. The server enforces this too; it is
+   *     repeated here because the owner's real book is a single chapter, "a clarifying question there
+   *     would be absurd and must be impossible", and a rule that is impossible on one half only is a
+   *     rule that one wire change can undo.
+   */
+  private clarifyFor(
+    res: ProductChatResponseDto,
+    question: string,
+    bookId: string | null
+  ): { question: string; choices: readonly AmbientChapterChoice[] } | null {
+    if (res.needsChapterClarification !== true) return null;
+    const chapters = this.ambientChapters.forBook(bookId)?.chapters ?? [];
+    if (chapters.length < 2) return null;
+    return { question, choices: chapters };
   }
 
   private acceptFault(reason: string, question: string): void {
@@ -478,10 +865,21 @@ export class ProductChatComponent implements OnDestroy {
    * applies the window it actually reads.
    */
   private historyForServer(): ProductChatTurnDto[] {
+    const current = this.bookId;
     const turns: ProductChatTurnDto[] = [];
     for (const e of this.entries) {
+      // PHASE B: a turn taken in a DIFFERENT book does not go up. It stays in the transcript, under its
+      // context-change marker, where the author can still read it; what it must not do is condition an
+      // answer about the book that is open now. A turn taken outside any book (`bookId: null`) always
+      // goes up: those are product Q&A, and keeping them is the entire reason a switch does not clear
+      // the thread. See the class doc's decision.
+      if (e.kind === 'user' || e.kind === 'assistant') {
+        if (e.bookId !== null && e.bookId !== current) continue;
+      }
       if (e.kind === 'user') turns.push({ role: 'user', content: e.text });
       else if (e.kind === 'assistant') turns.push({ role: 'assistant', content: e.text });
+      // A `book-marker` is never sent: nobody said it. It is a rule drawn in the transcript, and the
+      // scoping above is what makes it true on the wire rather than only on screen.
     }
     return turns;
   }

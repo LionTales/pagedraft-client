@@ -14,6 +14,44 @@
 @if (isTabShowing$ | async) {
   <div class="pc-pane">
 
+    <!-- ── BOOK CONTEXT LINE (phase B) ───────────────────────────────────────────────────────────
+         A compact statement of WHICH book the assistant is looking at, directly under the dock's tab
+         strip. Rendered only inside a book; outside one there is nothing to state and the line is
+         absent rather than saying "no book", which would turn a normal condition into a warning.
+
+         THE VISUAL LANGUAGE IS A FACT, NOT A SETTING: no chevron, no control, nothing clickable. The
+         way to change which book Show sees is to be in a different book, and an affordance here would
+         promise a book picker this drawer does not have.
+
+         `dir="auto"` on the TITLE only: the book's name is in the book's language, which need not be
+         the chrome's, and its direction is the one thing about this line that follows the book. The
+         label beside it is chrome and stays in the chrome direction. -->
+    @if (book) {
+      <div class="pc-book-context" [attr.aria-label]="bookContextAriaLabel">
+        <span class="pc-book-context-icon" aria-hidden="true">▪</span>
+        <span class="pc-book-context-label">{{ label('bookContextLabel') }}</span>
+        <span class="pc-book-context-title" dir="auto">{{ bookTitleLabel }}</span>
+
+        <!-- THE OPEN CHAPTER (a2). Absent when none is open, exactly as the whole line is absent
+             outside a book: no chapter is a normal state (an empty book, the book-review dashboard, the
+             import or export page) and rendering "no chapter" would turn it into a warning.
+
+             The separator is a DOT rather than a chevron, deliberately: a chevron would read as
+             navigation, and this half is the same kind of fact the book half is. `dir="auto"` for the
+             same reason the title carries it - a chapter's name is written in the book's language,
+             which need not be the chrome's. The chapter is a separate flex item, so a long Hebrew title
+             beside a long book title wraps to its own row at a narrow width instead of pushing the
+             label off the line. -->
+        @if (ambientChapterLabel; as chapter) {
+          <span class="pc-book-context-sep" aria-hidden="true">·</span>
+          <span
+            class="pc-book-context-chapter"
+            data-testid="pc-ambient-chapter"
+            dir="auto">{{ chapter }}</span>
+        }
+      </div>
+    }
+
     <!-- ── Start over (A.1, w2) ──────────────────────────────────────────────────────────────────
          Rendered ONLY once there is a conversation to clear, so the empty state has nothing to
          mis-click, and gated behind a second, differently-labelled click. Nothing here is saved: the
@@ -49,24 +87,57 @@
     <div class="pc-body" #scroller aria-live="polite">
 
       @if (entries.length === 0 && !pending) {
-        <!-- Empty state. Says what the assistant WILL and will NOT do before it is asked anything,
-             because the refusal behaviour is the property that makes it trustworthy and the author
-             should meet it up front rather than the first time it fires. -->
-        <div class="pc-empty">
-          <!-- Show's own avatar, not a generic glyph (f03): this is the one screen whose entire job is
-               to introduce the assistant by name, so the face beside that name has to be its own.
-               Decorative: the heading right below already says "Show", so a screen reader must not
-               hear the name twice. -->
-          <img class="pc-empty-icon" src="/assistant/show-header.png" alt="" aria-hidden="true" />
-          <p class="pc-empty-title">{{ label('emptyTitle') }}</p>
-          <p class="pc-empty-body">{{ label('emptyBody') }}</p>
-          <p class="pc-empty-examples-title">{{ label('emptyExamplesTitle') }}</p>
-          <div class="pc-examples">
-            <button class="pc-example" type="button" (click)="useExample('example1')">{{ label('example1') }}</button>
-            <button class="pc-example" type="button" (click)="useExample('example2')">{{ label('example2') }}</button>
-            <button class="pc-example" type="button" (click)="useExample('example3')">{{ label('example3') }}</button>
+        @if (showBookEmptyState) {
+          <!-- THE TUTORING EMPTY STATE (phase B): inside a book that has no briefs yet.
+               Not an apology and not a refusal. It states the condition, says what becomes possible
+               once it is met, carries the REAL build action, and previews the questions that will then
+               be answerable, so the author leaves knowing both what to do and what it buys them. The
+               examples are shown as a preview here (not as send buttons): sending "what happens in
+               chapter 3" against a book with no briefs would spend a model call to be told there are
+               no briefs, which is the thing this panel is already saying. -->
+          <div class="pc-empty pc-empty--book" data-testid="pc-empty-book">
+            <img class="pc-empty-icon" src="/assistant/show-header.png" alt="" aria-hidden="true" />
+            <p class="pc-empty-title">{{ label('emptyBookTitle') }}</p>
+            <p class="pc-empty-body">{{ label('emptyBookBody') }}</p>
+            @if (buildBriefsLink; as target) {
+              <a
+                class="pc-empty-action"
+                data-testid="pc-build-briefs"
+                [routerLink]="target"
+                [queryParams]="buildBriefsQueryParams"
+                (click)="openCitation()">{{ label('emptyBookBuild') }}</a>
+            }
+            <p class="pc-empty-examples-title">{{ label('emptyBookExamplesTitle') }}</p>
+            <ul class="pc-example-previews">
+              <li dir="auto">{{ label('bookExample1') }}</li>
+              <li dir="auto">{{ label('bookExample2') }}</li>
+              <li dir="auto">{{ label('bookExample3') }}</li>
+            </ul>
           </div>
-        </div>
+        } @else {
+          <!-- Empty state. Says what the assistant WILL and will NOT do before it is asked anything,
+               because the refusal behaviour is the property that makes it trustworthy and the author
+               should meet it up front rather than the first time it fires. -->
+          <div class="pc-empty">
+            <!-- Show's own avatar, not a generic glyph (f03): this is the one screen whose entire job is
+                 to introduce the assistant by name, so the face beside that name has to be its own.
+                 Decorative: the heading right below already says "Show", so a screen reader must not
+                 hear the name twice. -->
+            <img class="pc-empty-icon" src="/assistant/show-header.png" alt="" aria-hidden="true" />
+            <p class="pc-empty-title">{{ label('emptyTitle') }}</p>
+            <!-- f01 (review finding #5): "I answer only from the guides" is only true outside a book.
+                 Inside one with briefs built, this branch is what greets the author (the tutoring branch
+                 above only fires while briefs are NOT built), so it needs the same book/no-book split the
+                 grounding note already has. -->
+            <p class="pc-empty-body">{{ label(book ? 'emptyBodyBook' : 'emptyBody') }}</p>
+            <p class="pc-empty-examples-title">{{ label('emptyExamplesTitle') }}</p>
+            <div class="pc-examples">
+              <button class="pc-example" type="button" (click)="useExample('example1')">{{ label('example1') }}</button>
+              <button class="pc-example" type="button" (click)="useExample('example2')">{{ label('example2') }}</button>
+              <button class="pc-example" type="button" (click)="useExample('example3')">{{ label('example3') }}</button>
+            </div>
+          </div>
+        }
       }
 
       @for (entry of entries; track entry.id) {
@@ -77,6 +148,16 @@
           <div class="pc-turn pc-turn--user">
             <span class="pc-role">{{ label('roleUser') }}</span>
             <div class="pc-bubble pc-bubble--user" dir="auto">{{ user.text }}</div>
+            <!-- a2: this turn was re-asked from a clarify chip, so it was scoped to a chapter the
+                 author picked rather than to whatever is open. Shown only in that case: a chip re-asks
+                 the SAME sentence, so without this the transcript would carry the identical question
+                 twice with nothing to say why the answers differ. On an ordinary turn the context line
+                 already states the chapter and repeating it per turn would be noise. -->
+            @if (user.askedAboutChapter; as chapter) {
+              <span class="pc-turn-scope" data-testid="pc-turn-scope" dir="auto">
+                {{ askedAboutLabel(chapter) }}
+              </span>
+            }
           </div>
         }
 
@@ -90,9 +171,79 @@
           <div class="pc-turn pc-turn--assistant">
             <span class="pc-role">{{ label('roleAssistant') }}</span>
             <div class="pc-bubble pc-bubble--assistant">
+              <!-- MIXED DIRECTION (phase B). The answer runs in the server's answer language, and
+                   `blockDirBase` tells the renderer what that is so any BLOCK inside it written mostly
+                   in the other script gets its own `dir`. That is the case this todo is about: a
+                   Hebrew drawer quoting an English chapter brief, and an English drawer quoting a
+                   Hebrew one. A block that agrees with the answer carries no attribute at all, so the
+                   markup only marks real switches. See core/i18n/text-direction.ts for why this is
+                   script-majority rather than dir="auto" (a Hebrew paragraph opening with "PageDraft"
+                   would flip whole under auto). -->
               <div class="pc-answer" [attr.dir]="dirFor(answer.language)">
-                <app-markdown-text [text]="answer.text" />
+                <app-markdown-text [text]="answer.text" [blockDirBase]="dirFor(answer.language)" />
               </div>
+
+              <!-- THE CLARIFYING QUESTION's chips (a2, d2 section (5)).
+                   The server asked which chapter, so answering it costs a TAP rather than a retyped
+                   sentence: each chip re-asks the same question with that chapter supplied as the
+                   ambient key, which resolves it by identity instead of by a number the 0-based wire
+                   and the 1-based label could disagree about.
+
+                   Rendered only when the server's flag is true AND this book has more than one chapter
+                   (see `clarifyFor`). The server computes the flag from its own selection and is false
+                   by construction whenever a chapter resolved, so these chips cannot appear on a
+                   question the open chapter already answered. Buttons, not links: they send a request,
+                   they do not navigate. -->
+              @if (answer.clarify; as clarify) {
+                <div class="pc-clarify" data-testid="pc-clarify">
+                  <span class="pc-clarify-label">{{ label('clarifyLabel') }}</span>
+                  <span class="pc-clarify-chips">
+                    @for (choice of clarify.choices; track choice.id) {
+                      <button
+                        class="pc-clarify-chip"
+                        type="button"
+                        dir="auto"
+                        [disabled]="pending"
+                        (click)="chooseChapter(clarify, choice)">{{ chapterChoiceLabel(choice) }}</button>
+                    }
+                  </span>
+                </div>
+              }
+
+              <!-- The book half came back THIN, on an answer that still stands. A NOTE inside the
+                   answer card, not a failure block: the server said isGrounded, so dressing this as a
+                   failure would misreport a good answer, and hiding it would let a thinner-than-usual
+                   answer pass as a complete one. -->
+              @if (answer.bookFaultReason) {
+                <p class="pc-book-thin" data-testid="pc-book-thin">{{ bookThinNote }}</p>
+              }
+
+              <!-- BOOK-ARTIFACT CITATIONS (phase B). Its own row above the guide citation, and its own
+                   label, because the two say different things about where an answer came from: one is
+                   the product's documentation, the other is the author's own manuscript. A chip with a
+                   destination is a link; one without is a plain span, which is the todo's rule - an
+                   artifact with no surface renders UNLINKED rather than dead. -->
+              @if (answer.artifactRefs.length) {
+                <div class="pc-citation pc-citation--book" data-testid="pc-book-citation">
+                  <span class="pc-citation-label">{{ label('citationBook') }}</span>
+                  <span class="pc-citation-list">
+                    @for (ref of answer.artifactRefs; track ref.raw) {
+                      @if (artifactLink(ref, answer.bookId); as target) {
+                        <a
+                          class="pc-citation-chip pc-citation-chip--book"
+                          [attr.data-artifact]="ref.raw"
+                          [routerLink]="target"
+                          [queryParams]="artifactQueryParams(ref, answer.bookId)"
+                          (click)="openCitation()">{{ artifactLabel(ref) }}</a>
+                      } @else {
+                        <span
+                          class="pc-citation-chip pc-citation-chip--book pc-citation-chip--plain"
+                          [attr.data-artifact]="ref.raw">{{ artifactLabel(ref) }}</span>
+                      }
+                    }
+                  </span>
+                </div>
+              }
 
               @if (answer.guideIds.length) {
                 <!-- CITATION. A feature, not a footnote: it is how the author discovers that the
@@ -138,16 +289,29 @@
             </div>
           </div>
         }
+
+        @if (asMarker(entry); as marker) {
+          <!-- THE CONTEXT-CHANGE MARKER (phase B). A rule across the transcript saying where one
+               book's answers stop and the next book's begin. Not a turn: no bubble, no side, no role
+               label, because nobody said it. It is the visible half of the book-switch decision; the
+               other half is that the turns above it stop going up to the server (see
+               `historyForServer`). -->
+          <div class="pc-book-marker" role="separator" data-testid="pc-book-marker">
+            <span class="pc-book-marker-text" dir="auto">{{ markerText(marker) }}</span>
+          </div>
+        }
       }
 
       @if (pending) {
         <!-- In-flight. Says what it is doing ("looking through the guides") rather than a bare
-             spinner, because the wait is retrieval plus a local model and can run several seconds. -->
+             spinner, because the wait is retrieval plus a local model and can run several seconds.
+             f01 (review finding #5): a book-scoped question also sends book artifacts, so the row must
+             say so - same book/no-book split as the grounding note and the empty-state greeting. -->
         <div class="pc-turn pc-turn--assistant pc-pending">
           <span class="pc-role">{{ label('roleAssistant') }}</span>
           <div class="pc-bubble pc-bubble--assistant pc-bubble--pending">
             <span class="pc-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span class="pc-pending-text">{{ label('inFlight') }}</span>
+            <span class="pc-pending-text">{{ label(book ? 'inFlightBook' : 'inFlight') }}</span>
           </div>
         </div>
       }
@@ -170,7 +334,11 @@
     </form>
 
     <!-- The grounding promise, kept on screen rather than shown once: it is the reason to trust an
-         answer and the reason a refusal is not a malfunction. -->
-    <p class="pc-grounding-note">{{ label('groundingNote') }}</p>
+         answer and the reason a refusal is not a malfunction.
+
+         PHASE B RESTATES IT INSIDE A BOOK. Phase A's sentence promises the product guides ONLY, and
+         that stopped being true the moment a bookId could ride on a request. The one line whose whole
+         job is to say where answers come from must not be the line that is wrong about it. -->
+    <p class="pc-grounding-note">{{ label(book ? 'groundingNoteBook' : 'groundingNote') }}</p>
   </div>
 }

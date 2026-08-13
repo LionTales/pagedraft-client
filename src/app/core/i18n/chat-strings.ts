@@ -55,7 +55,13 @@
  * word outright.
  */
 
-import { ProductChatFaultReason, isKnownFaultReason } from '../models/product-chat';
+import {
+  BookChatFaultReason,
+  ProductChatFaultReason,
+  isKnownBookFaultReason,
+  isKnownFaultReason,
+} from '../models/product-chat';
+import { ChatArtifactRef, chapterDisplayNumber } from '../models/chat-artifact-ref';
 
 /** The two languages the chat chrome renders in. */
 export type ChatChromeLang = 'he' | 'en';
@@ -130,7 +136,97 @@ export type ChatStringKey =
   | 'faultEmptyAnswer'
   | 'faultNetwork'
   | 'faultUnknown'
-  | 'retry';
+  | 'retry'
+  // ── BOOK CONTEXT (phase B) ─────────────────────────────────────────────────────────────────────
+  // The compact line under the dock's tab that states WHICH book the assistant is looking at. It is a
+  // FACT, not a control: `bookContextLabel` reads as a statement and there is no affordance beside it,
+  // because the way to change which book Show sees is to be in a different book.
+  // The standing promise at the foot of the pane, RESTATED for a book-scoped turn. Phase A's
+  // `groundingNote` says the assistant answers from the product guides ONLY, which stopped being true
+  // the moment a bookId could ride on a request: inside a book it also answers from the manuscript's
+  // own artifacts. Leaving the phase-A sentence up inside a book would make the one line whose whole
+  // job is to say where answers come from the one line that is wrong about it.
+  | 'groundingNoteBook'
+  // f01 (review finding #5): two more strings whose whole job is naming where an answer comes from
+  // shipped un-twinned, the same way `groundingNote` initially did. `emptyBodyBook` replaces the
+  // empty-state greeting on every book-scoped first turn where briefs already exist - `showBookEmptyState`
+  // only diverts to the tutoring copy (`emptyBookBody`) when briefs are NOT built, so a book with briefs
+  // was still greeted with phase A's "guides only" sentence. `inFlightBook` replaces the pending row,
+  // shown while a book-scoped request (carrying book artifacts) is in flight. Both are keyed off the same
+  // `book` condition the template already reads at the grounding note.
+  | 'emptyBodyBook'
+  | 'inFlightBook'
+  | 'bookContextLabel'
+  // The title has not landed yet (or its read failed). The line still states the fact - a book IS open -
+  // rather than vanishing and re-appearing, which would read as a flicker rather than as a state.
+  | 'bookContextUnnamed'
+  | 'bookContextAria'
+  // ── THE CHAPTER on the context line (phase B, a2) ──────────────────────────────────────────────
+  // Once Show can answer about the chapter in front of the author, the line that says what it is
+  // looking at has to say WHICH CHAPTER, or the author cannot tell an answer about this chapter from an
+  // answer about the book. Same visual language as the book beside it: a fact, no affordance.
+  // `bookContextChapterAria` names the chapter half for a screen reader, since the two values sit in
+  // one line with only a separator between them.
+  | 'bookContextChapterAria'
+  // A chapter with no title of its own still has to be nameable, so it falls back to the number the
+  // author counts by ({0} is the 1-based display number, never the 0-based wire order).
+  | 'bookContextChapterUnnamed'
+  // ── THE CLARIFYING QUESTION's chips (phase B, a2, d2 section (5)) ──────────────────────────────
+  // Rendered when the server says the question was about a chapter and none resolved. The label
+  // introduces the chips; each chip is one chapter, and clicking it RE-ASKS the same question scoped to
+  // that chapter, so answering costs a tap rather than a retyped sentence. Never rendered when a
+  // chapter resolved, and never on a book with one chapter (both halves enforce that).
+  | 'clarifyLabel'
+  // The tag on the author's own turn saying which chapter that turn was scoped to, for a turn re-asked
+  // from a chip. Only there: for an ordinary turn the context line above already says it.
+  | 'askedAboutChapter'
+  // ── The book-switch marker in the transcript (phase B) ─────────────────────────────────────────
+  // DECISION: a book switch KEEPS the transcript and inserts a visible marker. See the component doc
+  // for the reasoning. These are the two shapes: entering/switching to a named book, and leaving every
+  // book for app-level ground.
+  | 'bookMarkerNow'
+  | 'bookMarkerLeft'
+  // ── Book-artifact citations (phase B) ──────────────────────────────────────────────────────────
+  // A SEPARATE label from the guide citation, because the two say different things about where an
+  // answer came from and collapsing them would blur exactly the distinction the grounding contract is
+  // built on: one is the product's documentation, the other is the author's own manuscript.
+  // ONE key, not the singular/plural PAIR the guide citation has: the guide label names a count
+  // ("in the guide" / "across the guides") and this one names a SOURCE, which does not inflect.
+  | 'citationBook'
+  // The per-artifact chip names. Chapter-keyed ones are built by `artifactChipLabel`, which fills in
+  // the chapter NUMBER the author counts by (see `chat-artifact-ref.ts`'s order decision).
+  | 'artifactChapterBrief'
+  | 'artifactChapterSummary'
+  | 'artifactChapterText'
+  | 'artifactFinding'
+  | 'artifactRegister'
+  | 'artifactBookBrief'
+  | 'artifactHistory'
+  | 'artifactStatusSummary'
+  | 'artifactStatusReview'
+  | 'artifactStatusBaseline'
+  // ── A book half that came back THIN (phase B) ──────────────────────────────────────────────────
+  // Rendered on a GROUNDED answer, because that is what a partial book fault is: the answer stands and
+  // one source of it was unreadable. It is a note attached to a real answer, never a failure block.
+  | 'bookThinNote'
+  // ── Book fail-safe sentences (phase B) ─────────────────────────────────────────────────────────
+  | 'faultBookUnavailable'
+  | 'faultBookRegister'
+  | 'faultBookBriefs'
+  | 'faultBookStatus'
+  | 'faultBookFindings'
+  | 'faultBookEscalation'
+  | 'faultBookHistory'
+  // ── The tutoring empty state (phase B) ─────────────────────────────────────────────────────────
+  // Inside a book with NOTHING built, this replaces the app-level greeting. It is the tutoring surface,
+  // so it says what is missing, what Show can do once it exists, and carries the real build action.
+  | 'emptyBookTitle'
+  | 'emptyBookBody'
+  | 'emptyBookBuild'
+  | 'emptyBookExamplesTitle'
+  | 'bookExample1'
+  | 'bookExample2'
+  | 'bookExample3';
 
 /**
  * Hebrew chat chrome. DRAFT he - needs native review.
@@ -174,6 +270,52 @@ export const CHAT_STRINGS_HE: Record<ChatStringKey, string> = {
   faultNetwork:      'לא הצלחתי להגיע לשרת. בדקו את החיבור ונסו שוב.',
   faultUnknown:      'לא הצלחתי לבסס תשובה על המדריכים כרגע.',
   retry:             'ניסיון חוזר',
+
+  groundingNoteBook:   'כאן אני עונה מתוך מדריכי המערכת ומתוך מה שכבר נבנה על הספר שלכם, ותמיד אומר מאיפה.',
+  emptyBodyBook:       'אני מכיר את המערכת מתוך המדריכים שלה, וגם את הספר הזה מתוך מה שכבר נבנה עליו, ועונה מתוך שניהם. אם הם לא מכסים את השאלה, אומר לכם ולא אנחש.',
+  inFlightBook:        'שואו מחפש במדריכים ובספר שלכם...',
+  bookContextLabel:    'הספר שלפניי',
+  bookContextUnnamed:  'הספר הזה',
+  bookContextAria:     'הספר שהעוזר רואה כעת',
+  bookContextChapterAria:     'הפרק שהעוזר רואה כעת',
+  bookContextChapterUnnamed:  'פרק {0}',
+
+  clarifyLabel:        'על איזה פרק שאלתם?',
+  askedAboutChapter:   'על {0}',
+
+  bookMarkerNow:       'מכאן והלאה אני מסתכל על {0}.',
+  bookMarkerLeft:      'מכאן והלאה אני מחוץ לספר, ואענה רק על המערכת עצמה.',
+
+  citationBook:        'מתוך הספר שלכם',
+
+  artifactChapterBrief:   'תקציר פרק {0}',
+  artifactChapterSummary: 'הסיכום שלכם לפרק {0}',
+  artifactChapterText:    'הטקסט של פרק {0}',
+  artifactFinding:        'ממצא מהסקירה',
+  artifactRegister:       'מרשם הדמויות',
+  artifactBookBrief:      'תקציר הספר',
+  artifactHistory:        'מה כבר הרצתם',
+  artifactStatusSummary:  'מצב תקצירי הספר',
+  artifactStatusReview:   'מצב העריכה ההתפתחותית',
+  artifactStatusBaseline: 'מצב סגנון הכתיבה',
+
+  bookThinNote:        'חלק ממה שאני קורא על הספר לא היה זמין הפעם, ולכן התשובה הזו דקה מהרגיל.',
+
+  faultBookUnavailable: 'לא הצלחתי לראות את הספר שלכם כרגע, ולכן לא אענה עליו מתוך ניחוש. נסו שוב בעוד רגע.',
+  faultBookRegister:    'לא הצלחתי לקרוא את מרשם הדמויות של הספר, ולכן לא אענה על הדמויות מהזיכרון שלי.',
+  faultBookBriefs:      'לא הצלחתי לקרוא את תקצירי הספר, ולכן אין לי ממה לענות עליו.',
+  faultBookStatus:      'לא הצלחתי לקרוא את מצב הבניות של הספר, ולכן לא אומר לכם מה כדאי להריץ עכשיו.',
+  faultBookFindings:    'לא הצלחתי לקרוא את ממצאי הסקירה, ולכן לא אתאר מה היא מצאה.',
+  faultBookEscalation:  'רציתי לקרוא את הפרק עצמו ולא הצלחתי, ולכן לא אתאר מה כתוב בו.',
+  faultBookHistory:     'לא הצלחתי לקרוא מה הורץ על הספר, ולכן לא אומר לכם מה כבר עשיתם.',
+
+  emptyBookTitle:      'עוד לא בניתם תקצירים לספר הזה',
+  emptyBookBody:       'אני יכול לראות את הספר שלכם ברגע שהתקצירים ייבנו. עד אז אענה על המערכת עצמה מתוך המדריכים.',
+  emptyBookBuild:      'בנו את תקצירי הספר',
+  emptyBookExamplesTitle: 'אחר כך אפשר לשאול אותי דברים כאלה',
+  bookExample1:        'מה קורה בפרק 3?',
+  bookExample2:        'מה הסקירה מצאה על הקצב?',
+  bookExample3:        'מה כדאי לי להריץ עכשיו?',
 };
 
 export const CHAT_STRINGS_EN: Record<ChatStringKey, string> = {
@@ -212,6 +354,52 @@ export const CHAT_STRINGS_EN: Record<ChatStringKey, string> = {
   faultNetwork:      'I could not reach the server. Check the connection and try again.',
   faultUnknown:      'I could not ground an answer in the guides right now.',
   retry:             'Try again',
+
+  groundingNoteBook:   'Here I answer from the product guides and from what has already been built about your book, and I always name my source.',
+  emptyBodyBook:       'I know this product from its guides, and I also know this book from what has already been built about it, and I answer from both. If they do not cover your question, I will tell you rather than guess.',
+  inFlightBook:        'Show is looking through the guides and your book...',
+  bookContextLabel:    'The book I can see',
+  bookContextUnnamed:  'this book',
+  bookContextAria:     'The book the assistant can currently see',
+  bookContextChapterAria:     'The chapter the assistant can currently see',
+  bookContextChapterUnnamed:  'Chapter {0}',
+
+  clarifyLabel:        'Which chapter did you mean?',
+  askedAboutChapter:   'About {0}',
+
+  bookMarkerNow:       'From here on I am looking at {0}.',
+  bookMarkerLeft:      'From here on I am outside any book, so I can only answer about the product.',
+
+  citationBook:        'From your book',
+
+  artifactChapterBrief:   'Chapter {0} brief',
+  artifactChapterSummary: 'Your summary of chapter {0}',
+  artifactChapterText:    'Chapter {0} text',
+  artifactFinding:        'A review finding',
+  artifactRegister:       'Character register',
+  artifactBookBrief:      'The book brief',
+  artifactHistory:        'What you have run',
+  artifactStatusSummary:  'Book briefs status',
+  artifactStatusReview:   'Developmental review status',
+  artifactStatusBaseline: 'Writing style status',
+
+  bookThinNote:        'Some of what I read about your book was not available this time, so this answer is thinner than usual.',
+
+  faultBookUnavailable: 'I could not see your book right now, so I will not answer about it from guesswork. Try again in a moment.',
+  faultBookRegister:    'I could not read your book\'s character register, so I will not answer about its characters from memory.',
+  faultBookBriefs:      'I could not read your book briefs, so I have nothing to answer about the book from.',
+  faultBookStatus:      'I could not read your book\'s build state, so I will not tell you what to run next.',
+  faultBookFindings:    'I could not read the review findings, so I will not describe what the review found.',
+  faultBookEscalation:  'I meant to read the chapter itself and could not, so I will not describe what is in it.',
+  faultBookHistory:     'I could not read what has been run on your book, so I will not tell you what you have already done.',
+
+  emptyBookTitle:      'This book has no briefs yet',
+  emptyBookBody:       'I can see your book once its briefs are built. Until then I answer about the product itself, from the guides.',
+  emptyBookBuild:      'Build the book briefs',
+  emptyBookExamplesTitle: 'Afterwards you could ask me things like these',
+  bookExample1:        'What happens in chapter 3?',
+  bookExample2:        'What did the review say about pacing?',
+  bookExample3:        'What should I run next?',
 };
 
 /** Resolve one chat string in the given chrome language. */
@@ -249,7 +437,109 @@ const FAULT_REASON_KEYS: Record<ProductChatFaultReason, ChatStringKey> = {
 export function faultMessage(lang: ChatChromeLang, reason: string | null | undefined): string {
   if (reason === 'network') return chatString(lang, 'faultNetwork');
   if (isKnownFaultReason(reason)) return chatString(lang, FAULT_REASON_KEYS[reason]);
+  // Phase B: the BOOK fail-safe path reports its own code through the SAME `faultReason` field (the
+  // server sets both fields there), so these have to be resolved here or a real, documented refusal
+  // would read as an unknown surprise. They are checked after the phase-A codes, which cannot collide
+  // with them, so nothing about A's rendering moves.
+  if (isKnownBookFaultReason(reason)) return chatString(lang, BOOK_FAULT_REASON_KEYS[reason]);
   return chatString(lang, 'faultUnknown');
+}
+
+/** Where each BOOK fault code's sentence lives (phase B). Keyed by the closed union, not a switch. */
+const BOOK_FAULT_REASON_KEYS: Record<BookChatFaultReason, ChatStringKey> = {
+  'book-unavailable':      'faultBookUnavailable',
+  'register-unreadable':   'faultBookRegister',
+  'briefs-unreadable':     'faultBookBriefs',
+  'status-unavailable':    'faultBookStatus',
+  'findings-unreadable':   'faultBookFindings',
+  'escalation-unreadable': 'faultBookEscalation',
+  'history-unreadable':    'faultBookHistory',
+};
+
+/**
+ * The transcript's BOOK-SWITCH MARKER (phase B).
+ *
+ * `title` null renders "this book" rather than a Guid or an empty gap, matching the context line's own
+ * fallback, so a marker written before the title landed still says something true.
+ */
+export function bookSwitchMarker(lang: ChatChromeLang, title: string | null): string {
+  const named = title?.trim() || chatString(lang, 'bookContextUnnamed');
+  return chatString(lang, 'bookMarkerNow').replace('{0}', named);
+}
+
+/** The marker for LEAVING every book. No title to interpolate: that is the whole content of it. */
+export function bookLeftMarker(lang: ChatChromeLang): string {
+  return chatString(lang, 'bookMarkerLeft');
+}
+
+/**
+ * How a chapter is NAMED wherever this surface names one (phase B, a2): on the context line, on a
+ * clarify chip and on the "about" tag of a turn re-asked from one.
+ *
+ * THE TITLE FIRST, and the number only as a fallback, on one substantive ground: the title is what the
+ * author sees in the chapter tree and is how they identify the chapter they are looking at, while the
+ * number is bookkeeping. Leading with both ("Chapter 1: פרק 28") reads badly on the commonest real
+ * shape, where the title IS a chapter number and rarely the same one - the owner's own book is a single
+ * chapter at order 0 titled "פרק 28", so a number-first label would put "פרק 1" in front of "פרק 28"
+ * and invite the author to wonder which of the two Show meant.
+ *
+ * An UNTITLED chapter falls back to the number the author counts by. `chapterDisplayNumber` is the one
+ * conversion, exactly as it is for citation chips, so a chapter can never be labelled by one numbering
+ * here and another there.
+ */
+export function ambientChapterName(
+  lang: ChatChromeLang,
+  chapter: { order: number; title: string }
+): string {
+  const title = chapter.title?.trim();
+  if (title) return title;
+  return chatString(lang, 'bookContextChapterUnnamed')
+    .replace('{0}', String(chapterDisplayNumber(chapter.order)));
+}
+
+/** Which string names each keyless artifact kind. Chapter-keyed kinds are handled by the label below. */
+const ARTIFACT_KEYS: Record<string, ChatStringKey> = {
+  'chapter-brief':   'artifactChapterBrief',
+  'chapter-summary': 'artifactChapterSummary',
+  'chapter-text':    'artifactChapterText',
+  'finding':         'artifactFinding',
+  'register':        'artifactRegister',
+  'book-brief':      'artifactBookBrief',
+  'history':         'artifactHistory',
+};
+
+const STATUS_KEYS: Record<string, ChatStringKey> = {
+  'summary':        'artifactStatusSummary',
+  'review':         'artifactStatusReview',
+  'style-baseline': 'artifactStatusBaseline',
+};
+
+/**
+ * The visible name of a book-artifact chip.
+ *
+ * THE FALLBACK IS THE RAW REF, on exactly the rule {@link guideTitle} follows: an artifact type this
+ * build has never heard of is still a real thing the answer was grounded in, and showing its slug is
+ * strictly better than deleting the author's only trace of where that part of the answer came from.
+ *
+ * Chapter numbers are the AUTHOR'S numbering, not the wire's. The refs carry `Chapter.Order`, which is
+ * 0-based; `chapterDisplayNumber` is the single conversion, so the label and the destination can never
+ * disagree about which chapter is meant.
+ */
+export function artifactChipLabel(lang: ChatChromeLang, ref: ChatArtifactRef): string {
+  if (!ref.kind) return ref.raw;
+
+  if (ref.kind === 'status') {
+    const key = ref.statusKind ? STATUS_KEYS[ref.statusKind] : undefined;
+    return key ? chatString(lang, key) : ref.raw;
+  }
+
+  const key = ARTIFACT_KEYS[ref.kind];
+  if (!key) return ref.raw;
+
+  const label = chatString(lang, key);
+  return ref.chapterOrder === null
+    ? label
+    : label.replace('{0}', String(chapterDisplayNumber(ref.chapterOrder)));
 }
 
 /**
