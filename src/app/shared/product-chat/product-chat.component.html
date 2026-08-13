@@ -194,20 +194,29 @@
                    by construction whenever a chapter resolved, so these chips cannot appear on a
                    question the open chapter already answered. Buttons, not links: they send a request,
                    they do not navigate. -->
+              <!-- WITHDRAWN once the book moves on. The chips hang on an answer that survives a book
+                   switch, so they outlive the book they were offered for, and re-asking sends whatever
+                   book is open now. Offering a chapter of the previous book would put its id on a
+                   request about this one, where the server cannot resolve it and falls back to the
+                   ORDER, grounding the answer in whichever chapter happens to hold that number.
+                   `chooseChapter` refuses as well; a rule enforced on one side only is one wire change
+                   from being no rule at all. -->
               @if (answer.clarify; as clarify) {
-                <div class="pc-clarify" data-testid="pc-clarify">
-                  <span class="pc-clarify-label">{{ label('clarifyLabel') }}</span>
-                  <span class="pc-clarify-chips">
-                    @for (choice of clarify.choices; track choice.id) {
-                      <button
-                        class="pc-clarify-chip"
-                        type="button"
-                        dir="auto"
-                        [disabled]="pending"
-                        (click)="chooseChapter(clarify, choice)">{{ chapterChoiceLabel(choice) }}</button>
-                    }
-                  </span>
-                </div>
+                @if (clarifyIsCurrent(clarify)) {
+                  <div class="pc-clarify" data-testid="pc-clarify">
+                    <span class="pc-clarify-label">{{ label('clarifyLabel') }}</span>
+                    <span class="pc-clarify-chips">
+                      @for (choice of clarify.choices; track choice.id) {
+                        <button
+                          class="pc-clarify-chip"
+                          type="button"
+                          dir="auto"
+                          [disabled]="pending"
+                          (click)="chooseChapter(clarify, choice)">{{ chapterChoiceLabel(choice) }}</button>
+                      }
+                    </span>
+                  </div>
+                }
               }
 
               <!-- The book half came back THIN, on an answer that still stands. A NOTE inside the

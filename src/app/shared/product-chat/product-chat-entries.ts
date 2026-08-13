@@ -90,7 +90,7 @@ export interface AssistantEntry {
    * making the author retype it. `choices` is captured AT ANSWER TIME, so the chips keep offering the
    * chapters the question was asked against even if the author navigates on while reading.
    */
-  clarify: { question: string; choices: readonly AmbientChapterChoice[] } | null;
+  clarify: { question: string; choices: readonly AmbientChapterChoice[]; bookId: string | null } | null;
 }
 
 /**

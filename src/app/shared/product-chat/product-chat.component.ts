@@ -278,6 +278,15 @@ export class ProductChatComponent implements OnDestroy {
    */
   briefsBuilt: boolean | null = null;
 
+  /**
+   * The language {@link briefsBuilt} was read against, or null when it was read before the book's own
+   * language was known. Briefs are stored PER LANGUAGE, and `BookContextService` publishes the id first
+   * with a null language and re-emits when the read lands, so without this the first read (always keyed
+   * 'he') would stand for the life of the book and an English book could be judged against a slot it has
+   * no rows in.
+   */
+  private briefsLanguage: string | null = null;
+
   constructor() {
     // Disarm on leaving the tab. Without this the confirmation could sit armed behind a closed drawer
     // and be completed days later by a click the author no longer connects to the question, which is
@@ -328,7 +337,16 @@ export class ProductChatComponent implements OnDestroy {
         this.scrollToLatest();
       }
       this.loadBriefsState(book);
-    } else if (book && this.book) {
+    } else if (book && this.briefsLanguage !== (book.language?.trim() || null)) {
+      // SAME book, and its LANGUAGE has now landed. BookContextService publishes the id first with a
+      // null title and language and re-emits when the read completes, so the first call above always
+      // asked for the 'he' slot regardless of the book. Briefs are stored per language, so an English
+      // book was being judged against a Hebrew status and could be shown the never-built tutoring state
+      // on evidence about a slot it has no rows in. The id is unchanged, so nothing else re-fetches.
+      this.loadBriefsState(book);
+    }
+
+    if (book) {
       // Same book, title landed: update the LAST marker for this book in place, so a marker written
       // before the title arrived does not keep saying "this book" forever.
       for (let i = this.entries.length - 1; i >= 0; i--) {
@@ -359,9 +377,12 @@ export class ProductChatComponent implements OnDestroy {
   private loadBriefsState(book: CurrentBook | null): void {
     if (!book) return;
     const bookId = book.bookId;
+    // The language this read was keyed on, so a later emission that CHANGES it re-reads. Recorded even
+    // when it is null, because null is what says "we asked before the book's language was known".
+    this.briefsLanguage = book.language?.trim() || null;
 
     this.summaries
-      .getBookSummaryStatus(bookId, book.language?.trim() || 'he')
+      .getBookSummaryStatus(bookId, this.briefsLanguage || 'he')
       .pipe(takeUntil(this.destroy$))
       .subscribe({
         next: status => {
@@ -727,10 +748,28 @@ export class ProductChatComponent implements OnDestroy {
    * a 0-based order is genuinely ambiguous and can resolve to two chapters. Supplying the id and order
    * instead resolves exactly one chapter by identity, which is the whole reason the ambient key carries
    * an id at all. The question the author typed is left untouched.
+   *
+   * REFUSED ONCE THE BOOK HAS MOVED ON. The chips hang on an answer that stays in the transcript across
+   * a book switch, so they outlive the book they were offered for, and `ask` sends whatever book is open
+   * NOW. Tapping a stale chip would put a chapter id from book A on a request about book B, where the
+   * server would fail to resolve it and fall back to the ORDER, grounding the answer in whichever
+   * chapter of B happens to hold that number. That is the wrong-chapter fabrication this feature exists
+   * to prevent, reached through the books rather than through the chapters. The template hides the chips
+   * in that state and this refuses anyway, because a rule enforced on one side only is one wire change
+   * from being no rule at all.
    */
-  chooseChapter(clarify: { question: string }, chapter: AmbientChapterChoice): void {
+  chooseChapter(
+    clarify: { question: string; bookId: string | null },
+    chapter: AmbientChapterChoice
+  ): void {
     if (this.pending) return;
+    if (clarify.bookId !== this.bookId) return;
     this.ask(clarify.question, chapter);
+  }
+
+  /** Whether a clarify block still belongs to the book on screen, and may be offered. */
+  clarifyIsCurrent(clarify: { bookId: string | null }): boolean {
+    return clarify.bookId === this.bookId;
   }
 
   /**
@@ -750,6 +789,10 @@ export class ProductChatComponent implements OnDestroy {
     // chapter that was on screen when it was asked. Reading it again on arrival would let an author who
     // switched chapters mid-answer get a reply filed under a chapter they had already left.
     const chapter = chapterOverride ?? this.ambientChapter;
+    // The transcript position this question was asked AT. Ids are monotonic across the session, so any
+    // context-change marker written while the answer is in flight carries a HIGHER id, and that is what
+    // lets the answer be filed above it (see {@link fileForRequest}).
+    const askedAt = this.nextId;
     this.entries = [
       ...this.entries,
       {
@@ -773,9 +816,28 @@ export class ProductChatComponent implements OnDestroy {
       // appended to the transcript that replaced the one it was asked in.
       .pipe(takeUntil(this.destroy$), takeUntil(this.reset$))
       .subscribe({
-        next: res => this.acceptResponse(res, question, bookId),
-        error: () => this.acceptFault('network', question),
+        next: res => this.acceptResponse(res, question, bookId, askedAt),
+        error: () => this.acceptFault('network', question, askedAt),
       });
+  }
+
+  /**
+   * Put an arriving entry where the question it answers was ASKED, not where the transcript has got to.
+   *
+   * A book switch keeps the transcript and draws a marker across it. A request already in flight when
+   * that happens still lands afterwards, and appending it would file an answer about book A underneath
+   * a rule that says "from here on I am looking at B" - so the transcript would assert the one thing the
+   * marker exists to deny. The answer is instead inserted ABOVE any marker written since the question
+   * was asked, where its own turn already sits.
+   *
+   * Ids are monotonic across the session and are never reused (see {@link nextId}), so "written since"
+   * is a comparison rather than an index that other insertions could shift underneath.
+   */
+  private fileForRequest(entry: ChatEntry, askedAt: number): void {
+    const at = this.entries.findIndex(e => e.kind === 'book-marker' && e.id > askedAt);
+    this.entries = at < 0
+      ? [...this.entries, entry]
+      : [...this.entries.slice(0, at), entry, ...this.entries.slice(at)];
   }
 
   /**
@@ -790,14 +852,14 @@ export class ProductChatComponent implements OnDestroy {
   private acceptResponse(
     res: ProductChatResponseDto,
     question: string,
-    bookId: string | null
+    bookId: string | null,
+    askedAt: number
   ): void {
     if (!res?.isGrounded) {
-      this.acceptFault(res?.faultReason ?? 'unknown', question);
+      this.acceptFault(res?.faultReason ?? 'unknown', question, askedAt);
       return;
     }
-    this.entries = [
-      ...this.entries,
+    this.fileForRequest(
       {
         kind: 'assistant',
         id: this.nextId++,
@@ -813,7 +875,8 @@ export class ProductChatComponent implements OnDestroy {
         bookFaultReason: res.bookFaultReason ?? null,
         clarify: this.clarifyFor(res, question, bookId),
       },
-    ];
+      askedAt
+    );
     this.settle();
   }
 
@@ -837,15 +900,17 @@ export class ProductChatComponent implements OnDestroy {
     res: ProductChatResponseDto,
     question: string,
     bookId: string | null
-  ): { question: string; choices: readonly AmbientChapterChoice[] } | null {
+  ): { question: string; choices: readonly AmbientChapterChoice[]; bookId: string | null } | null {
     if (res.needsChapterClarification !== true) return null;
     const chapters = this.ambientChapters.forBook(bookId)?.chapters ?? [];
     if (chapters.length < 2) return null;
-    return { question, choices: chapters };
+    // The book is carried so the chips can be withdrawn once it changes: they outlive the book they were
+    // offered for, and a chapter of the previous book must never ride a request about this one.
+    return { question, choices: chapters, bookId };
   }
 
-  private acceptFault(reason: string, question: string): void {
-    this.entries = [...this.entries, { kind: 'fault', id: this.nextId++, reason, question }];
+  private acceptFault(reason: string, question: string, askedAt: number): void {
+    this.fileForRequest({ kind: 'fault', id: this.nextId++, reason, question }, askedAt);
     this.settle();
   }
 

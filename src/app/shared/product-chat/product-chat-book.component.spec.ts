@@ -25,6 +25,7 @@ import { ProductChatComponent } from './product-chat.component';
 import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { BookContextService, CurrentBook } from '../../core/services/book-context.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
+import { AmbientChapterService } from '../../core/services/ambient-chapter.service';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { ProductChatResponseDto } from '../../core/models/product-chat';
 import { CHAT_STRINGS_EN, CHAT_STRINGS_HE } from '../../core/i18n/chat-strings';
@@ -716,6 +717,135 @@ describe('ProductChatComponent, book-aware (chatbot phase B)', () => {
       expect(teardownComponent.briefsBuilt)
         .withContext('a torn-down component must not still be written to by a late response')
         .toBeNull();
+    });
+  });
+
+  /**
+   * THREE DEFECTS A CR BOT FOUND ON THE PR, all of them the same shape one layer apart: state captured
+   * when a question was ASKED, read again against the book that is open NOW.
+   *
+   * The in-flight window is occupied for real in each one - the book moves while a request is genuinely
+   * outstanding - because a synchronous mock collapses exactly the interval all three live in.
+   */
+  describe('when the book moves while a request is in flight (CR bot, PR #41)', () => {
+    /** Publish an ambient snapshot so `clarifyFor` has chapters to offer. */
+    function publishChapters(bookId: string): void {
+      TestBed.inject(AmbientChapterService).publish({
+        bookId,
+        openChapter: null,
+        chapters: [
+          { id: 'c-one', order: 0, title: 'One' },
+          { id: 'c-two', order: 1, title: 'Two' },
+        ],
+      });
+      fixture.detectChanges();
+    }
+
+    it('files a late answer ABOVE the marker for the book the author moved to', () => {
+      openDrawer();
+      enterBook(BOOK_A);
+      ask('what happens here?');
+
+      // The author navigates to another book while the answer is still outstanding.
+      books.subject.next({ bookId: BOOK_B, title: 'Second', language: 'he' });
+      fixture.detectChanges();
+      http.expectOne(r => r.url.includes(`/api/books/${BOOK_B}/summary`)).flush({
+        hasSummary: true,
+        builtChapters: 3,
+      });
+      fixture.detectChanges();
+
+      answer();
+
+      const kinds = component.entries.map(e => e.kind);
+      const marker = kinds.indexOf('book-marker');
+      const assistant = kinds.indexOf('assistant');
+
+      expect(marker).toBeGreaterThan(-1);
+      expect(assistant)
+        .withContext(
+          'an answer about book A must sit ABOVE the rule that says "from here on I am looking at B", ' +
+            'or the transcript asserts the one thing the marker exists to deny'
+        )
+        .toBeLessThan(marker);
+    });
+
+    it('withdraws clarify chips once they no longer belong to the book on screen', () => {
+      openDrawer();
+      enterBook(BOOK_A);
+      publishChapters(BOOK_A);
+      ask('what happens in the chapter?');
+      answer(grounded({ needsChapterClarification: true }));
+
+      expect(fixture.debugElement.query(By.css('[data-testid="pc-clarify"]')))
+        .withContext('the chips are offered while their own book is open')
+        .not.toBeNull();
+
+      books.subject.next({ bookId: BOOK_B, title: 'Second', language: 'he' });
+      fixture.detectChanges();
+      http.expectOne(r => r.url.includes(`/api/books/${BOOK_B}/summary`)).flush({
+        hasSummary: true,
+        builtChapters: 3,
+      });
+      fixture.detectChanges();
+
+      expect(fixture.debugElement.query(By.css('[data-testid="pc-clarify"]')))
+        .withContext('a chapter of the previous book must not be offered for a request about this one')
+        .toBeNull();
+    });
+
+    it('refuses a stale clarify chip even if one is somehow tapped', () => {
+      openDrawer();
+      enterBook(BOOK_A);
+      publishChapters(BOOK_A);
+      ask('what happens in the chapter?');
+      answer(grounded({ needsChapterClarification: true }));
+
+      const assistantEntry = component.entries.find(e => e.kind === 'assistant');
+      const clarify = (assistantEntry as { clarify: { question: string; bookId: string | null } }).clarify;
+      books.subject.next({ bookId: BOOK_B, title: 'Second', language: 'he' });
+      fixture.detectChanges();
+      http.expectOne(r => r.url.includes(`/api/books/${BOOK_B}/summary`)).flush({
+        hasSummary: true,
+        builtChapters: 3,
+      });
+      fixture.detectChanges();
+
+      component.chooseChapter(clarify, { id: 'c-two', order: 1, title: 'Two' });
+      fixture.detectChanges();
+
+      // No request at all: the guard refuses before `ask` can put book A's chapter on a book B request.
+      http.expectNone('/api/product-chat');
+    });
+
+    it('re-reads the briefs status once the book its language belongs to arrives', () => {
+      openDrawer();
+
+      // BookContextService publishes the ID FIRST with a null title and language, then re-emits when
+      // its own read lands. The first briefs read therefore has no language to key on.
+      books.subject.next({ bookId: BOOK_A, title: null, language: null });
+      fixture.detectChanges();
+      const first = http.expectOne(r => r.url.includes(`/api/books/${BOOK_A}/summary`));
+      expect(first.request.urlWithParams)
+        .withContext('nothing is known yet, so it falls back to the app-default slot')
+        .toContain('he');
+      first.flush({ hasSummary: false, builtChapters: 0 });
+      fixture.detectChanges();
+
+      books.subject.next({ bookId: BOOK_A, title: 'An English Book', language: 'en' });
+      fixture.detectChanges();
+
+      const second = http.expectOne(r => r.url.includes(`/api/books/${BOOK_A}/summary`));
+      expect(second.request.urlWithParams)
+        .withContext(
+          'briefs are stored PER LANGUAGE, so an English book judged against the Hebrew slot can be ' +
+            'told its briefs are missing on evidence about a slot it has no rows in'
+        )
+        .toContain('en');
+      second.flush({ hasSummary: true, builtChapters: 4 });
+      fixture.detectChanges();
+
+      expect(component.showBookEmptyState).toBeFalse();
     });
   });
 });
