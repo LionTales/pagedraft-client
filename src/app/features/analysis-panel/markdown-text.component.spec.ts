@@ -409,4 +409,59 @@ describe('MarkdownTextComponent', () => {
       expect(style.wordBreak).not.toBe('break-all');
     });
   });
+
+  // =========================================================================
+  // blockDirBase: per-block direction for mixed-language prose (chatbot phase B)
+  // =========================================================================
+  describe('blockDirBase', () => {
+    const HEBREW = 'הפרק נפתח בשיחה בין שתי הדמויות';
+    const ENGLISH = 'The chapter opens on a conversation between two characters';
+
+    function renderWithBase(text: string, base: 'rtl' | 'ltr' | null): HTMLElement {
+      component.blockDirBase = base;
+      component.text = text;
+      fixture.detectChanges();
+      return fixture.nativeElement.querySelector('.markdown-text') as HTMLElement;
+    }
+
+    it('is OFF by default: no existing caller renders a single dir attribute', () => {
+      // The default is what keeps this from re-laying-out every analysis result and every guide page
+      // in the app. Only one surface has the mixed-language problem it solves.
+      const el = render(`${HEBREW}\n\n${ENGLISH}\n\n- ${ENGLISH}`);
+      expect(el.querySelectorAll('[dir]').length).toBe(0);
+    });
+
+    it('turns a foreign block, BOTH ways round, and leaves agreeing blocks with no attribute', () => {
+      const rtl = renderWithBase(`${HEBREW}\n\n${ENGLISH}`, 'rtl');
+      expect(Array.from(rtl.querySelectorAll('p')).map(p => p.getAttribute('dir')))
+        .toEqual([null, 'ltr']);
+
+      const ltr = renderWithBase(`${ENGLISH}\n\n${HEBREW}`, 'ltr');
+      expect(Array.from(ltr.querySelectorAll('p')).map(p => p.getAttribute('dir')))
+        .toEqual([null, 'rtl']);
+    });
+
+    it('decides a LIST per item as well as per list', () => {
+      // A list is a container of blocks: a Hebrew list quoting one English line should turn that line
+      // around and nothing else.
+      const el = renderWithBase(`- ${HEBREW}\n- ${ENGLISH}\n- ${HEBREW}`, 'rtl');
+      expect(Array.from(el.querySelectorAll('li')).map(li => li.getAttribute('dir')))
+        .toEqual([null, 'ltr', null]);
+    });
+
+    it('measures the SOURCE, not the rendered HTML, so markup does not tip the count', () => {
+      // Tag names and attribute values are Latin; a Hebrew paragraph carrying one <strong> would
+      // otherwise be measured as part-Latin and flip.
+      const el = renderWithBase(`**${HEBREW}**`, 'rtl');
+      expect(el.querySelector('p')?.getAttribute('dir')).toBeNull();
+    });
+
+    it('gives a turned block its OWN start edge', () => {
+      // The style must REACH the node: these arrive through [innerHTML] and carry no emulated content
+      // attribute, so this only works because the component's encapsulation is None.
+      const el = renderWithBase(`${HEBREW}\n\n${ENGLISH}`, 'rtl');
+      const turned = el.querySelector('p[dir="ltr"]') as HTMLElement;
+      expect(getComputedStyle(turned).textAlign).toBe('start');
+    });
+  });
 });

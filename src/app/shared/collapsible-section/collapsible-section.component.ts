@@ -131,6 +131,22 @@ export class CollapsibleSectionComponent implements OnChanges {
   /** Whether this section starts folded when the author has never touched it. Long lists opt in. */
   @Input() defaultCollapsed = false;
 
+  /**
+   * A one-shot "open this section" request: BUMP the number and the section unfolds (chatbot phase B).
+   *
+   * A token rather than a two-way `open` binding, because this is a GESTURE, not a state. The host is
+   * not claiming to own the fold - the author still owns it, and can fold the section again the moment
+   * it opens. A boolean input would either fight the author's toggle or need resetting after every use.
+   *
+   * IT DOES NOT PERSIST. `toggle()` writes to the collapse store because the author decided something;
+   * this did not, so the section is open for THIS mount and the author's stored preference for it is
+   * untouched. A deep link that permanently unfolded a section the author had folded would be a link
+   * with a side effect on their settings.
+   *
+   * Zero is "never asked", so the initial binding of a host that has nothing to ask for is inert.
+   */
+  @Input() openToken = 0;
+
   /** Current fold state. Seeded from storage (or `defaultCollapsed`) and written back on every toggle. */
   collapsed = false;
 
@@ -140,6 +156,10 @@ export class CollapsibleSectionComponent implements OnChanges {
       const stored = readCollapseMap(this.bookId)[this.sectionId];
       this.collapsed = typeof stored === 'boolean' ? stored : this.defaultCollapsed;
     }
+    // AFTER the re-seed, so a focus request that arrives in the same change as a book switch wins over
+    // the stored fold state rather than being immediately overwritten by it.
+    const open = changes['openToken'];
+    if (open && !open.firstChange && open.currentValue) this.collapsed = false;
   }
 
   /** DOM id for aria-controls; derived so two sections on one page cannot collide. */

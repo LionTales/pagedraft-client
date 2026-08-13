@@ -9,7 +9,7 @@
  */
 import { SimpleChange } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed, fakeAsync, flush, tick } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { BehaviorSubject, NEVER, Observable, Subject, of } from 'rxjs';
 import { BookProfileDto } from '../../core/models/book';
@@ -28,6 +28,7 @@ import { AnalysisProgressService } from '../../core/services/analysis-progress.s
 import { ChapterSummaryService } from '../../core/services/chapter-summary.service';
 import { CharacterRegisterService } from '../../core/services/character-register.service';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { BookSurfaceFocusService } from '../../core/services/book-surface-focus.service';
 import { GuidesService } from '../../core/services/guides.service';
 import { orientationStorageKey } from './orientation-store';
 import { stageGuideLink } from '../../shared/stage-spine/stage-guide';
@@ -2858,5 +2859,248 @@ describe('BookDashboardComponent w6: first-run orientation', () => {
     component.onSpineOpenGuide(stageGuideLink('export'));
 
     expect(opened).toEqual([{ guideId: 'export', lang: 'en' }]);
+  });
+
+  // ── Chatbot phase B: a citation chip's focus request lands on a real surface ───────────────────────
+  //
+  // Without these the chips would navigate to the book page and stop there, which is the exact
+  // "half-dead chip" the todo rules out. The assertions are on the mechanisms the dashboard ALREADY
+  // owns (the review-mode output, the review tab, the open tokens), because that is the rule this
+  // handler follows: a chip must not open a second way of doing something a surface already owns.
+
+  describe('a citation chip asked for a surface', () => {
+    let focus: BookSurfaceFocusService;
+    let switched: number;
+
+    beforeEach(() => {
+      focus = TestBed.inject(BookSurfaceFocusService);
+      switched = 0;
+      component.switchToReview.subscribe(() => switched++);
+    });
+
+    it('the FINDINGS ledger: review mode, the findings tab', () => {
+      component.reviewTab = 'bible';
+      focus.request({ target: 'findings' });
+      expect(switched).toBe(1);
+      expect(component.reviewTab).toBe('findings');
+    });
+
+    it('the BOOK BRIEF: review mode, the Story Bible tab beside the ledger', () => {
+      component.reviewTab = 'findings';
+      focus.request({ target: 'story-bible' });
+      expect(switched).toBe(1);
+      expect(component.reviewTab).toBe('bible');
+    });
+
+    it('the per-chapter BRIEFS: review mode, and the collapsed section is asked to open', () => {
+      const before = component.inputsOpenToken;
+      focus.request({ target: 'chapter-briefs' });
+      expect(switched).toBe(1);
+      expect(component.inputsOpenToken).toBe(before + 1);
+    });
+
+    it('the character REGISTER: review mode, and its collapsed section is asked to open', () => {
+      const before = component.registerOpenToken;
+      focus.request({ target: 'register' });
+      expect(switched).toBe(1);
+      expect(component.registerOpenToken).toBe(before + 1);
+    });
+
+    it('a STATUS: review mode, for every one of the three stages', () => {
+      for (const stage of ['summary', 'review', 'style-baseline'] as const) {
+        focus.request({ target: 'status', stage });
+      }
+      expect(switched).toBe(3);
+    });
+
+    it('a CHAPTER is not this component\'s to answer, so it does nothing here', () => {
+      // A chapter's text lives in the editor; the host consumes that one before it reaches the service.
+      const tab = component.reviewTab;
+      focus.request({ target: 'chapter', chapterOrder: 6 });
+      expect(switched).toBe(0);
+      expect(component.reviewTab).toBe(tab);
+    });
+
+    it('stops listening once destroyed, so a torn-down dashboard cannot be driven', () => {
+      component.ngOnDestroy();
+      focus.request({ target: 'findings' });
+      expect(switched).toBe(0);
+    });
+  });
+
+  // ── c01: the deep link has to land on the FIRST (cold) click ──────────────────────────────────────
+  //
+  // Review finding #4, measured live at a 900px viewport: the findings heading sat at `top: 1442` on the
+  // first click (the dashboard was not mounted when the chip was pressed) and at `top: 556` on the
+  // second, and a cold `?focus=register` left the register card at `top: 3691` WITH ITS SECTION
+  // CORRECTLY EXPANDED. The mode switch, the open token and the anchor were all already right; the
+  // scroll was measured against a page that had not been built yet and the arriving content then pushed
+  // the anchor out from under it.
+  //
+  // THESE TESTS DRIVE THE WINDOW RATHER THAN COLLAPSING IT. The profile GET is a Subject held OPEN
+  // across the assertions, so "the content is still arriving" is a state each case OCCUPIES. A
+  // synchronous `of()` would deliver every byte before the request was ever made, which makes the
+  // broken one-shot scroll pass: the old code lands correctly whenever the page is already complete,
+  // and that is precisely the second click, the one that does not matter.
+  describe('c01: a cold deep link lands on the surface it cites', () => {
+    let focus: BookSurfaceFocusService;
+    let profile$: Subject<BookProfileDto>;
+
+    /** What one scrollIntoView call saw at the moment it was made. */
+    interface ScrollObservation {
+      /** Total rendered height of the scroll container - the number late content moves. */
+      height: number;
+      /** Whether the held-open profile had already rendered its cards. */
+      contentLanded: boolean;
+      /** Whether the character register's collapsed section was already unfolded. */
+      registerExpanded: boolean;
+    }
+
+    beforeEach(() => {
+      // The outer fixture already spent its init load against the default NEVER, so build a fresh
+      // dashboard whose profile GET is a Subject this spec owns.
+      fixture.destroy();
+      profile$ = new Subject<BookProfileDto>();
+      (TestBed.inject(BookService).getProfile as jasmine.Spy).and.returnValue(profile$.asObservable());
+      fixture = TestBed.createComponent(BookDashboardComponent);
+      component = fixture.componentInstance;
+      component.bookId = 'book-1';
+      component.bookLanguage = 'he';
+      fixture.detectChanges();
+      focus = TestBed.inject(BookSurfaceFocusService);
+    });
+
+    /**
+     * A profile rich enough that rendering it REALLY changes the page's height: the four cards replace a
+     * one-line loading hint. Karma runs a real Chrome and the TestBed applies this component's own
+     * styles, so the heights recorded below are measured layout, not a stubbed number.
+     */
+    function loadedProfile(): BookProfileDto {
+      return {
+        genre: 'מתח',
+        synopsis: 'סינופסיס ארוך למדי. '.repeat(40),
+        charactersJson: JSON.stringify({
+          characters: [
+            { name: 'רות', role: 'protagonist', description: 'תיאור ארוך של הדמות הראשית. '.repeat(10) },
+            { name: 'דן', role: 'antagonist', description: 'תיאור ארוך של היריב. '.repeat(10) },
+          ],
+          relationships: [{ from: 'רות', to: 'דן', type: 'יריבות', description: 'סכסוך' }],
+        }),
+        storyStructureJson: null,
+      } as unknown as BookProfileDto;
+    }
+
+    /**
+     * Record what every scrollIntoView on `anchor` saw. The ordering property the fix guarantees is
+     * stated in terms of these observations: the FIRST request is made after the openToken expansion has
+     * been applied, and the LAST request is made against a page that already carries the late content
+     * (a strictly greater container height).
+     */
+    function watchAnchor(anchor: 'findingsAnchor' | 'registerAnchor'): ScrollObservation[] {
+      const seen: ScrollObservation[] = [];
+      const el = (component as unknown as Record<string, { nativeElement: HTMLElement }>)[anchor].nativeElement;
+      const root = fixture.nativeElement as HTMLElement;
+      spyOn(el, 'scrollIntoView').and.callFake(() => {
+        seen.push({
+          height: (root.querySelector('.book-dashboard') as HTMLElement).scrollHeight,
+          contentLanded: !!root.querySelector('.overview-card'),
+          registerExpanded: !!root.querySelector('[data-testid="collapse-body-character-register"]'),
+        });
+      });
+      return seen;
+    }
+
+    it('the FINDINGS ledger: the scroll is re-asserted once the page\'s late content has landed', () => {
+      const seen = watchAnchor('findingsAnchor');
+
+      focus.request({ target: 'findings' });
+      fixture.detectChanges();
+
+      // The cold click still scrolls straight away - a deep link must not feel deferred - but it is
+      // scrolling a page that is still a skeleton, which is exactly the measured defect.
+      expect(seen.length).withContext('the cold click must scroll at once').toBe(1);
+      expect(seen[0].contentLanded)
+        .withContext('the held-open profile has deliberately NOT arrived yet').toBeFalse();
+
+      // The load lands. On the live page this is one of eight such arrivals (the two status rows, the
+      // spine, the orientation panel, the ledger, the register and the baseline row are the others);
+      // it is the one a TestBed can hold open deterministically.
+      profile$.next(loadedProfile());
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.overview-card'))
+        .withContext('the content really did land').not.toBeNull();
+      expect(seen.length)
+        .withContext('arriving content must re-aim the scroll, not silently invalidate it')
+        .toBeGreaterThan(1);
+      const last = seen[seen.length - 1];
+      expect(last.contentLanded)
+        .withContext('the LAST scroll must be measured against the loaded page').toBeTrue();
+      expect(last.height)
+        .withContext('and against a taller page than the first scroll saw').toBeGreaterThan(seen[0].height);
+    });
+
+    it('the character REGISTER: its collapsed section is unfolded BEFORE the first scroll is measured', () => {
+      // This target is strictly worse than `findings`, and this is why: its openToken expansion is
+      // applied on the change-detection pass AFTER the request, so a scroll taken inline with the
+      // request is measured against a page that is still missing the height the unfolded section adds.
+      const seen = watchAnchor('registerAnchor');
+      expect(fixture.nativeElement.querySelector('[data-testid="collapse-body-character-register"]'))
+        .withContext('the register section starts folded, which is the whole difficulty').toBeNull();
+
+      focus.request({ target: 'register' });
+      fixture.detectChanges();
+
+      expect(seen.length).toBe(1);
+      expect(seen[0].registerExpanded)
+        .withContext('expansion must be ordered BEFORE the first measurement').toBeTrue();
+
+      profile$.next(loadedProfile());
+      fixture.detectChanges();
+
+      expect(seen.length)
+        .withContext('and the late content must re-aim it too').toBeGreaterThan(1);
+      expect(seen[seen.length - 1].height)
+        .withContext('the last scroll must see a taller page than the first').toBeGreaterThan(seen[0].height);
+    });
+
+    it('a book switch drops the held scroll, so the NEXT book\'s arriving content is not scrolled by '
+      + 'the previous book\'s chip', () => {
+      const seen = watchAnchor('findingsAnchor');
+      focus.request({ target: 'findings' });
+      fixture.detectChanges();
+      expect(seen.length).toBe(1);
+
+      // The editor switches book in place; resetOwnState() drops the previous book's transient state.
+      const previous = component.bookId;
+      component.bookId = 'book-2';
+      component.ngOnChanges({ bookId: new SimpleChange(previous, 'book-2', false) });
+
+      // Book 2's profile arrives on the re-issued GET (the same Subject stub) and grows the page.
+      profile$.next(loadedProfile());
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.overview-card')).not.toBeNull();
+      expect(seen.length)
+        .withContext('a focus is a gesture about ONE book and must not survive the switch').toBe(1);
+    });
+
+    it('the correction window is BOUNDED, so content arriving long afterwards is not scrolled', fakeAsync(() => {
+      const seen = watchAnchor('findingsAnchor');
+      focus.request({ target: 'findings' });
+      fixture.detectChanges();
+      expect(seen.length).toBe(1);
+
+      // Past the ceiling. Nothing was waiting on this timer - the scroll above already happened - it
+      // only stops the page from re-aiming at a surface the author asked for in another context.
+      tick(5000);
+      profile$.next(loadedProfile());
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.overview-card')).not.toBeNull();
+      expect(seen.length)
+        .withContext('past the ceiling the window is closed and must not re-aim the scroll').toBe(1);
+      flush();
+    }));
   });
 });

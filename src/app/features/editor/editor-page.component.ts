@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, DoCheck, OnInit, OnDestroy, ViewChild } from '@angular/core';
+import { AfterViewChecked, Component, DoCheck, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ImportHandoffCardComponent } from './import-handoff-card/import-handoff-card.component';
 import { ReplaySubject, Subject } from 'rxjs';
@@ -13,6 +13,12 @@ import { DocumentVersionService } from '../../core/services/document-version.ser
 import { AnalysisService } from '../../core/services/analysis.service';
 import { CHAPTER_SCOPED_KINDS, JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { ReviseContextService } from '../../core/services/revise-context.service';
+import {
+  BookSurfaceFocusRequest,
+  BookSurfaceFocusService,
+  parseBookSurfaceFocus,
+} from '../../core/services/book-surface-focus.service';
+import { AmbientChapterService } from '../../core/services/ambient-chapter.service';
 import { BookDetailDto, ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
 import { ChapterAnchor } from '../../core/models/book-review';
 import { ChapterTreeComponent } from '../chapter-tree/chapter-tree.component';
@@ -61,7 +67,7 @@ import { createElement, classList, EventHandler } from '@syncfusion/ej2-base';
   templateUrl: './editor-page.component.html',
   styleUrl: './editor-page.component.scss'
 })
-export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
+export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, OnDestroy {
   @ViewChild('docEditor', { static: false })
   docEditor?: DocumentEditorContainerComponent;
   @ViewChild(AnalysisPanelComponent, { static: false })
@@ -215,6 +221,33 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
    * the first pass, which only records a baseline. See {@link ngDoCheck} for why this is the key.
    */
   private lastRunDialogContext: { bookId: string | null; chapterId: string | null; sceneId: string | null } | null = null;
+
+  /**
+   * Chatbot phase B / a2. Bumped by the two sites that mutate `book.chapters` IN PLACE, so
+   * {@link publishAmbientChapter}'s key can stay a handful of cheap comparisons instead of hashing the
+   * list on every change-detection pass.
+   *
+   * Every other writer of the chapter list replaces the ARRAY (`getById`, `refreshBook`, the local
+   * reorder's `[...updated].sort`, delete's `filter`), and a reference comparison catches those for
+   * free. The two that do not are the SignalR reorder handler (it writes `ch.order` and sorts in place)
+   * and {@link renameChapter} (it writes `target.title`), and both are exactly the kind of change the
+   * drawer must see: a stale order would let a chip name the wrong chapter, and a stale title would let
+   * the context line name a chapter by a name the author has already changed.
+   */
+  private chapterListRevision = 0;
+
+  /**
+   * The last ambient snapshot published, kept as its own key so a re-render publishes nothing. See
+   * {@link publishAmbientChapter}.
+   */
+  private lastAmbientKey: {
+    bookId: string | null;
+    chapterId: string | null;
+    reviewMode: 'edit' | 'review';
+    chapters: ChapterSummaryDto[] | null;
+    chapterCount: number;
+    revision: number;
+  } | null = null;
 
   /** Used for editor-shell dir attribute (e.g. 'rtl' for Hebrew). */
   get editorDirection(): string {
@@ -573,6 +606,172 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
     this.reviewPanelOpen = true;
   }
 
+  // ── Chatbot phase B: consuming a `focus` deep link ────────────────────────────────────────────────
+
+  // c02 (review finding #9): BOTH one-shots below are set in one place and consumed in another, so both
+  // need an explicit RESET rule or they fire in a context the author has already left. THE TWO RULES ARE
+  // DELIBERATELY DIFFERENT, and this is the thing a later tidy-up would unify and thereby break:
+  //
+  //  - A DASHBOARD focus ({@link pendingSurfaceFocus}) is dropped by a book switch, by teardown, AND by a
+  //    switch back to Edit mode, because the dashboard is `@if`-mounted behind Review mode and going back
+  //    to Edit is the author saying they no longer want to look at it.
+  //  - A CHAPTER focus ({@link pendingChapterFocusOrder}) is dropped by a book switch and by teardown and
+  //    by NOTHING ELSE. It must NOT be dropped on a mode switch: {@link consumeSurfaceFocus} deliberately
+  //    does not force Review mode for a chapter, because the author asked to see the writing, so Edit
+  //    mode is exactly where this one is SUPPOSED to land. Resetting it there would break the only case
+  //    it exists for.
+  //
+  // The book-switch rule is shared and lives in {@link reconcilePendingFocusWithBook}, keyed on
+  // {@link pendingFocusBookId} rather than on "any book id change" - see the comment there for why a
+  // blanket id-change reset would kill the cold deep link this one-shot was written for.
+
+  /**
+   * A chapter focus that arrived before the book's chapter list did. Applied by the load, then cleared.
+   * Null means nothing is waiting. Reset: book switch + teardown only (see the block comment above).
+   */
+  private pendingChapterFocusOrder: number | null = null;
+
+  /**
+   * The book a held focus was raised FOR, stamped at {@link consumeSurfaceFocus} time.
+   *
+   * `null` means the request was raised before this page knew its book id at all, which is the ordinary
+   * COLD DEEP LINK: `ngOnInit` subscribes to `queryParams` before `route.params`, so on a fresh
+   * navigation into `?focus=...` the chip is consumed while `bookId` is still null. The first load
+   * therefore ADOPTS a null stamp rather than treating null-to-id as a switch; a blanket "any book id
+   * change drops the pending" rule would discard the request on the exact path it was written for.
+   */
+  private pendingFocusBookId: string | null = null;
+
+  /**
+   * Bring the surface a citation chip named into view.
+   *
+   * THE PARAM IS STRIPPED FIRST, following the shipped `imported=1` precedent and for the identical
+   * reason recorded there: a sticky param re-forces its effect on every refresh and silently overrides
+   * a later choice by the author. A `replaceUrl` merge keeps every other param and adds no history
+   * entry, so Back still goes where the author came from.
+   *
+   * The dashboard is reached through {@link BookSurfaceFocusService} rather than through the
+   * `@ViewChild`, because the dashboard is `@if`-mounted behind the state this method is in the middle
+   * of setting: at the moment of the call the ViewChild is very often still undefined. The `setTimeout`
+   * is what lets the mode change render and the dashboard subscribe before the request is published.
+   */
+  private consumeSurfaceFocus(request: BookSurfaceFocusRequest): void {
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: { focus: null, chapter: null },
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+
+    // c02: stamp the book this gesture is about BEFORE either branch can hold anything. Stamping
+    // unconditionally (rather than only on the branches that hold) keeps the stamp from ever describing
+    // an older request than the one in hand.
+    this.pendingFocusBookId = this.bookId;
+
+    if (request.target === 'chapter') {
+      // A chapter's TEXT is the editor's, not the dashboard's, so this one never leaves this component
+      // and deliberately does NOT force review mode: the author asked to see the writing.
+      this.focusChapterByOrder(request.chapterOrder ?? null);
+      return;
+    }
+
+    this.reviewPanelOpen = true;
+    this.focusMode = false;
+    this.onReviewModeChange('review');
+    // HELD, not published now. The dashboard is `@if`-mounted behind the state just set, so at this
+    // moment it does not exist and has not subscribed. A `setTimeout` looked like enough and was not:
+    // measured live, the timer fired before the mount and the request went to nobody, leaving a chip
+    // that navigated correctly and then did nothing. {@link ngAfterViewChecked} publishes it once the
+    // dashboard is actually there, which is a fact rather than a guess about ordering.
+    this.pendingSurfaceFocus = request;
+  }
+
+  /**
+   * A focus request waiting for the dashboard to exist. Null when nothing is waiting.
+   * Reset: book switch + teardown + a switch back to Edit mode (see the block comment above).
+   */
+  private pendingSurfaceFocus: BookSurfaceFocusRequest | null = null;
+
+  /**
+   * Publish a held focus request as soon as the dashboard has mounted - or DROP it if the author has
+   * meanwhile said they no longer want to look at the dashboard.
+   *
+   * A child's `ngOnInit` runs before its parent's `ngAfterViewChecked`, so by the time this sees
+   * `dashboardComp` the dashboard has already subscribed. The request still goes out on a timer rather
+   * than inline, because handling it mutates the dashboard's own view state and doing that inside the
+   * change-detection pass that just checked it is the classic ExpressionChangedAfterChecked.
+   *
+   * c02 - THE MODE DROP, AND WHY IT IS KEYED ON A VALUE HERE RATHER THAN HUNG OFF THE MODE WRITERS.
+   * `reviewMode` has several writers ({@link onReviewModeChange}, {@link onHandoffEditMode}'s direct
+   * assignment, and the import handoff in `ngOnInit`), and an enumeration of them is exactly the list
+   * that goes stale on the next one somebody adds - the same argument {@link publishAmbientChapter}
+   * already makes for the same reason. Reading the VALUE at the one place that consumes the request is
+   * the single site that covers every writer, present and future. `consumeSurfaceFocus` sets Review mode
+   * itself immediately before holding, so the first pass after a hold always sees `review`; seeing
+   * anything else means the author changed it back in the interval.
+   *
+   * WHAT IS DELIBERATELY NOT A DROP TRIGGER, although each of them also unmounts the dashboard (see
+   * {@link fullSpineVisible}): a closed ReviewPanel, focus mode, the import handoff card, and a book
+   * whose payload has not landed yet. None of those is the author changing their mind about WHAT they
+   * want to see - the panel reopens onto the same surface, focus mode restores it to exactly how it was,
+   * and a book that is still loading is the ordinary cold deep link this hold exists for. Only the
+   * segmented control going back to Edit says "show me something else".
+   */
+  ngAfterViewChecked(): void {
+    const request = this.pendingSurfaceFocus;
+    if (!request) return;
+    if (this.reviewMode !== 'review') {
+      this.pendingSurfaceFocus = null;
+      return;
+    }
+    if (!this.dashboardComp) return;
+    this.pendingSurfaceFocus = null;
+    setTimeout(() => this.surfaceFocus.request(request));
+  }
+
+  /**
+   * c02: drop a held focus that belonged to the book the author has just navigated away from.
+   *
+   * Called ONLY on a real book id change. The stamp, not the change, is what decides: a pending raised
+   * before any id was known ({@link pendingFocusBookId} null) is ADOPTED by the first load, because that
+   * is the cold `?focus=...` deep link, where the query params are consumed before `route.params` emits.
+   * Dropping there would break the working case while claiming to fix a stale one.
+   *
+   * Both one-shots are dropped together here, and that is the ONE rule they share: a focus is a gesture
+   * about one book, and neither a chapter order nor a dashboard surface means anything in another book's
+   * chapter list or another book's dashboard. Their mode rules differ; their book rule does not.
+   */
+  private reconcilePendingFocusWithBook(newBookId: string | null): void {
+    if (this.pendingSurfaceFocus === null && this.pendingChapterFocusOrder === null) {
+      this.pendingFocusBookId = newBookId;
+      return;
+    }
+    if (this.pendingFocusBookId !== null && this.pendingFocusBookId !== newBookId) {
+      this.pendingSurfaceFocus = null;
+      this.pendingChapterFocusOrder = null;
+    }
+    this.pendingFocusBookId = newBookId;
+  }
+
+  /**
+   * Open the chapter at a 0-BASED order (the order the citation ref carries).
+   *
+   * BY ORDER IS SAFE HERE, and it is worth saying why, because `onOpenChapterFromDashboard` deliberately
+   * REMOVED an order fallback: that one resolves a finding's anchor, which is persisted and can be
+   * months stale, so a reorder or a delete made it open the wrong chapter. This order was produced by
+   * the server for THIS answer, seconds ago, from the same chapter table. If no chapter carries it, this
+   * does nothing rather than opening a neighbour.
+   */
+  private focusChapterByOrder(order: number | null): void {
+    if (order === null) return;
+    if (!this.book) {
+      this.pendingChapterFocusOrder = order;
+      return;
+    }
+    const chapter = this.book.chapters.find(c => c.order === order);
+    if (chapter) this.selectChapter(chapter);
+  }
+
   // ── ds-c05 Focus mode ──────────────────────────────────────────────────────
 
   /** Localized label for the focus-mode toggle button (he default). */
@@ -789,7 +988,15 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
     private sfdtService: SfdtManipulationService,
     private editorTextService: EditorTextService,
     private suggestionAnchorService: SuggestionAnchorService,
-    private reviseContext: ReviseContextService
+    private reviseContext: ReviseContextService,
+    /** Chatbot phase B: where a citation chip's `focus` query param is handed off to the dashboard. */
+    private surfaceFocus: BookSurfaceFocusService,
+    /**
+     * Chatbot phase B / a2: where the chapter on screen is published OUTWARD, so the assistant drawer
+     * (app chrome, mounted once for the life of the app) can send it and can name it. See
+     * {@link publishAmbientChapter}.
+     */
+    private ambientChapter: AmbientChapterService
   ) {}
 
   ngOnInit(): void {
@@ -843,6 +1050,18 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
       });
     }
 
+    // ── Chatbot phase B: the assistant's citation chips deep-link here ──────────────────────────────
+    //
+    // SUBSCRIBED, not read from the snapshot, and that is the load-bearing part: the drawer is app
+    // chrome, so the commonest click is a chip pressed while ALREADY on this book's page. That changes
+    // only the query params, so the route is not recreated and ngOnInit never runs again - a snapshot
+    // read would have worked exactly once, on a cold load, and looked correct in every test that
+    // navigated in fresh.
+    this.route.queryParams.pipe(takeUntil(this.destroy$)).subscribe(params => {
+      const request = parseBookSurfaceFocus(params['focus'], params['chapter']);
+      if (request) this.consumeSurfaceFocus(request);
+    });
+
     // Wave 3 / w3: ONE subscription to the registry for the whole page lifetime. It is not re-created per
     // book because it is not scoped per book: the derivation filters on the CURRENT bookId every time it
     // runs, so the wrong-book guard is structural rather than a race between a teardown and a late emit.
@@ -854,6 +1073,13 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
     this.route.params.pipe(takeUntil(this.destroy$)).subscribe(params => {
       const previousBookId = this.bookId;
       this.bookId = params['bookId'] ?? null;
+      // c02 (review finding #9): FIRST, and before anything below can start loading the new book, so a
+      // focus held for the previous book cannot be applied by the load it no longer belongs to. Keyed on
+      // the id CHANGE like every other per-book reset in this block, so a same-book params re-emit never
+      // discards a focus that is still waiting for its own book's payload.
+      if (this.bookId !== previousBookId) {
+        this.reconcilePendingFocusWithBook(this.bookId);
+      }
       // Phase 4d-10c: the revise-context ("Addressing: <one-liner>" chip) is a root singleton owned by the
       // findings->checklist handoff, and the checklist that consumes it lives INSIDE this book's editor view.
       // A book switch must reset it, else a stale finding from the previous book could re-show its chip after
@@ -898,6 +1124,14 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
             // fallback so an empty/missing book language still keys the app-default 'he' slot.
             this.jobRegistry.reattach(b.id, b.language?.trim() || 'he');
           }
+          // A chapter-text chip that landed before the chapter list did (a cold load straight into the
+          // link). Applied HERE, and BEFORE the default first-chapter selection below, so the deep link
+          // wins over the default rather than being overwritten by it.
+          if (this.pendingChapterFocusOrder !== null) {
+            const pending = this.pendingChapterFocusOrder;
+            this.pendingChapterFocusOrder = null;
+            this.focusChapterByOrder(pending);
+          }
           if (b.chapters.length && !this.selectedChapterId) this.selectChapter(b.chapters[0]);
         });
       }
@@ -922,6 +1156,10 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
         if (newOrder != null) ch.order = newOrder;
       });
       this.book.chapters.sort((a, b) => a.order - b.order);
+      // a2: an IN-PLACE mutation of the list, so the ambient publish's reference key cannot see it. A
+      // reorder changes the ORDER of the open chapter, which is the value the server's chapter refs and
+      // escalation are keyed on, so leaving it unseen is how a stale ambient pair reaches the wire.
+      this.chapterListRevision++;
     });
     this.syncService.sceneCreated$.pipe(takeUntil(this.destroy$)).subscribe(ev => {
       if (ev.bookId !== this.bookId) return;
@@ -1016,6 +1254,9 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
         const target = this.book!.chapters.find(c => c.id === updated.id);
         if (target) {
           target.title = updated.title;
+          // a2: in place, so the ambient publish's reference key cannot see it. The drawer's context
+          // line names the chapter by its title, and a renamed chapter must not keep its old name there.
+          this.chapterListRevision++;
         }
       },
       error: () => {
@@ -1053,6 +1294,16 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
 
   ngOnDestroy(): void {
     window.removeEventListener('beforeunload', this.handleBeforeUnload);
+    // a2: this page is the only publisher of the open chapter, so leaving it means nothing is open. It
+    // is what makes the import and export pages report no ambient chapter even though they are
+    // book-scoped routes where `BookContextService` still names the book.
+    this.ambientChapter.clear();
+    // c02: both focus one-shots die with the page. The field write is belt-and-braces on an instance
+    // that is about to be unreachable; what it actually buys is that the reset rule is stated at every
+    // one of its three triggers, so a reader looking for "where is this cleared" finds all of them.
+    this.pendingSurfaceFocus = null;
+    this.pendingChapterFocusOrder = null;
+    this.pendingFocusBookId = null;
     if (this.bookId) this.syncService.leaveBook(this.bookId);
     if (this._scrollSettleTimer) clearTimeout(this._scrollSettleTimer);
     this.destroyCustomToolbar();
@@ -1453,6 +1704,10 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
    * second, permanently-stale copy of the state machine.
    */
   ngDoCheck(): void {
+    // Chatbot phase B / a2. FIRST, and outside the run-dialog key's early return, because it answers a
+    // different question about the same triple and must not be skipped when that one has nothing to do.
+    this.publishAmbientChapter();
+
     const bookId = this.bookId;
     const chapterId = this.selectedChapterId;
     const sceneId = this.selectedSceneId;
@@ -1475,6 +1730,69 @@ export class EditorPageComponent implements OnInit, DoCheck, OnDestroy {
       this.runEvents$ = null;
       this.runDialogAnalysisType = '';
     }
+  }
+
+  /**
+   * PUBLISH THE OPEN CHAPTER OUTWARD, for the assistant drawer (chatbot phase B, a2).
+   *
+   * WHY IT HANGS OFF ngDoCheck, and it is the same argument the run-dialog reconcile above already
+   * makes for the same reason: `selectedChapterId` has FIVE writers ({@link selectChapter},
+   * {@link selectScene}, {@link deleteChapter}'s no-replacement branch, and the two `route.params` /
+   * `getById` paths that select the first chapter of a freshly-loaded book), `reviewMode` has four, and
+   * the chapter list has six. Hanging the publish on each of them is the enumeration that goes stale on
+   * the next writer somebody adds - and a stale ambient chapter is not a cosmetic bug, it is an answer
+   * confidently about the wrong chapter of the author's own manuscript. Keying on the VALUE of what is
+   * published is the single site that covers every writer, present and future.
+   *
+   * IT IS CHEAP IN THE STEADY STATE, which is what makes that affordable on a page whose change
+   * detection runs constantly under Syncfusion: six comparisons and an early return. Nothing is
+   * allocated, no list is walked and no lookup is done unless one of the six values actually moved.
+   *
+   * THE DASHBOARD CARVE-OUT IS HERE (d2 section (1)): `reviewMode === 'review'` publishes a null
+   * chapter even though `selectedChapterId` still holds one, because that mode swaps the assistant panel
+   * for the whole-book dashboard and the author is asking about book-wide artifacts. Without it, a
+   * question asked from the review tab would silently ground in whichever chapter happened to be
+   * selected before the author switched. The chapter LIST is still published there: the author is inside
+   * the book, so a clarifying question still has chapters to offer.
+   */
+  private publishAmbientChapter(): void {
+    const bookId = this.bookId;
+    const chapters = this.book?.chapters ?? null;
+    const chapterId = this.selectedChapterId;
+    const reviewMode = this.reviewMode;
+    const chapterCount = chapters?.length ?? 0;
+    const revision = this.chapterListRevision;
+
+    const previous = this.lastAmbientKey;
+    if (previous
+      && previous.bookId === bookId
+      && previous.chapterId === chapterId
+      && previous.reviewMode === reviewMode
+      && previous.chapters === chapters
+      && previous.chapterCount === chapterCount
+      && previous.revision === revision) {
+      return;
+    }
+    this.lastAmbientKey = { bookId, chapterId, reviewMode, chapters, chapterCount, revision };
+
+    // No book id yet (the route param has not landed): there is no book to scope a snapshot to, and a
+    // snapshot with the wrong book is worse than none. The book's own payload may still be in flight
+    // below, which is why the list is allowed to be empty rather than the whole publish deferred - the
+    // drawer needs the bookId-scoped null promptly so it stops carrying the previous book's chapter.
+    if (!bookId) {
+      this.ambientChapter.clear();
+      return;
+    }
+
+    const open = reviewMode === 'review'
+      ? null
+      : (chapters?.find(c => c.id === chapterId) ?? null);
+
+    this.ambientChapter.publish({
+      bookId,
+      openChapter: open ? { id: open.id, order: open.order, title: open.title } : null,
+      chapters: (chapters ?? []).map(c => ({ id: c.id, order: c.order, title: c.title })),
+    });
   }
 
   /** Save if needed, then navigate to books list. Used by Back to books button and canDeactivate (browser back). */

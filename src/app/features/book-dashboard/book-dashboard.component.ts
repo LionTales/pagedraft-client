@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, ElementRef, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
+import { AfterViewChecked, Component, ElementRef, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { BookService } from '../../core/services/book.service';
@@ -33,6 +33,10 @@ import {
   orientationString,
 } from './first-run-orientation.component';
 import { dismissOrientation, orientationDismissed } from './orientation-store';
+import {
+  BookSurfaceFocusRequest,
+  BookSurfaceFocusService,
+} from '../../core/services/book-surface-focus.service';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 import { CollapsibleSectionComponent } from '../../shared/collapsible-section/collapsible-section.component';
 
@@ -173,7 +177,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     FirstRunOrientationComponent,
   ],
   template: `
-    <div class="book-dashboard" [attr.dir]="bookDir">
+    <div class="book-dashboard" #dashboardRoot [attr.dir]="bookDir">
       <header class="dashboard-header">
         <h3 class="dashboard-title">{{ label('title') }}: {{ bookTitle }}</h3>
         <div class="header-actions">
@@ -263,13 +267,14 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
         <!-- Q8-C + the collapse directive. A long per-chapter list, so it is one of the two sections that
              DEFAULT to collapsed; the explainer sits OUTSIDE the fold, so the relationship it states
              ("these are the inputs") is legible even when the list itself is folded away. -->
-        <div class="inputs-to-build" [attr.dir]="bookDir" data-testid="inputs-to-this-build">
+        <div class="inputs-to-build" #inputsAnchor [attr.dir]="bookDir" data-testid="inputs-to-this-build">
           <p class="inputs-explainer">{{ label('inputsExplainer') }}</p>
           <app-collapsible-section
             sectionId="inputs"
             [bookId]="bookId"
             [dir]="bookDir"
             [heading]="label('inputsToThisBuild')"
+            [openToken]="inputsOpenToken"
             [defaultCollapsed]="true">
             <app-book-chapter-summaries
               [bookId]="bookId"
@@ -559,12 +564,13 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
            profile, so it must still render (including its never-built empty state) for a book that has no
            profile yet. -->
       <!-- The second long content list, so it is the other section that DEFAULTS to collapsed. -->
-      <section class="card character-register-card">
+      <section class="card character-register-card" #registerAnchor>
         <app-collapsible-section
           sectionId="character-register"
           [bookId]="bookId"
           [dir]="bookDir"
           [heading]="label('characterRegister')"
+          [openToken]="registerOpenToken"
           [defaultCollapsed]="true">
           <app-character-register
             [bookId]="bookId"
@@ -883,7 +889,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     .citations { font-size: var(--pd-text-caption); color: var(--pd-text-muted); margin-top: var(--pd-space-3); }
   `]
 })
-export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
+export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, AfterViewChecked {
   @Input() bookId!: string;
   @Input() bookTitle: string = '';
   /** Book language (e.g. 'he', 'en'); drives the book-scoped status rows' localization + status key. */
@@ -980,6 +986,22 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
   /** rf-f04: anchor element just above the findings/bible tabs; scrolled to when the Revise CTA is clicked. */
   @ViewChild('findingsAnchor') findingsAnchor?: ElementRef<HTMLElement>;
 
+  /**
+   * Chatbot phase B: the two sections a citation chip can deep-link to that are not already anchored.
+   * They are the WRAPPER elements, not the collapsible bodies, so the scroll still lands correctly when
+   * the section is folded (which is these two sections' default).
+   */
+  @ViewChild('inputsAnchor') inputsAnchor?: ElementRef<HTMLElement>;
+  @ViewChild('registerAnchor') registerAnchor?: ElementRef<HTMLElement>;
+
+  /**
+   * THE SCROLL CONTAINER, and the thing whose growth invalidates a deep-link scroll (c01 fixes review
+   * finding #4). `.book-dashboard` carries `overflow-y: auto; max-height: 100%`, so it is the element
+   * `scrollIntoView` actually scrolls, and its `scrollHeight` is the total height of everything the
+   * page's async reads have delivered so far. See {@link focusHold} for what that measurement is for.
+   */
+  @ViewChild('dashboardRoot') dashboardRoot?: ElementRef<HTMLElement>;
+
   /** Latest derived review state reported by the hosted review row; gates the scorecard/ledger mount. */
   reviewState: BookReviewState = 'unknown';
   /** Latest "summary build in flight" flag from the hosted summary row (its buildingChange output). */
@@ -1019,17 +1041,204 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
     private bookService: BookService,
     /** Read ONLY for the spine's stage-4 running marks; the status rows still own their own builds. */
     private jobRegistry: JobRegistryService,
+    /**
+     * Chatbot phase B: the assistant's citation chips deep-link into these surfaces. Root-provided, so
+     * adding it here does not break a single existing spec of this component with a NullInjector.
+     */
+    private surfaceFocus: BookSurfaceFocusService,
   ) {}
 
   ngOnInit(): void {
     this.loadProfile();
     this.watchRunningChapters();
     this.rebuildSpineSignals();
+    this.focusSub = this.surfaceFocus.focus$.subscribe(req => this.onSurfaceFocus(req));
   }
 
   ngOnDestroy(): void {
     this.runningChaptersSub?.unsubscribe();
     this.runningChaptersSub = null;
+    this.focusSub?.unsubscribe();
+    this.focusSub = null;
+    // c01: a held scroll owns a pending timer and a closure over this view. Both die with the component.
+    this.releaseFocusHold();
+  }
+
+  // ── Chatbot phase B: bringing a cited surface into view ──────────────────────────────────────────
+
+  private focusSub: Subscription | null = null;
+
+  /**
+   * Open tokens for the two sections that default to COLLAPSED. Bumped rather than set, because the
+   * request is a gesture; see `CollapsibleSectionComponent.openToken`.
+   */
+  inputsOpenToken = 0;
+  registerOpenToken = 0;
+
+  /**
+   * A citation chip asked for one of these surfaces.
+   *
+   * MAPPED ONTO THE MECHANISMS THAT ALREADY EXIST, exactly as `onSpineAction` is: the same
+   * `switchToReview` output, the same review tab field, the same two scroll anchors. A chip must not
+   * open a second way of doing something a surface already owns, or the two will drift.
+   *
+   * `chapter` is deliberately absent from this switch: a chapter's TEXT lives in the editor, not in the
+   * dashboard, so the host handles that one before it ever reaches here.
+   */
+  private onSurfaceFocus(request: BookSurfaceFocusRequest): void {
+    switch (request.target) {
+      case 'findings':
+      case 'story-bible':
+        // The ledger and the Story Bible are two tabs of one section, so both need review mode and both
+        // land at the same anchor; only the tab differs.
+        this.switchToReview.emit();
+        this.reviewTab = request.target === 'findings' ? 'findings' : 'bible';
+        this.holdFocusScroll(() => this.scrollToFindings());
+        return;
+      case 'chapter-briefs':
+        this.switchToReview.emit();
+        this.inputsOpenToken++;
+        this.holdFocusScroll(() => this.scrollToInputs());
+        return;
+      case 'register':
+        this.switchToReview.emit();
+        this.registerOpenToken++;
+        this.holdFocusScroll(() => this.scrollToRegister());
+        return;
+      case 'status':
+        // All three status rows live in ONE card, so the stage does not change the destination. It is
+        // still carried on the request rather than collapsed away, because the day one of them moves,
+        // the caller's intent will still be on the wire.
+        this.switchToReview.emit();
+        this.holdFocusScroll(() => this.scrollToStatusRows());
+        return;
+      default:
+        return;
+    }
+  }
+
+  // ── c01: making the deep-link scroll land on the FIRST (cold) click ──────────────────────────────
+  //
+  // THE DEFECT, measured live at 900px: a chip clicked while the dashboard was not yet mounted left the
+  // findings heading at `top: 1442` (off screen), and the same chip clicked again - with the dashboard
+  // already mounted and loaded - left it at `top: 556`. A cold `?focus=register` left the register card
+  // at `top: 3691` WITH ITS SECTION CORRECTLY EXPANDED. So the mode switch, the open token and the
+  // anchor were all right; the scroll was simply measured against a page that had not been built yet.
+  //
+  // WHY THE PREVIOUS HOP WAS NOT ENOUGH. The host already learned once that a `setTimeout` "looked like
+  // enough and was not" and replaced it with `ngAfterViewChecked`, which proves the dashboard has
+  // SUBSCRIBED. Subscribing is not laying out: at that instant this page is a header, a skeleton spine,
+  // three unresolved status rows and a one-line loading hint, so `scrollHeight` is barely over
+  // `clientHeight` and `scrollIntoView` has almost nothing to scroll. Eight async reads then land -
+  // `loadProfile`, the summary / review / style-baseline status GETs, the spine rebuild, the first-run
+  // orientation panel and its guides, the findings ledger's own GET, the character register's own GET -
+  // and push the anchor down under a scroll position that was correct when it was taken.
+  //
+  // WHY THIS IS A HEIGHT SIGNAL AND NOT A LONGER TIMER, AND NOT A ResizeObserver.
+  //  - A list of "loads that have reported" is unreachable: the two status rows publish `statusChange`
+  //    only when the value CHANGES and publish failure on a separate `statusUnreadable` channel, and the
+  //    ledger, the Story Bible, the register and the baseline row report nothing to this component at
+  //    all. The ledger is the one whose content lands LAST (it only mounts once the review row's state
+  //    says ready/stale, and only then issues its own GET) and it is the one sitting directly above the
+  //    register anchor, so a window closed on the reads we can see would close before the growth that
+  //    matters most.
+  //  - A `ResizeObserver` on this root would fire ZERO times for that growth. The root is
+  //    `max-height: 100%` with its own scrollbar, so its observed box does not change when its content
+  //    does. RO is the obvious first reach here and it is the wrong one; recorded so it is not re-tried.
+  //  - The container's `scrollHeight`, sampled in `ngAfterViewChecked`, is complete BECAUSE it measures
+  //    the result rather than the cause: every one of the eight arrivals is an HTTP response, so each
+  //    lands in a zone task and drives a change-detection pass, and this hook runs after that pass has
+  //    been written to the DOM. A child that reports nothing still moves this number.
+
+  /**
+   * How long corrections keep being applied after a focus request.
+   *
+   * THIS IS A CEILING, NOT A DELAY, and the distinction is the whole reason it is allowed to exist in a
+   * file that has already been burnt by a timer. Nothing waits for it: the scroll lands off the height
+   * signal, at whatever moment the content actually arrives, so changing this number cannot change
+   * whether the chip works. It bounds only how long the page keeps re-asserting, which matters for one
+   * reason - a layout change minutes later (the author unfolding a section) must not yank them back to
+   * a surface they asked for in another context.
+   */
+  private static readonly FOCUS_SETTLE_CEILING_MS = 2500;
+
+  /**
+   * The live focus request, held across the window in which the page is still assembling itself.
+   *
+   * `scroll` is the anchor's own helper rather than the anchor, so each anchor keeps exactly one caller.
+   * `contentHeight` is the last `scrollHeight` a scroll was asserted against; a difference is the signal
+   * that later content has arrived and the assert must be repeated. `asserted` distinguishes the FIRST
+   * pass, which always scrolls, from the later ones, which scroll only on movement.
+   */
+  private focusHold: {
+    scroll: () => void;
+    contentHeight: number;
+    asserted: boolean;
+    ceiling: ReturnType<typeof setTimeout> | null;
+  } | null = null;
+
+  /**
+   * Start (or replace) the hold for a focus request. Deliberately does NOT scroll here.
+   *
+   * THE FIRST SCROLL IS ORDERED AFTER THE NEXT CHANGE-DETECTION PASS, which is the pass that applies the
+   * `openToken` bump the two collapsed targets just made. That ordering is the second half of finding
+   * #4: `chapter-briefs` and `register` were strictly worse than `findings` precisely because their
+   * section unfolded AFTER the scroll had already been measured, and an unfolded section is what gives
+   * the container the extra scrollable height the anchor needs. Deferring the first assert also covers
+   * the case a height-triggered assert alone would miss - a section the author already had open, where
+   * the token bump changes no height at all.
+   */
+  private holdFocusScroll(scroll: () => void): void {
+    this.releaseFocusHold();
+    this.focusHold = {
+      scroll,
+      contentHeight: this.focusContentHeight(),
+      asserted: false,
+      ceiling: setTimeout(
+        () => this.releaseFocusHold(),
+        BookDashboardComponent.FOCUS_SETTLE_CEILING_MS,
+      ),
+    };
+  }
+
+  /** Total height of everything currently rendered into the scroll container; 0 before it exists. */
+  private focusContentHeight(): number {
+    return this.dashboardRoot?.nativeElement?.scrollHeight ?? 0;
+  }
+
+  /**
+   * Assert the held scroll once per change-detection pass in which it can still be wrong.
+   *
+   * Runs after the view has been checked, so the DOM already carries whatever that pass rendered - the
+   * unfolded section, the status row that just got its payload, the profile cards that just replaced the
+   * loading hint. `scrollIntoView` is idempotent, so a repeat that finds nothing moved costs nothing.
+   */
+  ngAfterViewChecked(): void {
+    const hold = this.focusHold;
+    if (!hold) return;
+    const height = this.focusContentHeight();
+    if (hold.asserted && height === hold.contentHeight) return;
+    hold.asserted = true;
+    hold.contentHeight = height;
+    hold.scroll();
+  }
+
+  /**
+   * End the correction window. Called by the ceiling, by the next request, by a context switch and by
+   * teardown - a focus is a gesture about ONE book, so a book or language change discards it outright
+   * rather than letting it re-aim at the next book's page.
+   */
+  private releaseFocusHold(): void {
+    if (this.focusHold?.ceiling) clearTimeout(this.focusHold.ceiling);
+    this.focusHold = null;
+  }
+
+  private scrollToInputs(): void {
+    this.inputsAnchor?.nativeElement?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  private scrollToRegister(): void {
+    this.registerAnchor?.nativeElement?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   /**
@@ -1129,6 +1338,11 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy {
     // second book is a second first run, which is the whole reason the flag is keyed per book.
     this.orientationOpenState = null;
     this.orientationDecidedOnUnreadableStatus = false;
+    // c01: a deep-link scroll is a gesture about the book that was on screen when the chip was clicked.
+    // The whole page is about to be rebuilt from another book's payloads, and every one of those
+    // arrivals is a height change this hold would answer by scrolling - to an anchor whose contents are
+    // now a different book's. Drop it here, with the rest of the previous book's transient state.
+    this.releaseFocusHold();
   }
 
   /**

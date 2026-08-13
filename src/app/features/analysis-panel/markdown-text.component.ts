@@ -1,6 +1,8 @@
 import { CommonModule } from '@angular/common';
 import { Component, Input, ViewEncapsulation } from '@angular/core';
 
+import { TextDirection, blockDirection } from '../../core/i18n/text-direction';
+
 /**
  * Renders a SAFE subset of Markdown, in two VARIANTS.
  *
@@ -95,6 +97,16 @@ export type MarkdownVariant = 'compact' | 'document';
     .markdown-text h5 { font-size: 0.95rem; }
     .markdown-text h6 { font-size: 0.9rem; }
     .markdown-text strong { font-weight: 600; }
+    /* A block that SWITCHED direction (see the blockDirBase input) must align to its OWN start edge.
+       The start keyword is resolved against the element's own direction, so this one rule serves both ways
+       round, and it only ever matches a block the renderer decided to turn - a block that agrees with
+       its surroundings carries no dir attribute at all. Reachable because this component's
+       encapsulation is None; under Emulated it would match nothing, since these nodes arrive through
+       [innerHTML] and carry no content attribute. */
+    .markdown-text [dir="rtl"],
+    .markdown-text [dir="ltr"] {
+      text-align: start;
+    }
     .markdown-text code {
       font-family: var(--pd-font-mono);
       font-size: 0.9em;
@@ -161,6 +173,7 @@ export type MarkdownVariant = 'compact' | 'document';
 export class MarkdownTextComponent {
   private _text = '';
   private _variant: MarkdownVariant = 'compact';
+  private _blockDirBase: TextDirection | null = null;
   html = '';
 
   @Input()
@@ -187,8 +200,29 @@ export class MarkdownTextComponent {
     return this._variant;
   }
 
+  /**
+   * MIXED-DIRECTION rendering, opt-in (chatbot phase B, c2).
+   *
+   * Set it to the direction the surrounding prose runs in, and every rendered BLOCK whose own dominant
+   * script disagrees gets its own `dir`. Leave it null (the default) and NOTHING changes: no block
+   * carries a `dir`, which is byte-for-byte what every existing caller rendered before this input
+   * existed. That default is deliberate rather than cautious - turning per-block direction on globally
+   * would re-lay-out every analysis result and every guide page in the app at once, and only one
+   * surface has the mixed-language problem it solves.
+   *
+   * See `core/i18n/text-direction.ts` for why this is script-majority and not `dir="auto"`.
+   */
+  @Input()
+  set blockDirBase(value: TextDirection | null | undefined) {
+    this._blockDirBase = value === 'rtl' || value === 'ltr' ? value : null;
+    this.render();
+  }
+  get blockDirBase(): TextDirection | null {
+    return this._blockDirBase;
+  }
+
   private render(): void {
-    this.html = renderSafeMarkdown(this._text, this._variant);
+    this.html = renderSafeMarkdown(this._text, this._variant, this._blockDirBase);
   }
 }
 
@@ -282,7 +316,11 @@ type Block =
  *   - an INDENTED line right after a list item, in document -> a continuation of that item
  *   - anything else              -> paragraph text
  */
-export function renderSafeMarkdown(raw: string, variant: MarkdownVariant = 'compact'): string {
+export function renderSafeMarkdown(
+  raw: string,
+  variant: MarkdownVariant = 'compact',
+  blockDirBase: TextDirection | null = null
+): string {
   if (!raw || !raw.trim()) return '';
 
   const isDocument = variant === 'document';
@@ -375,10 +413,24 @@ export function renderSafeMarkdown(raw: string, variant: MarkdownVariant = 'comp
   }
   flushParagraph();
 
-  return blocks.map(block => renderBlock(block, isDocument)).join('');
+  return blocks.map(block => renderBlock(block, isDocument, blockDirBase)).join('');
 }
 
-function renderBlock(block: Block, isDocument: boolean): string {
+/**
+ * The `dir` attribute a block needs, as markup, or `''` when it needs none.
+ *
+ * The SOURCE text is measured, not the rendered HTML: tag names and attribute values are Latin, so a
+ * Hebrew paragraph carrying one `<strong>` would otherwise be measured as part-Latin. `blockDirection`
+ * returns null both when the direction agrees with its surroundings and when there is nothing to
+ * measure, and both of those mean "inherit", so one null check covers them.
+ */
+function dirAttr(source: string, base: TextDirection | null): string {
+  if (!base) return '';
+  const dir = blockDirection(source, base);
+  return dir ? ` dir="${dir}"` : '';
+}
+
+function renderBlock(block: Block, isDocument: boolean, base: TextDirection | null): string {
   switch (block.kind) {
     case 'p': {
       // In a document, consecutive lines are one hard-wrapped paragraph: join them BEFORE the inline
@@ -387,19 +439,22 @@ function renderBlock(block: Block, isDocument: boolean): string {
       const inner = isDocument
         ? renderInline(block.lines.join(' '))
         : block.lines.map(l => renderInline(l)).join('<br>');
-      return `<p>${inner}</p>`;
+      return `<p${dirAttr(block.lines.join(' '), base)}>${inner}</p>`;
     }
     case 'ul': {
-      const items = block.items.map(i => `<li>${renderInline(i)}</li>`).join('');
-      return `<ul>${items}</ul>`;
+      // The direction is decided PER ITEM as well as for the list, because a list is a container of
+      // blocks: a Hebrew list quoting one English line should turn that line around and nothing else.
+      // The list-level attribute is what puts the markers on the right edge.
+      const items = block.items.map(i => `<li${dirAttr(i, base)}>${renderInline(i)}</li>`).join('');
+      return `<ul${dirAttr(block.items.join(' '), base)}>${items}</ul>`;
     }
     case 'ol': {
-      const items = block.items.map(i => `<li>${renderInline(i)}</li>`).join('');
+      const items = block.items.map(i => `<li${dirAttr(i, base)}>${renderInline(i)}</li>`).join('');
       const startAttr = block.start !== 1 ? ` start="${block.start}"` : '';
-      return `<ol${startAttr}>${items}</ol>`;
+      return `<ol${startAttr}${dirAttr(block.items.join(' '), base)}>${items}</ol>`;
     }
     case 'h': {
-      return `<h${block.level}>${renderInline(block.text)}</h${block.level}>`;
+      return `<h${block.level}${dirAttr(block.text, base)}>${renderInline(block.text)}</h${block.level}>`;
     }
   }
 }

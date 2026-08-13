@@ -11,7 +11,14 @@
  * ONE-BASED is the correct convention: the number is shown beside a human-authored title as "the Nth
  * chapter", which is how a reader counts chapters, not how the database indexes them. Every surface that
  * names a chapter by number must call this function on the raw `order` rather than re-deriving it, so a
- * fifth surface cannot invent a third convention.
+ * fifth surface cannot invent a third convention. `core/models/chat-artifact-ref.ts` re-exports it for
+ * the chat's citation chips rather than declaring its own copy (be-c02, which found that second copy).
+ *
+ * THE ONE SURFACE THIS FUNCTION CANNOT REACH is the chat answer's PROSE, which the model writes. The
+ * server keeps the wire's 0-based order in every label and ref it shows the model, and carries a single
+ * sentence in its book-aware grounding string saying the author counts from 1. That agreement is pinned
+ * on BOTH sides against the same literal, because neither repo can run the other's tests:
+ * `chat-artifact-ref.spec.ts` here, `Pagedraft.Api.Tests/ProductChatChapterNumberingTests.cs` there.
  */
 export function chapterDisplayNumber(order: number): number {
   return order + 1;

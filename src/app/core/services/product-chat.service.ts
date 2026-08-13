@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
 import {
+  AmbientChapterKey,
   ChatLanguage,
   ProductChatRequest,
   ProductChatResponseDto,
@@ -53,13 +54,34 @@ export class ProductChatService {
   ask(
     question: string,
     history: readonly ProductChatTurnDto[],
-    language: ChatLanguage
+    language: ChatLanguage,
+    bookId?: string | null,
+    ambientChapter?: AmbientChapterKey | null
   ): Observable<ProductChatResponseDto> {
     const body: ProductChatRequest = {
       question,
       history: history.slice(-ProductChatService.MaxSentTurns).map(t => ({ ...t })),
       language,
     };
+    // OMITTED, not sent as null, when there is no book (phase B). The server treats an absent and a
+    // null `bookId` identically, but a body that carries no such property at all is BYTE-IDENTICAL to
+    // the one phase A sent, and phase A's gate verdict is a measurement of that request. Keeping the
+    // no-book path unchanged on the wire is the cheapest way to keep it unchanged in fact.
+    if (bookId) {
+      body.bookId = bookId;
+      // THE AMBIENT PAIR IS WRITTEN HERE AND ONLY HERE, both keys, unconditionally, explicitly null
+      // when no chapter is open (phase B, a2). The server has to be able to tell "the drawer is open on
+      // the dashboard" from "this client is too old to say", and it can do that only if the key's
+      // absence means one thing and one thing alone. Writing them together is also what keeps the pair
+      // consistent: a caller cannot supply an id without its order or the reverse, because the caller
+      // supplies neither - it supplies a chapter, or nothing.
+      //
+      // `??` and not `||`, and it is load-bearing rather than style: `Chapter.Order` is 0-based, the
+      // owner's real book is a single chapter AT ORDER 0, and `0 || null` is null. A `||` here would
+      // send "no chapter is open" for the exact book this plan was written about.
+      body.ambientChapterId = ambientChapter?.id ?? null;
+      body.ambientChapterOrder = ambientChapter?.order ?? null;
+    }
     return this.http.post<ProductChatResponseDto>(this.url, body);
   }
 }
