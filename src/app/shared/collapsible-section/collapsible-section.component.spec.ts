@@ -179,4 +179,54 @@ describe('CollapsibleSectionComponent (w5 collapse directive)', () => {
     writeCollapseState('book-1', '', true);
     expect(setSpy).not.toHaveBeenCalled();
   });
+
+  // ── openToken: the deep-link hook (chatbot phase B) ──────────────────────────────────────────────
+
+  describe('openToken', () => {
+    /** Bump the token the way a host does, and run the change the same way Angular would. */
+    function bump(to: number): void {
+      const from = component.openToken;
+      component.openToken = to;
+      component.ngOnChanges({ openToken: new SimpleChange(from, to, false) });
+      fixture.detectChanges();
+    }
+
+    it('unfolds a section that is folded', () => {
+      mount('inputs', 'book-1', true);
+      expect(component.collapsed).toBeTrue();
+      bump(1);
+      expect(component.collapsed).toBeFalse();
+    });
+
+    it('does NOT persist: the author\'s own stored preference is untouched', () => {
+      // A deep link that permanently unfolded a section the author had folded would be a link with a
+      // side effect on their settings.
+      writeCollapseState('book-1', 'inputs', true);
+      mount('inputs', 'book-1', true);
+      bump(1);
+      expect(readCollapseMap('book-1')['inputs'])
+        .withContext('still folded in storage; open for THIS mount only')
+        .toBeTrue();
+    });
+
+    it('is inert on the FIRST binding, so a host with nothing to ask for changes nothing', () => {
+      mount('inputs', 'book-1', true);
+      component.ngOnChanges({ openToken: new SimpleChange(undefined, 0, true) });
+      expect(component.collapsed).toBeTrue();
+    });
+
+    it('wins over the stored fold state when both change in the same tick', () => {
+      // A chip can switch book and ask for a section in one navigation, so the re-seed and the request
+      // arrive together. The request is the later intent and has to survive the re-seed.
+      writeCollapseState('book-2', 'inputs', true);
+      mount('inputs', 'book-1', true);
+      component.bookId = 'book-2';
+      component.openToken = 1;
+      component.ngOnChanges({
+        bookId: new SimpleChange('book-1', 'book-2', false),
+        openToken: new SimpleChange(0, 1, false),
+      });
+      expect(component.collapsed).toBeFalse();
+    });
+  });
 });
