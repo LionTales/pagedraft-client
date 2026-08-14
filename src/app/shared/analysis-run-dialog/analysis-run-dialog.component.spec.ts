@@ -1531,7 +1531,6 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
         chapterId: 'ch-1',
         sceneId: null,
         selectedAnalysisType: 'Proofread',
-        customPrompt: null,
         language: 'he',
         // Short enough to take the SYNC route, which is the route the reported hang took.
         documentText: 'מילה אחת שתיים שלוש',

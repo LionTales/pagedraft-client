@@ -16,6 +16,8 @@ import { JobRegistryService } from '../../core/services/job-registry.service';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { runString } from '../../core/i18n/run-strings';
+import { AppOverlayService } from '../../core/services/app-overlay.service';
+import { SHOW_POINTER_STRINGS_EN, SHOW_POINTER_STRINGS_HE } from '../../core/i18n/show-pointer-strings';
 
 /**
  * c01: a host that mounts the panel behind a structural `@if`, exactly the way `editor-page.component.html`
@@ -63,7 +65,6 @@ describe('AnalysisPanelComponent (focused logic)', () => {
         {
           provide: AnalysisService,
           useValue: {
-            getTemplates: () => of([]),
             getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
             getHistory: () => of([]),
             updateSuggestionOutcome: () => of(void 0),
@@ -72,7 +73,6 @@ describe('AnalysisPanelComponent (focused logic)', () => {
             startAsync: () => of({ jobId: 'job-1', analysisType: 'Proofread', scope: 'Chapter' }),
             getByJob: () => of({} as AnalysisResultDto),
             runStream: () => of(''),
-            createTemplate: () => of(),
           },
         },
         {
@@ -2574,7 +2574,6 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
         {
           provide: AnalysisService,
           useValue: {
-            getTemplates: () => of([]),
             getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
             getHistory: () => of([]),
             updateSuggestionOutcome: () => of(void 0),
@@ -2583,7 +2582,6 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
             startAsync: () => NEVER,
             getByJob: () => NEVER,
             runStream: () => NEVER,
-            createTemplate: () => NEVER,
           },
         },
         { provide: DocumentVersionService, useValue: { list: () => of([]), create: () => NEVER, get: () => NEVER } },
@@ -2794,7 +2792,6 @@ describe('AnalysisPanelComponent final-result retry vs a context change (c01)', 
         {
           provide: AnalysisService,
           useValue: {
-            getTemplates: () => of([]),
             getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
             getHistory: () => of([]),
             updateSuggestionOutcome: () => of(void 0),
@@ -2807,7 +2804,6 @@ describe('AnalysisPanelComponent final-result retry vs a context change (c01)', 
               return attempt.asObservable();
             },
             runStream: () => NEVER,
-            createTemplate: () => NEVER,
           },
         },
         { provide: DocumentVersionService, useValue: { list: () => of([]), create: () => NEVER, get: () => NEVER } },
@@ -3018,7 +3014,6 @@ describe('AnalysisPanelComponent run-failure banner i18n (c02)', () => {
         {
           provide: AnalysisService,
           useValue: {
-            getTemplates: () => of([]),
             getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
             getHistory: () => of([]),
             updateSuggestionOutcome: () => of(void 0),
@@ -3027,7 +3022,6 @@ describe('AnalysisPanelComponent run-failure banner i18n (c02)', () => {
             startAsync: () => of({ jobId: 'job-A', analysisType: 'Proofread', scope: 'Chapter' }),
             getByJob: () => NEVER,
             runStream: () => NEVER,
-            createTemplate: () => NEVER,
           },
         },
         { provide: DocumentVersionService, useValue: { list: () => of([]), create: () => NEVER, get: () => NEVER } },
@@ -3132,3 +3126,281 @@ describe('AnalysisPanelComponent run-failure banner i18n (c02)', () => {
   });
 });
 
+
+/**
+ * ── Wave 3 / w7 (Q5 + Q7-A): THE REMOVALS, ASSERTED ON THE RENDERED PANEL ─────────────────────────
+ *
+ * Three surfaces left this panel: the Custom free-form prompt box, the save-as-template button beside
+ * it, and Custom's button in the run-tab pass picker. Deleting code proves none of that on its own, so
+ * each is asserted here against the DOM the author actually sees, and the two SEPARATE type lists the
+ * panel now binds (startable to the picker, the full vocabulary to the history tab's chips) are pinned
+ * against each other so a future edit cannot collapse them back into one and silently take the history
+ * filter with it. The history side of that pair is asserted where it renders, in
+ * `analysis-history-tab.component.spec.ts`.
+ *
+ * The pointer that replaced the prompt box is asserted in BOTH languages and BOTH directions, and its
+ * button is asserted to really open the dock rather than to merely exist.
+ */
+describe('AnalysisPanelComponent - the w7 removals and the Show pointer', () => {
+  let component: AnalysisPanelComponent;
+  let fixture: ComponentFixture<AnalysisPanelComponent>;
+  let overlays: AppOverlayService;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [AnalysisPanelComponent],
+      providers: [
+        {
+          provide: AnalysisService,
+          useValue: {
+            getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
+            getHistory: () => of([]),
+            updateSuggestionOutcome: () => of(void 0),
+            explainSuggestion: () => NEVER,
+            run: () => NEVER,
+            startAsync: () => NEVER,
+            getByJob: () => NEVER,
+            runStream: () => NEVER,
+          },
+        },
+        { provide: DocumentVersionService, useValue: { list: () => of([]), create: () => NEVER, get: () => NEVER } },
+        {
+          provide: AnalysisRunOrchestrationService,
+          useValue: {
+            stopProgressPolling: () => {},
+            confirmReanalysisIfPendingSuggestions: () => true,
+            emitInitialStatusForRun: () => 'Running',
+            formatRunDuration: () => null,
+            runAnalysisAfterSave: () => EMPTY,
+            doRunStreaming: () => EMPTY,
+          },
+        },
+        {
+          provide: SuggestionAnchorService,
+          useValue: jasmine.createSpyObj('SuggestionAnchorService', { relocateAll: [], relocateOne: null }),
+        },
+        {
+          provide: StyleBaselineService,
+          useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER },
+        },
+        {
+          provide: AnalysisProgressService,
+          useValue: { pollProgress: () => NEVER, pollStyleBaselineProgress: () => NEVER },
+        },
+        {
+          provide: JobRegistryService,
+          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', {
+            track: undefined,
+            jobById$: of(null),
+          }),
+        },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    // The REAL overlay service, not a double: the pointer's whole claim is that it opens the surface
+    // the dock's own launcher opens, and a stub would let a call to a method nobody reads pass for that.
+    overlays = TestBed.inject(AppOverlayService);
+
+    fixture = TestBed.createComponent(AnalysisPanelComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+    component.chapterId = 'chap-1';
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+  });
+
+  /** The pass picker's buttons, by their rendered label. */
+  function pickerLabels(): string[] {
+    return fixture.debugElement
+      .queryAll(By.css('.type-picker button'))
+      .map(b => b.nativeElement.textContent.trim());
+  }
+
+  // ── (b) the Custom free-form prompt block ───────────────────────────────────────────────────────
+
+  it('renders no free-form prompt box, whatever pass is selected', () => {
+    for (const type of ['Proofread', 'LineEdit', 'LinguisticAnalysis', 'LiteraryAnalysis', 'Summarization', 'Custom']) {
+      component.selectedAnalysisType = type;
+      fixture.detectChanges();
+
+      expect(fixture.debugElement.query(By.css('.prompt-section')))
+        .withContext(`a prompt section rendered for ${type}`)
+        .toBeNull();
+      expect(fixture.debugElement.query(By.css('textarea')))
+        .withContext(`a free-form textarea rendered for ${type}`)
+        .toBeNull();
+    }
+  });
+
+  // ── (d) save as template ────────────────────────────────────────────────────────────────────────
+
+  it('offers no save-as-template affordance, and the panel no longer knows how to make one', () => {
+    component.selectedAnalysisType = 'Custom';
+    fixture.detectChanges();
+
+    const buttonText = fixture.debugElement
+      .queryAll(By.css('button'))
+      .map(b => b.nativeElement.textContent.trim());
+    for (const label of ['שמור כתבנית', 'Save as template']) {
+      expect(buttonText).withContext('the save-as-template button is removed').not.toContain(label);
+    }
+    // Asserted on the CLASS rather than on this TestBed's service double, for the same reason the
+    // dashboard asserts BookService.ask on the real class: a double will happily answer for a method
+    // that no longer exists.
+    expect(Object.getOwnPropertyNames(AnalysisService.prototype))
+      .withContext('w7: template creation is removed from the client entirely')
+      .not.toContain('createTemplate');
+    expect(Object.getOwnPropertyNames(AnalysisService.prototype))
+      .withContext('w7: nothing reads templates either, so the GET is gone too')
+      .not.toContain('getTemplates');
+  });
+
+  // ── (c) Custom leaves the picker, WITHOUT leaving the vocabulary ────────────────────────────────
+
+  it('does not offer Custom as a startable pass, in either language', () => {
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+    // A positive claim, not just the negative one below (finding C10): the negative half alone would
+    // stay green even if the Hebrew label map broke and the picker rendered raw wire values instead of
+    // labels - none of those would equal 'מותאם' either. The exact list is the same positive claim the
+    // English half already makes in the next test.
+    expect(pickerLabels())
+      .withContext('the Hebrew picker\'s exact rendered labels')
+      .toEqual(['הגהה', 'עריכת שורה', 'לשוני', 'ספרותי', 'תמצית פרק']);
+    expect(pickerLabels()).withContext('the Hebrew picker STILL offers מותאם, which w7 retired')
+      .not.toContain('מותאם');
+
+    component.bookLanguage = 'en';
+    fixture.detectChanges();
+    expect(pickerLabels()).withContext('the English picker STILL offers Custom, which w7 retired')
+      .not.toContain('Custom');
+  });
+
+  it('still offers every pass that DID survive, so the picker was not emptied by accident', () => {
+    component.bookLanguage = 'en';
+    fixture.detectChanges();
+
+    expect(pickerLabels()).toEqual(['Proofread', 'Line Edit', 'Linguistic', 'Literary', 'Chapter recap']);
+  });
+
+  it('binds the STARTABLE list to the picker and the FULL vocabulary to the history chips', () => {
+    // The trap this pins: one constant used to feed both, so retiring a pass from the picker silently
+    // retired its history filter chip too.
+    expect(component.startableAnalysisTypes.map(t => t.value as string))
+      .withContext('the picker offers what can be started')
+      .not.toContain('Custom');
+    expect(component.analysisTypes.map(t => t.value as string))
+      .withContext('the history chips must still offer what can be FOUND')
+      .toContain('Custom');
+  });
+
+  it('needs nothing but an open chapter to enable Run, now that no pass carries a prompt', () => {
+    component.selectedAnalysisType = 'Proofread';
+    expect(component.canRun).toBeTrue();
+
+    component.chapterId = null;
+    expect(component.canRun).withContext('a chapter is still required').toBeFalse();
+  });
+
+  // ── the Show pointer ────────────────────────────────────────────────────────────────────────────
+
+  it('renders the Show pointer in Hebrew, right to left, with a real button', () => {
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+
+    const section = fixture.debugElement.query(By.css('.show-pointer-section'));
+    expect(section).withContext('the pointer must stand where the prompt block stood').toBeTruthy();
+    expect(section.query(By.css('.show-pointer-body')).nativeElement.textContent.trim())
+      .toBe(SHOW_POINTER_STRINGS_HE.panelBody);
+
+    const button = section.query(By.css('.show-pointer-btn'));
+    expect(button.nativeElement.textContent.trim()).toBe(SHOW_POINTER_STRINGS_HE.open);
+    expect(button.nativeElement.getAttribute('aria-label')).toBe(SHOW_POINTER_STRINGS_HE.openAria);
+
+    expect(fixture.debugElement.query(By.css('.analysis-panel')).nativeElement.getAttribute('dir'))
+      .withContext('a Hebrew book renders the panel, and therefore the pointer, right to left')
+      .toBe('rtl');
+  });
+
+  it('renders the Show pointer in English, left to right', () => {
+    component.bookLanguage = 'en';
+    fixture.detectChanges();
+
+    const section = fixture.debugElement.query(By.css('.show-pointer-section'));
+    expect(section.query(By.css('.show-pointer-body')).nativeElement.textContent.trim())
+      .toBe(SHOW_POINTER_STRINGS_EN.panelBody);
+    expect(section.query(By.css('.show-pointer-btn')).nativeElement.textContent.trim())
+      .toBe(SHOW_POINTER_STRINGS_EN.open);
+
+    expect(fixture.debugElement.query(By.css('.analysis-panel')).nativeElement.getAttribute('dir'))
+      .toBe('ltr');
+  });
+
+  it('opens the dock on the assistant tab when the pointer is used, and blocks nothing', () => {
+    fixture.detectChanges();
+    expect(overlays.isOpen).withContext('precondition: the dock starts closed').toBeFalse();
+
+    fixture.debugElement.query(By.css('.show-pointer-btn')).nativeElement.click();
+
+    expect(overlays.isOpen).withContext('the pointer must OPEN Show, not merely describe it').toBeTrue();
+    expect(overlays.activeTab).toBe('assistant');
+    // Not a modal: the panel it was clicked from is still mounted and still rendering.
+    expect(fixture.debugElement.query(By.css('.type-picker'))).toBeTruthy();
+  });
+
+  // ── C1: placement and visibility ────────────────────────────────────────────────────────────────
+  //
+  // The block the pointer replaced was conditional on `selectedAnalysisType === 'Custom'` and stood
+  // ABOVE the Run button. The pointer shipped unconditional and ABOVE Run, so it rendered on every
+  // pass, on every sub-tab (Run, History, Versions), pushing the result list down in a 300-380px
+  // panel even on tabs that show past results rather than a place to ask something new. The fix scopes
+  // it to the Run sub-tab (the tab discoverability was actually lost from, and the only one where
+  // "ask something new" fits) and moves it below Run (the one action every visit to this tab is FOR).
+
+  it('renders on the Run sub-tab, and NOT on History or Versions (C1)', () => {
+    fixture.detectChanges();
+    expect(component.activeSubTab).withContext('precondition: Run is the default sub-tab').toBe('run');
+    expect(fixture.debugElement.query(By.css('.show-pointer-section')))
+      .withContext('the pointer must still show on Run, where it replaces the Custom prompt block')
+      .toBeTruthy();
+
+    component.activeSubTab = 'history';
+    fixture.detectChanges();
+    expect(fixture.debugElement.query(By.css('.show-pointer-section')))
+      .withContext('History reviews PAST results, not a place to compose a new free-form question')
+      .toBeNull();
+
+    component.activeSubTab = 'versions';
+    fixture.detectChanges();
+    expect(fixture.debugElement.query(By.css('.show-pointer-section')))
+      .withContext('Versions reviews PAST documents, same reasoning as History')
+      .toBeNull();
+
+    component.activeSubTab = 'run';
+    fixture.detectChanges();
+    expect(fixture.debugElement.query(By.css('.show-pointer-section')))
+      .withContext('switching back to Run must bring the pointer back')
+      .toBeTruthy();
+  });
+
+  it('stands BELOW the Run button, not above it (C1)', () => {
+    fixture.detectChanges();
+    const panel = fixture.nativeElement.querySelector('.analysis-panel') as HTMLElement;
+    const runBtn = panel.querySelector('.run-btn') as HTMLElement;
+    const pointer = panel.querySelector('.show-pointer-section') as HTMLElement;
+    expect(runBtn).withContext('precondition: the Run button rendered').toBeTruthy();
+    expect(pointer).withContext('precondition: the pointer rendered (default sub-tab is Run)').toBeTruthy();
+
+    // eslint-disable-next-line no-bitwise
+    expect(!!(runBtn.compareDocumentPosition(pointer) & Node.DOCUMENT_POSITION_FOLLOWING))
+      .withContext('the pointer must come AFTER the Run button in document order, not before it')
+      .toBeTrue();
+  });
+});

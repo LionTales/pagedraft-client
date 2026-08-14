@@ -56,33 +56,51 @@
   box-shadow: var(--pd-ring);
 }
 
-.prompt-section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--pd-space-3);
-}
+/* Wave 3 / w7: `.prompt-section`, `.prompt-label` and `.prompt-input` LIVED HERE, styling the Custom
+   free-form block. Replaced by the Show pointer below. */
 .actions-section {
   margin-bottom: var(--pd-space-1);
 }
-.prompt-label {
+
+/* The Show pointer that stands where the Custom prompt block stood.
+
+   RTL: one stacked column with logical block margins only, so it mirrors with the panel's own
+   [attr.dir] and there is no physical side to fix. The button is `align-self: flex-start`, which is
+   flow-relative: it sits at the inline START in both directions, i.e. right in Hebrew and left in
+   English. Sized for the narrow case, since this panel is 300-380px wide. */
+.show-pointer-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-3);
+  margin-bottom: var(--pd-space-4);
+}
+.show-pointer-body {
+  margin: 0;
   font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body);
   color: var(--pd-text-secondary);
 }
-.prompt-input {
-  resize: vertical;
-  min-height: 4rem;
-  padding: var(--pd-space-3);
+.show-pointer-btn {
+  align-self: flex-start;
+  padding: var(--pd-space-3) var(--pd-space-5);
   border-radius: var(--pd-radius-sm);
-  border: 1px solid var(--pd-border-strong);
+  border: 1px solid var(--pd-primary);
+  background: var(--pd-surface);
+  color: var(--pd-primary);
+  cursor: pointer;
   font-family: var(--pd-font-ui);
   font-size: var(--pd-text-body-sm);
-  color: var(--pd-text);
+  font-weight: var(--pd-weight-medium);
+  transition: background var(--pd-dur-fast) var(--pd-ease);
 }
-.prompt-input:focus-visible {
+.show-pointer-btn:hover {
+  background: var(--pd-surface-brand);
+}
+.show-pointer-btn:focus-visible {
   outline: none;
-  border-color: var(--pd-primary);
   box-shadow: var(--pd-ring);
 }
+
 .actions-row {
   display: flex;
   flex-wrap: wrap;
@@ -128,26 +146,10 @@
   cursor: not-allowed;
 }
 
-/* Secondary (e.g. Save as template): quiet outline action, never competes with Run. */
-.run-btn.secondary {
-  background: var(--pd-surface);
-  color: var(--pd-primary);
-  border: 1px solid var(--pd-primary);
-  box-shadow: none;
-  font-size: var(--pd-text-body-sm);
-  font-weight: var(--pd-weight-medium);
-  padding: var(--pd-space-3) var(--pd-space-5);
-}
-.run-btn.secondary:hover:not(:disabled) {
-  background: var(--pd-surface-brand);
-  box-shadow: none;
-}
-.run-btn.secondary:disabled {
-  background: var(--pd-surface);
-  color: var(--pd-neutral-400);
-  border-color: var(--pd-border);
-  cursor: not-allowed;
-}
+/* Wave 3 / w7: the `.run-btn.secondary` rules LIVED HERE. Save-as-template was this template's only
+   secondary button, and these rules are emulated-encapsulation scoped to THIS component, so they
+   never reached the `.run-btn.secondary` buttons in the run and versions tabs - those two carry their
+   own copies in their own stylesheets, which are untouched. */
 
 .highlight-option {
   display: flex;

@@ -3,29 +3,20 @@
     <h3>{{ panelLabel('title') }}</h3>
   </header>
 
+  <!-- Wave 3 / w7: the picker renders `startableAnalysisTypes`, NOT `analysisTypes`. The two are
+       different sets since Custom was retired: this is what can be STARTED, and the full list below,
+       bound to the history tab, is what can be FOUND. Binding this one to the full list would put a
+       dead Custom button back on the run tab. -->
   <section class="type-picker-section">
     <div class="type-picker" role="group" [attr.aria-label]="panelLabel('title')">
       <button
         type="button"
-        *ngFor="let opt of analysisTypes"
+        *ngFor="let opt of startableAnalysisTypes"
         [class.active]="selectedAnalysisType === opt.value"
         (click)="onSelectAnalysisType(opt.value)">
         {{ analysisTypeLabel(opt.value) }}
       </button>
     </div>
-  </section>
-
-  <section class="prompt-section" *ngIf="selectedAnalysisType === 'Custom'">
-    <label class="prompt-label">{{ panelLabel('customPrompt') }}</label>
-    <textarea
-      [(ngModel)]="prompt"
-      rows="4"
-      class="prompt-input"
-      [placeholder]="panelLabel('customPlaceholder')">
-    </textarea>
-    <button type="button" class="run-btn secondary" [disabled]="!prompt" (click)="saveAsTemplate()">
-      {{ panelLabel('saveAsTemplate') }}
-    </button>
   </section>
 
   <section class="actions-section">
@@ -44,6 +35,37 @@
       <span>{{ panelLabel('highlight') }}</span>
     </label>
   </section>
+
+  <!-- Wave 3 / w7 (Q5): the CUSTOM FREE-FORM PROMPT BLOCK stood here - a textarea, and a
+       save-as-template button beside it - rendered whenever the Custom pass was picked. Both are gone
+       with the pass, and Show is the free-form surface now.
+
+       What stands in their place is a pointer. It is NOT conditional on a selected pass the way the
+       block it replaced was - there is no longer a pass whose selection it could hang off, and an
+       author looking for the box they used to type in is not going to find it by picking the right
+       pass first - but it IS scoped to `activeSubTab === 'run'` and sits BELOW the Run action, not
+       above it (findings C1). Discoverability at the block's old address is real, which is why this
+       stays unconditional across every startable pass rather than being demoted further; but History
+       and Versions review PAST results and past documents, never compose a new free-form question, so
+       the pointer buys nothing there while still costing the one thing a 300-380px panel has the least
+       of - vertical space, above tab content the author came here to read. Below Run rather than above
+       it for the same reason: Run is the action every visit to this tab is FOR, and a sentence about a
+       different surface should not sit between the author and it.
+
+       RTL: one column, logical margins only, so it mirrors with the panel's own [attr.dir]. Sized for
+       the narrow case (the panel is 300-380px), which is why the body string is the short one. -->
+  @if (activeSubTab === 'run') {
+    <section class="show-pointer-section">
+      <p class="show-pointer-body">{{ showPointerLabel('panelBody') }}</p>
+      <button
+        type="button"
+        class="show-pointer-btn"
+        [attr.aria-label]="showPointerLabel('openAria')"
+        (click)="openShow()">
+        {{ showPointerLabel('open') }}
+      </button>
+    </section>
+  }
 
   @if (asyncJobInFlight) {
     <div class="async-job-banner" role="status" aria-live="polite">
@@ -113,6 +135,9 @@
     (explainSuggestion)="onExplainSuggestion($event)">
   </app-analysis-run-tab>
 
+  <!-- `[analysisTypes]` below is bound to the FULL vocabulary on purpose (w7), not to the picker's
+       `startableAnalysisTypes`: these are the history tab's filter chips, and a Custom result run
+       before this release is still in the database and still has to be findable by its own chip. -->
   <app-analysis-history-tab
     *ngIf="activeSubTab === 'history'"
     [history]="history"

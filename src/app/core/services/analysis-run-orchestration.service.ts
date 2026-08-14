@@ -25,7 +25,8 @@ export interface AnalysisRunContext {
   chapterId: string;
   sceneId: string | null;
   selectedAnalysisType: string;
-  customPrompt: string | null;
+  // Wave 3 / w7: `customPrompt` LIVED HERE. It carried the Custom pass's free-form instruction from
+  // the panel into the request body, and both ends went with the pass.
   language: string;
   documentText: string;
   /** When to use analysis-jobs (chunked); from server config. Omit to use defaults (500 Proofread, 1500 LineEdit). */
@@ -254,11 +255,14 @@ export class AnalysisRunOrchestrationService {
    * blocking synchronous /analyze request.
    *
    * Two families qualify:
-   *  - Single-shot whole-chapter LLM analyses (Linguistic/Literary/Summarization/Custom): ALWAYS async.
+   *  - Single-shot whole-chapter LLM analyses (Linguistic/Literary/Summarization): ALWAYS async.
    *    Each sends the whole chapter to the model and can run for tens of seconds to minutes (Linguistic was
    *    measured at ~3 min), so a synchronous request risks a proxy/browser timeout that loses the result
    *    even though the server persisted it. The backend reads the chapter from the DB, so no documentText is
    *    required here to make the decision.
+   *    Wave 3 / w7: `Custom` was a fourth member of this family and is gone with the pass. Nothing else
+   *    routes on it, so a Custom value reaching here (it cannot: it is not startable) would fall through
+   *    to the Proofread/LineEdit branch and be answered `false`, which is the safe direction.
    *  - Chunked Proofread/LineEdit: async only once the document exceeds the server chunk threshold; short
    *    documents finish fast enough to run inline.
    */
@@ -268,7 +272,6 @@ export class AnalysisRunOrchestrationService {
       analysisType === 'LinguisticAnalysis'
       || analysisType === 'LiteraryAnalysis'
       || analysisType === 'Summarization'
-      || analysisType === 'Custom'
     ) {
       return true;
     }
@@ -781,11 +784,10 @@ export class AnalysisRunOrchestrationService {
   }
 
   private buildRequestBody(ctx: AnalysisRunContext, stream = false): RunAnalysisRequest {
+    // Wave 3 / w7: a `customPrompt` field was set here for the Custom pass. The API still accepts one;
+    // this client no longer has a surface that produces one, so it no longer sends the field at all.
     return {
       analysisType: ctx.selectedAnalysisType,
-      customPrompt: ctx.selectedAnalysisType === 'Custom'
-        ? (ctx.customPrompt || undefined)
-        : undefined,
       language: ctx.language,
       stream
     };
