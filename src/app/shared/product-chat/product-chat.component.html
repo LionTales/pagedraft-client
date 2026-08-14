@@ -332,6 +332,7 @@
     <form class="pc-composer" (ngSubmit)="submit()">
       <label class="pc-visually-hidden" for="pc-input">{{ label('inputLabel') }}</label>
       <textarea
+        #composerInput
         id="pc-input"
         class="pc-input"
         rows="2"
