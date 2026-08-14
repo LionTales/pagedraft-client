@@ -382,6 +382,12 @@ export class ImportPageComponent implements OnInit, OnDestroy {
   spineSignals: StageSpineSignals = emptyStageSpineSignals();
   /** Chapter count / with-text count from the loaded book. Null until it lands. */
   private loadedChapters: ChapterSummaryDto[] | null = null;
+  /**
+   * How many chapters the SERVER could put in an exported file, off the same book payload. Null means not
+   * known (not landed, or a server that does not send it) and stage 5 renders it as such. Never derived
+   * from {@link loadedChapters}: a word count is not the exporter's question (w8 / F2).
+   */
+  private exportableChapterCount: number | null = null;
   private briefsRunning = false;
   private reviewRunning = false;
   /**
@@ -410,12 +416,14 @@ export class ImportPageComponent implements OnInit, OnDestroy {
         next: (book) => {
           this.bookLanguage = book.language ?? 'he';
           this.loadedChapters = book.chapters ?? [];
+          this.exportableChapterCount = book.exportableChapterCount ?? null;
           this.rebuildSpineSignals();
         },
         error: () => {
           this.bookLanguage = 'he';
           // The chapters are UNKNOWN, not empty: the spine renders loading rather than "no chapters".
           this.loadedChapters = null;
+          this.exportableChapterCount = null;
           this.rebuildSpineSignals();
         },
       });
@@ -453,6 +461,20 @@ export class ImportPageComponent implements OnInit, OnDestroy {
         : null,
       chapterCount: chapters ? chapters.length : null,
       chaptersWithText: chapters ? chapters.filter((c) => c.wordCount > 0).length : null,
+      // The exporter's own count, off the payload (w8 / F2). This page loads the book ONCE and never
+      // re-asks, which the editor's identical omission made a P1 (D1) and which is deliberate HERE:
+      //
+      //  - the only mutation this page can cause is `confirm()`, whose success handler NAVIGATES to the
+      //    editor, so the post-import state this count would be stale about is never rendered by this
+      //    page. Everything it does render (the preview, the selection) is pre-import, where the count
+      //    from book load is the correct one.
+      //  - this page subscribes to no hub events at all, so "joining the fix" would mean giving it a
+      //    sync subscription it does not have - a new capability on a page that navigates away, not a
+      //    repair. The editor keeps this count live because the editor STAYS MOUNTED across every save.
+      //
+      // If this page ever grows a path that mutates the book and stays, copy the editor's merged refresh
+      // (`editor-page.component.ts`, `refreshBook`); do not copy this paragraph.
+      chaptersExportable: chapters ? this.exportableChapterCount : null,
       summary: null,
       review: null,
       summaryRunning: this.briefsRunning,

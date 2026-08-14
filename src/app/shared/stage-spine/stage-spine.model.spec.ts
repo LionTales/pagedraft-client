@@ -79,6 +79,9 @@ function signals(overrides: Partial<StageSpineSignals> = {}): StageSpineSignals 
   return {
     chapters: null,
     chaptersWithText: null,
+    // Stage 5's own count, and NOT defaulted from `chaptersWithText`: the two are different questions and
+    // a case that means "this book can be exported" has to say so (w8 / F2).
+    chaptersExportable: null,
     summary: null,
     review: null,
     summaryRunning: false,
@@ -353,19 +356,22 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
      */
     it('names IMPORT on a book whose chapters carry no text, for the same reason', () => {
       const all = deriveStageSpine(signals({
-        chapters: chapters(3), chaptersWithText: 0,
+        chapters: chapters(3), chaptersWithText: 0, chaptersExportable: 0,
         review: review({ hasBriefs: false, hasReview: false, ready: false }),
       }));
       const s = stage(all, 'review');
       expect(s.state).toBe('blocked');
       expect(s.blockedBy).toBe('import');
       expect(s.action).toBe('open-import');
-      // Every stage that offers a whole-book build says the same thing and points at the same door. Stage 4
+      // Every stage that offers a whole-book BUILD says the same thing and points at the same door. Stage 4
       // is deliberately NOT among them: it offers navigation into the chapters, which is where the author
-      // has to go to fix this, and it makes no claim to contradict.
+      // has to go to fix this, and it makes no claim to contradict. Stage 5 is blocked here too but on a
+      // DIFFERENT thing (final-r03): it consumes no build, it consumes content, and it names that instead.
       const blocked = all.filter(x => x.state === 'blocked');
       expect(blocked.map(x => x.id)).toEqual(['briefs', 'review', 'export']);
-      expect(blocked.every(x => x.blockedBy === 'import' && x.action === 'open-import')).toBeTrue();
+      const buildStages = blocked.filter(x => x.id !== 'export');
+      expect(buildStages.every(x => x.blockedBy === 'import' && x.action === 'open-import')).toBeTrue();
+      expect(stage(all, 'export').blockedBy).toBeNull();
       expect(stage(all, 'chapter-passes').perChapter).toBeTrue();
       expect(stage(all, 'chapter-passes').state).toBeNull();
     });
@@ -521,7 +527,8 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
 
   describe('stage 5 Export', () => {
     it('is ready on a book with chapters, and offers the export screen (w4)', () => {
-      const s = stage(deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 3 })), 'export');
+      const s = stage(
+        deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 3, chaptersExportable: 3 })), 'export');
       expect(s.state).toBe('ready');
       expect(s.action).toBe('open-export');
     });
@@ -534,7 +541,7 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
 
     it('is gated on chapters ONLY, never on the briefs or the review', () => {
       const s = stage(deriveStageSpine(signals({
-        chapters: chapters(3), chaptersWithText: 3,
+        chapters: chapters(3), chaptersWithText: 3, chaptersExportable: 3,
         summary: summary({ hasSummary: false, ready: false }),
         review: review({ hasBriefs: false, hasReview: false, ready: false }),
       })), 'export');
@@ -548,35 +555,155 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
      * nothing, HTTP 200, no error. The signal was already on the wire.
      */
     it('is NOT ready when chapters exist but none of them carries any text', () => {
-      const all = deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 }));
+      const all = deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0, chaptersExportable: 0 }));
       const s = stage(all, 'export');
       expect(s.state).not.toBe('ready');
       expect(s.state).toBe('blocked');
-      expect(s.blockedBy).toBe('import');
-      // The action must be one the user can walk from here, exactly as on the empty book.
-      expect(s.action).toBe('open-import');
+      // final-r03: it names CONTENT, not the Import stage. The rows exist, so Import is not the thing that
+      // is missing here even on this book, where stage 1 also has nothing to show yet.
+      expect(s.blockedNeed).toBe('exportable-content');
+      expect(s.blockedBy).toBeNull();
       // And it agrees with stage 1 rather than contradicting it in the same column.
       expect(stage(all, 'import').state).toBe('not-started');
       expect(all.filter(x => x.state === 'ready')).toEqual([]);
     });
 
-    it('carries the two counts, so the row can say WHY a file made now would be empty', () => {
-      const s = stage(deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 })), 'export');
+    /**
+     * THE SECOND VERSION OF THE SAME DEFECT, and the state no fixture in this file held (w8 / F2).
+     *
+     * c01 fixed "ready off chapterCount alone" by reading stage 1's `chaptersWithText` - the right shape
+     * with the wrong number. `WordCount > 0` and "the stored SFDT holds a renderable block" are different
+     * questions, so a book imported from a DOCX and never opened in the editor satisfies the first and
+     * fails the second, and the spine rendered `Export: Ready` while the endpoint answered 409
+     * `nothingWritten`. Every seed in this file gave a chapter both properties or neither, so the whole
+     * suite was green across the state that produced the bug. This is that state.
+     */
+    it('is NOT ready when the chapters carry text but nothing the exporter could render', () => {
+      const all = deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 3, chaptersExportable: 0,
+      }));
+      const s = stage(all, 'export');
+      expect(s.state).toBe('blocked');
+      // Stage 1 is untouched by this: the book HAS a manuscript, and saying otherwise would be the
+      // opposite lie. The two stages read different numbers and both are right.
+      expect(stage(all, 'import').state).toBe('ready');
+    });
+
+    /**
+     * THE THIRD VERSION OF THE SAME DEFECT, and the one the closing render gate read off the screen
+     * (final-r03). The state above is right; what the row SAID about it was not.
+     *
+     * On a real book with eight imported chapters and `exportableChapterCount: 0`, one viewport held stage 1
+     * "Ready" and stage 5 "Blocked / Needs first: Import" over a button offering to upload a manuscript. The
+     * state was correct and the prerequisite was not missing - it was finished - so the row asked the author
+     * to redo completed work and contradicted a row four places above it.
+     *
+     * These two cases must stay APART. They collapsed into one `blockedByImport` call once already, which is
+     * how naming a finished stage shipped, so the pair below is asserted as a DIFFERENCE and not as two
+     * literals: whatever the wording becomes, the content case may not name the stage the chapters case does.
+     */
+    it('names the missing CONTENT and not a finished stage, on a book whose manuscript is already in', () => {
+      const all = deriveStageSpine(signals({
+        chapters: chapters(8), chaptersWithText: 8, chaptersExportable: 0,
+      }));
+      const s = stage(all, 'export');
+      expect(s.state).toBe('blocked');
+      expect(s.blockedNeed)
+        .withContext('the row must name what is actually missing, which is content no stage produces')
+        .toBe('exportable-content');
+      expect(s.blockedBy)
+        .withContext('naming a stage here names Import, and Import is DONE: stage 1 reads ready')
+        .toBeNull();
+      expect(stage(all, 'import').state).toBe('ready');
+      // And it offers no step at all rather than offering the one that is already complete. Stage 4 is the
+      // walkable door on this book and it is still open: it lists the chapters, and writing in one is what
+      // produces the thing stage 5 is waiting for.
+      expect(s.action)
+        .withContext('re-importing a manuscript that is already imported is not a fix')
+        .toBeNull();
+      expect(stage(all, 'chapter-passes').perChapter).toBeTrue();
+      expect(stage(all, 'chapter-passes').chapters?.length).toBe(8);
+    });
+
+    /**
+     * THE OTHER HALF OF THE SAME PIN. `no-chapters` keeps every bit of its old behavior: there Import really
+     * is the missing step, `open-import` really is the fix, and the sentence naming it is right. The two
+     * cases are asserted together, in one test, so an edit that collapses them again fails HERE and says
+     * which pole it moved.
+     */
+    it('keeps the two blocked cases apart: no chapters names Import and offers it, no content does neither', () => {
+      const empty = stage(deriveStageSpine(signals({ chapters: [], chaptersWithText: 0 })), 'export');
+      const unrenderable = stage(deriveStageSpine(signals({
+        chapters: chapters(8), chaptersWithText: 8, chaptersExportable: 0,
+      })), 'export');
+
+      expect(empty.state).toBe('blocked');
+      expect(unrenderable.state).toBe('blocked');
+      // Same state, DIFFERENT thing missing. This is the claim, not the two literal values.
+      expect(empty.blockedBy).not.toEqual(unrenderable.blockedBy);
+      expect(empty.action).not.toEqual(unrenderable.action);
+
+      expect(empty.blockedBy).toBe('import');
+      expect(empty.blockedNeed).toBeNull();
+      expect(empty.action).toBe('open-import');
+      expect(unrenderable.blockedNeed).toBe('exportable-content');
+    });
+
+    /**
+     * The invariant that keeps `blocked`'s first half intact across both kinds: a blocked row names EXACTLY
+     * ONE missing thing, never two and never none. Asserted over every stage of every book shape this file
+     * seeds, so a future third kind cannot be added by setting both fields or neither.
+     */
+    it('names exactly one missing thing on every blocked row, whatever the book', () => {
+      const books = [
+        signals({ chapters: [], chaptersWithText: 0 }),
+        signals({ chapters: chapters(3), chaptersWithText: 0, chaptersExportable: 0 }),
+        signals({ chapters: chapters(8), chaptersWithText: 8, chaptersExportable: 0 }),
+        signals({ chapters: chapters(3), chaptersWithText: 3, chaptersExportable: 3, review: review({ hasBriefs: false }) }),
+      ];
+      const blocked = books.flatMap(b => deriveStageSpine(b)).filter(s => s.state === 'blocked');
+      expect(blocked.length).withContext('non-vacuity: these shapes must produce blocked rows').toBeGreaterThan(6);
+      for (const s of blocked) {
+        expect(Number(s.blockedBy !== null) + Number(s.blockedNeed !== null))
+          .withContext(`stage ${s.id} must name exactly one missing thing`)
+          .toBe(1);
+      }
+    });
+
+    it('is ready only on the exporter own count, not on the text count', () => {
+      const s = stage(deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 0, chaptersExportable: 3,
+      })), 'export');
+      // The mirror image: an image-only book has no words and still exports. `ready` follows the count
+      // that decides whether a file can be produced, in both directions.
+      expect(s.state).toBe('ready');
+    });
+
+    it('carries the counts the row says WHY with: how many chapters, and how many can be exported', () => {
+      const s = stage(deriveStageSpine(signals({
+        chapters: chapters(3), chaptersWithText: 3, chaptersExportable: 0,
+      })), 'export');
       expect(s.chapterCount).toBe(3);
-      expect(s.chaptersWithText).toBe(0);
+      expect(s.chaptersExportable).toBe(0);
     });
 
-    it('reads the same signal stage 1 reads, whatever the surface: counts with no chapter list', () => {
-      const fromCounts = stage(
-        deriveStageSpine(signals({ chapters: null, chapterCount: 4, chaptersWithText: 0 })), 'export');
-      expect(fromCounts.state).toBe('blocked');
-      const withText = stage(
-        deriveStageSpine(signals({ chapters: null, chapterCount: 4, chaptersWithText: 1 })), 'export');
-      expect(withText.state).toBe('ready');
+    it('says it does not know on the books-list payload, which carries no exportable count', () => {
+      // The counts-only shape (`GET /api/books`). Stage 1 is REAL there and stage 5 is not: the exportable
+      // count cannot be a SQL aggregate, so the list does not carry it and this stage may not guess from
+      // the numbers that are there. Deriving it from `chaptersWithText` here is exactly what shipped the
+      // defect - cheap, and wrong.
+      const all = deriveStageSpine(signals({ chapters: null, chapterCount: 4, chaptersWithText: 4 }));
+      expect(stage(all, 'import').state).toBe('ready');
+      const s = stage(all, 'export');
+      expect(s.unknown).toBeTrue();
+      expect(s.state).toBeNull();
+      expect(s.action).toBeNull();
     });
 
-    it('says it does not know, rather than ready, when the text count has not landed', () => {
-      const s = stage(deriveStageSpine(signals({ chapters: null, chapterCount: 4, chaptersWithText: null })), 'export');
+    it('says it does not know, rather than ready, when the exportable count has not landed', () => {
+      const s = stage(deriveStageSpine(signals({
+        chapters: null, chapterCount: 4, chaptersWithText: 4, chaptersExportable: null,
+      })), 'export');
       expect(s.unknown).toBeTrue();
       expect(s.state).toBeNull();
       expect(s.action).toBeNull();
@@ -596,7 +723,7 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
 
     it('is unavailable only for a build with no export screen, which is not the shipped one', () => {
       const off = stage(deriveStageSpine(signals({
-        chapters: chapters(3), chaptersWithText: 3, exportSurfaceAvailable: false,
+        chapters: chapters(3), chaptersWithText: 3, chaptersExportable: 3, exportSurfaceAvailable: false,
       })), 'export');
       expect(off.state).toBe('unavailable');
       expect(off.action).toBeNull();
@@ -606,9 +733,10 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
     it('never reads unavailable under the shipped constant, whatever the rest of the book says', () => {
       const seeds: Partial<StageSpineSignals>[] = [
         {},
-        { chapters: [], chaptersWithText: 0 },
-        { chapters: chapters(2), chaptersWithText: 0 },
-        { chapters: chapters(2), chaptersWithText: 2, summary: summary(), review: review() },
+        { chapters: [], chaptersWithText: 0, chaptersExportable: 0 },
+        { chapters: chapters(2), chaptersWithText: 0, chaptersExportable: 0 },
+        { chapters: chapters(2), chaptersWithText: 2, chaptersExportable: 2, summary: summary(), review: review() },
+        { chapters: chapters(2), chaptersWithText: 2, chaptersExportable: 0 },
         { chapters: null, chapterCount: 7, chaptersWithText: 7 },
       ];
       for (const seed of seeds) {
@@ -642,7 +770,7 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
 
   describe('a book whose chapters are all empty', () => {
     it('claims nothing is ready, and the server agrees: this book answers 409 nothingWritten', () => {
-      const all = deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0 }));
+      const all = deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 0, chaptersExportable: 0 }));
       expect(stage(all, 'import').state).toBe('not-started');
       expect(stage(all, 'export').state).toBe('blocked');
       expect(all.filter(s => s.state === 'ready')).toEqual([]);
@@ -678,7 +806,7 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
 
     it('falls back to the per-chapter stage when every stage is settled', () => {
       const all = deriveStageSpine(signals({
-        chapters: chapters(3), chaptersWithText: 3, summary: summary(), review: review(),
+        chapters: chapters(3), chaptersWithText: 3, chaptersExportable: 3, summary: summary(), review: review(),
       }));
       expect(focusStageId(all)).toBe('chapter-passes');
     });

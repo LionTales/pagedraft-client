@@ -408,6 +408,13 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   /** The compact spine's signals, assembled from the same book payload this page already loads. */
   spineSignals: StageSpineSignals = emptyStageSpineSignals();
   private chaptersKnown = false;
+  /**
+   * How many chapters the SERVER says it could put in a file, off the book payload. Null until the book
+   * lands, and null on a server that does not send it - both mean "not known", which stage 5 renders as
+   * such rather than guessing. This screen deliberately does not re-derive it from {@link chapters}: the
+   * chapter list carries word counts, and a word count is not the exporter's question (w8 / F2).
+   */
+  private exportableChapterCount: number | null = null;
   private briefsRunning = false;
   private reviewRunning = false;
 
@@ -474,6 +481,7 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     this.chapters = [];
     this.selectedChapterId = null;
     this.chaptersKnown = false;
+    this.exportableChapterCount = null;
     this.loading = true;
     this.bookLoadFailed = false;
     this.busyKindId = null;
@@ -497,6 +505,7 @@ export class ExportPageComponent implements OnInit, OnDestroy {
           this.bookLanguage = book.language ?? 'he';
           this.chapters = (book.chapters ?? []).slice().sort((a, b) => a.order - b.order);
           this.selectedChapterId = this.chapters.length ? this.chapters[0].id : null;
+          this.exportableChapterCount = book.exportableChapterCount ?? null;
           this.chaptersKnown = true;
           this.loading = false;
           this.rebuildSpineSignals();
@@ -526,6 +535,10 @@ export class ExportPageComponent implements OnInit, OnDestroy {
         : null,
       chapterCount: known ? this.chapters.length : null,
       chaptersWithText: known ? this.chapters.filter(c => c.wordCount > 0).length : null,
+      // The EXPORTER's own count, straight off the payload - never counted from the chapter list, which
+      // carries no renderable-content fact (w8 / F2). `?? null` keeps an older server's silence as "not
+      // known" rather than as "nothing can be exported".
+      chaptersExportable: known ? (this.exportableChapterCount ?? null) : null,
       summary: null,
       review: null,
       summaryRunning: this.briefsRunning,

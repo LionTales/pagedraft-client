@@ -36,6 +36,8 @@ import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
+import { AppOverlayService } from '../../core/services/app-overlay.service';
+import { SHOW_POINTER_STRINGS_EN, SHOW_POINTER_STRINGS_HE } from '../../core/i18n/show-pointer-strings';
 
 describe('BookDashboardComponent (wb3-c01 host)', () => {
   let component: BookDashboardComponent;
@@ -73,7 +75,6 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
           useValue: jasmine.createSpyObj('BookService', {
             getProfile: NEVER,
             refreshProfile: NEVER,
-            ask: NEVER,
             // The hosted chapter-summaries child (wb3-c04) fetches the chapter list on init.
             getById: NEVER,
           }),
@@ -595,8 +596,9 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
   });
 
   // ── c02: reset the dashboard's OWN state when the editor switches book in place ──
-  // The host keeps THIS instance alive and just changes [bookId]; the dashboard-owned profile card +
-  // Ask answer + active review tab must reset and the profile must reload, without double-loading on init.
+  // The host keeps THIS instance alive and just changes [bookId]; the dashboard-owned profile card and
+  // active review tab must reset and the profile must reload, without double-loading on init.
+  // (The Ask answer was a third member of that set until Wave 3 / w7 removed the ask card.)
   describe('reset on book switch (c02)', () => {
     function profileFor(genre: string): BookProfileDto {
       return {
@@ -615,7 +617,7 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(getProfile).toHaveBeenCalledWith('book-1');
     });
 
-    it('reloads the profile and resets reviewTab/lastAnswer/askQuestion when bookId changes in place', () => {
+    it('reloads the profile and resets reviewTab and the parsed profile state when bookId changes in place', () => {
       const bookSvc = TestBed.inject(BookService);
       const getProfile = bookSvc.getProfile as jasmine.Spy;
 
@@ -625,9 +627,6 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
 
       // Simulate the prior book's lingering dashboard-owned state (set by the user before the switch).
       component.reviewTab = 'bible';
-      component.askQuestion = 'who is the villain?';
-      component.lastAnswer = { resultText: 'old answer' } as any;
-      component.citationChapterIds = ['Ch 1'];
       component.synopsisExpanded = true;
       component.expandedPlotNode = 'climax';
       component.profile = profileFor('OldGenre');
@@ -643,9 +642,6 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
 
       // Transient own-state cleared immediately on the switch (before the new profile resolves).
       expect(component.reviewTab).toBe('findings');
-      expect(component.askQuestion).toBe('');
-      expect(component.lastAnswer).toBeNull();
-      expect(component.citationChapterIds).toEqual([]);
       expect(component.synopsisExpanded).toBeFalse();
       expect(component.expandedPlotNode).toBeNull();
       // Book A's profile card must not keep rendering under book B's title while the new GET is still
@@ -1011,6 +1007,9 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
         { id: 'ch-2', title: 'Two', partName: null, order: 1, wordCount: 0, updatedAt: '2026-01-01T00:00:00Z' },
         { id: 'ch-3', title: 'Three', partName: null, order: 2, wordCount: 0, updatedAt: '2026-01-01T00:00:00Z' },
       ];
+      // Stage 5's own signal, which the host binds from the book payload (w8 / F2): nothing here can be
+      // exported either, which is what the server would say about three chapters with nothing in them.
+      component.exportableChapterCount = 0;
       (component as any).rebuildSpineSignals();
       fixture.detectChanges();
 
@@ -1028,13 +1027,50 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
           .toBeTrue();
       }
       // And the spine beside them is derived from the SAME two numbers, so the screen cannot contradict
-      // itself: stage 5 blocked is what made this visible live.
+      // itself: stage 5 blocked is what made this visible live. Stage 5 reads a THIRD number since
+      // w8 / F2 (the exporter's own count, an @Input from the host); this book has none of the three.
       expect(component.spineSignals.chapterCount).toBe(3);
       expect(component.spineSignals.chaptersWithText).toBe(0);
+      expect(component.spineSignals.chaptersExportable).toBe(0);
       expect(fixture.debugElement.query(By.css('[data-testid="spine-stage-export"]')).attributes['data-state'])
         .toBe('blocked');
       expect(fixture.debugElement.query(By.css('[data-testid="spine-stage-briefs"]')).attributes['data-state'])
         .toBe('blocked');
+    });
+
+    /**
+     * D14. `ngOnChanges` rebuilt the spine on `bookId`, `bookLanguage` and `chapters` and not on
+     * `exportableChapterCount`, which is a SEPARATE input that can move on its own: a chapter's stored
+     * document becomes renderable without the chapter list changing at all, which is exactly what the
+     * first save into a freshly imported book does. Both of today's hosts rebind the pair off one
+     * refreshed `book` object, so `chapters` covered for it; a host that re-asks the server for the count
+     * alone left stage 5 rendering the previous answer with nothing to notice it by.
+     *
+     * The rebind goes through `ngOnChanges` explicitly because setting an `@Input` FIELD fires none.
+     */
+    it('rebuilds the spine when only exportableChapterCount is rebound (D14)', () => {
+      const chapters = [
+        { id: 'ch-1', title: 'One', partName: null, order: 0, wordCount: 900, updatedAt: '2026-01-01T00:00:00Z' },
+      ];
+      component.chapters = chapters;
+      component.exportableChapterCount = 0;
+      (component as any).rebuildSpineSignals();
+      fixture.detectChanges();
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-stage-export"]')).attributes['data-state'])
+        .withContext('imported and never opened: rows exist, the exporter can make nothing from them')
+        .toBe('blocked');
+
+      // The host re-asked the SERVER and only the count came back different. The chapter list is the same
+      // array, so `changes['chapters']` cannot be what saves this.
+      component.exportableChapterCount = 1;
+      component.ngOnChanges({ exportableChapterCount: new SimpleChange(0, 1, false) });
+      fixture.detectChanges();
+
+      expect(component.chapters).withContext('the list must be untouched, or this proves nothing').toBe(chapters);
+      expect(component.spineSignals.chaptersExportable).toBe(1);
+      expect(fixture.debugElement.query(By.css('[data-testid="spine-stage-export"]')).attributes['data-state'])
+        .withContext('stage 5 must follow the count it is given, not the one it happened to mount with')
+        .toBe('ready');
     });
 
     it('re-enables every build row as soon as one chapter carries text', () => {
@@ -1341,7 +1377,6 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
           useValue: jasmine.createSpyObj('BookService', {
             getProfile: NEVER,
             refreshProfile: NEVER,
-            ask: NEVER,
             getById: NEVER,
           }),
         },
@@ -1483,7 +1518,7 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
-            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+            getProfile: NEVER, refreshProfile: NEVER, getById: NEVER,
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
@@ -1637,20 +1672,23 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
 });
 
 /**
- * c01: the dashboard's own SERVER calls must carry the book language, not just its chrome.
+ * c01 (history) / w5+w7 (what is left): the dashboard's own SERVER calls, and the closing statement of
+ * two removals.
  *
- * The chrome was made book-scoped (the suite above) while onRefresh/onAsk still called the service with no
- * language argument, so both fell through to the service default of 'he' and then the controller default of
- * "he". That is not display-only: RefreshProfileAsync threads the language into the chapter summarize and
- * profile build, which STAMP it onto ChunkSummary.Language and BookProfile.Language. An English book
- * therefore spent a whole-book AI run producing Hebrew briefs AND mislabelled the language-keyed cache rows
- * that the briefs and style-baseline paths read back.
+ * c01 found that the chrome was made book-scoped while onRefresh/onAsk still called the service with no
+ * language argument, so both fell through to the service default of 'he' and then the controller default
+ * of "he" - not display-only, since RefreshProfileAsync threads the language into the chapter summarize
+ * and profile build, which STAMP it onto ChunkSummary.Language and BookProfile.Language. That drove FIVE
+ * language-threading cases over `onAsk`, plus a `driveAsk` helper, which lived in this describe.
  *
- * These drive the REAL onRefresh/onAsk (nothing on the component is stubbed) with BookService mocked, and
- * assert on the argument that reaches the service. The service/controller defaults are left alone on
- * purpose: they are a correct backstop, the caller was the defect.
+ * Both callers are gone now: `refreshProfile`'s bare-arrow caller moved to the Book briefs row in w5
+ * (asserted there, in `book-summary-status-row.component.spec.ts`, describe 'Q4-A'), and `onAsk` /
+ * `BookService.ask` were removed outright in w7. The property did NOT weaken, it EMPTIED - there is
+ * nothing left on this component to thread a language INTO - so this describe no longer asserts anything
+ * about language (finding C7); it is honestly retitled below to what the one surviving test actually
+ * checks: that after both removals, a full mount issues exactly one BookService call and no others.
  */
-describe('BookDashboardComponent threads the book language into its server calls (c01)', () => {
+describe('BookDashboardComponent issues no extra whole-book server call, now that w5 and w7 removed its other two (c01 history)', () => {
   let component: BookDashboardComponent;
   let fixture: ComponentFixture<BookDashboardComponent>;
   let bookService: jasmine.SpyObj<BookService>;
@@ -1669,7 +1707,7 @@ describe('BookDashboardComponent threads the book language into its server calls
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
-            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+            getProfile: NEVER, refreshProfile: NEVER, getById: NEVER,
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
@@ -1705,65 +1743,35 @@ describe('BookDashboardComponent threads the book language into its server calls
   });
 
   /**
-   * Drive this component's remaining server-calling handler, with a question set so onAsk does not bail.
+   * Wave 3 / w7: the FIVE language-threading cases over `onAsk` LIVED HERE, and so did the `driveAsk`
+   * helper that fed them. They asserted that the ask card sent the book's language rather than falling
+   * through to the service default, which was the c01 defect. The card is gone, `BookService.ask` is
+   * gone with it, and there is nothing left on this component to thread a language INTO.
    *
-   * w5 (Q4-A): `onRefresh()` used to be driven here too. It was the bare arrow's handler and it is gone;
-   * the refreshProfile call it made is now phase 2 of the Book briefs row's consented build, so the
-   * language-threading guarantee for refreshProfile is asserted in that row's spec
-   * (`book-summary-status-row.component.spec.ts`, describe 'Q4-A'). The property did not weaken, it moved
-   * to the component that now issues the call.
+   * The property did not weaken, it emptied: this suite's other subject, `refreshProfile`, had already
+   * moved to the Book briefs row in w5 (asserted there, in `book-summary-status-row.component.spec.ts`,
+   * describe 'Q4-A'), and the language threading for every remaining book-level call is asserted on the
+   * row that issues it. What is left here is the closing statement of both removals, phrased as a
+   * property of the component rather than of a handler: after a full mount, the dashboard has issued
+   * exactly one BookService call, the profile GET, and no build or ask call of its own.
    */
-  function driveAsk(): void {
-    component.askQuestion = 'who is the protagonist?';
-    component.onAsk();
-  }
+  it('issues no whole-book server call of its own beyond the profile read (w5 arrow + w7 ask, both gone)', () => {
+    // No `component.bookLanguage = 'en'` here: that assignment was inert (setting an `@Input` field
+    // directly fires no `ngOnChanges`, and nothing this test asserts reads the language anyway - see
+    // the describe doc comment for where language threading IS still covered). `bookId` alone, set in
+    // `beforeEach`, is enough to drive `ngOnInit`'s profile load.
+    fixture.detectChanges();
 
-  it('sends the English language on ask for an English book', () => {
-    component.bookLanguage = 'en';
-
-    driveAsk();
-
-    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'en');
-  });
-
-  it('sends the Hebrew language on ask for a Hebrew book', () => {
-    component.bookLanguage = 'he';
-
-    driveAsk();
-
-    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
-  });
-
-  it('falls back to Hebrew when the book language is null', () => {
-    component.bookLanguage = null;
-
-    driveAsk();
-
-    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
-  });
-
-  it('falls back to Hebrew when the book language is blank or whitespace', () => {
-    component.bookLanguage = '   ';
-
-    driveAsk();
-
-    expect(bookService.ask).toHaveBeenCalledWith('book-1', 'who is the protagonist?', 'he');
-  });
-
-  it('passes a language argument explicitly rather than relying on the service default', () => {
-    component.bookLanguage = 'en';
-
-    driveAsk();
-
-    expect(bookService.ask.calls.mostRecent().args.length)
-      .withContext('ask must receive the language argument, not fall through to its default')
-      .toBe(3);
-  });
-
-  it('w5: this component no longer calls refreshProfile at all (the bare arrow is folded away)', () => {
-    component.bookLanguage = 'en';
-    driveAsk();
-    expect(bookService.refreshProfile).not.toHaveBeenCalled();
+    expect(bookService.getProfile)
+      .withContext('the profile read is the one server call this component still owns')
+      .toHaveBeenCalledWith('book-1');
+    expect(bookService.refreshProfile)
+      .withContext('w5: the bare refresh arrow folded into the Book briefs build row')
+      .not.toHaveBeenCalled();
+    // The w7 `BookService.ask` pin used to live here, asserted at the class rather than at this
+    // TestBed's spy for the same reason given above. Moved to `book.service.spec.ts` (finding C7): it
+    // is a fact about `BookService`, not about this component, and a future feature legitimately
+    // re-adding `ask()` should not turn a dashboard spec red with a misleading message.
   });
 });
 
@@ -1785,10 +1793,9 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
   let component: BookDashboardComponent;
   let fixture: ComponentFixture<BookDashboardComponent>;
   let bookService: jasmine.SpyObj<BookService>;
-  /** One entry per getProfile / refreshProfile / ask call, in issue order, each answerable on demand. */
+  /** One entry per getProfile / refreshProfile call, in issue order, each answerable on demand. */
   let profileLoads: Subject<BookProfileDto>[];
   let refreshes: Subject<BookProfileDto>[];
-  let asks: Subject<any>[];
 
   function queued<T>(log: Subject<T>[]): Observable<T> {
     const subject = new Subject<T>();
@@ -1810,7 +1817,6 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
   beforeEach(async () => {
     profileLoads = [];
     refreshes = [];
-    asks = [];
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
@@ -1824,7 +1830,7 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
-            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+            getProfile: NEVER, refreshProfile: NEVER, getById: NEVER,
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
@@ -1858,7 +1864,6 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
     bookService = TestBed.inject(BookService) as jasmine.SpyObj<BookService>;
     bookService.getProfile.and.callFake(() => queued(profileLoads));
     bookService.refreshProfile.and.callFake(() => queued(refreshes));
-    bookService.ask.and.callFake(() => queued(asks));
 
     component.bookId = 'book-1';
     component.bookLanguage = 'he';
@@ -1870,18 +1875,12 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
   it('treats a bookLanguage change like a book switch: resets own state and reloads the profile', () => {
     // Own state the user built up under the Hebrew book.
     component.reviewTab = 'bible';
-    component.askQuestion = 'who is the villain?';
-    component.lastAnswer = { resultText: 'old Hebrew answer' } as any;
-    component.citationChapterIds = ['Ch 1'];
     component.synopsisExpanded = true;
     component.expandedPlotNode = 'climax';
 
     switchLanguageTo('en');
 
     expect(component.reviewTab).withContext('a language switch must reset the dashboard-owned tab').toBe('findings');
-    expect(component.askQuestion).toBe('');
-    expect(component.lastAnswer).withContext('the answer was produced in the previous language').toBeNull();
-    expect(component.citationChapterIds).toEqual([]);
     expect(component.synopsisExpanded).toBeFalse();
     expect(component.expandedPlotNode).toBeNull();
     expect(profileLoads.length)
@@ -1937,65 +1936,12 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
   // (book, language) key (see `book-summary-status-row.component.spec.ts`, describe 'Q4-A'). The
   // getProfile and ask halves of the contract are untouched and still covered above and below.
 
-  it('leaves no asking latch raised for an ask abandoned by the switch, and drops its answer', () => {
-    component.askQuestion = 'who is the villain?';
-    component.onAsk();
-    expect(component.asking).withContext('precondition: a he ask is in flight').toBeTrue();
-    const staleAsk = asks[0];
-
-    switchLanguageTo('en');
-
-    expect(component.asking)
-      .withContext('the switch abandons the ask, so the switch must settle its latch')
-      .toBeFalse();
-
-    staleAsk.next({ resultText: 'Hebrew answer', structuredResult: null } as any);
-
-    expect(component.lastAnswer)
-      .withContext('an answer produced in the PREVIOUS language must not be shown')
-      .toBeNull();
-    expect(component.asking).toBeFalse();
-  });
-
-  it('a stale ask response must not settle the CURRENT ask (next handler ordering)', () => {
-    component.askQuestion = 'who is the villain?';
-    component.onAsk();
-    const staleAsk = asks[0]; // issued under 'he'
-
-    switchLanguageTo('en');
-    component.askQuestion = 'who is the protagonist?';
-    component.onAsk(); // a fresh ask under 'en' is now the one in flight
-    expect(component.asking).withContext('precondition: an en ask is in flight').toBeTrue();
-    expect(asks.length).toBe(2);
-
-    staleAsk.next({ resultText: 'Hebrew answer', structuredResult: null } as any);
-
-    expect(component.lastAnswer)
-      .withContext('an answer produced in the PREVIOUS language must not be shown')
-      .toBeNull();
-    expect(component.asking)
-      .withContext('the stale answer cleared the CURRENT ask latch: guard must run first')
-      .toBeTrue();
-  });
-
-  it('a stale ask ERROR must not settle or fail the CURRENT ask (error handler ordering)', () => {
-    component.askQuestion = 'who is the villain?';
-    component.onAsk();
-    const staleAsk = asks[0];
-
-    switchLanguageTo('en');
-    component.askQuestion = 'who is the protagonist?';
-    component.onAsk();
-
-    staleAsk.error({ message: 'he-side ask failure' });
-
-    expect(component.askError)
-      .withContext('a failure from the abandoned language must not surface as the current ask error')
-      .toBeNull();
-    expect(component.asking)
-      .withContext('the stale error cleared the CURRENT ask latch: guard must run first')
-      .toBeTrue();
-  });
+  // Wave 3 / w7 (Q5): THREE `onAsk` stale-response tests LIVED HERE, exactly parallel to the four
+  // `onRefresh` ones noted just above and removed for the same reason: the handler they pinned is gone
+  // with the ask card. What each asserted (guard-before-latch-clear in the next handler, the same in
+  // the error handler, and the switch settling an abandoned request's latch) is a property of the
+  // CONTRACT rather than of `onAsk`, and the contract's remaining participant on this component,
+  // `loadProfile`, is asserted on all three counts by the three tests above.
 
   it('still drops a response abandoned by a bookId switch (the pre-existing axis stays guarded)', () => {
     const staleLoad = profileLoads[0];
@@ -2040,7 +1986,6 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
   let bookService: jasmine.SpyObj<BookService>;
   let profileLoads: Subject<BookProfileDto>[];
   let refreshes: Subject<BookProfileDto>[];
-  let asks: Subject<any>[];
 
   const PROFILE_URL = 'http://localhost:5114/api/books/book-1/profile';
 
@@ -2073,7 +2018,6 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
   beforeEach(async () => {
     profileLoads = [];
     refreshes = [];
-    asks = [];
     await TestBed.configureTestingModule({
       imports: [BookDashboardComponent],
       providers: [
@@ -2087,7 +2031,7 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
-            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+            getProfile: NEVER, refreshProfile: NEVER, getById: NEVER,
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
@@ -2121,7 +2065,6 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
     bookService = TestBed.inject(BookService) as jasmine.SpyObj<BookService>;
     bookService.getProfile.and.callFake(() => queued(profileLoads));
     bookService.refreshProfile.and.callFake(() => queued(refreshes));
-    bookService.ask.and.callFake(() => queued(asks));
     // The handlers log the raw error for the developer surface; keep the Karma output readable and let the
     // diagnostic-preserved spec below assert on it.
     spyOn(console, 'error');
@@ -2179,56 +2122,13 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
   // shows a localized label rather than Angular's English transport string. This component no longer
   // issues that call, and the row that does reports the failure of the profile HALF specifically (so a
   // succeeded briefs build is not misreported as a total failure), covered in
-  // `book-summary-status-row.component.spec.ts`. The loadProfile and ask cases either side are untouched.
-
-  describe('onAsk', () => {
-    function ask(): void {
-      component.askQuestion = 'who is the protagonist?';
-      component.onAsk();
-    }
-
-    it('shows the Hebrew label, never the transport string, on a 500', () => {
-      startIn('he');
-      ask();
-
-      asks[0].error(transportFailure('http://localhost:5114/api/books/book-1/ask'));
-
-      expect(component.askError).toBe('שגיאה בשאלה');
-      expect(component.askError).not.toContain('Http failure');
-      expect(component.asking).toBeFalse();
-    });
-
-    it('shows the English label, never the transport string, on a 500', () => {
-      startIn('en');
-      ask();
-
-      asks[0].error(transportFailure('http://localhost:5114/api/books/book-1/ask'));
-
-      expect(component.askError).toBe('Could not answer the question');
-      expect(component.askError).not.toContain('Http failure');
-    });
-
-    it('keeps the label even when the body carries the API error shape', () => {
-      startIn('he');
-      ask();
-
-      asks[0].error(transportFailure('http://localhost:5114/api/books/book-1/ask', { error: 'Question is required.' }));
-
-      expect(component.askError)
-        .withContext('no error body this API writes is localized, so none of them may reach the card')
-        .toBe('שגיאה בשאלה');
-    });
-
-    it('shows the label rather than a body that happens to carry a message field', () => {
-      startIn('en');
-      ask();
-
-      // Nothing in the API writes this shape; the assertion pins that the card ignores it if anything ever does.
-      asks[0].error(transportFailure('http://localhost:5114/api/books/book-1/ask', { message: 'Ollama connection refused' }));
-
-      expect(component.askError).toBe('Could not answer the question');
-    });
-  });
+  // `book-summary-status-row.component.spec.ts`. The loadProfile cases above are untouched.
+  //
+  // Wave 3 / w7 (Q5): `describe('onAsk')` LIVED HERE, with four cases parallel to loadProfile's. Same
+  // reason again: the handler is gone with the ask card. `failureMessage` itself is unchanged and its
+  // whole contract (always the localized label, never `err.message`, never a server body, raw error to
+  // the console) is still asserted by the loadProfile block above and the diagnostic case below, which
+  // is what those four were re-proving for a second caller.
 
   it('keeps the diagnostic on the developer surface: the raw error is logged, not shown', () => {
     startIn('he');
@@ -2319,7 +2219,7 @@ describe('BookDashboardComponent survives an in-session language change with loa
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
-            getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER,
+            getProfile: NEVER, refreshProfile: NEVER, getById: NEVER,
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
@@ -2476,7 +2376,7 @@ describe('BookDashboardComponent finding 19: the chapter breakdown reads an expl
         { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$, jobs$: of([]) }) },
         {
           provide: BookService,
-          useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER }),
+          useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, getById: NEVER }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
@@ -2599,7 +2499,7 @@ describe('BookDashboardComponent w6: first-run orientation', () => {
         { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
-          useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, ask: NEVER, getById: NEVER }),
+          useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, getById: NEVER }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
         // An un-fed Subject behaves exactly like the NEVER these were: the read is issued and stays
@@ -3102,5 +3002,189 @@ describe('BookDashboardComponent w6: first-run orientation', () => {
         .withContext('past the ceiling the window is closed and must not re-aim the scroll').toBe(1);
       flush();
     }));
+  });
+});
+
+/**
+ * ── Wave 3 / w7 (Q5): THE ASK CARD IS GONE, AND A POINTER TO SHOW STANDS WHERE IT STOOD ───────────
+ *
+ * The card had an input, a send button, an in-flight line, an answer block and a citation strip; Show
+ * is the ask surface now. What replaces it is deliberately NOT a second ask box: it is a sentence and
+ * a button that opens the dock, kept at the old address for one release so the capability is
+ * discoverable where the author last saw it.
+ *
+ * Everything here is asserted against the RENDERED dashboard rather than against the component's
+ * fields, because "the handler is deleted" and "the affordance is off the screen" are different
+ * claims and only the second one is the removal. Both languages and both directions, since the
+ * dashboard is book-scoped chrome.
+ *
+ * The card only rendered once a profile had loaded, and so does the pointer, so this TestBed answers
+ * `getProfile` rather than leaving it open the way most suites in this file do.
+ */
+describe('BookDashboardComponent - the ask card is gone and Show is pointed to (w7)', () => {
+  let component: BookDashboardComponent;
+  let fixture: ComponentFixture<BookDashboardComponent>;
+  let overlays: AppOverlayService;
+
+  const profile = {
+    genre: 'Fantasy',
+    synopsis: null,
+    charactersJson: null,
+    storyStructureJson: null,
+  } as unknown as BookProfileDto;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [BookDashboardComponent],
+      providers: [
+        { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
+        {
+          provide: JobRegistryService,
+          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }),
+        },
+        {
+          provide: BookService,
+          useValue: jasmine.createSpyObj('BookService', { getProfile: of(profile), refreshProfile: NEVER, getById: NEVER }),
+        },
+        { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
+        {
+          provide: BookReviewService,
+          useValue: {
+            getReviewStatus: () => NEVER, buildReview: () => NEVER, getReviewProgress: () => NEVER,
+            getReviewFindings: () => NEVER, patchFindingStatus: () => NEVER,
+          },
+        },
+        { provide: AnalysisProgressService, useValue: { pollBookSummaryProgress: () => NEVER } },
+        {
+          provide: ChapterSummaryService,
+          useValue: { getChapterSummary: () => NEVER, updateChapterSummary: () => NEVER, rederiveChapterSummary: () => NEVER },
+        },
+        { provide: CharacterRegisterService, useValue: { getRegister: () => NEVER, applyEdits: () => NEVER } },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+      ],
+    }).compileComponents();
+
+    // The REAL dock state owner, so "the button opens Show" is a fact about the surface the launcher
+    // opens rather than about a spy nobody reads.
+    overlays = TestBed.inject(AppOverlayService);
+
+    fixture = TestBed.createComponent(BookDashboardComponent);
+    component = fixture.componentInstance;
+    component.bookId = 'book-1';
+    component.bookLanguage = 'he';
+    component.chapters = [];
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    localStorage.removeItem(orientationStorageKey('book-1'));
+  });
+
+  // ── (a) the card ────────────────────────────────────────────────────────────────────────────────
+
+  it('renders no ask card, and no free-text input in the region the ask card used to occupy', () => {
+    // A RENDERED precondition, not a component-state one: a template that drew nothing at all below
+    // the `@else` would still satisfy `component.profile` being truthy, so assert the region the ask
+    // card stood in actually rendered something (finding C6). `.show-pointer-card` is what replaced
+    // the card at that address (see the note at the template).
+    const region = fixture.debugElement.query(By.css('.show-pointer-card'));
+    expect(region)
+      .withContext('precondition: the profile-loaded branch actually rendered the region the card stood in')
+      .toBeTruthy();
+
+    // Scoped to that region rather than swept over the whole fixture (finding C5): a query over the
+    // entire fixture would also catch an unrelated future input elsewhere on the page (the character
+    // register, for instance) and fail this w7-removal test while naming the ask card.
+    expect(region.query(By.css('.ask-card')))
+      .withContext('the ask card is removed')
+      .toBeNull();
+    expect(region.query(By.css('.ask-input')))
+      .withContext('its question input is removed')
+      .toBeNull();
+    expect(region.query(By.css('input[type="text"]')))
+      .withContext('the ask card\'s former region has no free-text input left in it')
+      .toBeNull();
+  });
+
+  // `carries none of the ask card's strings in either language map` (finding C6) is deleted, not
+  // strengthened: DASHBOARD_LABELS_HE/EN are typed `Record<DashboardLabelKey, string>` over a closed
+  // union, so a leftover retired key is already a compile error and this assertion could never fail at
+  // runtime without also failing to build. The removal (above) and the compiler between them are the
+  // coverage; this test named neither a rendered fact nor anything the type system does not already
+  // guarantee.
+
+  // ── the pointer, in both languages and both directions ──────────────────────────────────────────
+
+  it('renders the Show pointer in Hebrew, right to left', () => {
+    const card = fixture.debugElement.query(By.css('.show-pointer-card'));
+    expect(card).withContext('the pointer must stand where the ask card stood').toBeTruthy();
+
+    expect(card.query(By.css('.show-pointer-title')).nativeElement.textContent.trim())
+      .toBe(SHOW_POINTER_STRINGS_HE.title);
+    expect(card.query(By.css('.show-pointer-body')).nativeElement.textContent.trim())
+      .toBe(SHOW_POINTER_STRINGS_HE.dashboardBody);
+
+    const button = card.query(By.css('.show-pointer-btn'));
+    expect(button.nativeElement.textContent.trim()).toBe(SHOW_POINTER_STRINGS_HE.open);
+    expect(button.nativeElement.getAttribute('aria-label')).toBe(SHOW_POINTER_STRINGS_HE.openAria);
+
+    expect(fixture.debugElement.query(By.css('.book-dashboard')).nativeElement.getAttribute('dir'))
+      .withContext('a Hebrew book renders the page, and so the pointer, right to left')
+      .toBe('rtl');
+  });
+
+  it('renders the Show pointer in English, left to right', () => {
+    component.bookLanguage = 'en';
+    fixture.detectChanges();
+
+    const card = fixture.debugElement.query(By.css('.show-pointer-card'));
+    expect(card.query(By.css('.show-pointer-title')).nativeElement.textContent.trim())
+      .toBe(SHOW_POINTER_STRINGS_EN.title);
+    expect(card.query(By.css('.show-pointer-body')).nativeElement.textContent.trim())
+      .toBe(SHOW_POINTER_STRINGS_EN.dashboardBody);
+
+    expect(fixture.debugElement.query(By.css('.book-dashboard')).nativeElement.getAttribute('dir'))
+      .toBe('ltr');
+  });
+
+  it('opens the dock on the assistant tab, and does not block the page it was used from', () => {
+    expect(overlays.isOpen).withContext('precondition: the dock starts closed').toBeFalse();
+
+    fixture.debugElement.query(By.css('.show-pointer-btn')).nativeElement.click();
+
+    expect(overlays.isOpen).withContext('the pointer must OPEN Show, not merely name it').toBeTrue();
+    expect(overlays.activeTab).toBe('assistant');
+    // Not a modal, not a takeover: the dashboard is still mounted and still rendering its own content.
+    expect(fixture.debugElement.query(By.css('.overview-card'))).toBeTruthy();
+  });
+
+  // ── C9: one shared string set, two visual weights ───────────────────────────────────────────────
+  //
+  // The SAME pointer content sits in two slots (here, and the analysis panel). Before this fix the
+  // dashboard's copy carried a heading that was a peer of the page <h3> title and a filled-primary
+  // button, making it the strongest call to action on the page, while the panel's copy was a quiet
+  // outline button under a body-sized heading. One shared string set must not read two different ways.
+
+  it('uses an h4 heading, a peer of the settings row\'s heading, not h3 (C9)', () => {
+    const card = fixture.debugElement.query(By.css('.show-pointer-card'));
+    const heading = card.query(By.css('.show-pointer-title')).nativeElement as HTMLElement;
+    expect(heading.tagName.toLowerCase())
+      .withContext('the pointer is one card among several, not a second page title; .settings-heading, the sibling section heading further down this page, is h4')
+      .toBe('h4');
+  });
+
+  it('gives the button the quiet outline weight, not the filled-primary CTA style (C9)', () => {
+    const button = fixture.debugElement.query(By.css('.show-pointer-btn')).nativeElement as HTMLElement;
+    const style = getComputedStyle(button);
+    expect(parseFloat(style.borderWidth))
+      .withContext('a quiet outline button carries a visible border; the filled-primary style this replaces used border: none, making a pointer to a discovery surface the strongest CTA on the dashboard')
+      .toBeGreaterThan(0);
   });
 });

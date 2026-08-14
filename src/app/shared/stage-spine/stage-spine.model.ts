@@ -32,7 +32,10 @@ export const SPINE_STAGE_ORDER: readonly SpineStageId[] = [
 /**
  * THE ONE state vocabulary, used identically on all five stages. No synonyms, no per-stage extras.
  *
- *  - `blocked`      a NAMED prerequisite is missing; the row must say which and offer the fix.
+ *  - `blocked`      something NAMED is missing; the row must say what, and offer the fix when there is one
+ *                   to offer. What is missing is usually an earlier stage ({@link StageStatus.blockedBy});
+ *                   it can also be content that no stage produces ({@link BlockedNeed}), and naming the
+ *                   nearest stage in that case is what final-r03 removed.
  *  - `not-started`  nothing built yet. The inviting state, where a first-run user lives.
  *  - `running`      a build is in flight.
  *  - `behind`       built, but what it was built from has moved. NOT an error, and it has a magnitude
@@ -63,6 +66,28 @@ export type BehindReason =
   | 'coverage-grew'
   | 'briefs-rebuilt'
   | 'configuration-changed';
+
+/**
+ * WHAT A BLOCKED ROW IS WAITING FOR WHEN THE ANSWER IS NOT AN EARLIER STAGE (final-r03).
+ *
+ * `blocked` has always carried a two-part contract: name what is missing, and offer the way to fix it. Until
+ * the closing render gate there was exactly one KIND of missing thing - an earlier stage - so `blockedBy`
+ * (a {@link SpineStageId}) was the whole of the first half. The gate found the case that does not fit: a book
+ * with eight imported chapters and `exportableChapterCount: 0` rendered stage 1 `ready` and stage 5
+ * `blocked` / "Needs first: Import" in ONE viewport, with an action button offering to upload a manuscript
+ * over the manuscript that was already there. The named prerequisite was not missing; it was DONE.
+ *
+ * So the missing thing gets its own vocabulary rather than borrowing the nearest stage name:
+ *
+ *  - `exportable-content`  chapters exist and not one of them holds anything the exporter can put in a file.
+ *                          The blocker is content, not a step, and no stage in the spine produces it: it is
+ *                          made by writing in a chapter, which is stage 4's row and not a whole-book build.
+ *
+ * EXACTLY ONE of {@link StageStatus.blockedBy} and {@link StageStatus.blockedNeed} is set on a blocked row.
+ * That is what keeps the contract's first half intact: the row still always names something, and now it names
+ * the true thing.
+ */
+export type BlockedNeed = 'exportable-content';
 
 /** The next action a stage row can offer. `open-export` is inert until w4 builds the screen. */
 export type StageActionId =
@@ -132,6 +157,24 @@ export interface StageSpineSignals {
    * `chaptersWithTextCount`. Null when not known.
    */
   chaptersWithText: number | null;
+  /**
+   * How many of those chapters THE EXPORTER could put in a file - the book payload's
+   * `exportableChapterCount`, computed by the export service itself. Stage 5's whole `ready` test, and
+   * deliberately a SECOND number rather than a reuse of {@link chaptersWithText} (w8 / F2).
+   *
+   * The two answer different questions and a book can satisfy one and fail the other: "has text" is
+   * `WordCount > 0`, "can be exported" is whether the stored SFDT holds a renderable block, plus the scene
+   * rule. A book imported and never opened in the editor has word counts and no renderable document, and
+   * stage 5 used to read `ready` on it while `GET /api/document/export/book/{id}` answered 409
+   * `nothingWritten` - the spine speaking for the exporter off a predicate the exporter does not use.
+   *
+   * NULL ON EVERY SURFACE THAT DOES NOT LOAD THE BOOK PAYLOAD, which is the books list: the count cannot be
+   * expressed in SQL and putting it on the list would turn a metadata query into a full-manuscript read per
+   * row. Stage 5 therefore reads `unknown` there, which the compact density already says honestly for the
+   * stages it cannot compute. Null is never coalesced to zero: that would turn "not known here" into
+   * "nothing can be exported".
+   */
+  chaptersExportable: number | null;
 }
 
 /**
@@ -160,6 +203,7 @@ export function emptyStageSpineSignals(): StageSpineSignals {
     chapters: null,
     chapterCount: null,
     chaptersWithText: null,
+    chaptersExportable: null,
     summary: null,
     review: null,
     summaryRunning: false,
@@ -184,8 +228,17 @@ export interface StageStatus {
   unknown: boolean;
   /** Stage 4's steady state: no book-level claim, the chapter list is the content. */
   perChapter: boolean;
-  /** When `blocked`, the stage that must happen first. Always set when state is `blocked`. */
+  /**
+   * When `blocked` ON AN EARLIER STAGE, the stage that must happen first. Null when the row is blocked on
+   * something that is not a stage, which is {@link blockedNeed} below - and exactly one of the two is set
+   * whenever `state` is `blocked`, so a blocked row still always names what is missing.
+   */
   blockedBy: SpineStageId | null;
+  /**
+   * When `blocked` on something that is NOT a stage, what that is. See {@link BlockedNeed} for why this
+   * exists and what naming a completed stage instead used to cost.
+   */
+  blockedNeed: BlockedNeed | null;
   /** When `behind`, every reason that holds, in report order. Empty otherwise. */
   behindReasons: BehindReason[];
   /** When `behind` for `chapters-changed`, how many chapters moved. Null when there is no magnitude. */
@@ -197,10 +250,19 @@ export interface StageStatus {
    * must keep distinct from zero - the copy layer renders a sentence off these and an absent fact may not
    * become the positive claim "none of them has any text".
    *
-   * Stage 4 also carries {@link chapterCount} for its own gate; only 1 and 5 read the pair.
+   * Stage 4 also carries {@link chapterCount} for its own gate; only 1 and 5 read a second number, and
+   * they read DIFFERENT second numbers - stage 1 {@link chaptersWithText}, stage 5
+   * {@link chaptersExportable}.
    */
   chapterCount: number | null;
   chaptersWithText: number | null;
+  /**
+   * Stage 5 only: how many chapters the exporter could put in a file
+   * ({@link StageSpineSignals.chaptersExportable}). Null when not known, under the same rule as the pair
+   * above - the copy layer renders a sentence off it and an absent fact may not become "nothing can be
+   * exported".
+   */
+  chaptersExportable: number | null;
   /** Stage 3 only: working-through progress, straight off the status payload. Null when no review. */
   findingTotal: number | null;
   findingResolved: number | null;
@@ -226,7 +288,14 @@ export function deriveStageSpine(signals: StageSpineSignals): StageStatus[] {
     deriveBriefs(signals.summary, inputs, signals.summaryRunning),
     deriveReview(signals.review, inputs, signals.reviewRunning),
     deriveChapterPasses(chapters, chapterCount),
-    deriveExport(signals.exportSurfaceAvailable, chapterCount, chaptersWithText, inputs),
+    // Stage 5 gets its OWN inputs, off its own count. It is the one stage whose claim belongs to the
+    // exporter rather than to the whole-book builders, and `inputs` is the builders' precondition.
+    deriveExport(
+      signals.exportSurfaceAvailable,
+      chapterCount,
+      signals.chaptersExportable,
+      buildInputsFor(chapterCount, signals.chaptersExportable),
+    ),
   ];
 }
 
@@ -238,9 +307,14 @@ export function deriveStageSpine(signals: StageSpineSignals): StageStatus[] {
  *   'no-text'     - rows exist and not one of them carries a word.
  *   'has-text'    - at least one chapter carries text, so a build has something to read.
  *
+ * IT CLASSIFIES A PAIR OF COUNTS, and the second count is the CALLER's. The whole-book builds pass
+ * `chaptersWithText`; stage 5 passes `chaptersExportable`, because the exporter's precondition is not "is
+ * there text" but "is there a renderable document" (w8 / F2, and see {@link deriveExport}). The shape of the
+ * answer - unknown before no-chapters before the empty case - is what is shared, not the number.
+ *
  * WHY THIS IS ONE FUNCTION AND NOT A COMPARISON SPELLED PER CALLER. Every whole-book build in the product
- * reads chapter TEXT: the briefs builder, the developmental review that consumes them, the writing-style
- * measurement, and the exporter. They therefore have exactly one precondition, and it was spelled twice with
+ * reads chapter TEXT: the briefs builder, the developmental review that consumes them, and the writing-style
+ * measurement. They therefore have exactly one precondition, and it was spelled twice with
  * two different answers - the spine's stages 1 and 5 read both counts (c01) while the dashboard's three
  * build rows read `chapterCount === 0` alone (c02). On a book with three chapters created empty that put
  * two surfaces on one screen in direct contradiction: the spine said "there are 3 chapters but nothing has
@@ -284,6 +358,38 @@ function blockedByImport(base: StageStatus): StageStatus {
   base.state = 'blocked';
   base.blockedBy = 'import';
   base.action = 'open-import';
+  return base;
+}
+
+/**
+ * THE OTHER BLOCKED ANSWER (final-r03): the row is waiting on CONTENT, not on a step.
+ *
+ * It names {@link BlockedNeed} `exportable-content` and offers NO action, and both halves are deliberate.
+ *
+ * WHY NOT `blockedByImport` HERE. That is what shipped, and the closing render gate read it back: on a book
+ * with eight imported chapters, stage 1 said `ready` and stage 5 said "Needs first: Import" over a button
+ * offering to upload a manuscript. Import was not the missing thing - it was the finished thing - so the row
+ * told the author to redo completed work, and contradicted the row four places above it in the same column.
+ * That is the same class as the defect w8 / F2 fixed on this very code path (stage 5 claiming a state the
+ * server contradicts), only inverted: there the stage over-claimed readiness, here it under-claims the work
+ * the author has already done.
+ *
+ * WHY NO ACTION, rather than a new one. The thing that is missing is made by writing in a chapter, and
+ * {@link StageActionId} is a closed union whose every member is a whole-book move that the hosts route
+ * explicitly (`book-dashboard.component.ts`'s `onSpineAction` switch, and the same event handled by the
+ * editor, import and export hosts). A new id would be a fifth thing to wire in five hosts, and the switch
+ * has no exhaustiveness assertion, so a host that missed it would render a button that silently does
+ * nothing - which is a worse version of this very finding. And the walkable door is already ON THIS SPINE
+ * and one row up: stage 4 renders the chapter list and every entry opens a chapter, which
+ * {@link deriveChapterPasses} keeps walkable on exactly this book for exactly this reason. The row's third
+ * line says what a file made now would contain, and the row's guide link explains the stage; what the row
+ * no longer does is offer a step that is already complete. "Absent rather than disabled when there is
+ * nothing honest to offer" is the template's standing rule, and this is that case.
+ */
+function blockedOnExportableContent(base: StageStatus): StageStatus {
+  base.state = 'blocked';
+  base.blockedNeed = 'exportable-content';
+  base.action = null;
   return base;
 }
 
@@ -548,54 +654,76 @@ function deriveChapterPasses(
  *                                     anything to put in a file.
  *   no chapters                    -> blocked by Import. This is exactly the server's own 409 answer
  *                                     (`noChapters`), said before the user spends a click on it.
- *   chaptersWithText unknown       -> unknown. Rows exist, but whether a file made from them would hold
- *                                     anything is not known here, and `ready` would be a guess.
- *   chapters, none with text       -> blocked by Import, with its own sentence. The server's second 409
- *                                     answer (`nothingWritten`), said before the click.
+ *   chaptersExportable unknown     -> unknown. Rows exist, but whether a file made from them would hold
+ *                                     anything is not known here, and `ready` would be a guess. This is
+ *                                     the permanent answer on the books list, which does not carry the
+ *                                     count (see {@link StageSpineSignals.chaptersExportable}).
+ *   chapters, none exportable      -> blocked ON CONTENT, not on a stage ({@link blockedOnExportableContent}),
+ *                                     with its own sentence and NO action. The server's second 409 answer
+ *                                     (`nothingWritten`), said before the click.
  *   otherwise                      -> ready, and the action opens the export screen.
  *
- * WHY THIS READS THE SAME SIGNAL AS STAGE 1, and what it cost not to. This stage used to read `ready` off
+ * THE TWO BLOCKED CASES ARE NOT THE SAME BLOCKED, and final-r03's closing render gate is where that stopped
+ * being a nicety. With no chapters, Import is genuinely the missing step and `open-import` is genuinely the
+ * fix, so that case is unchanged. With chapters that hold nothing renderable, Import is DONE - the gate read
+ * stage 1 "Ready" four rows above stage 5 "Blocked / Needs first: Import" with an "upload a manuscript"
+ * button, in Hebrew and again in English, on a book with eight imported chapters. `blockedSentence`'s
+ * contract is to name what is MISSING, and a completed stage is not it. See
+ * {@link blockedOnExportableContent} for the second answer and for why it offers no action at all.
+ *
+ * WHY THIS DOES NOT READ STAGE 1's SIGNAL, and what each version of that cost. It first read `ready` off
  * `chapterCount > 0` alone, so a book whose three chapters were created empty rendered stage 1
  * `not-started` ("none of them has any text yet") and stage 5 `ready` IN THE SAME COLUMN - and the user
- * who followed it downloaded a .docx containing nothing, HTTP 200, no error. That is this file's one rule
- * failing on the one stage whose input was on the wire and unused: `chaptersWithTextCount` was put there
- * by w1 for exactly this.
+ * who followed it downloaded a .docx containing nothing, HTTP 200, no error. c01 fixed that by reading
+ * stage 1's `chaptersWithText`, and that was the right shape with the wrong number.
  *
- * The server now agrees rather than being contradicted: an all-unwritten book answers `409`
- * `nothingWritten` instead of assembling an empty document. The two are NOT the same test - the spine
- * counts `WordCount > 0` and the exporter asks whether the stored SFDT holds a renderable block - so this
- * derivation is a HONEST WARNING, never a prediction of which chapters the file will be missing. Those
- * come back on the response headers of a successful export and are rendered from the server's answer
- * (`export.service.ts`); a client-side guess at them would be a third spelling of the same definition.
+ * THE NUMBER IS NOW THE EXPORTER'S OWN (w8 / F2). `WordCount > 0` and "the stored SFDT holds a renderable
+ * block" are two different questions, and a book satisfies the first and fails the second the moment it is
+ * imported and not yet opened in the editor - which is most books, on their first visit to this screen. The
+ * live gate found exactly that: `ייצוא: מוכן` above a 409 `nothingWritten`. The argument that used to sit
+ * here - that the difference is an honest WARNING rather than a prediction - holds for a PARTIAL skip,
+ * where a file really is produced and the chapters left out of it come back on the response headers and are
+ * rendered from the server's answer (`export.service.ts`). It does not hold for the all-or-nothing claim
+ * this stage makes, because there the two predicates do not differ in detail, they contradict each other.
+ * One claim, one source: `BookDetailDto.exportableChapterCount` comes from
+ * `BookExportService.CountExportableChaptersAsync`, which calls the same underlying rule the export
+ * endpoints do (`RenderableUnitsOf`), one level down - not the endpoints' own helper, `ResolveUnitsFor`,
+ * which adds a warning log on top of that rule and nothing else. The two callers' agreement is held by
+ * `BookExportServiceTests.cs`, not by construction; a filter added inside `ResolveUnitsFor`, or a conversion
+ * failure that leaves an export with zero buffers, would reopen the drift silently.
  *
  * `blocked` rather than `not-started`: nothing about export is ever the user's own unstarted work, and
- * naming a prerequisite the user can walk (Import, the same door every other blocked stage points at on
- * this book) is what the `blocked` contract is for. `ready` still means only "there is something to
+ * naming what is missing is what the `blocked` contract is for. On the empty book that is Import, the same
+ * door every other blocked stage points at; on the book whose chapters hold nothing renderable it is the
+ * content itself, because Import there is already done. `ready` still means only "there is something to
  * download and a screen to download it from", never that the author is finished.
  */
 function deriveExport(
   surfaceAvailable: boolean,
   chapterCount: number | null,
-  chaptersWithText: number | null,
+  chaptersExportable: number | null,
   inputs: BuildInputs,
 ): StageStatus {
   const base = emptyStatus('export');
   base.chapterCount = chapterCount;
-  base.chaptersWithText = chaptersWithText;
+  base.chaptersExportable = chaptersExportable;
   if (!surfaceAvailable) {
     base.state = 'unavailable';
     return base;
   }
   // The five-way answer this stage used to spell inline is now {@link buildInputsFor}, shared with stages
   // 1, 2 and 3 and with the dashboard's three build rows. `no-chapters` and `no-text` are the server's own
-  // two 409 answers (`noChapters`, `nothingWritten`), said before the user spends a click on them.
+  // two 409 answers (`noChapters`, `nothingWritten`), said before the user spends a click on them - and
+  // they get TWO DIFFERENT blocked answers here, which is the whole of final-r03's fix. They used to share
+  // one.
   switch (inputs) {
     case 'unknown':
       base.unknown = true;
       return base;
     case 'no-chapters':
-    case 'no-text':
       return blockedByImport(base);
+    case 'no-text':
+      return blockedOnExportableContent(base);
     default:
       base.state = 'ready';
       base.action = 'open-export';
@@ -611,11 +739,13 @@ function emptyStatus(id: SpineStageId): StageStatus {
     unknown: false,
     perChapter: false,
     blockedBy: null,
+    blockedNeed: null,
     behindReasons: [],
     behindMagnitude: null,
     action: null,
     chapterCount: null,
     chaptersWithText: null,
+    chaptersExportable: null,
     findingTotal: null,
     findingResolved: null,
     findingOpen: null,

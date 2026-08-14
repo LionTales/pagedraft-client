@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { AfterViewChecked, Component, DoCheck, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ImportHandoffCardComponent } from './import-handoff-card/import-handoff-card.component';
-import { ReplaySubject, Subject } from 'rxjs';
+import { ReplaySubject, Subject, merge } from 'rxjs';
 import { debounceTime, takeUntil } from 'rxjs/operators';
 import { DocumentEditorContainerComponent, DocumentEditorContainerModule, ToolbarService } from '@syncfusion/ej2-angular-documenteditor';
 import { BookService } from '../../core/services/book.service';
@@ -235,6 +235,11 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    * the context line name a chapter by a name the author has already changed.
    */
   private chapterListRevision = 0;
+
+  /** D1: a book refetch is in flight, so a second asker waits for it instead of racing it. */
+  private bookRefreshInFlight = false;
+  /** D1: somebody asked for a refresh while one was in flight. Runs exactly once when that one lands. */
+  private bookRefreshQueued = false;
 
   /**
    * The last ambient snapshot published, kept as its own key so a re-render publishes nothing. See
@@ -587,6 +592,11 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
         : null,
       chapterCount: chapters ? chapters.length : null,
       chaptersWithText: chapters ? chapters.filter(c => c.wordCount > 0).length : null,
+      // Stage 5 reads the EXPORTER's own count off the same book payload, never a word count (w8 / F2).
+      // `?? null` is "the server did not say", which stage 5 renders as unknown rather than as empty.
+      // The payload is kept current by {@link refreshBook}, which every manuscript-changing hub event
+      // calls (D1) - without that this line is a snapshot of book load and stays wrong all session.
+      chaptersExportable: chapters ? (this.book?.exportableChapterCount ?? null) : null,
       summary: null,
       review: null,
       summaryRunning: jobs.some(j => j.kind === 'summary'),
@@ -1145,9 +1155,47 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
         if (ch) { ch.wordCount = ev.wordCount; ch.updatedAt = ev.updatedAt; }
       }
     });
-    this.syncService.chapterCreated$.pipe(takeUntil(this.destroy$)).subscribe(ev => {
-      if (this.book && ev.bookId === this.bookId) this.refreshBook();
-    });
+    // ── D1: the export count is the SERVER's answer, so it has to be RE-ASKED ────────────────────────
+    //
+    // Stage 5 reads `BookDetailDto.exportableChapterCount`, computed by the exporter itself. Nothing on
+    // this page can derive it, and deriving it would re-open the exact drift w8 / F2 closed, so the only
+    // way it stops being the number that happened to land at book load is to fetch the book payload
+    // again. THE REFETCH HANGS ON THE SERVER'S OWN ECHOES rather than on {@link saveCurrentDocument}:
+    //
+    //  - `ChapterUpdated` is broadcast to `Clients.Group("book:{bookId}")` (`ChapterService.SaveAsync`),
+    //    the group this page joined above, so the author's OWN save arrives back here as an event. It is
+    //    already the only way this page learns its own new word count - the save writes no `wordCount`,
+    //    the handler above does - so hanging the count here restores the mechanism the spine's sentence
+    //    had before it moved off the chapter array, instead of inventing a second one beside it.
+    //  - The same event covers a save made in another tab or by a collaborator, which a hook on the save
+    //    call cannot see at all.
+    //  - The SCENE events are here because a chapter's scenes are the OTHER store the exporter may read
+    //    (`BookExportService.ScenesHoldTheChaptersCurrentText` switches to them the moment one scene's
+    //    `UpdatedAt` passes its `CreatedAt`), and a write, a delete, a clear and even a REORDER all bump
+    //    it - `SceneService.ReorderAsync` saves the scene rows twice. So a scene-layer change can move
+    //    the count in either direction while no chapter event fires at all.
+    //
+    // WHAT IS DELIBERATELY NOT IN THIS LIST. `chapterReordered$`: a reorder changes no chapter's content
+    // and no chapter's presence, so the exporter's answer over that set cannot move. `chapterDeleted$`:
+    // this page does not subscribe to it at all, so a REMOTE delete already leaves a phantom chapter in
+    // the tree - a wider pre-existing gap than this finding and not opened here; the LOCAL delete asks
+    // for its own refresh from its success handler (see {@link deleteChapter}).
+    //
+    // If the hub connection is down none of these arrive, and the count is stale - but so are this page's
+    // word counts and its whole chapter tree, so stage 5 takes on no dependency it did not already have.
+    merge(
+      this.syncService.chapterUpdated$,
+      this.syncService.chapterCreated$,
+      this.syncService.sceneCreated$,
+      this.syncService.sceneUpdated$,
+      this.syncService.sceneDeleted$,
+      this.syncService.scenesCleared$,
+      this.syncService.scenesReordered$,
+    )
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(ev => {
+        if (this.book && ev.bookId === this.bookId) this.refreshBook();
+      });
     this.syncService.chapterReordered$.pipe(takeUntil(this.destroy$)).subscribe(ev => {
       if (!this.book || ev.bookId !== this.bookId) return;
       const orderMap = new Map(ev.newOrder.map(o => [o.chapterId, o.order]));
@@ -1200,11 +1248,46 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
     });
   }
 
+  /**
+   * Re-ask the SERVER for this book and rebuild everything derived from it. The one "the payload is out
+   * of date" path on this page; every caller is a caller BECAUSE the server's answer just changed.
+   *
+   * D20: this used to assign {@link book} and rebuild only the review-mode options, so the ONE path that
+   * did refetch left {@link spineSignals} holding the counts from book load until an unrelated
+   * `activeJobs$` emission happened to rebuild them. The rebuild belongs here rather than at the call
+   * sites, for the same reason {@link rebuildReviewModeOptions} does: a future caller cannot forget it.
+   *
+   * COALESCED, because the callers arrive in BURSTS - a DOCX import emits one `ChapterCreated` per
+   * chapter and a scene split one `SceneCreated` per scene, and every one of them lands here. A refresh
+   * asked for while one is in flight is not dropped, it is remembered and run once when the in-flight one
+   * lands, so the state finally read is always the latest at a cost of at most two round trips per burst.
+   *
+   * The response is applied only if the route is still on the book it was asked for: this now fires from
+   * hub events, and a late payload for the book the author just left must not overwrite the one on screen.
+   */
   private refreshBook(): void {
     if (!this.bookId) return;
-    this.bookService.getById(this.bookId).subscribe(b => {
-      this.book = b;
-      this.rebuildReviewModeOptions();
+    if (this.bookRefreshInFlight) { this.bookRefreshQueued = true; return; }
+    this.bookRefreshInFlight = true;
+    const requestedFor = this.bookId;
+    this.bookService.getById(requestedFor).subscribe({
+      next: b => {
+        this.bookRefreshInFlight = false;
+        if (requestedFor !== this.bookId) { this.bookRefreshQueued = false; return; }
+        this.book = b;
+        this.rebuildReviewModeOptions();
+        this.rebuildSpineSignals();
+        if (this.bookRefreshQueued) {
+          this.bookRefreshQueued = false;
+          this.refreshBook();
+        }
+      },
+      error: () => {
+        // A failed refresh leaves the last known payload on screen rather than blanking the page; the
+        // queued follow-up is dropped with it, since the next event will ask again.
+        this.bookRefreshInFlight = false;
+        this.bookRefreshQueued = false;
+      },
     });
   }
 
@@ -1285,6 +1368,10 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
           this.scenesByChapter = next;
           if (first) this.selectChapter(first);
         }
+        // D1: deleting the last chapter that held a renderable document changes the EXPORTER's answer,
+        // and the local `filter` above cannot compute the new one. This page does not observe
+        // `chapterDeleted$` (see the merged refresh in ngOnInit), so the local delete asks here.
+        this.refreshBook();
       },
       error: () => {
         alert(this.reviewPanelIsHebrew ? 'מחיקת הפרק נכשלה.' : 'Failed to delete chapter.');

@@ -1,6 +1,5 @@
 import { CommonModule } from '@angular/common';
 import { AfterViewChecked, Component, ElementRef, EventEmitter, Input, OnChanges, OnDestroy, OnInit, Output, SimpleChanges, ViewChild } from '@angular/core';
-import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { BookService } from '../../core/services/book.service';
 import {
@@ -13,7 +12,6 @@ import {
   PlotStructure,
   ConflictEntry
 } from '../../core/models/book';
-import { AnalysisResultDto } from '../../core/models/analysis';
 import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { CHAPTER_SCOPED_KINDS, JobRegistryService } from '../../core/services/job-registry.service';
@@ -39,6 +37,8 @@ import {
 } from '../../core/services/book-surface-focus.service';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 import { CollapsibleSectionComponent } from '../../shared/collapsible-section/collapsible-section.component';
+import { AppOverlayService } from '../../core/services/app-overlay.service';
+import { ShowPointerStringKey, showPointerString } from '../../core/i18n/show-pointer-strings';
 
 /** Which review tab is active when the review is READY/STALE: the c02 ledger or the c03 Story Bible. */
 type ReviewTab = 'findings' | 'bible';
@@ -64,8 +64,14 @@ export type DashboardLabelKey =
   | 'characters' | 'relationships' | 'charactersUnparseable' | 'noCharacters'
   | 'plotStructure' | 'setup' | 'risingAction' | 'climax' | 'fallingAction' | 'resolution'
   | 'pacing' | 'conflicts' | 'storyUnparseable' | 'noStory'
-  | 'ask' | 'askPlaceholder' | 'asking' | 'citations'
-  | 'profileLoadError' | 'askFailed' | 'chapter'
+  // Wave 3 / w7 (Q5): `ask`, `askPlaceholder`, `asking`, `citations`, `askFailed` and `chapter` LIVED
+  // HERE. All six belonged to the removed "ask about the book" card - its heading, its input, its
+  // in-flight line, its citation strip, its failure message and the word the citation strip used to
+  // name a chapter by number. The pointer that replaced the card reads its strings from
+  // `core/i18n/show-pointer-strings.ts` instead, where he/en parity is compiler-enforced over a closed
+  // key union (this map's `Record<DashboardLabelKey, string>` gives the same guarantee; the pointer
+  // shares its strings with the analysis panel, whose own map does not, which is why they live there).
+  | 'profileLoadError'
   | 'export'
   // Wave 3 / w5: the stage-2 row group (Q8-C) and the collapse directive's section headings.
   | 'inputsToThisBuild' | 'inputsExplainer' | 'reviewSection' | 'characterRegister' | 'settings';
@@ -99,13 +105,7 @@ export const DASHBOARD_LABELS_HE: Record<DashboardLabelKey, string> = {
   conflicts: 'קונפליקטים:',
   storyUnparseable: 'לא ניתן לפרש מבנה עלילה.',
   noStory: 'אין נתוני מבנה עלילה.',
-  ask: 'שאל על הספר',
-  askPlaceholder: 'שאל שאלה על הספר…',
-  asking: 'מחפש תשובה…',
-  citations: 'ציטוט מפרקים:',
   profileLoadError: 'שגיאה בטעינת הפרופיל',
-  askFailed: 'שגיאה בשאלה',
-  chapter: 'פרק',
   export: 'ייצוא',
   // Wave 3 / w5. DRAFT Hebrew - w8 native sweep.
   inputsToThisBuild: 'הקלט לבנייה הזו',
@@ -143,13 +143,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
   conflicts: 'Conflicts:',
   storyUnparseable: 'Plot structure could not be read.',
   noStory: 'No plot structure data.',
-  ask: 'Ask about the book',
-  askPlaceholder: 'Ask a question about the book…',
-  asking: 'Looking for an answer…',
-  citations: 'Cited from chapters:',
   profileLoadError: 'Could not load the profile',
-  askFailed: 'Could not answer the question',
-  chapter: 'Chapter',
   export: 'Export',
   inputsToThisBuild: 'The inputs to this build',
   inputsExplainer: 'A chapter brief is the input the book briefs and the developmental review are built from. Editing one by hand changes what the build reads.',
@@ -162,8 +156,10 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
   selector: 'app-book-dashboard',
   standalone: true,
   imports: [
+    // Wave 3 / w7: `FormsModule` LEFT THIS LIST with the ask card. Its input was this template's only
+    // `[(ngModel)]`, so the module became an import that brought in Angular's whole forms machinery for
+    // nothing. Re-add it the moment a form control lands here again.
     CommonModule,
-    FormsModule,
     BookSummaryStatusRowComponent,
     BookReviewStatusRowComponent,
     BookReviewFindingsComponent,
@@ -374,10 +370,12 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
       } @else if (!profile) {
         <p class="empty-hint">{{ label('emptyHint') }}</p>
       } @else {
-        <!-- The four profile cards + Ask are the SECOND level the collapse directive asks for: elements
+        <!-- The four profile cards are the SECOND level the collapse directive asks for: elements
              inside a major part. Each defaults to expanded (the current layout) and each remembers its own
              fold per book. None of them is a build status, a prerequisite warning or a consent prompt, so
-             none of them is in the never-collapse class. -->
+             none of them is in the never-collapse class. (The Ask card was a fifth member of this group
+             until Wave 3 / w7 removed it; the pointer that replaced it is deliberately not collapsible,
+             see the note at it.) -->
         <section class="card overview-card">
           <app-collapsible-section
             sectionId="overview"
@@ -521,34 +519,43 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
           </app-collapsible-section>
         </section>
 
-        <section class="card ask-card">
-          <app-collapsible-section
-            sectionId="ask"
-            [bookId]="bookId"
-            [dir]="bookDir"
-            [heading]="label('ask')">
-          <div class="ask-input-row">
-            <input
-              type="text"
-              class="ask-input"
-              [placeholder]="label('askPlaceholder')"
-              [(ngModel)]="askQuestion"
-              (keydown.enter)="onAsk()">
-            <button type="button" class="ask-btn" [disabled]="asking || !(askQuestion && askQuestion.trim())" (click)="onAsk()">▶</button>
-          </div>
-          @if (asking) {
-            <p class="muted">{{ label('asking') }}</p>
-          } @else if (askError) {
-            <p class="error-hint">{{ askError }}</p>
-          } @else if (lastAnswer) {
-            <div class="answer-block">
-              <div class="answer-text">{{ lastAnswer.resultText }}</div>
-              @if (citationChapterIds.length) {
-                <div class="citations">📖 {{ label('citations') }} {{ citationChapterIds.join(', ') }}</div>
-              }
-            </div>
-          }
-          </app-collapsible-section>
+        <!-- Wave 3 / w7 (Q5): the "ask about the book" CARD stood here, with its own input, its own
+             in-flight state and its own answer block. It is gone and Show is the ask surface; what is
+             left at its address is a pointer, for one release, so the capability is discoverable where
+             the author last saw it.
+
+             TODO(2026-08-14, wave 4): delete this .show-pointer-card section (and, if the analysis
+             panel's pointer in analysis-panel.component.html is also retired by then, the shared
+             show-pointer-strings.ts map and this component's showPointerLabel/openShow). One release
+             of grace was the whole design; nothing here should still be pointing at Show once wave 4
+             ships (finding C12 - the "for one release" sentence above had nothing encoding it).
+
+             NOT collapsible, unlike the four profile cards above it: it is three lines with no content
+             to hide, and a fold on it would be a second gesture standing between the author and the
+             thing that replaced the card. It is also not a modal and blocks nothing - the button opens
+             the dock beside the page and leaves the dashboard exactly where it was.
+
+             HEADING LEVEL is h4, a peer of the settings row's .settings-heading further down this
+             page, not h3: this section is one card among several on the dashboard, not a second
+             page title (finding C9). The BUTTON is the same quiet outline weight the analysis panel's
+             copy of this pointer uses (.show-pointer-btn in analysis-panel.component.scss), not a
+             filled primary fill: one shared string set must not read as the dashboard's strongest call
+             to action in one slot and a quiet aside in the other.
+
+             RTL: a plain stacked block. The heading, the sentence and the button are ordinary flow
+             content with logical block margins only, so text alignment and button placement both come
+             from the dir the dashboard root already carries; nothing is positioned physically, so
+             there is no per-element fixed-vs-mirrored call to make. -->
+        <section class="card show-pointer-card">
+          <h4 class="show-pointer-title">{{ showPointerLabel('title') }}</h4>
+          <p class="show-pointer-body">{{ showPointerLabel('dashboardBody') }}</p>
+          <button
+            type="button"
+            class="show-pointer-btn"
+            [attr.aria-label]="showPointerLabel('openAria')"
+            (click)="openShow()">
+            {{ showPointerLabel('open') }}
+          </button>
         </section>
       }
 
@@ -843,50 +850,40 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     .pacing, .conflicts { font-size: var(--pd-text-body-sm); margin-top: var(--pd-space-4); }
     .conflicts ul { margin: var(--pd-space-2) 0 0 0; padding-inline-end: var(--pd-space-6); }
     .conflict-type { font-weight: var(--pd-weight-medium); }
-    .ask-input-row { display: flex; gap: var(--pd-space-3); margin-bottom: var(--pd-space-4); }
-    .ask-input {
-      flex: 1;
-      padding: var(--pd-space-3) var(--pd-space-4);
-      border: 1px solid var(--pd-border);
-      border-radius: var(--pd-radius-sm);
-      font-size: var(--pd-text-body-sm);
+    /* Wave 3 / w7: the Show pointer that replaced the ask card. Every value is a --pd-* token, and
+       every box property that could have been physical is logical or symmetric, so the block mirrors
+       with the dashboard's own [attr.dir] and needs no rtl/ltr branch of its own. */
+    .show-pointer-title {
+      margin: 0 0 var(--pd-space-2) 0;
       font-family: var(--pd-font-ui);
+      font-size: var(--pd-text-body);
+      font-weight: var(--pd-weight-medium);
       color: var(--pd-text);
-      background: var(--pd-surface);
     }
-    .ask-input:focus {
-      outline: none;
-      box-shadow: var(--pd-ring);
-      border-color: var(--pd-primary-600);
+    .show-pointer-body {
+      margin: 0 0 var(--pd-space-4) 0;
+      font-size: var(--pd-text-body-sm);
+      line-height: var(--pd-lh-body);
+      color: var(--pd-text-secondary);
     }
-    .ask-btn {
+    /* Same quiet outline weight the analysis panel's copy of this pointer uses (finding C9): a
+       pointer to a discovery surface must not be the strongest call to action on the page, and one
+       shared string set must not carry two visual weights across its two slots. Was filled-primary
+       (solid background, border: none) until this fix. */
+    .show-pointer-btn {
       padding: var(--pd-space-3) var(--pd-space-5);
-      background: var(--pd-primary-600);
-      color: var(--pd-on-primary);
-      border: none;
       border-radius: var(--pd-radius-sm);
+      border: 1px solid var(--pd-primary);
+      background: var(--pd-surface);
+      color: var(--pd-primary);
       cursor: pointer;
       font-family: var(--pd-font-ui);
       font-size: var(--pd-text-body-sm);
+      font-weight: var(--pd-weight-medium);
       transition: background var(--pd-dur-fast) var(--pd-ease);
     }
-    .ask-btn:hover:not(:disabled) { background: var(--pd-primary-hover); }
-    .ask-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .answer-block {
-      margin-top: var(--pd-space-4);
-      padding: var(--pd-space-4) var(--pd-space-5);
-      background: var(--pd-surface-sunken);
-      border-radius: var(--pd-radius-md);
-      border: 1px solid var(--pd-border);
-    }
-    .answer-text {
-      white-space: pre-wrap;
-      font-family: var(--pd-font-reading);
-      font-size: var(--pd-text-body);
-      line-height: var(--pd-lh-body);
-      color: var(--pd-text);
-    }
-    .citations { font-size: var(--pd-text-caption); color: var(--pd-text-muted); margin-top: var(--pd-space-3); }
+    .show-pointer-btn:hover { background: var(--pd-surface-brand); }
+    .show-pointer-btn:focus-visible { outline: none; box-shadow: var(--pd-ring); }
   `]
 })
 export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, AfterViewChecked {
@@ -909,6 +906,18 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    * "empty" - an empty book is `[]`.
    */
   @Input() chapters: ChapterSummaryDto[] | null = null;
+
+  /**
+   * How many chapters the EXPORTER could put in a file, straight off the book payload the host already
+   * loaded (`BookDetailDto.exportableChapterCount`). Stage 5's whole `ready` test.
+   *
+   * A SECOND INPUT rather than a count off {@link chapters}, because it is not derivable from a chapter
+   * summary: "carries text" is a word count and "can be exported" is whether the stored document holds a
+   * renderable block. Deriving it here is precisely the defect w8 / F2 closed - the spine said
+   * `Export: Ready` on a book whose export answered 409. Null means the host has not loaded the book yet,
+   * or the server did not send the count; both render as "not known", never as "nothing to export".
+   */
+  @Input() exportableChapterCount: number | null = null;
 
   /**
    * Wave 3 / w5. Bumped by the host when a per-chapter surface asked to be sent to the relocated
@@ -1031,11 +1040,11 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
   charactersParsed: CharacterAnalysisResult | null = null;
   storyParsed: StoryAnalysisResult | null = null;
 
-  askQuestion = '';
-  asking = false;
-  askError: string | null = null;
-  lastAnswer: AnalysisResultDto | null = null;
-  citationChapterIds: string[] = [];
+  // Wave 3 / w7 (Q5): `askQuestion`, `asking`, `askError`, `lastAnswer` and `citationChapterIds` LIVED
+  // HERE, and `onAsk()` / `tryParseCitations()` lived down beside `loadProfile`. All of it belonged to
+  // the removed ask card. The c02 stale-response contract documented on `loadProfile` had three
+  // participants and now has two (loadProfile and the rows' own calls); the ask half of it went with
+  // the handler, and `resetOwnState` below no longer settles an `asking` latch because there is none.
 
   constructor(
     private bookService: BookService,
@@ -1046,6 +1055,12 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
      * adding it here does not break a single existing spec of this component with a NullInjector.
      */
     private surfaceFocus: BookSurfaceFocusService,
+    /**
+     * Wave 3 / w7: the Show pointer's button opens the dock through this. Root-provided with no
+     * dependencies of its own (see its own docstring), so like `surfaceFocus` above it costs no
+     * existing spec a NullInjector.
+     */
+    private overlays: AppOverlayService,
   ) {}
 
   ngOnInit(): void {
@@ -1275,7 +1290,13 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
     }
     // The chapter list drives stages 1 and 4 directly, so any rebinding of it (including the host's
     // in-place mutations after a create/delete/reorder, which arrive as a new array) refreshes the spine.
-    if (contextChanged || changes['chapters']) {
+    //
+    // D14: `exportableChapterCount` is listed for the same reason and is NOT covered by `chapters`. Both
+    // of today's hosts rebind the two off one refreshed `book` object, so the omission was latent - but a
+    // host that re-asks the server only for the count (the count and the chapter list can move
+    // independently: a chapter's stored document becomes renderable without the list changing at all)
+    // would leave stage 5 rendering the previous answer with no way to notice.
+    if (contextChanged || changes['chapters'] || changes['exportableChapterCount']) {
       this.rebuildSpineSignals();
     }
   }
@@ -1308,11 +1329,6 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    */
   private resetOwnState(): void {
     this.reviewTab = 'findings';
-    this.askQuestion = '';
-    this.asking = false;
-    this.askError = null;
-    this.lastAnswer = null;
-    this.citationChapterIds = [];
     this.synopsisExpanded = false;
     this.expandedPlotNode = null;
     this.reviewState = 'unknown';
@@ -1521,6 +1537,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
       chapters,
       chapterCount: this.chapterCount,
       chaptersWithText: this.chaptersWithText,
+      chaptersExportable: this.chapters ? this.exportableChapterCount : null,
       summary: this.summaryStatus,
       review: this.reviewStatus,
       summaryRunning: this.summaryBuilding,
@@ -1882,9 +1899,11 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
   }
 
   /**
-   * c02 stale-response contract, shared by this method, onRefresh and onAsk.
+   * c02 stale-response contract. `onRefresh` and `onAsk` used to share it too, before w5 and w7 retired
+   * them; `loadProfile` is now the only participant left in this component (the rows' own status GETs
+   * apply the same pattern independently, each guarded by its own capture).
    *
-   * Each capture the (bookId, language) they were issued under and re-check BOTH in the next AND the error
+   * It captures the (bookId, language) it was issued under and re-checks BOTH in the next AND the error
    * handler, the same guard the sibling chapter-summaries component applies to every one of its requests.
    * The language belongs in the key because the profile is language-keyed server content: a load issued for
    * a Hebrew book must not paint a dashboard that has since switched to English.
@@ -1960,40 +1979,35 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
   // the rebuilt profile through the summary row's completion fan-out (`onSummaryBuildingChange`), which is
   // why there is no refreshProfile call left on this component.
 
-  /** Ask the book a question in the CURRENT language. Guarded per the stale-response contract on loadProfile. */
-  onAsk(): void {
-    const q = this.askQuestion.trim();
-    if (!this.bookId || !q || this.asking) return;
-    const bookId = this.bookId;
-    const lang = this.language;
-    this.asking = true;
-    this.askError = null;
-    this.bookService.ask(bookId, q, lang).subscribe({
-      next: (result) => {
-        if (this.bookId !== bookId || this.language !== lang) return;
-        this.lastAnswer = result;
-        this.citationChapterIds = this.tryParseCitations(result.structuredResult);
-        this.asking = false;
-      },
-      error: (err) => {
-        if (this.bookId !== bookId || this.language !== lang) return;
-        this.askError = this.failureMessage(err, 'askFailed', 'ask');
-        this.asking = false;
-      }
-    });
+  // Wave 3 / w7 (Q5): `onAsk()` and `tryParseCitations()` LIVED HERE. Their card is gone and Show is
+  // the ask surface, so the two methods went with it rather than being left callable from nowhere. The
+  // API endpoint they used, `POST /api/books/{id}/ask`, is untouched and still serves `AnalysisType.QA`.
+
+  /**
+   * Localized string for the Show pointer that stands where the ask card stood.
+   *
+   * Follows the BOOK language, like the rest of this page's chrome, via the same `isEn` derivation
+   * every other label on this component uses. The assistant it opens is app-level and Hebrew-default;
+   * see the language note in `show-pointer-strings.ts` for why that mismatch is the app's rule rather
+   * than this pointer's bug.
+   */
+  showPointerLabel(key: ShowPointerStringKey): string {
+    return showPointerString(this.isEn ? 'en' : 'he', key);
   }
 
-  private tryParseCitations(structuredResult: string | null | undefined): string[] {
-    if (!structuredResult) return [];
-    try {
-      const obj = JSON.parse(structuredResult);
-      const citations = obj?.citations as Array<{ chapterNumber?: number; chapterTitle?: string }> | undefined;
-      if (Array.isArray(citations)) {
-        return citations.map(c => c.chapterTitle ?? `${this.label('chapter')} ${c.chapterNumber ?? '?'}`).filter(Boolean);
-      }
-      return [];
-    } catch {
-      return [];
-    }
+  /**
+   * Open Show, on the dock's assistant tab.
+   *
+   * `AppOverlayService` is the dock's own state owner and this is the same call the dock's launcher
+   * makes, so the pointer opens the real surface rather than describing it. The service is a
+   * `providedIn: 'root'` singleton with no dependencies of its own, so field-injecting it here adds no
+   * transitive provider an existing TestBed has to learn about (the NullInjector-across-the-suite trap
+   * that a new CONSTRUCTOR dependency sets off).
+   *
+   * The dock is a side drawer, not a modal: opening it leaves this page mounted, scrolled where it was
+   * and fully usable, which is the requirement the pointer was written under.
+   */
+  openShow(): void {
+    this.overlays.openTab('assistant');
   }
 }

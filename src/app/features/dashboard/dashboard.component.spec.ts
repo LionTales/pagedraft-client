@@ -152,9 +152,18 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
     // w4: Export became REAL on this surface for free. It is derived from `chapterCount` alone, which the
     // books-list payload already carries, so the books list needed no new request to stop saying "no
     // export screen" - and it says something different per row, which a constant never could.
-    it('Export reads ready on a row with chapters, now that the export screen exists (w4)', () => {
+    /**
+     * w8 / F2 CHANGED THIS ROW'S ANSWER, deliberately. Export readiness is "could the exporter render a
+     * document from what is stored", which is a parse of every chapter's SFDT rather than a SQL count, so
+     * it is not on the books-list payload and this row may not guess it. It used to be derived from
+     * `chaptersWithTextCount` - free, and wrong: a book with word counts and no saved document read
+     * `ready` here and answered 409 at the endpoint. "Not known here" is what this density says about the
+     * briefs and the review already, and it is what it says about export now.
+     */
+    it('Export reads NOT KNOWN on a row with chapters: the count that decides it is not on this payload', () => {
       load([book({ id: 'b', chapterCount: 12, chaptersWithTextCount: 12 })]);
-      expect(pipState(0, 'export')).toBe('ready');
+      expect(pipState(0, 'export')).toBe('unknown');
+      expect(pipState(0, 'export')).not.toBe('ready');
     });
 
     it('Export reads blocked on an EMPTY book row: there is nothing to put in a file', () => {
