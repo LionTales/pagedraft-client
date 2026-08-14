@@ -1,16 +1,16 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { AnalysisResultDto, AnalysisChunkThresholdsDto, PromptTemplateDto, RunAnalysisRequest, StartAnalysisJobResponse } from '../models/analysis';
+import { AnalysisResultDto, AnalysisChunkThresholdsDto, RunAnalysisRequest, StartAnalysisJobResponse } from '../models/analysis';
 import { ActiveAnalysisJobDto } from '../models/active-analysis-job';
 
 @Injectable({ providedIn: 'root' })
 export class AnalysisService {
   constructor(private http: HttpClient) {}
 
-  getTemplates(): Observable<PromptTemplateDto[]> {
-    return this.http.get<PromptTemplateDto[]>(`/api/templates`);
-  }
+  // Wave 3 / w7: `getTemplates()` LIVED HERE, and `createTemplate()` below it. Both served the
+  // save-as-template button that sat beside the Custom free-form prompt box, which Q5 retired in
+  // Show's favour. `/api/templates` is still served by the API; nothing in this client calls it.
 
   /**
    * Chunk thresholds from server (Proofread/LineEdit) for the given book language. Use to decide
@@ -128,10 +128,6 @@ export class AnalysisService {
   ): Observable<AnalysisResultDto> {
     const url = `/api/books/${bookId}/chapters/${chapterId}/analysis-jobs/${jobId}`;
     return this.http.get<AnalysisResultDto>(url);
-  }
-
-  createTemplate(payload: { name: string; type: string; templateText: string; language?: string }): Observable<PromptTemplateDto> {
-    return this.http.post<PromptTemplateDto>(`/api/templates`, payload);
   }
 
   /**

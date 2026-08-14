@@ -390,18 +390,23 @@ export class DashboardComponent implements OnInit, OnDestroy {
         chapters: null,
         chapterCount: b.chapterCount,
         chaptersWithText: b.chaptersWithTextCount,
+        // STAGE 5 IS NOT KNOWN HERE, and that is a decision rather than an omission (w8 / F2). Export
+        // readiness is "could the exporter render a document", which is a parse of every chapter's stored
+        // SFDT - not a SQL count like the two M1 numbers above, and putting it on this payload would turn
+        // one metadata query into a full read of every manuscript in the list. So the count is on the
+        // BOOK payload only (`BookDetailDto.exportableChapterCount`) and this row says "not known here",
+        // exactly as it already does for the briefs and the review.
+        //
+        // It used to be derived here from `chaptersWithTextCount`, which was free and wrong: a book with
+        // word counts and no saved document read `ready` in this list and answered 409 at the endpoint.
+        // A cheap wrong answer on a list is still the class of claim this wave removes.
+        chaptersExportable: null,
         // The two book-level statuses are not on this payload and are not worth a request per row.
         summary: null,
         review: null,
         // The registry can only raise these, never lower them: see the note above.
         summaryRunning: this.runningBriefs.has(b.id),
         reviewRunning: this.runningReview.has(b.id),
-        // w4's export screen exists, and stage 5 needs nothing this row does not already have: it derives
-        // from the SAME TWO M1 counts stage 1 does (`chapterCount` and `chaptersWithTextCount`, both set
-        // above), so it is REAL on the books list for free - ready once some chapter carries text, blocked
-        // by Import both when there are no chapters and when none of them has been written in. It read
-        // `chapterCount` alone until c01, which is how a book of empty chapters used to render stage 1
-        // "no text yet" and stage 5 "ready" side by side in this very list.
         exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE,
       });
     }

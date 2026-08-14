@@ -4,6 +4,7 @@ import { Component, EventEmitter, Input, OnChanges, OnInit, Output, SimpleChange
 import { chapterDisplayNumber } from '../../core/utils/chapter-number';
 import {
   BEHIND_FALLBACK,
+  BLOCKED_NEED_SENTENCE,
   CHAPTER_RUNNING_LABEL,
   COMPACT_ARIA_LABEL,
   COMPACT_UNKNOWN_LABEL,
@@ -109,11 +110,14 @@ export interface StageActionEvent {
  *                           same isolation at the string level instead (`isolateDigits`,
  *                           `stage-spine.copy.ts`), wrapping each digit run in `<span class="iso">`
  *                           and rendered via `[innerHTML]` (Angular's default sanitizer; no
- *                           `bypassSecurityTrust*`). Stage 5's "nothing written" sentence
- *                           (`exportNothingWrittenDetail`) is the one remaining sentence-embedded count
- *                           NOT yet isolated - named here on purpose rather than silently, since a
- *                           per-element list that misstates its own members is the defect this comment
- *                           exists to stop repeating.
+ *                           `bypassSecurityTrust*`). TWO sentence-embedded counts are NOT isolated this
+ *                           way, both deliberately, both rendered via plain `{{ }}` text interpolation
+ *                           where a literal `<span>` would show up as text: stage 5's "nothing written"
+ *                           sentence (`exportNothingWrittenDetail`) and stage 2's `chapters-changed`
+ *                           `behindSentence`, whose count is ALSO already carried by the isolated
+ *                           `behind-magnitude` badge above it. Named here on purpose rather than
+ *                           silently, since a per-element list that misstates its own members is the
+ *                           defect this comment exists to stop repeating.
  *   - the running spinner   PHYSICALLY FIXED. A rotation has no reading direction.
  *
  * ── RTL in the COMPACT density (w3), same discipline, per element ──────────────────────────────────
@@ -259,8 +263,12 @@ export interface StageActionEvent {
                 <!-- What this stage IS. Present on every row, in every state. -->
                 <p class="stage-line stage-line--explain">{{ explanation(stage.id) }}</p>
 
-                <!-- blocked: NAME the prerequisite, then offer the fix as the action below. -->
-                @if (stage.state === 'blocked' && stage.blockedBy) {
+                <!-- blocked: NAME what is missing, then offer the fix as the action below when there is
+                     one. Two kinds of missing thing reach this one slot - an earlier STAGE, and content
+                     that no stage produces - and blockedText picks between them; the condition is the
+                     rendered sentence rather than blockedBy, because the second kind sets no stage
+                     (final-r03). -->
+                @if (stage.state === 'blocked' && blockedText(stage)) {
                   <p
                     class="stage-line stage-line--blocked"
                     [attr.data-testid]="'spine-blocked-' + stage.id">{{ blockedText(stage) }}</p>
@@ -288,9 +296,10 @@ export interface StageActionEvent {
                   <p class="stage-line" data-testid="spine-import-detail" [innerHTML]="detail"></p>
                 }
 
-                <!-- Stage 5's honest detail: the chapters are there, the words are not, so the file would
-                     be empty. Without it, a blocked row naming Import on a book that HAS chapters reads
-                     as the spine being wrong rather than as the book being unwritten. -->
+                <!-- Stage 5's honest detail: the chapters are there, but nothing in them can go into a
+                     file, so one made now would be empty. It carries the COUNT and the consequence; the
+                     prerequisite line above it names the missing thing (final-r03: content, not the
+                     Import stage). The count behind it is the exporter's own (w8 / F2). -->
                 @if (exportDetailText(stage); as detail) {
                   <p class="stage-line" data-testid="spine-export-detail">{{ detail }}</p>
                 }
@@ -933,7 +942,18 @@ export class StageSpineComponent implements OnInit, OnChanges {
     return UNKNOWN_LABEL[this.lang];
   }
 
+  /**
+   * The prerequisite sentence under a `blocked` row. TWO SOURCES, one slot: a row waiting on an earlier
+   * STAGE names that stage, and a row waiting on something no stage produces names the thing itself
+   * ({@link BlockedNeed}). The model sets exactly one of the two, so this cannot render both and cannot
+   * render neither on a blocked row.
+   *
+   * `blockedNeed` is checked FIRST and that is not arbitrary: it is the more specific fact, and reading
+   * `blockedBy` first is precisely how stage 5's content case ended up borrowing Import's name and telling
+   * an author with eight imported chapters to import one (final-r03).
+   */
   blockedText(stage: StageStatus): string {
+    if (stage.blockedNeed) return BLOCKED_NEED_SENTENCE[stage.blockedNeed][this.lang];
     return stage.blockedBy ? blockedSentence(stage.blockedBy, this.lang) : '';
   }
 
@@ -957,10 +977,15 @@ export class StageSpineComponent implements OnInit, OnChanges {
     return importDetail(stage.chapterCount, stage.chaptersWithText, this.lang);
   }
 
-  /** Stage 5's detail line: chapters exist, but a file made from them right now would be empty. */
+  /**
+   * Stage 5's detail line: chapters exist, but a file made from them right now would be empty.
+   *
+   * Reads `chaptersExportable`, the EXPORTER's own count, not stage 1's `chaptersWithText` (w8 / F2) - the
+   * sentence and the export endpoint have to answer alike, and off the word count they did not.
+   */
   exportDetailText(stage: StageStatus): string | null {
     if (stage.id !== 'export') return null;
-    return exportNothingWrittenDetail(stage.chapterCount, stage.chaptersWithText, this.lang);
+    return exportNothingWrittenDetail(stage.chapterCount, stage.chaptersExportable, this.lang);
   }
 
   progressText(stage: StageStatus): string | null {

@@ -79,6 +79,22 @@ describe('AppOverlayService (chatbot phase A.1)', () => {
     expect(seen).toEqual([false, true]);
   });
 
+  it('tabOpenRequested$ fires on EVERY openTab call, including a repeat on an already-open tab (C13)', () => {
+    // The trap this pins: isOpen$/activeTab$/isTabShowing$ all de-duplicate on the STATE, so a second
+    // "open Show" click while Show is already the tab on screen produces no signal at all on any of
+    // them (see the idempotency test above). A caller that wants to react to the GESTURE itself - the
+    // pointer's button moving focus into an already-open composer - needs a channel that does not
+    // de-duplicate, which is what this one is for.
+    const seen: AppDockTab[] = [];
+    svc.tabOpenRequested$.subscribe(t => seen.push(t));
+
+    svc.openTab('assistant');
+    svc.openTab('assistant'); // the dock was already open on this tab: state is unchanged, but this must still be seen
+    svc.selectTab('activity');
+
+    expect(seen).toEqual(['assistant', 'assistant', 'activity']);
+  });
+
   it('closeTab(tab) is a NO-OP when the OTHER tab is the one showing', () => {
     // The stale-close case: a tab body's destroy hook (or a late Escape) firing after the author
     // already switched must not close the dock they are now looking at.

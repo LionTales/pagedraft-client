@@ -1,4 +1,11 @@
-import { BehindReason, SpineStageId, StageActionId, StageState, StageStatus } from './stage-spine.model';
+import {
+  BehindReason,
+  BlockedNeed,
+  SpineStageId,
+  StageActionId,
+  StageState,
+  StageStatus,
+} from './stage-spine.model';
 
 /**
  * Wave 3 / w2 - every user-facing string the stage spine renders, in Hebrew and English, in one place.
@@ -15,6 +22,11 @@ import { BehindReason, SpineStageId, StageActionId, StageState, StageStatus } fr
  * with stage 3 knowingly. Their wording is authoritative - do not "improve" a Hebrew string here without
  * another native reading. The GUIDES corpus is NOT covered by that sweep: it still calls an individual pass
  * a `מעבר`, which is a live, undecided terminology question recorded in that document.
+ *
+ * ONE STRING IN THIS FILE IS NEWER THAN THAT SWEEP AND IS NOT CLEARED: {@link BLOCKED_NEED_SENTENCE}, written
+ * 2026-08-14 for final-r03. It carries a `// DRAFT he - needs native review` marker at its site, the same
+ * convention `features/export/export-kinds.ts` uses for the three strings it reworded after its own
+ * clearance. Everything else here is cleared, so the marker is the difference and not the docstring.
  *
  * TWO STANDING CONSTRAINTS THIS FILE OBEYS:
  *  - No em-dash and no en-dash anywhere. Plain hyphens, or the sentence is restructured.
@@ -45,7 +57,14 @@ function isolateDigits(text: string): string {
   return text.replace(/\d+/g, digits => `<span class="iso">${digits}</span>`);
 }
 
-/** The five stage names. DRAFT he. */
+/**
+ * The five stage names. THE CANONICAL, owner-dictated, native-swept source (2026-08-11) - not a draft.
+ * `src/docs/HEBREW_NATIVE_REVIEW.md` lists this group (inventory group 1) CLEARED, and `guides-strings.ts`'s
+ * `STAGE_LABELS_HE['chapter-editing']` cites this map as the canonical name for the same reason. This
+ * does NOT resolve the stage-4 naming question left open there: the guide H1 and Show's citation chip
+ * still say `מעברי העריכה על פרק`, and that is a live, undecided terminology question for the owner's
+ * next sweep, not a draft-clearance question.
+ */
 export const STAGE_NAMES: Record<SpineStageId, Bi> = {
   'import': { he: 'ייבוא', en: 'Import' },
   'briefs': { he: 'תקצירי ספר', en: 'Book briefs' },
@@ -129,8 +148,12 @@ export function actionLabel(status: StageStatus, lang: SpineLang): string {
 }
 
 /**
- * The `blocked` sentence. It always NAMES the prerequisite stage; a blocked row that does not say what
- * is missing is the failure this stage state exists to fix.
+ * The `blocked` sentence FOR A ROW WAITING ON AN EARLIER STAGE. It always NAMES that stage; a blocked row
+ * that does not say what is missing is the failure this stage state exists to fix.
+ *
+ * IT MAY ONLY BE CALLED WITH A STAGE THAT IS ACTUALLY MISSING. The naming is the whole contract, and naming
+ * a stage the author has already finished breaks it just as thoroughly as naming nothing: see
+ * {@link BLOCKED_NEED_SENTENCE} for the case that used to come through here wrongly and now does not.
  */
 export function blockedSentence(blockedBy: SpineStageId, lang: SpineLang): string {
   const name = STAGE_NAMES[blockedBy][lang];
@@ -138,6 +161,45 @@ export function blockedSentence(blockedBy: SpineStageId, lang: SpineLang): strin
     ? `צריך קודם: ${name}.`
     : `Needs first: ${name}.`;
 }
+
+/**
+ * The `blocked` sentence FOR A ROW WAITING ON SOMETHING THAT IS NOT A STAGE (final-r03).
+ *
+ * WHY IT EXISTS. {@link blockedSentence} names a stage, and stage 5's "chapters exist, none of them holds
+ * anything renderable" case borrowed Import's name for want of one of its own. The closing render gate read
+ * the result back on a real book with eight imported chapters: stage 1 "Ready" and, in the same viewport,
+ * stage 5 "Blocked" plus "Needs first: Import" over a button offering to upload a manuscript. The sentence
+ * named a prerequisite that was not missing, so the row asked the author to redo finished work and
+ * contradicted a row four places above it. This sentence names the thing that IS missing instead.
+ *
+ * THE WORDING. It keeps the "Needs first" frame, because that frame is the row's promise and only its object
+ * was wrong, and it names CONTENT rather than an act of writing: a chapter imported from a DOCX and never
+ * opened in the editor already holds the author's words and still yields no file, so "write something" would
+ * be the false claim w8 / F2 removed from the sentence one line below this one. It is deliberately NOT a copy
+ * of `features/export/export-kinds.ts`'s `EXPORT_ERRORS.nothingWrittenBook`, which answers the same server
+ * condition after a failed click and therefore carries the retry and both ways out of it; the two must make
+ * the same CLAIM, and they do, but a spine row read before the click has no attempt to retry. The row's own
+ * third line ({@link exportNothingWrittenDetail}) then supplies the count and what a file made now would
+ * contain, so this line stays short enough for a 300px panel.
+ *
+ * NO ACTION ACCOMPANIES IT, which is `stage-spine.model.ts`'s call, not this file's; the reason is written at
+ * `blockedOnExportableContent`.
+ *
+ * PARITY IS ENFORCED BY THE TYPE, not by review: `Record<BlockedNeed, Bi>` and `Bi = Record<SpineLang, string>`
+ * mean a need with only one language, or a need with no sentence at all, does not compile.
+ *
+ * RTL: nothing here is direction-aware. The sentence carries no digits, no bracket and no Latin fragment
+ * inside its Hebrew, so it needs neither {@link isolateDigits} nor a bidi mark; it MIRRORS with the row, which
+ * is `dir`-driven at the spine root and reading-edge aligned by `.stage-line`'s inherited `text-align: start`.
+ */
+export const BLOCKED_NEED_SENTENCE: Record<BlockedNeed, Bi> = {
+  // DRAFT he - needs native review (written 2026-08-14; the rest of this file's Hebrew is cleared, this
+  // string is not, see the file docstring).
+  'exportable-content': {
+    he: 'צריך קודם: פרק שיש בו תוכן שאפשר להפיק ממנו קובץ.',
+    en: 'Needs first: a chapter that holds something a file can be made from.',
+  },
+};
 
 /**
  * The `behind` sentence for one reason. Calm, never an error, and it always ends with what to do rather
@@ -261,33 +323,53 @@ export function findingsProgress(status: StageStatus, lang: SpineLang): string |
 // other computed stage.
 
 /**
- * Stage 5's extra line when chapters exist but none of them carries text.
+ * Stage 5's extra line when chapters exist but not one of them holds anything the exporter could put in a
+ * file.
  *
- * WHY THIS SENTENCE EXISTS. Without it the row reads `blocked` / "Needs first: Import" on a book that
- * plainly HAS chapters, which reads as the spine being wrong rather than as the book being empty. The
- * blocked sentence names the prerequisite; this one says what is actually missing and what the file would
- * be if it were produced anyway - which is the thing the author cares about, and the thing an empty
- * download used to tell them only after they had opened it.
+ * WHY THIS SENTENCE EXISTS. Without it the row reads `blocked` and a bare prerequisite on a book that plainly
+ * HAS chapters, which reads as the spine being wrong rather than as the book holding nothing a file can be
+ * made from. The prerequisite line above ({@link BLOCKED_NEED_SENTENCE}) names the missing thing; this one
+ * carries the COUNT and says what the file would be if it were produced anyway - which is the thing the
+ * author cares about, and the thing an empty download used to tell them only after they had opened it.
  *
- * It says what the file WOULD be, never what the server will do: the two definitions of an empty chapter
- * differ by design (word count here, renderable content there), so this is a warning, not a forecast.
+ * It used to be the row's ONLY true line, because the prerequisite line above it named Import, a stage the
+ * author had already finished (final-r03). Both lines now answer the same condition and neither contradicts
+ * stage 1.
+ *
+ * IT NOW SAYS WHAT THE SERVER WILL DO, and that is a change (w8 / F2). It used to be a warning off the word
+ * count with an explicit disclaimer that the exporter's definition of an empty chapter is a different one;
+ * the count it reads is now the exporter's own (`chaptersExportable`), so the sentence and the endpoint
+ * cannot disagree. The wording follows: "nothing has been written" was true of the state the word count
+ * described and false of this one - a chapter imported from a DOCX and never opened in the editor has the
+ * author's words in it and still nothing a file can be made from. It says that instead.
+ *
  * Returns null when there is nothing true to add, including when the count is not known.
  */
 export function exportNothingWrittenDetail(
   chapterCount: number | null,
-  chaptersWithText: number | null,
+  chaptersExportable: number | null,
   lang: SpineLang,
 ): string | null {
-  if (chapterCount === null || chaptersWithText === null) return null;
-  if (chapterCount <= 0 || chaptersWithText !== 0) return null;
+  if (chapterCount === null || chaptersExportable === null) return null;
+  if (chapterCount <= 0 || chaptersExportable !== 0) return null;
+  // No {@link isolateDigits} here, deliberately: this sentence is rendered as TEXT, not through
+  // `[innerHTML]` like the import detail, so a span would be drawn literally (confirmed at
+  // `stage-spine.component.ts`'s `exportDetailText` binding, `{{ detail }}` not `[innerHTML]`). It is
+  // the only COUNT-BEARING sentence among the isolated group named in that file's RTL numerals note
+  // (import detail, findings progress, chapter-toggle count) that is not wrapped - the asymmetry is
+  // deliberate, not an oversight, for the reason above. NOTE: `behindSentence`'s `chapters-changed` case
+  // a few functions above ALSO embeds an unwrapped count and is ALSO rendered as plain text for the same
+  // reason; that one predates this note and is a pre-existing gap in the same RTL numerals comment's
+  // enumeration, not something this function's asymmetry claim covers - flagging it here rather than
+  // silently repeating an incomplete "the one exception" line.
   if (lang === 'he') {
     return chapterCount === 1
-      ? 'יש פרק אחד בספר, אך עדיין לא נכתב בו דבר, ולכן קובץ שייווצר עכשיו יהיה ריק.'
-      : `יש ${chapterCount} פרקים בספר, אך עדיין לא נכתב בהם דבר, ולכן קובץ שייווצר עכשיו יהיה ריק.`;
+      ? 'יש פרק אחד בספר, אך אין בו עדיין תוכן שאפשר לכתוב לקובץ, ולכן קובץ שייווצר עכשיו יהיה ריק.'
+      : `יש ${chapterCount} פרקים בספר, אך אין בהם עדיין תוכן שאפשר לכתוב לקובץ, ולכן קובץ שייווצר עכשיו יהיה ריק.`;
   }
   return chapterCount === 1
-    ? 'The book has one chapter, but nothing has been written in it yet, so a file made now would be empty.'
-    : `The book has ${chapterCount} chapters, but nothing has been written in them yet, so a file made now would be empty.`;
+    ? 'The book has one chapter, but it holds nothing that can go into a file yet, so a file made now would be empty.'
+    : `The book has ${chapterCount} chapters, but they hold nothing that can go into a file yet, so a file made now would be empty.`;
 }
 
 /**

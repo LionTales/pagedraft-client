@@ -20,8 +20,14 @@
  * spine's permanently grey column shipped for a year, and a list of kinds is exactly where the next one
  * would appear.
  *
- * ALL HEBREW HERE IS DRAFT, gated on w8's native-speaker sweep. No em-dash, no en-dash, no model or
- * provider identity - the same three constraints the rest of the wave obeys.
+ * THE HEBREW HERE WAS CLEARED by the owner's native-speaker sweep (2026-08-11,
+ * `src/docs/HEBREW_NATIVE_REVIEW.md`, group 4: all nine `EXPORT_ERRORS` sentences plus the frame labels,
+ * kind names and progress strings) - not a standing draft. `nothingWrittenBook`, `nothingWrittenChapter`
+ * and `skippedNotice` were reworded again after that clearance to fix a factual error (the "nothing has
+ * been written" phrasing contradicted the exporter's own definition of empty), so those three carry a
+ * fresh `// DRAFT he` marker at their sites and need another native reading; nothing else in this file
+ * does. No em-dash, no en-dash, no model or provider identity - the same three constraints the rest of
+ * the wave obeys.
  */
 
 export type ExportLang = 'he' | 'en';
@@ -144,18 +150,28 @@ export const EXPORT_ERRORS = {
    * 409 with `reason: nothingWritten` on the BOOK path - the book has chapters, but not one of them holds
    * anything renderable, so the file would be blank. A separate sentence from {@link noChapters} because
    * the next action is different: there is nothing to import, there is something to write.
+   *
+   * "Holds nothing that can go into a file" on purpose, not "nothing has been written": a chapter imported
+   * from a DOCX and never opened in the editor already has the author's words in it and is still not
+   * exportable, so calling that "unwritten" would be false. This must stay in step with stage 5's own
+   * sentence ({@link exportNothingWrittenDetail} in `stage-spine.copy.ts`), which reads the same server
+   * condition - not word for word (this one also carries the next action), but the same claim.
    */
   nothingWrittenBook: {
-    he: 'יש פרקים בספר, אך עדיין לא נכתב בהם דבר, ולכן הקובץ היה יוצא ריק. אפשר לכתוב באחד הפרקים, או להעלות כתב יד, ואז לנסות שוב.',
-    en: 'The book has chapters, but nothing has been written in them yet, so the file would have come out empty. Write in a chapter, or import a manuscript, then try again.',
+    // DRAFT he - needs native review (reworded 2026-08-14 to fix the false "unwritten" claim; the rest
+    // of this file's Hebrew is cleared, this string is not, see the file docstring).
+    he: 'יש פרקים בספר, אך אף אחד מהם אינו מכיל עדיין תוכן שאפשר לכתוב לקובץ, ולכן הקובץ היה יוצא ריק. אפשר לכתוב באחד הפרקים, או להעלות כתב יד, ואז לנסות שוב.',
+    en: 'The book has chapters, but none of them holds anything that can go into a file yet, so the file would have come out empty. Write in a chapter, or import a manuscript, then try again.',
   },
   /**
    * 409 with `reason: nothingWritten` on the CHAPTER path. This case used to answer 200 with a valid but
    * empty .docx, so this sentence is the whole of what the author now learns instead of a blank file.
+   * Same wording choice as {@link nothingWrittenBook} above, for the same reason.
    */
   nothingWrittenChapter: {
-    he: 'עדיין לא נכתב דבר בפרק הזה, ולכן הקובץ היה יוצא ריק. אפשר לכתוב בו, או לבחור פרק אחר, ואז לנסות שוב.',
-    en: 'Nothing has been written in this chapter yet, so the file would have come out empty. Write in it, or pick another chapter, then try again.',
+    // DRAFT he - needs native review (reworded 2026-08-14, same reason as nothingWrittenBook above).
+    he: 'הפרק הזה אינו מכיל עדיין תוכן שאפשר לכתוב לקובץ, ולכן הקובץ היה יוצא ריק. אפשר לכתוב בו, או לבחור פרק אחר, ואז לנסות שוב.',
+    en: 'This chapter holds nothing that can go into a file yet, so the file would have come out empty. Write in it, or pick another chapter, then try again.',
   },
   /** 404 on the book path. */
   bookNotFound: {
@@ -185,7 +201,7 @@ export const EXPORT_ERRORS = {
 
 // ─── What the downloaded file does NOT contain ────────────────────────────────────────────────────
 //
-// The export leaves out a chapter with nothing written in it. Silently, that is indistinguishable from
+// The export leaves out a chapter that holds nothing renderable. Silently, that is indistinguishable from
 // data loss: an author opening their manuscript and finding chapter 7 missing has no way to tell a skip
 // from a corruption. So a successful download says what it left out, from the SERVER's own headers - the
 // client never predicts a skip, because the spine's "empty chapter" (no words) and the exporter's (no
@@ -201,13 +217,17 @@ export const EXPORT_ERRORS = {
  * `names` arrive already numbered by the caller, which owns display numbering.
  */
 export function skippedNotice(count: number, names: string[], lang: ExportLang): string {
+  // Same wording choice as EXPORT_ERRORS.nothingWritten* above and the same reason: this is the exporter's
+  // "no renderable block" test, not a word count, so "holds nothing that can go into a file" is the true
+  // claim and "nothing has been written" is not. DRAFT he - needs native review (reworded 2026-08-14,
+  // same reason as nothingWrittenBook above).
   const head = lang === 'he'
     ? (count === 1
-      ? 'פרק אחד לא נכלל בקובץ, כי עדיין לא נכתב בו דבר'
-      : `${count} פרקים לא נכללו בקובץ, כי עדיין לא נכתב בהם דבר`)
+      ? 'פרק אחד לא נכלל בקובץ, כי אינו מכיל עדיין תוכן שאפשר לכתוב לקובץ'
+      : `${count} פרקים לא נכללו בקובץ, כי אינם מכילים עדיין תוכן שאפשר לכתוב לקובץ`)
     : (count === 1
-      ? 'One chapter is not in this file, because nothing has been written in it yet'
-      : `${count} chapters are not in this file, because nothing has been written in them yet`);
+      ? 'One chapter is not in this file, because it holds nothing that can go into a file yet'
+      : `${count} chapters are not in this file, because they hold nothing that can go into a file yet`);
   if (names.length === 0) return `${head}.`;
   const list = names.join(', ');
   if (names.length >= count) return `${head}: ${list}.`;

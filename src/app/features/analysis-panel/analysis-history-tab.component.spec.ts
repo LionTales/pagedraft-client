@@ -1,7 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { AnalysisHistoryTabComponent } from './analysis-history-tab.component';
-import { ANALYSIS_TYPE_LABELS, AnalysisResultDto } from '../../core/models/analysis';
+import { ANALYSIS_TYPES, ANALYSIS_TYPE_LABELS, AnalysisResultDto } from '../../core/models/analysis';
 import { LinguisticAnalysis } from '../../core/models/language-engine';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
@@ -978,5 +978,115 @@ describe('AnalysisHistoryTabComponent – linguistic rendering', () => {
       expect(he).not.toContain('—');
       expect(en).not.toContain('—');
     });
+  });
+});
+
+/**
+ * ── Wave 3 / w7 (Q5): A RETIRED PASS MUST STILL BE READABLE IN HISTORY ─────────────────────────────
+ *
+ * THIS IS THE SUITE THE REMOVAL'S SCOPE FENCE EXISTS FOR. w7 took the Custom free-form pass out of the
+ * product, and the fence on that removal is explicit: the API keeps `AnalysisType.Custom`, keeps every
+ * persisted `AnalysisResult` row that carries it, and keeps its repair-config entry. An author who ran
+ * Custom before this release still owns those results, so the History tab has to keep rendering them.
+ *
+ * Two ways that could have broken silently, both pinned here:
+ *
+ *  1. THE FILTER CHIP. The chips are rendered from the `analysisTypes` INPUT, and until w7 the panel
+ *     bound one constant to this input AND to the run-tab picker. Deleting the Custom entry to retire
+ *     the pass would therefore have taken the CHIP with it, leaving historical Custom results
+ *     reachable only by scrolling the unfiltered "All" list. The constant is split instead
+ *     (`ANALYSIS_TYPES` for the chips, `STARTABLE_ANALYSIS_TYPES` for the picker), and the panel's own
+ *     spec pins which surface gets which.
+ *
+ *  2. THE LABEL. `analysisTypeLabel` is `map[value] ?? value`, so deleting the `Custom` entry from
+ *     `ANALYSIS_TYPE_LABELS` would fail nothing: it would silently render the raw ASCII wire value
+ *     "Custom" inside a Hebrew right-to-left surface, on every historical row. The map keeps its entry
+ *     and these assert the RENDERED text rather than the map, in both languages.
+ */
+describe('AnalysisHistoryTabComponent - a retired pass stays readable (w7)', () => {
+  let component: AnalysisHistoryTabComponent;
+  let fixture: ComponentFixture<AnalysisHistoryTabComponent>;
+
+  /** A Custom result of the kind already sitting in authors' databases. */
+  function customResult(): AnalysisResultDto {
+    return {
+      id: 'r-custom',
+      chapterId: 'chap-1',
+      jobId: null,
+      type: 'Custom',
+      analysisType: 'Custom',
+      resultText: 'מה שביקשתי מהמעבר המותאם',
+      createdAt: new Date().toISOString(),
+      scope: 'Chapter',
+      structuredResult: null,
+      sceneId: null,
+      bookId: 'book-1',
+      language: 'he',
+      status: 'Active',
+      proofreadNoChangesHint: false,
+      suggestions: [],
+    };
+  }
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [AnalysisHistoryTabComponent],
+      providers: [LineEditParserService, SuggestionKeyService],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(AnalysisHistoryTabComponent);
+    component = fixture.componentInstance;
+    component.history = [customResult()];
+    // The panel binds the FULL vocabulary to this input, which is the contract this suite rests on.
+    component.analysisTypes = ANALYSIS_TYPES;
+  });
+
+  it('renders a historical Custom result under its HEBREW label, not the raw wire value', () => {
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+
+    const heading = fixture.debugElement.query(By.css('.result-view h4'));
+    expect(heading).withContext('the result itself must still render').toBeTruthy();
+    expect(heading.nativeElement.textContent.trim()).toBe('מותאם');
+    expect(heading.nativeElement.textContent)
+      .withContext('a missing label-map entry falls through to the ASCII wire value')
+      .not.toContain('Custom');
+  });
+
+  it('renders a historical Custom result under its ENGLISH label for an English book', () => {
+    component.bookLanguage = 'en';
+    fixture.detectChanges();
+
+    const heading = fixture.debugElement.query(By.css('.result-view h4'));
+    expect(heading.nativeElement.textContent.trim()).toBe('Custom');
+  });
+
+  it('still offers a Custom FILTER CHIP, so the results are findable without scrolling All', () => {
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+
+    const chips = fixture.debugElement
+      .queryAll(By.css('.history-filter button'))
+      .map(b => b.nativeElement.textContent.trim());
+
+    expect(chips).withContext('the retired pass keeps its history filter chip').toContain('מותאם');
+  });
+
+  it('filters to Custom when its chip is clicked, emitting the WIRE value', () => {
+    component.bookLanguage = 'he';
+    fixture.detectChanges();
+
+    const emitted: (string | null)[] = [];
+    component.historyFilterChange.subscribe(v => emitted.push(v));
+
+    const chip = fixture.debugElement
+      .queryAll(By.css('.history-filter button'))
+      .find(b => b.nativeElement.textContent.trim() === 'מותאם');
+    expect(chip).withContext('precondition: the chip is on screen').toBeTruthy();
+    chip!.nativeElement.click();
+
+    expect(emitted)
+      .withContext('the chip must emit the wire value the API filters by, not the display label')
+      .toEqual(['Custom']);
   });
 });

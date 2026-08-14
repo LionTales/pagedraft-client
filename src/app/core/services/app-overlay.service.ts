@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { BehaviorSubject, Observable, distinctUntilChanged, map } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, distinctUntilChanged, map } from 'rxjs';
 
 /**
  * The tabs of the app dock. Adding one here is a commitment: it becomes a tab in the single
@@ -68,6 +68,17 @@ export class AppOverlayService {
     return this.stateSubject.value.tab;
   }
 
+  /**
+   * Fires every time {@link openTab} is called for a tab, INCLUDING when the dock was already open on
+   * that exact tab (finding C13). `activeTab$` and `isTabShowing$` only emit on a real state change, so
+   * a pointer's "Open Show" button clicked while Show is already the tab on screen produces `commit`'s
+   * early return and NOTHING happens - no re-render, no focus move, no feedback of any kind. This is
+   * the channel a tab body listens on to do something on a REPEATED open, distinct from "the tab
+   * changed": the assistant tab uses it to move focus into its composer, which is the only sensible
+   * response to "open the thing that is already open" a text-input surface has.
+   */
+  readonly tabOpenRequested$ = new Subject<AppDockTab>();
+
   /** Whether `tab`'s content is on screen right now: the dock is open AND this is the selected tab. */
   isTabShowing(tab: AppDockTab): boolean {
     const { open, tab: active } = this.stateSubject.value;
@@ -86,9 +97,16 @@ export class AppOverlayService {
     );
   }
 
-  /** Open the dock on `tab`, selecting it if another tab was on. Idempotent. */
+  /**
+   * Open the dock on `tab`, selecting it if another tab was on.
+   *
+   * The STATE commit is idempotent (open on an already-open tab is a no-op write), but
+   * {@link tabOpenRequested$} always fires, so a caller can still observe "the open gesture happened
+   * again" even when nothing about the dock's state changed.
+   */
   openTab(tab: AppDockTab): void {
     this.commit({ open: true, tab });
+    this.tabOpenRequested$.next(tab);
   }
 
   /**

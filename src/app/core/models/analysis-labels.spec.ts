@@ -2,6 +2,7 @@ import {
   ANALYSIS_TYPES,
   ANALYSIS_TYPE_LABELS,
   CHAPTER_RECAP_RELATIONSHIP,
+  STARTABLE_ANALYSIS_TYPES,
 } from './analysis';
 import { DEFAULT_TITLES } from '../services/job-registry.service';
 import { LABELS_EN, LABELS_HE } from '../../shared/activity-center/activity-center.component';
@@ -97,7 +98,63 @@ describe('the Summarize rename (w6 / Q9-C)', () => {
     expect(Object.keys(ANALYSIS_TYPE_LABELS.he)).toContain('Summarization');
     expect(Object.keys(ANALYSIS_TYPE_LABELS.en)).toContain('Summarization');
   });
+});
 
+/**
+ * ── Wave 3 / w7 (Q5): THE STARTABLE LIST AND THE VOCABULARY ARE DIFFERENT SETS ────────────────────
+ *
+ * Until w7 there was one constant and it fed two surfaces that only happened to want the same thing:
+ * the run-tab picker (what an author can START) and the history tab's type-filter chips (what an
+ * author can FIND). Retiring the Custom pass from the picker by deleting the entry would have taken
+ * the chip with it, so past Custom results, which the API still stores and still serves, would have
+ * become reachable only by scrolling the unfiltered list.
+ *
+ * These pin the split at the source. The rendered halves are pinned where they render, in
+ * `analysis-panel.component.spec.ts` (picker) and `analysis-history-tab.component.spec.ts` (chips and
+ * the Hebrew label on a historical row).
+ */
+describe('the startable-vs-known split (w7 / Q5)', () => {
+  it('offers every known type except Custom as startable, in the same order', () => {
+    expect(STARTABLE_ANALYSIS_TYPES.map(t => t.value)).toEqual([
+      'Proofread', 'LineEdit', 'LinguisticAnalysis', 'LiteraryAnalysis', 'Summarization',
+    ]);
+  });
+
+  it('keeps Custom in the KNOWN vocabulary, because persisted results still carry it', () => {
+    expect(ANALYSIS_TYPES.map(t => t.value))
+      .withContext('removing Custom here would remove its history filter chip and its label lookup')
+      .toContain('Custom');
+    expect(ANALYSIS_TYPE_LABELS.he['Custom'])
+      .withContext('a missing label renders the raw ASCII wire value inside the Hebrew UI')
+      .toBe('מותאם');
+    expect(ANALYSIS_TYPE_LABELS.en['Custom']).toBe('Custom');
+  });
+
+  it('is a strict subset, so a type can never be startable without being nameable', () => {
+    const known = new Set(ANALYSIS_TYPES.map(t => t.value as string));
+    for (const t of STARTABLE_ANALYSIS_TYPES) {
+      expect(known)
+        .withContext(`${t.value} is startable but is not in the known vocabulary, so it has no label`)
+        .toContain(t.value);
+    }
+    expect(STARTABLE_ANALYSIS_TYPES.length).toBeLessThan(ANALYSIS_TYPES.length);
+  });
+});
+
+/**
+ * ── w6 (Q9-C): label-map parity and the on-surface relationship statement ────────────────────────
+ *
+ * A sibling of the w7 split above, not a child of it: these pin the rename's label-map hygiene and the
+ * "what does Chapter recap relate to" copy, neither of which is about which types are startable. (A
+ * `describe` closing brace once sat in this file such that everything below ran INSIDE 'the
+ * startable-vs-known split (w7 / Q5)', which meant a `--grep "startable-vs-known"` run silently pulled in
+ * FIVE w6/Q9-C test cases that describe's own doc comment says nothing about - the parity case plus the
+ * four in 'the on-surface relationship statement' - finding C2. Revert-verified: with the old nesting
+ * restored and that describe focused via `fdescribe`, 8 tests ran under it instead of the 3 that belong
+ * there. (Recounted 2026-08-14: this note first said "six assertions" and "the 4 that belong there";
+ * the w7 describe holds THREE cases of its own and the block below contributes FIVE, which is the 8.))
+ */
+describe('label maps and the relationship statement (w6 / Q9-C)', () => {
   /** he/en parity, and no key in one map that the other lacks. */
   it('keeps the two label maps at parity', () => {
     expect(Object.keys(ANALYSIS_TYPE_LABELS.he).sort()).toEqual(Object.keys(ANALYSIS_TYPE_LABELS.en).sort());

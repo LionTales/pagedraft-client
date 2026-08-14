@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnInit, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subscription, forkJoin } from 'rxjs';
-import { ANALYSIS_TYPE_LABELS, ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, PromptTemplateDto, isConsistencySuggestion } from '../../core/models/analysis';
+import { ANALYSIS_TYPE_LABELS, ANALYSIS_TYPES, STARTABLE_ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { analysisTypeLabelFor, runChromeLang, runString } from '../../core/i18n/run-strings';
 import { AnalysisService } from '../../core/services/analysis.service';
@@ -21,6 +21,8 @@ import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { AnalysisHistoryTabComponent } from './analysis-history-tab.component';
 import { AnalysisVersionsTabComponent } from './analysis-versions-tab.component';
 import { JobProgressInlineComponent } from '../../shared/job-progress-inline/job-progress-inline.component';
+import { AppOverlayService } from '../../core/services/app-overlay.service';
+import { ShowPointerStringKey, showPointerString } from '../../core/i18n/show-pointer-strings';
 
 @Component({
   selector: 'app-analysis-panel',
@@ -81,7 +83,17 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    */
   @Output() openStyleBaselineHome = new EventEmitter<void>();
 
+  /**
+   * The FULL analysis-type vocabulary, bound to the history tab's filter chips.
+   *
+   * Wave 3 / w7: this used to feed the run-tab picker as well, and the two wants diverged the moment
+   * Custom stopped being startable. Custom results already in the database stay viewable AND
+   * filterable, which is what the removal's scope fence requires, so the chips keep the full list.
+   */
   readonly analysisTypes = ANALYSIS_TYPES;
+
+  /** The passes the run-tab picker offers. Custom is deliberately absent; see the constant's doc. */
+  readonly startableAnalysisTypes = STARTABLE_ANALYSIS_TYPES;
 
   /**
    * Panel chrome language: book-scoped, Hebrew default, English only for an English book.
@@ -112,10 +124,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    */
   panelLabel(key: string): string {
     const he: Record<string, string> = {
+      // Wave 3 / w7: `customPrompt`, `customPlaceholder` and `saveAsTemplate` LEFT BOTH MAPS with the
+      // block they labelled. Because this map is the loose `Record<string, string>` the note above
+      // warns about, deleting a key from one language and not the other would go unnoticed; both were
+      // edited together, by hand, and the pointer that replaced the block reads its strings from
+      // `core/i18n/show-pointer-strings.ts`, whose closed key union makes that class of miss a
+      // compile error instead.
       title: 'ניתוח',
-      customPrompt: 'בקשה מותאמת',
-      customPlaceholder: 'תארו מה תרצו שה-AI ינתח (תמיכה בעברית)...',
-      saveAsTemplate: 'שמור כתבנית',
       run: 'הרץ ניתוח',
       running: 'מריץ...',
       highlight: 'הדגש מילים מוצעות במסמך',
@@ -128,9 +143,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     };
     const en: Record<string, string> = {
       title: 'Analysis',
-      customPrompt: 'Custom prompt',
-      customPlaceholder: 'Describe what you want the AI to analyze (Hebrew supported)...',
-      saveAsTemplate: 'Save as template',
       run: 'Run analysis',
       running: 'Running...',
       highlight: 'Highlight suggestion words in document',
@@ -150,9 +162,29 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     return map[value] ?? value;
   }
 
+  /**
+   * Localized string for the Show pointer that stands where the Custom prompt block stood.
+   *
+   * Follows the panel's own chrome language, i.e. the BOOK language, like every other string on this
+   * surface. The assistant it opens is app-level Hebrew-default; see `show-pointer-strings.ts`.
+   */
+  showPointerLabel(key: ShowPointerStringKey): string {
+    return showPointerString(this.panelLang, key);
+  }
+
+  /**
+   * Open Show, on the dock's assistant tab, from the pointer's button. The same call the dock's own
+   * launcher makes. The dock is a drawer beside the page, so the editor and this panel stay mounted
+   * and nothing about the open chapter is disturbed.
+   */
+  openShow(): void {
+    this.overlays.openTab('assistant');
+  }
+
   selectedAnalysisType: string = 'Proofread';
-  prompt = '';
-  selectedTemplateId: string | null = null;
+  // Wave 3 / w7: `prompt` LIVED HERE, holding the Custom textarea's text, and `selectedTemplateId`
+  // beside it. Both belonged to the removed free-form block; `selectedTemplateId` had in fact had no
+  // reader for longer than that.
   isRunning = false;
   streamingText = '';
   /**
@@ -184,7 +216,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    */
   private asyncBannerActiveForRun = false;
 
-  templates: PromptTemplateDto[] = [];
+  // Wave 3 / w7: `templates` LIVED HERE. It was written by `loadTemplates()` on every context change
+  // and read by nothing but `saveAsTemplate()`, which prepended to it; no template was ever rendered
+  // or applied. All three went with the save-as-template button.
   history: AnalysisResultDto[] = [];
   /** All analyses from the API (Active + Archived); History tab shows only Archived. Exposed for child component bindings. */
   allAnalyses: AnalysisResultDto[] = [];
@@ -474,13 +508,23 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     private suggestionKeyService: SuggestionKeyService,
     private suggestionAnchorService: SuggestionAnchorService,
     private styleBaselineService: StyleBaselineService,
-    private jobRegistry: JobRegistryService
+    private jobRegistry: JobRegistryService,
+    /**
+     * Wave 3 / w7: the Show pointer's button opens the dock through this. `providedIn: 'root'` with no
+     * dependencies of its own, so adding it to this constructor does not cost the existing specs a
+     * NullInjector the way a non-root dependency would.
+     */
+    private overlays: AppOverlayService
   ) {}
 
 
+  /**
+   * Wave 3 / w7: the Custom branch LEFT THIS GETTER. It was the only pass whose run button had a
+   * second precondition beyond "a chapter is open" (a non-empty prompt), and with the pass retired
+   * every startable pass now needs the same one thing.
+   */
   get canRun(): boolean {
     if (!this.bookId || !this.chapterId) return false;
-    if (this.selectedAnalysisType === 'Custom') return !!this.prompt?.trim();
     return true;
   }
 
@@ -1166,16 +1210,14 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.loadStyleBaselineStatus();
       }
       if (this.bookId && this.chapterId) {
-        this.loadTemplates();
+        // Wave 3 / w7: a `loadTemplates()` GET fired here on every book/chapter change, and again in
+        // the language branch below, for a list nothing rendered. Both calls went with the button.
         this.loadHistory();
         // Eagerly load versions for the new context so Versions tab and
         // version-related helpers (isVersionReverted / isVersionLocked)
         // have up-to-date data regardless of the currently active sub-tab.
         this.loadVersions();
       }
-    }
-    if (changes['bookLanguage'] && this.bookId && this.chapterId) {
-      this.loadTemplates();
     }
     // Chunk thresholds are language-dependent (dense scripts chunk at a lower word count than the Latin
     // ceiling), so re-fetch them when the language switches so the async-vs-sync decision keeps matching the
@@ -1373,7 +1415,7 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   /**
    * Canonical language code (lowercase base code, e.g. `en-US` -> `en`) sent to every server call that
-   * is language-keyed (chunk thresholds, run context, template lookups/creation) - reuses the same
+   * is language-keyed (chunk thresholds, run context) - reuses the same
    * base-split rule as the reattach seam (job-registry's normalizeLang) so a locale-tagged bookLanguage
    * (e.g. `He`/`en-US`) can't diverge the chunk-threshold fetch from the run context language.
    */
@@ -1381,16 +1423,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     return normalizeLang(this.bookLanguage);
   }
 
-  private loadTemplates(): void {
-    this.analysisService.getTemplates().subscribe({
-      next: (items) => {
-        this.templates = (items ?? []).filter(t => !t.language || t.language === this.language);
-      },
-      error: () => {
-        this.templates = [];
-      }
-    });
-  }
+  // Wave 3 / w7: `loadTemplates()` LIVED HERE, GETting `/api/templates` into the `templates` field.
+  // Removed with the save-as-template button, which was the only thing that ever wrote a template.
 
   private loadHistory(mergeWithExisting = false): void {
     if (!this.bookId || !this.chapterId) return;
@@ -1704,7 +1738,6 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       chapterId: this.chapterId!,
       sceneId: this.sceneId,
       selectedAnalysisType: this.selectedAnalysisType,
-      customPrompt: this.selectedAnalysisType === 'Custom' ? (this.prompt || null) : null,
       language: this.language,
       documentText: this.documentText
     };
@@ -2050,26 +2083,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     return total;
   }
 
-  saveAsTemplate(): void {
-    const trimmed = (this.prompt || '').trim();
-    if (!trimmed) return;
-
-    const name = prompt('Template name (for re-use later):', '')?.trim();
-    if (!name) return;
-
-    const templateText = `${trimmed}\n\n---\nטקסט הפרק:\n{chapter_text}`;
-
-    this.analysisService.createTemplate({
-      name,
-      type: this.selectedAnalysisType === 'Custom' ? 'Custom' : this.selectedAnalysisType,
-      templateText,
-      language: this.language
-    }).subscribe({
-      next: (created) => {
-        this.templates = [created, ...this.templates];
-      },
-      error: () => {}
-    });
-  }
+  // Wave 3 / w7 (Q7-A): `saveAsTemplate()` LIVED HERE. It took the Custom prompt box's text, asked for
+  // a name through a bare `window.prompt`, wrapped it in a hardcoded Hebrew `{chapter_text}` footer and
+  // POSTed it to `/api/templates`. Nothing in this client ever read a saved template back, so the
+  // feature was write-only from the day it shipped; the plan's Q7-A ruled out building the template
+  // library that would have completed it, and the pass it served is retired. The API's
+  // `TemplatesController` and `PromptTemplate` entity are untouched.
 }
 

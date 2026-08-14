@@ -10,7 +10,7 @@
  * coverage moved with them to `shared/app-dock/`. This surface is now a tab BODY, so it is opened by
  * selecting its tab through `AppOverlayService` rather than by clicking a launcher of its own.
  */
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
@@ -141,6 +141,53 @@ describe('ProductChatComponent (chatbot phase A)', () => {
         .withContext('a stale close from a hidden tab must not close the dock')
         .toBeTrue();
       expect(overlays.activeTab).toBe('activity');
+    });
+
+    // ── C13: "Open Show" on an already-open dock must not be a no-op ─────────────────────────────
+    //
+    // Before this fix, `openTab('assistant')` on a dock already open on the assistant tab hit
+    // `AppOverlayService.commit`'s early return: no state change, so `isTabShowing$` never emitted,
+    // so this component never learned the button was pressed again. The pointer's "Open Show" click
+    // did nothing perceptible in that state. The fix is `AppOverlayService.tabOpenRequested$`, which
+    // fires on every `openTab` call regardless of whether the state changed, and this component's
+    // subscription to it moving focus into the composer.
+    describe('focus on open (C13)', () => {
+      function composerEl(): HTMLTextAreaElement {
+        return fixture.debugElement.query(By.css('#pc-input')).nativeElement as HTMLTextAreaElement;
+      }
+
+      it('moves focus into the composer on a FRESH open', fakeAsync(() => {
+        overlays.openTab('assistant');
+        fixture.detectChanges();
+        tick();
+
+        expect(document.activeElement)
+          .withContext('opening the dock onto the assistant tab should hand focus to the composer')
+          .toBe(composerEl());
+      }));
+
+      it('ALSO moves focus when the assistant tab is ALREADY showing (the no-op case this fixes)', fakeAsync(() => {
+        openDrawer();
+        tick();
+        // Deliberately steal focus elsewhere, so the assertion below can only pass if the SECOND
+        // openTab call actually moved it back - a false positive left over from the first open is
+        // exactly what this steal rules out.
+        const outsider = document.createElement('button');
+        document.body.appendChild(outsider);
+        outsider.focus();
+        expect(document.activeElement).withContext('precondition: focus is on the outsider').toBe(outsider);
+
+        // The dock is ALREADY open on 'assistant': this call changes no state on `AppOverlayService`.
+        overlays.openTab('assistant');
+        fixture.detectChanges();
+        tick();
+
+        expect(document.activeElement)
+          .withContext('a repeated "open Show" while Show is already on screen must still move focus')
+          .toBe(composerEl());
+
+        document.body.removeChild(outsider);
+      }));
     });
   });
 

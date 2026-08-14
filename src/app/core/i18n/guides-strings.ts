@@ -129,7 +129,10 @@ const STAGE_LABELS_HE: Record<string, string> = {
   overview:            'סקירה',                    // DRAFT he - needs native review
   import:              'ייבוא',                    // DRAFT he - needs native review
   'book-intelligence': 'הכנת הספר',                // DRAFT he - needs native review
-  'chapter-editing':   'עריכת פרקים',              // DRAFT he - needs native review
+  // THE CANONICAL STAGE NAME, not a draft: `stage-spine.copy.ts`'s `STAGE_NAMES` is the owner-dictated,
+  // native-swept source (2026-08-11) and this index heading is the same stage under a second name.
+  // `stage-label-agreement.spec.ts` pins the two together.
+  'chapter-editing':   'עריכת פרק',                // canonical - see STAGE_NAMES
   'whole-book-review': 'עריכה התפתחותית',          // DRAFT he - needs native review
   export:              'ייצוא',                    // DRAFT he - needs native review
   faq:                 'שאלות נפוצות',             // DRAFT he - needs native review
@@ -140,7 +143,9 @@ const STAGE_LABELS_EN: Record<string, string> = {
   overview:            'Overview',
   import:              'Import',
   'book-intelligence': 'Book setup',
-  'chapter-editing':   'Chapter editing',
+  // Canonical, for the same reason as its Hebrew twin: this is the stage the spine calls
+  // "Chapter editing passes", and the index heading is a second rendering of that one name.
+  'chapter-editing':   'Chapter editing passes',
   'whole-book-review': 'Developmental review',
   export:              'Export',
   faq:                 'Questions',

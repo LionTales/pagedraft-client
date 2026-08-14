@@ -18,7 +18,6 @@ function ctx(overrides: Partial<AnalysisRunContext>): AnalysisRunContext {
     chapterId: 'c',
     sceneId: null,
     selectedAnalysisType: 'Proofread',
-    customPrompt: null,
     language: 'en',
     documentText: '',
     ...overrides,
@@ -57,7 +56,8 @@ describe('AnalysisRunOrchestrationService', () => {
 
   describe('shouldUseAsyncJob', () => {
     it('returns true (always) for single-shot whole-chapter types, even with no documentText', () => {
-      for (const t of ['LinguisticAnalysis', 'LiteraryAnalysis', 'Summarization', 'Custom']) {
+      // Wave 3 / w7: 'Custom' was a fourth member of this list and is no longer startable.
+      for (const t of ['LinguisticAnalysis', 'LiteraryAnalysis', 'Summarization']) {
         expect(service.shouldUseAsyncJob(ctx({ selectedAnalysisType: t, documentText: '' }))).toBeTrue();
       }
     });
@@ -230,7 +230,7 @@ describe('AnalysisRunOrchestrationService', () => {
     });
 
     it('includes streaming indicator when streaming is true', () => {
-      const status = service.emitInitialStatusForRun(ctx({ selectedAnalysisType: 'Custom', documentText: 'text' }), true);
+      const status = service.emitInitialStatusForRun(ctx({ selectedAnalysisType: 'Summarization', documentText: 'text' }), true);
       expect(status).toContain('streaming');
     });
   });

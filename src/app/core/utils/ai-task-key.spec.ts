@@ -69,12 +69,15 @@ describe('isKnownNoTierTask', () => {
   });
 
   /**
-   * THE COMPLETENESS ORACLE. The discovered side is `ANALYSIS_TYPES` - the picker's own list, which is what
-   * a seventh analysis type would be added to - and the decided side is this file's two sets. A type added
-   * to the picker without a tier decision lands in neither and goes RED here, which is the case finding 27
-   * describes ("a seventh analysis type added without a map entry").
+   * THE COMPLETENESS ORACLE. The discovered side is `ANALYSIS_TYPES` - the full known vocabulary, which is
+   * what a seventh analysis type would be added to - and the decided side is this file's two sets. A type
+   * added to the vocabulary without a tier decision lands in neither and goes RED here, which is the case
+   * finding 27 describes ("a seventh analysis type added without a map entry"). Note that `ANALYSIS_TYPES`
+   * is NOT the picker any more - Wave 3 / w7 split the picker out as `STARTABLE_ANALYSIS_TYPES`, a strict
+   * subset (`analysis-labels.spec.ts` pins that) - so a type added only to the picker without also landing
+   * here would silently skip this tier decision. This oracle must stay pointed at the full vocabulary.
    */
-  it('PARTITIONS the picker: every analysis type either has a tier control or is a known no-tier pass', () => {
+  it('PARTITIONS the known vocabulary: every analysis type either has a tier control or is a known no-tier pass', () => {
     const undecided = ANALYSIS_TYPES
       .map((t) => t.value as string)
       .filter((value) => resolveAiTaskKey(value) === null && !isKnownNoTierTask(value));

@@ -42,22 +42,47 @@ export interface AnalysisResultDto {
   suggestions?: AnalysisSuggestionDto[] | null;
 }
 
+/**
+ * The body of `POST .../analyze`, as this client sends it.
+ *
+ * Wave 3 / w7: `templateId` and `customPrompt` are GONE FROM HERE. Both belonged to the free-form
+ * Custom pass and its save-as-template companion, which this wave retired from the UI; `templateId`
+ * had in fact been dead for longer than that, with no writer anywhere in the client. The API still
+ * accepts both fields and still runs `AnalysisType.Custom` when asked - this interface describes what
+ * the client sends, and the client no longer sends either. Re-adding one is re-opening the surface.
+ */
 export interface RunAnalysisRequest {
-  templateId?: string | null;
-  customPrompt?: string | null;
   stream?: boolean;
-  /** When using type picker: Proofread, LineEdit, LinguisticAnalysis, LiteraryAnalysis, Summarization, Custom */
+  /** When using type picker: Proofread, LineEdit, LinguisticAnalysis, LiteraryAnalysis, Summarization */
   analysisType?: string | null;
   language?: string | null;
 }
 
 /**
- * Analysis types for the type picker.
+ * EVERY analysis type this client knows how to NAME. The full vocabulary, not the picker's menu.
  *
  * `value` IS THE WIRE VALUE (the API's `AnalysisType` enum) and may never be renamed here: it is what
  * `POST .../analyze` carries, what every persisted `AnalysisResult` row holds, and what the repair-config
  * and tier-routing keys are looked up by. `label` is a DISPLAY string and nothing else - see the Wave 3 /
  * w6 note on {@link ANALYSIS_TYPE_LABELS} for the one that changed.
+ *
+ * ── Wave 3 / w7 (Q5): THIS LIST AND THE PICKER'S LIST ARE NOW DIFFERENT SETS ──────────────────────
+ * Until w7 there was one constant, and it fed TWO surfaces that only happened to want the same thing:
+ * the analysis panel's run-tab picker (what you can START) and the history tab's type-filter chips
+ * (what you can FIND). w7 retires the Custom free-form pass from the product, and the scope fence on
+ * that removal is explicit: the API keeps `AnalysisType.Custom`, keeps its persisted rows, and keeps
+ * its repair-config entry, so an author who ran Custom before this release still has those results and
+ * must still be able to read them.
+ *
+ * Deleting the entry from the single shared constant would have satisfied the picker and silently
+ * taken the history FILTER CHIP with it, leaving those results reachable only by scrolling "All". So
+ * the constant is SPLIT instead: this one stays complete and drives the filter chips (and the
+ * task-key partition oracle in `ai-task-key.spec.ts`, which is about the vocabulary, not the menu),
+ * and {@link STARTABLE_ANALYSIS_TYPES} below drives the picker.
+ *
+ * ADDING A TYPE: add it here, then decide DELIBERATELY whether it belongs in the startable list too.
+ * REMOVING a type from the product: remove it from the startable list only. It stays here for as long
+ * as a persisted row can carry it, which is forever unless a migration says otherwise.
  */
 export const ANALYSIS_TYPES = [
   { value: 'Proofread', label: 'Proofread' },
@@ -67,6 +92,31 @@ export const ANALYSIS_TYPES = [
   { value: 'Summarization', label: 'Chapter recap' },
   { value: 'Custom', label: 'Custom' }
 ] as const;
+
+/** The element type a `Custom` entry can never satisfy - see {@link StartableAnalysisType} below. */
+type NotCustom = { value: 'Custom' };
+
+/**
+ * The strict-subset element type {@link STARTABLE_ANALYSIS_TYPES} is typed as: every member of
+ * {@link ANALYSIS_TYPES} except the one whose `value` is `'Custom'`. This is what makes the subset
+ * relation a TYPE-level fact rather than only a runtime one pinned by a test (finding C11) - a future
+ * edit that widened the filter back to the full vocabulary would fail to compile against this type, not
+ * merely fail a spec.
+ */
+type StartableAnalysisType = Exclude<(typeof ANALYSIS_TYPES)[number], NotCustom>;
+
+/**
+ * The passes an author can START, i.e. the run-tab picker's buttons, in the order it renders them.
+ *
+ * A strict subset of {@link ANALYSIS_TYPES}, enforced structurally by {@link StartableAnalysisType}
+ * above (and, redundantly, still pinned dynamically by `analysis-labels.spec.ts` as a regression check
+ * on the actual runtime contents). `Custom` is the one member of the full vocabulary that is
+ * deliberately NOT here: Wave 3 / w7 retired the free-form prompt surface in favour of the Show
+ * assistant, which is the product's ask surface now. Nothing else about Custom was removed - see the
+ * note on {@link ANALYSIS_TYPES}.
+ */
+export const STARTABLE_ANALYSIS_TYPES: readonly StartableAnalysisType[] =
+  ANALYSIS_TYPES.filter((t): t is StartableAnalysisType => t.value !== 'Custom');
 
 /**
  * Shared he/en label maps for analysis types. Used by every surface that shows a
@@ -83,7 +133,8 @@ export const ANALYSIS_TYPES = [
  *
  * THE NEW HEBREW AVOIDS BOTH COLLIDING WORDS. "תמצית פרק" shares no root with "תקציר" (ק.צ.ר) and is
  * not "סיכום" (ס.כ.ם); it also carries its own scope word, פרק, so the label states what it is scoped
- * to. DRAFT Hebrew, gated on the w8 native-speaker sweep like every other string this wave introduced.
+ * to. CLEARED by the owner's native-speaker sweep (2026-08-11, `src/docs/HEBREW_NATIVE_REVIEW.md`,
+ * group 2), not a draft.
  *
  * THE KEYS ARE WIRE VALUES AND DID NOT MOVE. `Summarization` is still what the client sends, what the
  * server persists and what a history row read back from the database carries, so an older result renders
@@ -99,7 +150,7 @@ export const ANALYSIS_TYPE_LABELS: {
     LineEdit: 'עריכת שורה',
     LinguisticAnalysis: 'לשוני',
     LiteraryAnalysis: 'ספרותי',
-    // DRAFT he - w8 native sweep. Was 'סיכום'; see the collision note above.
+    // CLEARED, not draft (2026-08-11 native sweep). Was 'סיכום'; see the collision note above.
     Summarization: 'תמצית פרק',
     Custom: 'מותאם',
   },
@@ -126,7 +177,8 @@ export const ANALYSIS_TYPE_LABELS: {
  *                   confusion (the author who ran the recap on every chapter and wonders why the briefs
  *                   are still not built). Said from the briefs' side, naming the pass by its new label.
  *
- * No em-dash and no en-dash in either sentence. Hebrew is DRAFT, w8 native sweep.
+ * No em-dash and no en-dash in either sentence. Hebrew is CLEARED, not draft (2026-08-11,
+ * `src/docs/HEBREW_NATIVE_REVIEW.md`, group 2) - see the note on {@link ANALYSIS_TYPE_LABELS} above.
  */
 export const CHAPTER_RECAP_RELATIONSHIP: {
   pass: { he: string; en: string };
@@ -142,14 +194,11 @@ export const CHAPTER_RECAP_RELATIONSHIP: {
   },
 };
 
-export interface PromptTemplateDto {
-  id: string;
-  name: string;
-  type: string;
-  templateText: string;
-  isBuiltIn: boolean;
-  language: string;
-}
+// Wave 3 / w7: `PromptTemplateDto` LIVED HERE. Its only two readers were `AnalysisService.getTemplates()`
+// and `createTemplate()`, which existed for the save-as-template button beside the Custom prompt box.
+// The button and the pass are gone, so both service methods and this shape went with them. The API's
+// `TemplatesController` and its `PromptTemplate` entity are untouched and still serve `/api/templates`;
+// this client simply has no surface that reads or writes a template any more.
 
 /** Unified suggestion model used in the UI for Proofread and Line Edit. */
 export interface AnalysisSuggestion {

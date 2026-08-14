@@ -1,9 +1,14 @@
 import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
-import { Component, EventEmitter, NO_ERRORS_SCHEMA, OnDestroy, Output } from '@angular/core';
+import { Component, EventEmitter, Input, NO_ERRORS_SCHEMA, OnDestroy, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { By } from '@angular/platform-browser';
 import { ActivatedRoute, Router } from '@angular/router';
-import { BookDetailDto } from '../../core/models/book';
+import {
+  BookDetailDto,
+  ChapterCreatedEvent,
+  ChapterUpdatedEvent,
+  SceneUpdatedEvent,
+} from '../../core/models/book';
 import { of, EMPTY, NEVER, throwError, Subject, BehaviorSubject, Observable } from 'rxjs';
 import { EditorPageComponent } from './editor-page.component';
 import { BookService } from '../../core/services/book.service';
@@ -1096,6 +1101,15 @@ class StubBookDashboardComponent {
   // @Output was deleted). The affordance is now derived from the job registry; the dashboard only bubbles
   // openChapter. Kept as an inert stub so the real template's <app-book-dashboard> resolves.
   @Output() openChapter = new EventEmitter<unknown>();
+  /**
+   * D12: the FULL spine on this route is hosted inside the dashboard, so this input is the one wire that
+   * carries the exporter's count from the book payload into it (`editor-page.component.html:249`). It is
+   * DECLARED here, rather than being swallowed by NO_ERRORS_SCHEMA, so a spec can read what the template
+   * actually bound - the wire shipped with no spec at all on either host.
+   */
+  @Input() exportableChapterCount: number | null = null;
+  /** Declared for the same reason: the pair is bound off ONE book object and the pair is what stage 5 reads. */
+  @Input() chapters: unknown = null;
 }
 
 /** rf-f03: inert stub for ImportHandoffCardComponent — same selector, emits both outputs. */
@@ -3325,4 +3339,284 @@ describe('EditorPageComponent chatbot phase B: the ambient open chapter', () => 
       .withContext('the replayed current value only; this page re-checks constantly under Syncfusion')
       .toBe(1);
   });
+});
+
+/**
+ * D1 / D12 / D20: THE EXPORT COUNT IS THE SERVER'S ANSWER, AND IT HAS TO BE RE-ASKED.
+ *
+ * Stage 5 stopped counting words and started reading `BookDetailDto.exportableChapterCount`, which the
+ * exporter computes, under a docstring that says the sentence "NOW SAYS WHAT THE SERVER WILL DO"
+ * (`stage-spine.copy.ts`). This page then captured that number ONCE per book load, so the promise held
+ * for exactly as long as the author did not write anything: import a DOCX (count 0), open the editor,
+ * write chapter one, save - the export endpoint would now succeed while the spine went on saying the book
+ * holds nothing that can go into a file, for the rest of the session.
+ *
+ * THE WINDOW IS THE TEST. Every load here is its OWN `Subject`, opened by `getById` and resolved by hand,
+ * and the hub is a set of open `Subject`s too. A synchronous `of()` would collapse the interval between
+ * "the author saved" and "the server answered" into one tick, and the interval is where both the defect
+ * and the fix live: the assertions below check the count is still the OLD one while the refetch is in
+ * flight (nothing is invented client-side) and the NEW one only once the server has spoken.
+ *
+ * The surface asserted is RENDERED: the compact spine's stage-5 pip, whose real component is mounted here
+ * rather than stubbed, and for the full spine the input the template actually bound into its host.
+ */
+describe('EditorPageComponent D1: the export count is re-asked, not captured at book load', () => {
+  let component: EditorPageComponent;
+  let fixture: ComponentFixture<EditorPageComponent>;
+  let params$: Subject<Record<string, string>>;
+  /** One entry per `getById` call, each holding its OWN open subject. Resolved when a spec says so. */
+  let loads: { id: string; subject: Subject<BookDetailDto> }[];
+  /** The hub, held open for the life of each spec. */
+  let sync: {
+    chapterUpdated$: Subject<ChapterUpdatedEvent>;
+    chapterCreated$: Subject<ChapterCreatedEvent>;
+    sceneUpdated$: Subject<SceneUpdatedEvent>;
+    sceneCreated$: Subject<unknown>;
+    sceneDeleted$: Subject<unknown>;
+    scenesCleared$: Subject<unknown>;
+    scenesReordered$: Subject<unknown>;
+    chapterReordered$: Subject<unknown>;
+  };
+
+  const el = () => fixture.nativeElement as HTMLElement;
+
+  /** The compact spine's rendered stage-5 state: what the author actually sees about Export. */
+  const exportPip = (): string | null => {
+    const pip = el().querySelector('[data-testid="spine-compact-pip-export"]');
+    return pip ? pip.getAttribute('data-state') : null;
+  };
+
+  /**
+   * A book with ONE written chapter and a caller-chosen exporter count. That pair is the state this whole
+   * finding lives in and the one no fixture held: the chapter carries the author's imported words
+   * (`wordCount: 900`) while the exporter can make nothing from what is stored (`exportable: 0`).
+   */
+  const bookWith = (exportable: number | undefined, id = 'book-1'): BookDetailDto => ({
+    id, title: 'My Book', author: null, language: 'he', createdAt: '', updatedAt: '', aiTier: 'fast',
+    chapters: [{ id: 'chap-1', title: 'Chapter one', partName: null, order: 0, wordCount: 900, updatedAt: '' }],
+    exportableChapterCount: exportable,
+  });
+
+  function resolveLatestLoad(id: string, dto: BookDetailDto): void {
+    const entry = [...loads].reverse().find(l => l.id === id);
+    expect(entry).withContext(`no open book load for ${id}`).toBeDefined();
+    entry!.subject.next(dto);
+  }
+
+  /** Land on a book with the compact spine on screen (panel closed), and resolve its first load. */
+  function openBook(exportable: number | undefined, id = 'book-1'): void {
+    component.reviewMode = 'review';
+    component.reviewPanelOpen = false;
+    component.selectedChapterId = null;
+    fixture.detectChanges();      // ngOnInit: route params, activeJobs$, the hub subscriptions
+    params$.next({ bookId: id });
+    tick();                       // syncService.connect()
+    resolveLatestLoad(id, bookWith(exportable, id));
+    fixture.detectChanges();
+  }
+
+  beforeEach(async () => {
+    params$ = new Subject();
+    loads = [];
+    sync = {
+      chapterUpdated$: new Subject(), chapterCreated$: new Subject(), sceneUpdated$: new Subject(),
+      sceneCreated$: new Subject(), sceneDeleted$: new Subject(), scenesCleared$: new Subject(),
+      scenesReordered$: new Subject(), chapterReordered$: new Subject(),
+    };
+
+    await TestBed.configureTestingModule({
+      imports: [EditorPageComponent],
+      providers: [
+        {
+          provide: ActivatedRoute,
+          useValue: { params: params$.asObservable(), queryParams: of({}), snapshot: { queryParams: {} } },
+        },
+        { provide: Router, useValue: { navigate: jasmine.createSpy(), getCurrentNavigation: () => null } },
+        {
+          provide: BookService,
+          useValue: {
+            getById: (id: string) => {
+              const subject = new Subject<BookDetailDto>();
+              loads.push({ id, subject });
+              return subject.asObservable();
+            },
+          },
+        },
+        { provide: JobRegistryService, useValue: new RegistryStub() },
+        { provide: ChapterService, useValue: { update: () => of({}), create: () => EMPTY, delete: () => EMPTY, getById: () => EMPTY, reorder: () => EMPTY } },
+        { provide: SceneService, useValue: { update: () => of({}), getAll: () => of([]), getById: () => EMPTY, splitScenes: () => EMPTY } },
+        { provide: SyncService, useValue: { connect: () => Promise.resolve(), joinBook: () => {}, leaveBook: () => {}, ...sync } },
+        { provide: DocumentVersionService, useValue: { create: () => of({}), list: () => of([]), get: () => EMPTY } },
+        { provide: AnalysisService, useValue: {} },
+        { provide: SfdtManipulationService, useValue: jasmine.createSpyObj('SfdtManipulationService', ['ensureSfdtRtl']) },
+        { provide: EditorTextService, useValue: jasmine.createSpyObj('EditorTextService', ['refreshDocumentPlainText']) },
+        { provide: SuggestionAnchorService, useValue: jasmine.createSpyObj('SuggestionAnchorService', ['relocateAll', 'relocateOne']) },
+      ],
+    })
+      .overrideComponent(EditorPageComponent, {
+        set: {
+          imports: [
+            CommonModule, StubChapterTreeComponent, StubAnalysisPanelComponent, StubIssuePanelComponent,
+            StubBookDashboardComponent, StubSegmentedControlComponent, StubImportHandoffCardComponent,
+            // NOT stubbed: the rendered stage-5 pip is the claim under test.
+            StageSpineComponent, AnalysisRunDialogComponent,
+          ],
+          schemas: [NO_ERRORS_SCHEMA],
+        },
+      })
+      .compileComponents();
+
+    fixture = TestBed.createComponent(EditorPageComponent);
+    component = fixture.componentInstance;
+  });
+
+  afterEach(() => fixture.destroy());
+
+  // ── D12: the one wire into the FULL spine, which shipped with no spec on either host ───────────────
+
+  it('binds the payload count into the hosted full spine (the wire at editor-page.component.html:249)', fakeAsync(() => {
+    openBook(2);
+    component.reviewPanelOpen = true;   // panel open + review mode: the FULL spine is the surface
+    fixture.detectChanges();
+
+    const host = fixture.debugElement.query(By.directive(StubBookDashboardComponent));
+    expect(host).withContext('the full spine host must be mounted').not.toBeNull();
+    expect(host.componentInstance.exportableChapterCount).toBe(2);
+  }));
+
+  it('binds NULL, not zero, into the full spine when the server did not send the count', fakeAsync(() => {
+    // Absent is "not known here" and renders as unknown; zero is the positive claim "nothing to export".
+    openBook(undefined);
+    component.reviewPanelOpen = true;
+    fixture.detectChanges();
+
+    const host = fixture.debugElement.query(By.directive(StubBookDashboardComponent));
+    expect(host.componentInstance.exportableChapterCount).toBeNull();
+  }));
+
+  // ── D1: the save. The failing scenario, driven end to end through the open window ──────────────────
+
+  it('re-asks the server after a chapter save, and stage 5 stops saying nothing can go into a file', fakeAsync(() => {
+    openBook(0);
+    expect(exportPip())
+      .withContext('a freshly imported book: chapters exist, the exporter can make nothing from them')
+      .toBe('blocked');
+    const loadsBefore = loads.length;
+
+    // The author writes and saves. The server broadcasts ChapterUpdated back to the group this page
+    // joined, which is how this page learns anything at all about its own save.
+    sync.chapterUpdated$.next({ bookId: 'book-1', chapterId: 'chap-1', wordCount: 950, updatedAt: '' });
+    fixture.detectChanges();
+
+    // MID-WINDOW: a refetch is open, and nothing has been guessed while it is.
+    expect(loads.length).withContext('the save must open a fresh book load').toBe(loadsBefore + 1);
+    expect(exportPip())
+      .withContext('until the server answers, the last known count is the only honest one')
+      .toBe('blocked');
+
+    // The server answers: the chapter now holds a renderable document.
+    resolveLatestLoad('book-1', bookWith(1));
+    fixture.detectChanges();
+
+    expect(exportPip())
+      .withContext('the count came from the exporter, so the spine and the endpoint now agree')
+      .toBe('ready');
+  }));
+
+  it('re-asks after a SCENE save, the other store the exporter may read', fakeAsync(() => {
+    // A scene write flips `ScenesHoldTheChaptersCurrentText`, so the count can move with no chapter
+    // event at all. `saveCurrentDocument`'s scene branch produces exactly this and nothing else.
+    openBook(0);
+    const loadsBefore = loads.length;
+
+    sync.sceneUpdated$.next({ bookId: 'book-1', chapterId: 'chap-1', sceneId: 'scene-1', updatedAt: '' });
+    fixture.detectChanges();
+    expect(loads.length)
+      .withContext('a scene write moves the exporter\'s answer, so it must open a fresh book load')
+      .toBe(loadsBefore + 1);
+
+    resolveLatestLoad('book-1', bookWith(1));
+    fixture.detectChanges();
+    expect(exportPip())
+      .withContext('the scene layer answered, so stage 5 must move with it')
+      .toBe('ready');
+  }));
+
+  it('drops back to blocked when the server says the last exportable chapter is gone', fakeAsync(() => {
+    // The refresh is not a one-way ratchet to `ready`: it is whatever the exporter now answers.
+    openBook(1);
+    expect(exportPip()).toBe('ready');
+    const loadsBefore = loads.length;
+
+    sync.chapterUpdated$.next({ bookId: 'book-1', chapterId: 'chap-1', wordCount: 0, updatedAt: '' });
+    // Asserted BEFORE resolving: the book load opened at navigation is a Subject that never completes,
+    // so without this the payload below would reach that subscription instead and the spine would update
+    // whether or not the save refreshed anything. This is the assertion that makes the next one mean it.
+    expect(loads.length)
+      .withContext('the save must open a fresh book load of its own')
+      .toBe(loadsBefore + 1);
+    resolveLatestLoad('book-1', bookWith(0));
+    fixture.detectChanges();
+
+    expect(exportPip())
+      .withContext('a stale READY is the failure that sent an author to a 409, so it must fall back too')
+      .toBe('blocked');
+  }));
+
+  // ── D20: the one path that DID refetch rebuilt everything except the spine ─────────────────────────
+
+  it('rebuilds the spine on the refetch path itself, not only on the next activeJobs$ emission (D20)', fakeAsync(() => {
+    // `chapterCreated$` already called `refreshBook()` before this change, and `refreshBook()` assigned
+    // the book and rebuilt only the review-mode options - so the ONE path that re-asked the server left
+    // the spine rendering the counts from book load. Nothing here touches the job registry, so an
+    // `activeJobs$` rebuild cannot be what makes this pass.
+    openBook(0);
+    expect(exportPip()).toBe('blocked');
+    const loadsBefore = loads.length;
+
+    sync.chapterCreated$.next({ bookId: 'book-1', chapterId: 'chap-2', title: 'Chapter two', order: 1 });
+    // Same guard as above: the payload must land on the REFRESH's own load, not on the one still open
+    // from navigation, or this would pass on a page that never refreshed at all.
+    expect(loads.length).withContext('the refetch path must open its own book load').toBe(loadsBefore + 1);
+    resolveLatestLoad('book-1', bookWith(1));
+    fixture.detectChanges();
+
+    expect(exportPip()).toBe('ready');
+  }));
+
+  // ── Scoping and cost ──────────────────────────────────────────────────────────────────────────────
+
+  it('ignores an event for a DIFFERENT book, so a collaborator elsewhere cannot refetch this one', fakeAsync(() => {
+    openBook(0);
+    const loadsBefore = loads.length;
+
+    sync.chapterUpdated$.next({ bookId: 'book-2', chapterId: 'other', wordCount: 10, updatedAt: '' });
+    fixture.detectChanges();
+
+    expect(loads.length).withContext('no request may be made for a book this route is not on').toBe(loadsBefore);
+    expect(exportPip()).toBe('blocked');
+  }));
+
+  it('coalesces a burst into at most two round trips, and the LAST answer is the one rendered', fakeAsync(() => {
+    // An import emits one ChapterCreated per chapter and a split one SceneCreated per scene, so these
+    // arrive in bursts. A refresh asked for while one is in flight is remembered, not dropped and not
+    // multiplied: three events during one open request must not mean three more requests.
+    openBook(0);
+    const loadsBefore = loads.length;
+
+    sync.chapterCreated$.next({ bookId: 'book-1', chapterId: 'chap-2', title: 'Two', order: 1 });
+    sync.chapterCreated$.next({ bookId: 'book-1', chapterId: 'chap-3', title: 'Three', order: 2 });
+    sync.chapterCreated$.next({ bookId: 'book-1', chapterId: 'chap-4', title: 'Four', order: 3 });
+    expect(loads.length).withContext('one in flight; the other two are queued behind it').toBe(loadsBefore + 1);
+
+    // The first lands mid-burst carrying a stale answer; the queued follow-up then runs exactly once.
+    resolveLatestLoad('book-1', bookWith(0));
+    fixture.detectChanges();
+    expect(loads.length).withContext('the queue collapses to ONE follow-up, not two').toBe(loadsBefore + 2);
+    expect(exportPip()).toBe('blocked');
+
+    resolveLatestLoad('book-1', bookWith(3));
+    fixture.detectChanges();
+    expect(exportPip()).withContext('the state finally read is the newest one').toBe('ready');
+  }));
 });

@@ -52,11 +52,24 @@ const ANALYSIS_TYPE_TO_TASK: Readonly<Record<string, AiTaskKey>> = {
  * The values that are KNOWN to run with no user-facing tier at all: the server surfaces no tier row for
  * them, and that absence is a fact the app can state rather than a gap in its own knowledge.
  *
- * `Summarization` and `Custom` are the two analysis types the picker offers that land here; `QA` is an
- * AiTaskType a surface can bind directly. Together with the keys of {@link ANALYSIS_TYPE_TO_TASK} this
- * list PARTITIONS the vocabulary the client knows: every value in `ANALYSIS_TYPES` is in exactly one of
- * the two, which `ai-task-key.spec.ts` pins mechanically off that source so a seventh analysis type
- * cannot land in neither.
+ * `Summarization` is the analysis type the picker offers that lands here; `QA` is an AiTaskType a
+ * surface can bind directly. Together with the keys of {@link ANALYSIS_TYPE_TO_TASK} this list
+ * PARTITIONS the vocabulary the client knows: every value in `ANALYSIS_TYPES` is in exactly one of the
+ * two, which `ai-task-key.spec.ts` pins mechanically off that source so a seventh analysis type cannot
+ * land in neither.
+ *
+ * `Custom` STAYS in this list even though Wave 3 / w7 made it unstartable. Two reasons, and the second
+ * is the load-bearing one: it is still in `ANALYSIS_TYPES` (a persisted result carries it, and the
+ * history tab names and filters by it), so removing it here would break the partition the spec pins;
+ * and a surface that asks about a Custom result must still be told "this pass has no tier", which is a
+ * fact, rather than "never heard of it", which is {@link isKnownNoTierTask}'s other answer.
+ *
+ * `QA` STAYS too, but not for the reason once written here ("QA needs it independently ... untouched by
+ * w7"). That was false as of the commit that wrote it: this same w7 commit deleted the client's only
+ * caller (`BookService.ask`), so nothing in this client binds `QA` as a task key today - a whole-`src/`
+ * grep for `'QA'` returns only this line outside of tests. The server surface is genuinely untouched
+ * (`POST /api/books/{id}/ask`, `AnalysisType.QA`), so the entry is inert rather than wrong, and keeping
+ * it correct costs nothing against the day a client surface binds `QA` again.
  */
 export const NO_TIER_TASK_VALUES = ['Summarization', 'Custom', 'QA'] as const;
 

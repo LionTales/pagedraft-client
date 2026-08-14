@@ -21,13 +21,8 @@ describe('AnalysisService', () => {
     http.verify();
   });
 
-  it('should GET templates', () => {
-    service.getTemplates().subscribe();
-
-    const req = http.expectOne('/api/templates');
-    expect(req.request.method).toBe('GET');
-    req.flush([]);
-  });
+  // Wave 3 / w7: a 'should GET templates' case LIVED HERE, over `getTemplates()`. The method went with
+  // the save-as-template button; `/api/templates` is still served, this client just never calls it.
 
   it('should GET history without filters', () => {
     service.getHistory('book-1', 'chap-1', null, null).subscribe();

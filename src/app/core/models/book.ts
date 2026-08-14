@@ -136,6 +136,30 @@ export interface BookDto extends BookBaseDto {
  */
 export interface BookDetailDto extends BookBaseDto {
   chapters: ChapterSummaryDto[];
+  /**
+   * How many chapters THE EXPORTER could put in a file, computed server-side by
+   * `BookExportService.CountExportableChaptersAsync`, scene rule included. That method calls the SAME
+   * underlying rule the export endpoints do, `RenderableUnitsOf`, but it is not literally the endpoints' own
+   * helper: the endpoints route through `ResolveUnitsFor`, a wrapper one level up that also logs a warning
+   * when both copies of a chapter look written. `ResolveUnitsFor` is exactly
+   * `WarnIfBothCopiesLookWritten(...); return RenderableUnitsOf(...)`, and today that warning call is a
+   * no-op (it returns void and mutates nothing), so the two callers agree - but that agreement is held by
+   * TESTS (`BookExportServiceTests.cs`), not by construction. A filter added inside `ResolveUnitsFor`, or a
+   * `ConvertSfdtToDocx` failure that leaves the export with zero buffers, would reopen the drift with no
+   * compile error.
+   *
+   * NOT DERIVABLE from {@link ChapterSummaryDto}, which is why it is on the payload while the two M1 counts
+   * are not: "carries text" (`wordCount > 0`) and "can be rendered into a document" are different questions,
+   * and a book imported and never opened in the editor satisfies the first and fails the second. The stage
+   * spine's Export stage used to read `ready` on exactly that book while the export endpoint answered 409
+   * `nothingWritten` (w8 / F2). The spine reads this instead.
+   *
+   * OPTIONAL because an older server does not send it, and because that is the honest degradation: absent
+   * means NOT KNOWN, which stage 5 renders as `unknown` rather than as "nothing can be exported". The books
+   * list never carries it at all - the count cannot be expressed in SQL and would make the list read every
+   * manuscript on it.
+   */
+  exportableChapterCount?: number;
 }
 
 export interface ChapterSummaryDto {
@@ -285,11 +309,9 @@ export interface SummarizeBookRequest {
   language?: string | null;
 }
 
-/** POST /api/books/{bookId}/ask */
-export interface AskBookRequest {
-  question: string;
-  language?: string | null;
-}
+// Wave 3 / w7 (Q5): `AskBookRequest` LIVED HERE, describing the body of `POST /api/books/{bookId}/ask`.
+// The endpoint stays and still runs `AnalysisType.QA`; the dashboard card that was this client's only
+// caller of it does not, so the shape has no writer left. See `BookService` for the same note.
 
 /** Parsed from BookProfileDto.charactersJson (CharacterAnalysisResult). */
 export interface CharacterAnalysisResult {

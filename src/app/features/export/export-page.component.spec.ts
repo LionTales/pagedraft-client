@@ -43,7 +43,17 @@ function chapter(order: number, overrides: Partial<ChapterSummaryDto> = {}): Cha
   };
 }
 
-function book(language: string, chapters: ChapterSummaryDto[]): BookDetailDto {
+function book(
+  language: string,
+  chapters: ChapterSummaryDto[],
+  // NULL means "this server sent no count at all", conceptually distinct from zero - though not a state
+  // the current API can actually produce (see the "NAMED, NOT LIVE" note on the test that exercises it
+  // below); it stays a real, useful defensive fallback. It has to be spelled as null rather than as
+  // `undefined`, because passing `undefined` to an optional parameter re-triggers its default and would
+  // silently seed "all of them".
+  exportable: number | null = chapters.length,
+): BookDetailDto {
+  const exportableChapterCount = exportable ?? undefined;
   return {
     id: BOOK_ID,
     title: 'A Book',
@@ -53,6 +63,10 @@ function book(language: string, chapters: ChapterSummaryDto[]): BookDetailDto {
     updatedAt: '2026-08-01T10:00:00Z',
     aiTier: 'fast',
     chapters,
+    // The EXPORTER's own count (w8 / F2). It defaults to "all of them" so the existing cases read as the
+    // written books they were always meant to be, and the cases that care pass it explicitly - including
+    // `undefined`, which is a server that does not send it.
+    exportableChapterCount,
   };
 }
 
@@ -147,8 +161,12 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
   });
 
   /** Land the book payload and render. */
-  function loadBook(language = 'he', chapters: ChapterSummaryDto[] = [chapter(0), chapter(1), chapter(2)]): void {
-    bookSubject.next(book(language, chapters));
+  function loadBook(
+    language = 'he',
+    chapters: ChapterSummaryDto[] = [chapter(0), chapter(1), chapter(2)],
+    exportable: number | null = chapters.length,
+  ): void {
+    bookSubject.next(book(language, chapters, exportable));
     bookSubject.complete();
     fixture.detectChanges();
   }
@@ -343,6 +361,50 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       click('export-download-chapter-docx');
       expect(el('export-error-chapter-docx')!.textContent!.trim())
         .toBe(EXPORT_ERRORS.nothingWrittenChapter.en);
+    });
+
+    /**
+     * final-r01. THE SENTENCES ABOVE ARE PINNED TO THEMSELVES, so this pins the CLAIM they make.
+     *
+     * <p>Every assertion above compares the rendered text to the very constant the component renders
+     * (`toBe(EXPORT_ERRORS.nothingWrittenBook.he)`), which is the `f(x) == f(x)` shape this plan removed
+     * from the API's own strip suite. It is the right assertion for the WIRING - it proves this fault code,
+     * in this language, reaches this row - and it says nothing at all about the words. Measured: reverting
+     * both sentences to "The book has chapters, but nothing has been written in them yet" left the whole
+     * export spec green at 49 SUCCESS.</p>
+     *
+     * <p>That wording is not a style preference. The exporter's test is "no renderable block", not a word
+     * count, so a chapter imported from a DOCX and never opened HAS the author's words in it and still
+     * cannot be put in a file. `stage-spine.copy.ts` states the same thing one viewport away, and the two
+     * surfaces contradicting each other over one server condition is the finding (D7) this todo fixed.</p>
+     *
+     * <p>The English is pinned by literal; the Hebrew is pinned only by the phrase that carries the claim,
+     * because it is still `// DRAFT he` and the owner's native sweep is expected to reword around it.</p>
+     */
+    it('says what the exporter actually means, not that nothing was written (D7)', () => {
+      const retired = 'nothing has been written';
+      const heClaim = 'תוכן שאפשר לכתוב לקובץ'; // "content that can be written to a file"
+
+      expect(EXPORT_ERRORS.nothingWrittenBook.en).toBe(
+        'The book has chapters, but none of them holds anything that can go into a file yet, so the file ' +
+        'would have come out empty. Write in a chapter, or import a manuscript, then try again.');
+      expect(EXPORT_ERRORS.nothingWrittenChapter.en).toBe(
+        'This chapter holds nothing that can go into a file yet, so the file would have come out empty. ' +
+        'Write in it, or pick another chapter, then try again.');
+
+      for (const [name, copy] of [
+        ['nothingWrittenBook', EXPORT_ERRORS.nothingWrittenBook],
+        ['nothingWrittenChapter', EXPORT_ERRORS.nothingWrittenChapter],
+      ] as const) {
+        expect(copy.en.toLowerCase())
+          .withContext(`${name} (en) is back to the claim the exporter contradicts: a chapter can hold the ` +
+            'author\'s words and still hold nothing renderable')
+          .not.toContain(retired);
+        expect(copy.he)
+          .withContext(`${name} (he) must still say what CAN go into a file, whatever the native sweep ` +
+            'does to the rest of the sentence')
+          .toContain(heClaim);
+      }
     });
 
     it('leaves an error on the row that produced it, not on the other kind', () => {
@@ -672,6 +734,35 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       expect(el('spine-compact-pip-export')!.dataset['state']).toBe('blocked');
       const spine = el('stage-spine-compact')!;
       expect(spine.querySelectorAll('[data-state="ready"]').length).toBe(0);
+    });
+
+    /**
+     * THE STATE THE LIVE GATE FOUND (w8 / F2), on the very screen that spends the request: three chapters
+     * with word counts, and nothing in any of them that the exporter could render. The spine read
+     * `ייצוא: מוכן` while `GET /api/document/export/book/{id}` answered 409 `nothingWritten`. It reads the
+     * server's own count now, so this screen cannot promise what its own button will refuse.
+     */
+    it('does not read stage 5 as ready when the server says no chapter can be exported', () => {
+      loadBook('he', [chapter(0), chapter(1), chapter(2)], 0);
+      expect(el('spine-compact-pip-export')!.dataset['state']).toBe('blocked');
+      // Stage 1 stays `ready`, and that is the point: the book HAS a manuscript and still cannot be
+      // exported. The two stages read different numbers and neither is made to agree with the other.
+      expect(el('spine-compact-pip-import')!.dataset['state']).toBe('ready');
+    });
+
+    /**
+     * An older server sends no count at all. Not known is not the same as nothing, and neither is ready.
+     *
+     * NAMED, NOT LIVE: `BookDetailDto.ExportableChapterCount` on the API is a non-nullable `int` with no
+     * `JsonIgnoreCondition`, and `BookExportService` has exactly one construction site for it, so it
+     * always serialises against this API - no deployed server actually omits it. This test exercises the
+     * defensive fallback (the optional client field, the `?? null` at every read site) rather than a
+     * state a real payload can produce. Keeping the fallback is still correct defensive coding; this note
+     * is here so the branch is not mistaken for live coverage.
+     */
+    it('reads stage 5 as not known when the payload carries no exportable count', () => {
+      loadBook('he', [chapter(0), chapter(1), chapter(2)], null);
+      expect(el('spine-compact-pip-export')!.dataset['state']).toBe('unknown');
     });
   });
 

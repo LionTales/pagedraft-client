@@ -92,6 +92,9 @@ const ANALYSIS_TYPE_ICONS: Record<string, string> = {
   LinguisticAnalysis: '📐',
   LiteraryAnalysis:   '📚',
   Summarization:      '📝',
+  // Wave 3 / w7 made Custom unstartable, so no NEW job can wear this glyph. Kept rather than deleted:
+  // this map is keyed by `analysisType` and the fallback for an unmapped type is the generic kind
+  // icon, so the only thing removing it could change is how a Custom row looks if one ever appears.
   Custom:             '💬',
 };
 

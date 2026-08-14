@@ -53,7 +53,7 @@ function chapters(count: number, running: string[] = []): ChapterPassSignal[] {
 
 function signals(overrides: Partial<StageSpineSignals> = {}): StageSpineSignals {
   return {
-    chapters: null, chaptersWithText: null, summary: null, review: null,
+    chapters: null, chaptersWithText: null, chaptersExportable: null, summary: null, review: null,
     // The SHIPPED build fact, so every case below renders the spine the way users get it (w4).
     summaryRunning: false, reviewRunning: false, exportSurfaceAvailable: EXPORT_SURFACE_AVAILABLE, ...overrides,
   };
@@ -62,7 +62,7 @@ function signals(overrides: Partial<StageSpineSignals> = {}): StageSpineSignals 
 /** A fully built, fully current book: every stage that CAN be ready, is. */
 function healthyBook(): StageSpineSignals {
   return signals({
-    chapters: chapters(4), chaptersWithText: 4, summary: summary(), review: review(),
+    chapters: chapters(4), chaptersWithText: 4, chaptersExportable: 4, summary: summary(), review: review(),
   });
 }
 
@@ -78,6 +78,7 @@ function mixedStatesBook(): StageSpineSignals {
   return signals({
     chapters: chapters(4),
     chaptersWithText: 4,
+    chaptersExportable: 4,
     summary: summary({ ready: false, staleCount: 2 }),
     review: review({ hasBriefs: false }),
   });
@@ -438,24 +439,104 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
      * has any text yet", and the download it offered was an empty file.
      */
     it('does not read ready on a book whose chapters are all empty, and says why', () => {
-      render(signals({ chapters: chapters(3), chaptersWithText: 0 }));
+      render(signals({ chapters: chapters(3), chaptersWithText: 0, chaptersExportable: 0 }));
       expand('export');
       expect(stateOf('export')).toBe('blocked');
       expect(root().querySelectorAll('[data-state="ready"]').length).toBe(0);
-      // The blocked sentence names the prerequisite; the detail says what is actually missing, so a
-      // blocked row on a book that plainly HAS chapters does not read as the spine being wrong.
-      expect(text('[data-testid="spine-blocked-export"]')).toContain(STAGE_NAMES['import'].he);
+      // The prerequisite sentence names the missing CONTENT (final-r03), and the detail carries the count,
+      // so a blocked row on a book that plainly HAS chapters does not read as the spine being wrong.
+      expect(text('[data-testid="spine-blocked-export"]').length).toBeGreaterThan(10);
       const detail = text('[data-testid="spine-export-detail"]');
       expect(detail).toContain('3');
       expect(detail.length).toBeGreaterThan(10);
     });
 
+    /**
+     * THE CLOSING RENDER GATE'S FINDING (final-r03), pinned at the rendered surface it was seen on.
+     *
+     * On a book with eight imported chapters and `exportableChapterCount: 0`, ONE viewport showed stage 1
+     * "Ready" and stage 5 "Blocked" plus "Needs first: Import" over a button labelled "Import a manuscript".
+     * Every part of that except the state was wrong: the named prerequisite was the finished stage four rows
+     * above, and the offered action was to redo it.
+     *
+     * Asserted as the CONTRADICTION rather than as the new wording: the stage-1 name must not appear in
+     * stage 5's prerequisite sentence, and stage 1 must still read ready. Both languages, because the
+     * defect rendered in both.
+     */
+    it('does not name a FINISHED stage under stage 5 on a book whose manuscript is already in', () => {
+      for (const lang of ['he', 'en'] as const) {
+        render(signals({ chapters: chapters(8), chaptersWithText: 8, chaptersExportable: 0 }), lang);
+        expand('import');
+        expect(stateOf('import')).withContext(lang).toBe('ready');
+        expand('export');
+        expect(stateOf('export')).withContext(lang).toBe('blocked');
+
+        const sentence = text('[data-testid="spine-blocked-export"]');
+        expect(sentence.length).withContext(`${lang}: the row must still say what is missing`).toBeGreaterThan(10);
+        expect(sentence)
+          .withContext(`${lang}: stage 5 names the Import stage while stage 1 reads ready`)
+          .not.toContain(STAGE_NAMES['import'][lang]);
+        // And nothing offers the step that is already complete.
+        expect(fixture.debugElement.query(By.css('[data-testid="spine-action-export"]')))
+          .withContext(`${lang}: a blocked-on-content row offers no action, least of all re-importing`)
+          .toBeNull();
+      }
+    });
+
+    /**
+     * The other pole, at the same surface: with NO chapters, naming Import and offering the upload is
+     * correct and must survive every future edit to the sentence above. One test holds both poles so a
+     * change that collapses them fails here and says which one moved.
+     */
+    it('still names Import and offers the upload when the book has no chapters at all', () => {
+      for (const lang of ['he', 'en'] as const) {
+        render(signals({ chapters: [], chaptersWithText: 0 }), lang);
+        expand('export');
+        expect(stateOf('export')).withContext(lang).toBe('blocked');
+        expect(text('[data-testid="spine-blocked-export"]'))
+          .withContext(`${lang}: with no chapters, Import IS the missing step`)
+          .toContain(STAGE_NAMES['import'][lang]);
+        const action = fixture.debugElement.query(By.css('[data-testid="spine-action-export"]'));
+        expect(action).withContext(`${lang}: and the upload is the fix`).not.toBeNull();
+        // Asserted through the INTENT the button raises, not through its label read back off the same map
+        // that drew it.
+        const emitted: StageActionEvent[] = [];
+        component.stageAction.subscribe(e => emitted.push(e));
+        (action.nativeElement as HTMLElement).click();
+        expect(emitted).withContext(lang).toEqual([{ stage: 'export', action: 'open-import' }]);
+      }
+    });
+
+    /**
+     * The two prerequisite sentences must DIFFER, in both languages. Asserted as a difference rather than
+     * against the constants that render them: comparing a rendered string to the same map it came from is
+     * the vacuity shape this cycle has already hit twice, and it would pass just as happily if both cases
+     * rendered one sentence again.
+     */
+    it('gives the two blocked cases two different sentences, in both languages', () => {
+      for (const lang of ['he', 'en'] as const) {
+        render(signals({ chapters: [], chaptersWithText: 0 }), lang);
+        expand('export');
+        const noChapters = text('[data-testid="spine-blocked-export"]');
+
+        render(signals({ chapters: chapters(8), chaptersWithText: 8, chaptersExportable: 0 }), lang);
+        expand('export');
+        const noContent = text('[data-testid="spine-blocked-export"]');
+
+        expect(noChapters.length).withContext(lang).toBeGreaterThan(10);
+        expect(noContent.length).withContext(lang).toBeGreaterThan(10);
+        expect(noContent)
+          .withContext(`${lang}: the content case borrowed the chapters case's sentence again`)
+          .not.toBe(noChapters);
+      }
+    });
+
     it('says the same thing in English, and says nothing extra once a chapter carries text', () => {
-      render(signals({ chapters: chapters(3), chaptersWithText: 0 }), 'en');
+      render(signals({ chapters: chapters(3), chaptersWithText: 0, chaptersExportable: 0 }), 'en');
       expand('export');
       expect(text('[data-testid="spine-export-detail"]').toLowerCase()).toContain('empty');
 
-      render(signals({ chapters: chapters(3), chaptersWithText: 1 }), 'en');
+      render(signals({ chapters: chapters(3), chaptersWithText: 1, chaptersExportable: 1 }), 'en');
       expand('export');
       expect(stateOf('export')).toBe('ready');
       expect(fixture.debugElement.query(By.css('[data-testid="spine-export-detail"]'))).toBeNull();
@@ -646,13 +727,13 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       for (const id of SPINE_STAGE_ORDER) {
         for (const seed of [
           signals({ chapters: [], chaptersWithText: 0 }),
-          signals({ chapters: chapters(3, ['ch-0']), chaptersWithText: 0 }),
+          signals({ chapters: chapters(3, ['ch-0']), chaptersWithText: 0, chaptersExportable: 0 }),
           signals({
-            chapters: chapters(3), chaptersWithText: 3,
+            chapters: chapters(3), chaptersWithText: 3, chaptersExportable: 3,
             summary: summary({ ready: false, staleCount: 2, summaryCoversBuiltChapters: false, builtWithDifferentModel: true }),
             review: review({ ready: false, staleVsBriefs: true, builtWithDifferentModel: true }),
           }),
-          signals({ chapters: chapters(3), chaptersWithText: 3, summary: summary(), review: review(), exportSurfaceAvailable: true }),
+          signals({ chapters: chapters(3), chaptersWithText: 3, chaptersExportable: 3, summary: summary(), review: review(), exportSurfaceAvailable: true }),
         ]) {
           render(seed, lang);
           expand(id);
@@ -925,6 +1006,14 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
     const emptyBookRow = () => signals({ chapters: null, chapterCount: 0, chaptersWithText: 0 });
     /** A books-list row for a book with REAL WORK in it: chapters, all of them written. */
     const workedBookRow = () => signals({ chapters: null, chapterCount: 5, chaptersWithText: 5 });
+    /**
+     * The same worked book on a surface that LOADED it, so stage 5's count is there too. The books-list
+     * row above cannot have it: the exportable count is not on that payload (w8 / F2), so stage 5 reads
+     * `unknown` there and its pip is one of the hollow ones.
+     */
+    const workedBookSurface = () => signals({
+      chapters: chapters(5), chapterCount: 5, chaptersWithText: 5, chaptersExportable: 5,
+    });
 
     it('THE FINDING: the empty book never shows more filled pips than a book with real work', () => {
       // This is the defect stated as an assertion. The states themselves are unchanged and honest -
@@ -932,18 +1021,31 @@ describe('StageSpineComponent (Wave 3 / w2)', () => {
       renderCompact(emptyBookRow());
       const empty = filledPips();
       expect(empty).toEqual(['not-started']);   // only the stage that is actually asking for a move
+      expect(empty).not.toContain('ready');     // and nothing on this book is painted as progress
 
       renderCompact(workedBookRow());
+      const workedRow = filledPips();
+      // One, not two: stage 1 is real on the books list and stage 5 is not known there.
+      expect(workedRow).toEqual(['ready']);
+      // NOT `toBeLessThan` on this surface: the books-list row has exactly one filled pip both empty
+      // (`not-started`) and worked (`ready`), so the strict w3 density guarantee ("empty never shows MORE
+      // filled pips, and shows fewer") does not hold here - it holds one-directionally, on COUNT alone.
+      // `expect(empty).not.toContain('ready')` above is what still proves the two are not painted the
+      // same: an empty book's one filled pip is `not-started`, never `ready`, even though the counts tie.
+      // The strict `toBeLessThan` guarantee returns below, on `workedBookSurface`, which has a real stage
+      // 5 count and two filled pips.
+      expect(empty.length).toBeLessThanOrEqual(workedRow.length);
+
+      renderCompact(workedBookSurface());
       const worked = filledPips();
       expect(worked).toEqual(['ready', 'ready']);
-
       expect(empty.length).toBeLessThan(worked.length);
     });
 
     it('holds in English too, since the pips are the same drawing in both directions', () => {
       renderCompact(emptyBookRow(), 'en');
       const empty = filledPips();
-      renderCompact(workedBookRow(), 'en');
+      renderCompact(workedBookSurface(), 'en');
       expect(empty.length).toBeLessThan(filledPips().length);
     });
 

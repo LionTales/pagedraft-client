@@ -246,6 +246,7 @@
             [bookTitle]="book.title"
             [bookLanguage]="book.language"
             [chapters]="book.chapters"
+            [exportableChapterCount]="book.exportableChapterCount ?? null"
             [focusBaselineToken]="focusBaselineToken"
             (openChapter)="onOpenChapterFromDashboard($event)"
             (openImport)="goToImport()"

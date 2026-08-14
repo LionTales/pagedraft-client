@@ -215,6 +215,9 @@ export class ProductChatComponent implements OnDestroy {
   /** Scroll container for the transcript, so a new turn is not left below the fold. */
   @ViewChild('scroller') scroller?: ElementRef<HTMLElement>;
 
+  /** The composer's textarea, so a repeated "open Show" can move focus into it (finding C13). */
+  @ViewChild('composerInput') composerInput?: ElementRef<HTMLTextAreaElement>;
+
   /**
    * App-level chrome language. Hebrew-default per the app-level i18n convention (see the class doc).
    * Hardcoded for now because no global i18n service exists; change here when one is added. Kept
@@ -296,6 +299,16 @@ export class ProductChatComponent implements OnDestroy {
         this.confirmingReset = false;
         this.cdr.markForCheck();
       }
+    });
+
+    // C13: "Open Show" clicked while the assistant tab is already showing is a no-op on
+    // `activeTab$`/`isTabShowing$` (the state does not change), so without this the pointer's button
+    // did nothing perceptible in that case. `tabOpenRequested$` fires on every call regardless, so this
+    // covers BOTH the already-open case and the freshly-opened one (the composer is torn out of the DOM
+    // by `@if (isTabShowing$ | async)` while closed, so it needs the same deferred-focus handling
+    // either way; see {@link focusComposer}).
+    this.overlays.tabOpenRequested$.pipe(takeUntil(this.destroy$)).subscribe(tab => {
+      if (tab === 'assistant') this.focusComposer();
     });
 
     this.bookContext.currentBook$
@@ -967,6 +980,19 @@ export class ProductChatComponent implements OnDestroy {
       const el = this.scroller?.nativeElement;
       if (el) el.scrollTop = el.scrollHeight;
     });
+  }
+
+  /**
+   * Move focus into the composer (finding C13).
+   *
+   * Deferred a frame for the same reason {@link scrollToLatest} is: the composer does not exist in the
+   * DOM at all while the assistant tab is closed (`@if (isTabShowing$ | async)`), so a freshly-opened
+   * dock needs a tick for Angular to render it before `nativeElement` resolves to anything. The
+   * already-open case does not strictly need the defer, but there is no reason for it to take a
+   * different path than the one that does.
+   */
+  private focusComposer(): void {
+    setTimeout(() => this.composerInput?.nativeElement?.focus());
   }
 
   ngOnDestroy(): void {
