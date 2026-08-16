@@ -199,14 +199,6 @@
   white-space: nowrap;
 }
 
-.review-context-meta {
-  flex: 0 0 auto;
-  font-family: var(--pd-font-mono);
-  font-size: var(--pd-text-caption);
-  line-height: var(--pd-lh-caption);
-  color: var(--pd-text-muted);
-}
-
 .review-body {
   flex: 1;
   min-height: 0;

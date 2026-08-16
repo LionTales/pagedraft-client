@@ -2399,6 +2399,176 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       expect(running).toEqual(['ch-1']);
     });
   });
+
+  // ── 5. Q12 close: ONE scope statement, never a chapter/scene contradiction ─────────────────────
+  //
+  // The scope pill used to read "This chapter" / "פרק נוכחי" unconditionally in edit mode while the
+  // adjacent meta line correctly said "scene" once a scene was selected - the exact single-screen
+  // contradiction WAVE3_REDESIGN_BRIEF.md's Q12 row was written to resolve, and that the Wave 3 docs
+  // pass found still reproducible. reviewScopeLabel + reviewContextMeta are retired; one getter
+  // (reviewScopeStatement) now owns the whole pill, so it cannot describe two different scopes at
+  // once. These specs pin the new shape and assert the ABSENCE of the old contradiction directly.
+  describe('reviewScopeStatement (Q12 close): the pill never contradicts the selection', () => {
+    // f01: a realistic Hebrew chapter title, not the unrepresentative 'Chapter one'. Hebrew
+    // manuscripts overwhelmingly title chapters with "פרק" (the DOCX parser splits on that
+    // marker), and .review-context-label legitimately renders it beside the scene title by
+    // design (`${chapterLabel} · ${sceneLabel}`, reviewContextLabel) - so a regression guard
+    // that scans .review-context's full text for "פרק" would go red against correct code once
+    // the fixture carries a realistic title. See the re-scoped guards below.
+    const CHAPTER_BOOK: BookDetailDto = {
+      ...BOOK,
+      chapters: [{ id: 'chap-1', title: 'פרק ראשון', partName: null, order: 0, wordCount: 900, updatedAt: '' }],
+    };
+
+    beforeEach(() => {
+      component.bookId = 'book-1';
+      component.book = CHAPTER_BOOK; // Hebrew book (BOOK.language = 'he'): reviewPanelIsHebrew defaults true
+      component.reviewMode = 'edit';
+      component.selectedChapterId = 'chap-1';
+    });
+
+    it('names the chapter when no scene is selected', () => {
+      component.selectedSceneId = null;
+      fixture.detectChanges();
+
+      expect(el().querySelector('.scope-pill')?.textContent?.trim()).toBe('פרק נוכחי');
+      // The old subtitle span is gone: the pill is the ONLY scope statement now.
+      expect(has('.review-context-meta')).toBe(false);
+    });
+
+    it('names the scene, never the chapter, once a scene is selected - the exact former contradiction', () => {
+      component.selectedSceneId = 'sc-1';
+      fixture.detectChanges();
+
+      const pill = el().querySelector('.scope-pill');
+      // Existence claim first: querySelector(...)?.textContent on a vanished element is
+      // `undefined`, and `expect(undefined).not.toContain(x)` passes vacuously - it would not
+      // catch the pill disappearing entirely.
+      expect(pill).withContext('the pill must still render').not.toBeNull();
+      expect(pill?.textContent?.trim()).toBe('סצנה נוכחית');
+      // Regression guard: the app's OWN scope statement (the pill) may never say "chapter" while
+      // a scene is selected. Scoped to .scope-pill, NOT .review-context: .review-context also
+      // contains .review-context-label, which legitimately renders the chapter title beside the
+      // scene title BY DESIGN (`${chapterLabel} · ${sceneLabel}`, reviewContextLabel), and a
+      // realistic Hebrew chapter title routinely contains "פרק". A guard over .review-context
+      // would be scoped over the author's own content, not the app's scope statement.
+      expect(pill?.textContent).not.toContain('פרק');
+      expect(has('.review-context-meta')).toBe(false);
+    });
+
+    it('states the whole-book scope in review mode, in one string', () => {
+      component.reviewMode = 'review';
+      fixture.detectChanges();
+
+      expect(el().querySelector('.scope-pill')?.textContent?.trim()).toBe('כל הספר · ניתוח התפתחותי');
+      expect(has('.review-context-meta')).toBe(false);
+    });
+
+    it('he/en parity: English book renders the English scope statement, scene-aware', () => {
+      component.book = { ...CHAPTER_BOOK, language: 'en' };
+      component.selectedSceneId = null;
+      fixture.detectChanges();
+      expect(el().querySelector('.scope-pill')?.textContent?.trim()).toBe('This chapter');
+
+      component.selectedSceneId = 'sc-1';
+      fixture.detectChanges();
+      const scenePill = el().querySelector('.scope-pill');
+      // Existence claim first: see the Hebrew spec above for why a bare `?.textContent` check
+      // passes vacuously once the queried element stops rendering.
+      expect(scenePill).withContext('the pill must still render').not.toBeNull();
+      expect(scenePill?.textContent?.trim()).toBe('This scene');
+      // Scoped to .scope-pill, not .review-context: see the Hebrew spec above - the chapter
+      // title legitimately appears in the adjacent .review-context-label by design.
+      expect(scenePill?.textContent).not.toContain('chapter');
+    });
+
+    // ── c01: the THIRD edit-mode scope state - no chapter resolves ──────────────────────────────
+    //
+    // The Q12 close walked two of the three states. These seed the cell no fixture held: a book with an
+    // EMPTY chapters array (a chapterless book is what a new author sees first, and it is what every
+    // book looks like for the moment before its chapters load) and a book whose selectedChapterId
+    // matches nothing (a stale id). In both, the pill must not claim a chapter scope - it said
+    // "פרק נוכחי" beside a label reading "בחר פרק" until this fix.
+    it('c01 he: an EMPTY chapters array does not make the pill claim a chapter', () => {
+      component.book = { ...CHAPTER_BOOK, chapters: [] };
+      component.selectedChapterId = null;
+      component.selectedSceneId = null;
+      fixture.detectChanges();
+
+      const pill = el().querySelector('.scope-pill');
+      expect(pill).withContext('the pill is the strip\'s only scope statement; it must still render').not.toBeNull();
+      expect(pill?.textContent?.trim()).toBe('לא נבחרה יחידה');
+      expect(pill?.textContent).not.toContain('פרק');
+      // ...and it now agrees with its sibling label, which already resolved the chapter correctly.
+      expect(el().querySelector('.review-context-label')?.textContent?.trim()).toBe('בחר פרק');
+
+      // final-r01: with `selectedChapterId = null` the EMPTY ARRAY is not load-bearing - the pill is
+      // unresolved for the null id alone, and swapping the empty list for a populated one leaves this
+      // spec green (measured). So seed the state where the empty array is the ONLY reason nothing
+      // resolves: every chapter deleted while its id is still selected. Now a non-empty `chapters`
+      // resolves `chap-1` and the pill goes back to claiming a chapter, which is what makes the
+      // fixture's own subject - a chapterless book - the axis this spec actually pins.
+      component.selectedChapterId = 'chap-1';
+      fixture.detectChanges();
+
+      const pillAfterDelete = el().querySelector('.scope-pill');
+      expect(pillAfterDelete).not.toBeNull();
+      expect(pillAfterDelete?.textContent?.trim()).toBe('לא נבחרה יחידה');
+      expect(pillAfterDelete?.textContent).not.toContain('פרק');
+    });
+
+    it('c01 he: a selectedChapterId matching NO chapter does not make the pill claim a chapter', () => {
+      component.selectedChapterId = 'chap-does-not-exist';
+      component.selectedSceneId = null;
+      fixture.detectChanges();
+
+      const pill = el().querySelector('.scope-pill');
+      expect(pill).not.toBeNull();
+      expect(pill?.textContent?.trim()).toBe('לא נבחרה יחידה');
+      expect(pill?.textContent).not.toContain('פרק');
+    });
+
+    it('c01 en: the unresolved state has he/en parity, for both an empty list and a stale id', () => {
+      component.book = { ...CHAPTER_BOOK, language: 'en', chapters: [] };
+      component.selectedChapterId = null;
+      component.selectedSceneId = null;
+      fixture.detectChanges();
+
+      let pill = el().querySelector('.scope-pill');
+      expect(pill).not.toBeNull();
+      expect(pill?.textContent?.trim()).toBe('No unit selected');
+      expect(pill?.textContent?.toLowerCase()).not.toContain('chapter');
+      expect(el().querySelector('.review-context-label')?.textContent?.trim()).toBe('Select a chapter');
+
+      component.book = { ...CHAPTER_BOOK, language: 'en' };
+      component.selectedChapterId = 'chap-does-not-exist';
+      fixture.detectChanges();
+
+      pill = el().querySelector('.scope-pill');
+      expect(pill).not.toBeNull();
+      expect(pill?.textContent?.trim()).toBe('No unit selected');
+      expect(pill?.textContent?.toLowerCase()).not.toContain('chapter');
+    });
+
+    it('c01: a stale scene id cannot resurrect a scope claim when no chapter resolves', () => {
+      // The old getter branched on selectedSceneId ALONE, so this state read "סצנה נוכחית".
+      component.book = { ...CHAPTER_BOOK, chapters: [] };
+      component.selectedChapterId = null;
+      component.selectedSceneId = 'sc-1';
+      fixture.detectChanges();
+
+      expect(el().querySelector('.scope-pill')?.textContent?.trim()).toBe('לא נבחרה יחידה');
+    });
+
+    it('c01: review mode is unaffected by an unresolved chapter (the whole book is the scope)', () => {
+      component.book = { ...CHAPTER_BOOK, chapters: [] };
+      component.selectedChapterId = null;
+      component.reviewMode = 'review';
+      fixture.detectChanges();
+
+      expect(el().querySelector('.scope-pill')?.textContent?.trim()).toBe('כל הספר · ניתוח התפתחותי');
+    });
+  });
 });
 
 // ─── rf-f04: imported=1 query param decoupled from the ephemeral handoff card ─────────────────────
