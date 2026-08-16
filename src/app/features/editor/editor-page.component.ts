@@ -426,12 +426,65 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
     this.focusBaselineToken++;
   }
 
-  /** Scope pill text: this chapter (edit mode) vs whole book (review mode). */
-  get reviewScopeLabel(): string {
+  /**
+   * Q12 close (2026-08-15, WAVE3_REDESIGN_BRIEF.md's Q12 row): the scope pill's ENTIRE statement,
+   * in one string. This retires the old reviewScopeLabel + reviewContextMeta pair, which could
+   * describe two different scopes on the same screen: the pill read "This chapter" / "פרק נוכחי"
+   * unconditionally in edit mode, while the adjacent meta line correctly distinguished "scene" from
+   * "chapter" once a scene was selected - the exact single-screen contradiction Q12 was written to
+   * resolve, still reproducible until this fix. One getter now owns the whole statement, so it can
+   * no longer disagree with itself: a scene selection is named as a scene, never as a chapter.
+   *
+   * c01 (2026-08-16): the Q12 close named a closed set of edit-mode scope states and walked only two of
+   * them. The set is THREE - {no chapter resolved, chapter, chapter and scene} - and this getter used to
+   * branch on `selectedSceneId` alone, so with no chapter resolved it fell through to the chapter string.
+   * Observed live on the seeded chapterless book: the pill read "פרק נוכחי" beside its own sibling label
+   * reading "בחר פרק", with the sidebar saying there are no chapters at all. Persistent on every
+   * chapterless book (the first screen a new author sees) and transient on every book during load.
+   * The fix is not a second guess at the same question: both getters now read {@link resolvedScopeChapter},
+   * the ONE resolution, so they cannot disagree again.
+   *
+   * WHAT THE PILL SAYS WHEN NOTHING RESOLVES: it renders, and it NAMES THE ABSENCE ("לא נבחרה יחידה" /
+   * "No unit selected") rather than asserting any scope. It is not hidden: the pill is the strip's only
+   * scope statement, and a strip that silently loses it reads as "scope unchanged" to anyone who was
+   * looking at a chapter a moment ago, which is the same false claim in a quieter form. Naming the absence
+   * also keeps the pill and its sibling label saying the same thing in the unresolved state.
+   *
+   * WHAT c01 DID NOT CLOSE, stated so the closed set above is not read as wider than it is (final-r01,
+   * 2026-08-16): the shared resolution covers the CHAPTER axis only. The SCENE axis still has two
+   * different owners - this getter branches on the raw `selectedSceneId`, while {@link reviewContextLabel}
+   * resolves that id against `scenesByChapter[chapter.id]` and falls back to a generic "סצנה" / "Scene"
+   * when it finds nothing. So in the state {chapter resolves, scene id set, scene NOT in the loaded list}
+   * the pill asserts a scene scope with no scene behind it. VERDICT: left as is, deliberately. Every
+   * mutation site that can empty or replace a chapter's scene list already nulls `selectedSceneId` when
+   * the selected scene is gone (the delete, clear-all, hub-event and reconcile paths), so the state is
+   * defended rather than unreachable. Closing it the way the chapter axis was closed needs a decision
+   * this fix had no basis to make: when a scene id is loaded but unresolvable, the editor may still be
+   * showing that scene's content, so "פרק נוכחי" would be a false claim in the other direction. If the
+   * scene axis is ever given a shared resolution, decide that question first.
+   */
+  get reviewScopeStatement(): string {
     const he = this.reviewPanelIsHebrew;
-    return this.reviewMode === 'review'
-      ? (he ? 'כל הספר' : 'Whole book')
+    if (this.reviewMode === 'review') {
+      return he ? 'כל הספר · ניתוח התפתחותי' : 'Whole book · developmental';
+    }
+    if (!this.resolvedScopeChapter) {
+      return he ? 'לא נבחרה יחידה' : 'No unit selected'; // DRAFT he - needs native review
+    }
+    return this.selectedSceneId
+      ? (he ? 'סצנה נוכחית' : 'This scene') // DRAFT he - needs native review
       : (he ? 'פרק נוכחי' : 'This chapter');
+  }
+
+  /**
+   * c01: the SINGLE chapter resolution behind the context strip. {@link reviewScopeStatement} (the pill)
+   * and {@link reviewContextLabel} (the label beside it) both describe the same scope on the same strip,
+   * so they must answer "is there a chapter?" from the same place; a second independent guess is exactly
+   * how the pair came to contradict each other. `undefined` means no chapter resolves - either none is
+   * selected, or the selected id matches nothing in the loaded book (mid-load, or a stale id).
+   */
+  private get resolvedScopeChapter(): ChapterSummaryDto | undefined {
+    return this.book?.chapters?.find(c => c.id === this.selectedChapterId);
   }
 
   /**
@@ -443,7 +496,7 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
     if (this.reviewMode === 'review') {
       return this.book?.title || (he ? 'הספר כולו' : 'The whole book');
     }
-    const chapter = this.book?.chapters?.find(c => c.id === this.selectedChapterId);
+    const chapter = this.resolvedScopeChapter;
     if (!chapter) {
       return he ? 'בחר פרק' : 'Select a chapter';
     }
@@ -455,17 +508,6 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
       return `${chapterLabel} · ${sceneLabel}`;
     }
     return chapter.title || (he ? 'ללא כותרת' : 'Untitled'); // DRAFT he - needs native review
-  }
-
-  /** Mono meta line for the context strip: scope of the open unit (e.g. "scene" or "chapter"/whole book). */
-  get reviewContextMeta(): string {
-    const he = this.reviewPanelIsHebrew;
-    if (this.reviewMode === 'review') {
-      return he ? 'ניתוח התפתחותי' : 'developmental';
-    }
-    return this.selectedSceneId
-      ? (he ? 'סצנה' : 'scene')
-      : (he ? 'פרק' : 'chapter');
   }
 
   /** Localized labels for the Edit-help secondary sub-view toggle (analysis vs language engine). */
