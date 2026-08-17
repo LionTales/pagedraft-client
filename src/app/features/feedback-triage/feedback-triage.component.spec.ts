@@ -435,6 +435,34 @@ describe('FeedbackTriageComponent (Show C2)', () => {
       expect(el('ft-detail-error')).toBeTruthy();
       expect(rowIds().length).toBe(3);
     });
+
+    /**
+     * The stale half of that message, found by Bugbot on `pagedraft-client#45`. `detailError` renders in the
+     * LIST region, above the rows, and `load()` cleared only its own `loadError` - so the owner filtered or
+     * paged, the list came back perfectly, and "could not load that row" still sat on top of it naming a row
+     * they were no longer looking at.
+     *
+     * Driven through a FILTER change rather than by calling `load()` directly, because every list path
+     * funnels through that one method and this is the path an owner actually takes.
+     */
+    it('drops the detail error once the list reloads under it', () => {
+      start();
+      all('[data-testid="ft-row-open"]')[0].click();
+      fixture.detectChanges();
+      http.expectOne(r => r.method === 'GET').flush('down', { status: 500, statusText: 'Server Error' });
+      fixture.detectChanges();
+
+      // NON-VACUITY: the message is genuinely on screen before the reload, so its absence afterwards is the
+      // clear firing rather than a message that never rendered.
+      expect(el('ft-detail-error')).toBeTruthy();
+
+      answer(setFilter('ft-filter-verdict', 'down'), [listItem({ id: 'fb-down-new-a' })]);
+
+      expect(el('ft-detail-error'))
+        .withContext('a failed detail read must not outlive the list it was reported over')
+        .toBeNull();
+      expect(rowIds()).toEqual(['fb-down-new-a']);
+    });
   });
 
   // ── Transitions ──────────────────────────────────────────────────────────────────────────────────

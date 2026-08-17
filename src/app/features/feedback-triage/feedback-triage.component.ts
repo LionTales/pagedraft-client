@@ -233,6 +233,13 @@ export class FeedbackTriageComponent implements OnInit, OnDestroy {
     this.listSub?.unsubscribe();
     this.loading = true;
     this.loadError = false;
+    // A FAILED DETAIL READ MUST NOT OUTLIVE THE LIST IT WAS REPORTED OVER. `detailError` renders in this
+    // region, above the rows, so without this line the owner filters or pages, the list comes back
+    // perfectly, and "could not load that row" still sits on top of it referring to a row they are no
+    // longer looking at. Cleared HERE rather than in each caller because every path that changes the list
+    // funnels through this method - init, the filter change, paging, clearFilters and the retry button -
+    // so the seam owns the decision and a sixth caller added later inherits it.
+    this.detailError = false;
     this.cdr.markForCheck();
 
     this.listSub = this.feedback
