@@ -48,21 +48,28 @@ describe('chat-strings (chatbot phase A)', () => {
       expect(untranslated).toEqual([]);
     });
 
-    it('carries NO string for a phase C feature (history, quota, customization)', () => {
+    it('carries NO string for a capability that does not exist (quota, customization)', () => {
       // The UI must not imply a capability that does not exist. A string is the first place one would
       // appear, so this is asserted where the strings live rather than left to review.
       //
-      // A.1/w2 narrowed one term. The bare word "conversation" used to be banned outright, which was a
-      // fine proxy while nothing in phase A could name a conversation at all; the reset control now
-      // has to name the one being cleared. What is actually forbidden is the PERSISTENCE vocabulary -
-      // a previous, saved or listed conversation - and that is what is banned below, so the check
-      // still fails on the phase C surfaces and no longer fails on saying "clear this one".
+      // THIS BAN HAS BEEN NARROWED TWICE, and both narrowings were a feature shipping rather than a
+      // rule weakening. A.1/w2 dropped the bare word "conversation", which was a fine proxy while
+      // nothing could name one, once the reset control had to name the one it acted on. SHOW C1 drops
+      // the PERSISTENCE vocabulary, because C1 built the persistence: conversations are stored, listed,
+      // renamed, deleted and resumed, so a string saying "your previous conversations" is now simply
+      // true. Its own strings live in `history-strings.ts`; what remains banned here is what still does
+      // not exist - a token/quota/credit readout (which needs a usage-metering backend) and a
+      // "customize the assistant" surface.
       const forbidden =
-        /histor|previous conversation|past conversation|saved conversation|conversation list|list of conversations|quota|token|credit|customi[sz]|settings|preference|היסטורי|שיחות קודמות|שיחות שמורות|רשימת שיחות|מכסה|טוקנ|הגדרות|התאמה אישית/i;
+        /quota|token|credit|customi[sz]|settings|preference|מכסה|טוקנ|הגדרות|התאמה אישית/i;
       const offenders = [...Object.entries(CHAT_STRINGS_HE), ...Object.entries(CHAT_STRINGS_EN)]
         .filter(([, v]) => forbidden.test(v))
         .map(([k]) => k);
       expect(offenders).toEqual([]);
+      // Non-vacuity: the pattern really does catch the vocabulary this test exists to keep out, so an
+      // empty offender list means "none present" rather than "the regex matches nothing".
+      expect('You have 4,000 tokens left this month').toMatch(forbidden);
+      expect('נותרה לכם מכסה של 4,000').toMatch(forbidden);
     });
   });
 
@@ -93,13 +100,35 @@ describe('chat-strings (chatbot phase A)', () => {
       expect(CHAT_STRINGS_HE['newConversationConfirm']).not.toBe(CHAT_STRINGS_HE['newConversation']);
     });
 
-    it('promises NO persistence: it clears, it never keeps, saves or reopens', () => {
-      // The one place "conversation" is allowed to appear must still not imply phase C.
-      const persistence = /sav(e|ed|ing)|keep|kept|store|restore|reopen|resume|archive|לשמור|נשמר|שמורה|לשחזר|היסטורי/i;
+    /**
+     * THE INVERSE OF WHAT THIS TEST USED TO ASSERT, and the inversion is the point rather than a
+     * relaxation.
+     *
+     * A.1 pinned that this copy promised NO persistence: it cleared, it never kept, saved or reopened,
+     * because nothing was kept and a string implying otherwise would have been a lie. Show C1 made the
+     * opposite true. The conversation is persisted, stays listed and can be reopened, so copy still
+     * promising a destruction would now be the lie - which is exactly the defect d1 found in this copy
+     * while writing the contract, before a line of C1 was built.
+     *
+     * So the claim flips: the control must read as starting NEW, and must not tell the author their
+     * conversation is being cleared, emptied or destroyed.
+     */
+    it('promises a NEW conversation, and never that the current one is destroyed', () => {
+      const destruction = /clear|delete|erase|discard|wip(e|ed)|throw away|לנקות|למחוק|לאבד|נמחק/i;
       for (const k of resetKeys) {
-        expect(CHAT_STRINGS_HE[k]).withContext(`he: ${k}`).not.toMatch(persistence);
-        expect(CHAT_STRINGS_EN[k]).withContext(`en: ${k}`).not.toMatch(persistence);
+        expect(CHAT_STRINGS_HE[k]).withContext(`he: ${k}`).not.toMatch(destruction);
+        expect(CHAT_STRINGS_EN[k]).withContext(`en: ${k}`).not.toMatch(destruction);
       }
+      // Non-vacuity: the pattern really does catch the wording this test exists to keep out - these are
+      // the exact strings A.1 shipped and C1 replaced.
+      expect('Clear the current conversation?').toMatch(destruction);
+      expect('לנקות את השיחה הנוכחית?').toMatch(destruction);
+
+      // And it says the thing that IS true, in both languages: a new conversation is what starts.
+      expect(CHAT_STRINGS_EN['newConversationConfirm']).toMatch(/new conversation/i);
+      expect(CHAT_STRINGS_EN['newConversationConfirmYes']).toMatch(/new/i);
+      expect(CHAT_STRINGS_HE['newConversationConfirm']).toMatch(/שיחה חדשה/);
+      expect(CHAT_STRINGS_HE['newConversationConfirmYes']).toMatch(/חדשה/);
     });
   });
 
