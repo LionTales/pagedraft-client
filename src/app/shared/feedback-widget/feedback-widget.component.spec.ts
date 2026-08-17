@@ -464,6 +464,74 @@ describe('FeedbackWidgetComponent (Show C2)', () => {
       expect(component.verdict).toBeNull();
       expect(pressed('fw-down')).toBe('false');
     });
+
+    /**
+     * THE OPPOSITE POLE OF THE SAME FIX, and the round-2 defect Bugbot found in the round-1 fix: clearing
+     * the optimistic vote takes `verdict` to null with it, and `saveNote`'s own `!verdict` guard then
+     * swallows every press of a Save button that still looks enabled. Keeping the editor open would leave a
+     * dead form - the exact shape the note lock was fixed for one round earlier.
+     *
+     * So it closes HERE and stays open in the stored-vote case below, and the draft has to survive both.
+     */
+    it('closes the dead editor but keeps the paragraph, so a re-press can retry it', async () => {
+      click('fw-down');
+      const firstVote = pendingVote();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      typeNote(REASON);
+      click('fw-note-save');
+      expect(el('fw-note')).withContext('the editor is open while the save is in flight').toBeTruthy();
+
+      pendingVote().flush('boom', { status: 500, statusText: 'Server Error' });
+      fixture.detectChanges();
+
+      expect(el('fw-note'))
+        .withContext('an editor whose Save is a guaranteed no-op must not stay on screen')
+        .toBeNull();
+      expect(component.noteDraft)
+        .withContext('the paragraph outlives the close, or retrying means retyping')
+        .toBe(REASON);
+
+      // A re-press restores a verdict and reopens onto the SAME draft, which is what makes the close safe.
+      click('fw-down');
+      const retry = pendingVote();
+      fixture.detectChanges();
+      expect(el('fw-note')).toBeTruthy();
+      expect(component.noteDraft).toBe(REASON);
+
+      retry.flush(storedRow({ id: 'fb-n', verdict: 'down', text: REASON }));
+      firstVote.flush(storedRow({ id: 'fb-n', verdict: 'down' }));
+    });
+
+    /**
+     * The other pole: when a STORED vote survives the clear, `verdict` falls back to it, Save still works,
+     * and the editor stays open so retrying the note costs one press instead of two. A blanket close would
+     * pass the test above and fail this one, which is the point of having both.
+     */
+    it('keeps the editor open when a stored vote survives the failure', async () => {
+      // A down-vote opens the editor itself, so there is no "add a note" affordance to click here. The
+      // settle before typing is the NgModel rule the sibling describe documents: a fresh control's first
+      // write lands on a microtask, and typing before it flushes blanks the textarea mid-test.
+      click('fw-down');
+      pendingVote().flush(storedRow({ id: 'fb-s', verdict: 'down' }));
+      fixture.detectChanges();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      typeNote(REASON);
+      click('fw-note-save');
+      pendingVote().flush('boom', { status: 500, statusText: 'Server Error' });
+      fixture.detectChanges();
+
+      expect(component.verdict)
+        .withContext('the stored vote is untouched by a failed NOTE save')
+        .toBe('down');
+      expect(el('fw-note'))
+        .withContext('Save still works here, so the editor has no reason to close')
+        .toBeTruthy();
+      expect(component.noteDraft).toBe(REASON);
+    });
   });
 
   describe('the note', () => {

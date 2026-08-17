@@ -499,10 +499,26 @@ export class FeedbackWidgetComponent implements OnChanges, OnDestroy {
           // that cleared it would erase the optimistic value one line after it was set. The field belongs
           // to the arms, which is why all six of them now clear it.
           this.pending = undefined;
-          // The editor STAYS OPEN with the reader's text in it: losing what they wrote on a transport
-          // failure would make retrying mean rewriting.
           this.savingNote = false;
           this.failure = 'vote';
+
+          // WHETHER THE EDITOR CAN STILL BE USED DECIDES WHETHER IT STAYS, and the two cases are genuinely
+          // different rather than one boundary to pick:
+          //
+          //  - A STORED VOTE SURVIVES the clear above (`verdict` falls back to `saved.verdict`), so Save
+          //    still works and the editor stays open with the paragraph in it. Retrying the note costs one
+          //    press, and losing what they wrote to a transport failure would make retrying mean rewriting.
+          //  - NOTHING SURVIVES it (the superseded-first-vote race this arm exists for: `saved` is null, so
+          //    `verdict` is now null too). `saveNote`'s own `!verdict` guard would then swallow every press
+          //    of an enabled-looking Save button - a dead form again, which is the very shape the note lock
+          //    was fixed for. So it closes, and the DRAFT OUTLIVES THE CLOSE: only cancelNote() and the
+          //    success arm clear `noteDraft`, and openNote() refuses to overwrite a live draft, so pressing
+          //    a thumb reopens the editor with the paragraph still there.
+          //
+          // vote()'s failure arm closes unconditionally and that is not this rule contradicted: there the
+          // VOTE did not land, and a note belongs to a vote. Here the NOTE did not land, so the editor is
+          // worth keeping exactly as long as the vote under it exists.
+          if (this.verdict === null) this.noteOpen = false;
           this.cdr.markForCheck();
         },
       });
