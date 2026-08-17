@@ -1,0 +1,119 @@
+<!--
+  THE VOTE WIDGET (Show C2). Compact enough for a message-bubble footer, and mounted by three inputs.
+
+  THE OUTERMOST CONDITION IS THE CONTRACT: no target id, no DOM at all. A Show answer whose persistence
+  write faulted has no message id, and a widget that rendered anyway would offer a button whose vote can
+  never be stored. The guard lives here rather than in each host's template so a host has nothing to
+  remember.
+-->
+@if (hasTarget) {
+  <div class="fw">
+
+    <!-- The pair. ICON-ONLY, so each button carries an `aria-label` rather than relying on a computed
+         name - the opposite of the history trigger, whose visible text names it and where a label would
+         have replaced what the reader can see.
+
+         `aria-pressed` carries the state, so a screen reader hears the vote rather than only the action.
+         The lit thumb's label changes to "undo": pressing it retracts, and a control whose meaning has
+         changed must say so rather than keep announcing the thing it no longer does. -->
+    <div class="fw-thumbs" role="group">
+      <button
+        type="button"
+        class="fw-thumb fw-thumb--up"
+        data-testid="fw-up"
+        [class.fw-thumb--on]="verdict === 'up'"
+        [attr.aria-pressed]="verdict === 'up'"
+        [attr.aria-label]="verdict === 'up' ? label('voteRetractAria') : label('voteUpAria')"
+        [attr.title]="verdict === 'up' ? label('voteRetractAria') : label('voteUpAria')"
+        (click)="vote('up')">&#9650;</button>
+
+      <button
+        type="button"
+        class="fw-thumb fw-thumb--down"
+        data-testid="fw-down"
+        [class.fw-thumb--on]="verdict === 'down'"
+        [attr.aria-pressed]="verdict === 'down'"
+        [attr.aria-label]="verdict === 'down' ? label('voteRetractAria') : label('voteDownAria')"
+        [attr.title]="verdict === 'down' ? label('voteRetractAria') : label('voteDownAria')"
+        (click)="vote('down')">&#9660;</button>
+
+      <!-- ON DEMAND, not only on a down-vote. An author who liked an answer may still have something to
+           say about it, and the note field is the only channel this feature has for prose. Offered only
+           once a vote exists, because a note is posted WITH a verdict and there is no note-only write. -->
+      @if (canWriteNote && !noteOpen) {
+        <button
+          type="button"
+          class="fw-note-open"
+          data-testid="fw-note-open"
+          (click)="openNote()">{{ hasNote ? label('noteEdit') : label('noteAdd') }}</button>
+      }
+
+      <!-- A confirmation, not a state: cleared by the next action. `role="status"` so it is announced
+           without stealing focus. -->
+      @if (thanks && !noteOpen) {
+        <span class="fw-thanks" data-testid="fw-thanks" role="status">{{ label('voteThanks') }}</span>
+      }
+    </div>
+
+    <!-- NON-BLOCKING FAILURE. By the time this renders the widget has ALREADY reverted to whatever the
+         server holds, so this sentence reports a save that did not happen rather than warning about a
+         state still on screen. Nothing here retries on its own: the controls above are live again. -->
+    @if (failure) {
+      <p class="fw-failure" data-testid="fw-failure" role="status">
+        {{ failure === 'retract' ? label('retractFailed') : label('voteFailed') }}
+      </p>
+    }
+
+    <!-- ── THE NOTE ───────────────────────────────────────────────────────────────────────────────
+         Placed with LOGICAL inline properties against this component's OWN `dir` (bound on the host from
+         `lang`), never against the direction of the content it is mounted beside. On Show the two differ
+         daily: the answer bubble takes its direction from the server's answer language, so a Hebrew
+         reader looking at an English answer sits in an `ltr` subtree and an inherited placement would
+         open this off the wrong edge.
+
+         `dir="auto"` on the TEXTAREA only, and that is a different question from the popover's placement:
+         the reader may write in either language regardless of which chrome they are reading. -->
+    @if (noteOpen) {
+      <div class="fw-note" data-testid="fw-note" role="group" [attr.aria-label]="label('noteTitle')">
+        <label class="fw-note-title" [attr.for]="noteInputId">{{ label('noteTitle') }}</label>
+        <textarea
+          [id]="noteInputId"
+          class="fw-note-input"
+          rows="3"
+          dir="auto"
+          [placeholder]="label('notePlaceholder')"
+          [disabled]="savingNote"
+          [(ngModel)]="noteDraft"
+          [name]="noteInputName"></textarea>
+
+        <div class="fw-note-foot">
+          <!-- The counter is the ONLY thing between a reader and a `400 textTooLong`: the server rejects
+               an over-long note rather than truncating it, so the count is live and the save is refused
+               locally before it can cost a round trip. -->
+          <span
+            class="fw-note-counter"
+            data-testid="fw-note-counter"
+            [class.fw-note-counter--over]="noteTooLong">{{ counterLabel }}</span>
+
+          <button
+            type="button"
+            class="fw-note-save"
+            data-testid="fw-note-save"
+            [disabled]="savingNote || noteTooLong"
+            (click)="saveNote()">{{ savingNote ? label('noteSaving') : label('noteSave') }}</button>
+
+          <button
+            type="button"
+            class="fw-note-cancel"
+            data-testid="fw-note-cancel"
+            [disabled]="savingNote"
+            (click)="cancelNote()">{{ label('noteCancel') }}</button>
+        </div>
+
+        @if (noteTooLong) {
+          <p class="fw-note-error" data-testid="fw-note-error" role="status">{{ label('noteTooLong') }}</p>
+        }
+      </div>
+    }
+  </div>
+}

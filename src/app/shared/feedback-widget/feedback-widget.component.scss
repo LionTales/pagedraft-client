@@ -1,0 +1,198 @@
+/**
+ * The vote widget's chrome (Show C2).
+ *
+ * THREE PROPERTIES ARE LOAD-BEARING RATHER THAN COSMETIC.
+ *
+ * 1. IT USES THE `--pd-*` DESIGN TOKENS, not hand-picked colours. This widget is infrastructure: it will
+ *    sit in a chat bubble first and on a suggestion card next, and a hardcoded palette would look right
+ *    on exactly one of them and would miss the theme when the tokens move.
+ *
+ * 2. EVERY DIRECTIONAL PROPERTY IS LOGICAL (`inset-inline-*`, `margin-inline-*`), and they resolve
+ *    against the HOST's own `dir`, which the component binds from its `lang` input. That is what places
+ *    the note correctly in both directions with one rule, and - the part that actually bites - it does
+ *    NOT follow the direction of the content it is mounted beside. On Show that difference is daily: an
+ *    answer bubble carries the SERVER's answer language, so a Hebrew reader can be inside an `ltr`
+ *    subtree, and a popover placed by inheritance would open off the wrong edge.
+ *
+ * 3. NOTHING HERE STYLES ANYTHING THIS COMPONENT DID NOT RENDER. Emulated encapsulation stamps its
+ *    scoping attribute only on nodes Angular creates, so a rule aimed at an `[innerHTML]` subtree or a
+ *    third-party widget's internals would be dead from the day it shipped. Every selector below targets
+ *    an element in this component's own template.
+ */
+
+/* THE WIDGET OWNS ITS OWN FOOTER SPACING, so a host adds no rule at all to mount it. That is the
+   infrastructure argument (a host that restyled it would be where two mounts started to diverge) and it
+   is also arithmetic: `product-chat.component.scss` sits within ~30 bytes of Angular's hard
+   component-style budget, and a one-declaration rule there failed the build by 32 bytes. */
+:host {
+  display: block;
+  position: relative;
+  margin-block-start: var(--pd-space-3);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+}
+
+/* No target, no widget. The template renders nothing; this keeps the host out of the layout too, so a
+   bubble footer does not gain an empty row for an answer that cannot take feedback. */
+:host(.fw-empty) {
+  display: none;
+}
+
+.fw {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-2);
+}
+
+.fw-thumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  flex-wrap: wrap;
+}
+
+.fw-thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-sm);
+  background: transparent;
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-caption);
+  cursor: pointer;
+}
+
+.fw-thumb:hover:not(:disabled) {
+  background: var(--pd-neutral-100);
+}
+
+.fw-thumb:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.fw-thumb:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The lit state carries a BORDER and a BACKGROUND, not colour alone: a control distinguished only by hue
+   is invisible to a reader who cannot separate the two, and reporting a state back is this control's
+   entire job. */
+.fw-thumb--on {
+  border-color: var(--pd-primary-200);
+  background: var(--pd-info-bg);
+  color: var(--pd-primary-700);
+}
+
+.fw-note-open,
+.fw-note-save,
+.fw-note-cancel {
+  font-family: inherit;
+  font-size: var(--pd-text-caption);
+  padding: var(--pd-space-1) var(--pd-space-3);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-sm);
+  background: transparent;
+  color: var(--pd-text-secondary);
+  cursor: pointer;
+}
+
+.fw-note-open:hover:not(:disabled),
+.fw-note-save:hover:not(:disabled),
+.fw-note-cancel:hover:not(:disabled) {
+  background: var(--pd-neutral-100);
+}
+
+.fw-note-open:focus-visible,
+.fw-note-save:focus-visible,
+.fw-note-cancel:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.fw-note-open:disabled,
+.fw-note-save:disabled,
+.fw-note-cancel:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.fw-thanks {
+  color: var(--pd-primary-700);
+}
+
+.fw-failure {
+  margin: 0;
+  color: var(--pd-cut);
+}
+
+/* ── The note ──────────────────────────────────────────────────────────────────────────────────────
+   Absolutely positioned so opening it does not push the transcript around, anchored on the widget's
+   INLINE START edge and growing toward the inline end. The width cap is expressed against the viewport
+   as well as a fixed maximum because the drawer it first mounts in is 380px by default and 300px at its
+   narrowest, where a fixed-width popover would overflow the panel. */
+.fw-note {
+  position: absolute;
+  top: 100%;
+  inset-inline-start: 0;
+  inset-inline-end: auto;
+  z-index: 5;
+  width: max-content;
+  min-width: 14rem;
+  max-width: min(20rem, 90vw);
+  margin-block-start: var(--pd-space-2);
+  padding: var(--pd-space-3);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-surface-raised);
+  box-shadow: var(--pd-shadow-3);
+}
+
+.fw-note-title {
+  display: block;
+  margin-block-end: var(--pd-space-2);
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text);
+}
+
+.fw-note-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: inherit;
+  font-size: var(--pd-text-body-sm);
+  padding: var(--pd-space-2);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-sm);
+  color: var(--pd-text);
+}
+
+.fw-note-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  margin-block-start: var(--pd-space-3);
+  flex-wrap: wrap;
+}
+
+.fw-note-counter {
+  margin-inline-end: auto;
+  color: var(--pd-text-secondary);
+}
+
+.fw-note-counter--over {
+  color: var(--pd-cut);
+  font-weight: var(--pd-weight-semibold);
+}
+
+.fw-note-error {
+  margin: var(--pd-space-2) 0 0;
+  color: var(--pd-cut);
+}
