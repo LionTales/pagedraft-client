@@ -15,6 +15,7 @@ import { Params, RouterLink } from '@angular/router';
 import { Subject, takeUntil } from 'rxjs';
 
 import { MarkdownTextComponent } from '../../features/analysis-panel/markdown-text.component';
+import { FeedbackWidgetComponent } from '../feedback-widget/feedback-widget.component';
 import { AppOverlayService } from '../../core/services/app-overlay.service';
 import {
   AmbientChapterChoice,
@@ -120,6 +121,12 @@ export type {
  * `reset$` unsubscribe are one invariant, and splitting them would put "a discarded conversation's
  * answer can never be appended" in two files.
  *
+ * SHOW C2 ADDED ABOUT TWENTY-FIVE LINES TO THAT ALREADY-WAIVED FILE, and they are the smallest addition
+ * the feedback mount could be: one import, one element in each of the two answer branches, and the
+ * pass-through of `assistantMessageId` onto the two entry kinds that can carry it. Everything the widget
+ * DOES lives in `shared/feedback-widget/`, which is the point of it being infrastructure: this component
+ * hands it three strings and learns nothing about feedback in return.
+ *
  * ── STARTING OVER, WHICH IS NOW STARTING NEW (A.1, w2; re-read under C1) ──────────────────────────
  * The session-long transcript was a liability, and the owner hit it: with two refusals still inside the
  * history window the assistant drifted to answering about a different editing pass than the one asked
@@ -221,6 +228,10 @@ export type {
     RouterLink,
     MarkdownTextComponent,
     ConversationHistoryComponent,
+    // Show C2, mount #1. Imported here, but this component tells it NOTHING about chat: the widget takes
+    // three strings and reaches `FeedbackService` for everything else, which is what makes the next mount
+    // one line rather than a refactor.
+    FeedbackWidgetComponent,
   ],
   templateUrl: './product-chat.component.html',
   styleUrl: './product-chat.component.scss',
@@ -1115,7 +1126,15 @@ export class ProductChatComponent implements AfterViewChecked, OnDestroy {
     // asked after a refusal.
     this.adoptConversation(res);
     if (!res?.isGrounded) {
-      this.acceptFault(res?.faultReason ?? 'unknown', question, askedAt, bookId);
+      // The FAIL-SAFE carries a stored id too (C1 persists a failed exchange flagged rather than
+      // dropping it), and C2 mounts the widget on it deliberately: a thumbs-down on a refusal is signal.
+      this.acceptFault(
+        res?.faultReason ?? 'unknown',
+        question,
+        askedAt,
+        bookId,
+        res?.assistantMessageId ?? null
+      );
       return;
     }
     this.fileForRequest(
@@ -1126,6 +1145,10 @@ export class ProductChatComponent implements AfterViewChecked, OnDestroy {
         guideIds: res.guideIds ?? [],
         language: res.language === 'en' ? 'en' : 'he',
         bookId,
+        // Show C2: the PERSISTED id this answer was written to, or null when the write faulted. It is
+        // what the feedback widget anchors to, and a null renders no widget at all rather than a button
+        // whose vote could never be stored.
+        messageId: res.assistantMessageId ?? null,
         // Parsed here rather than at render time so the template does not re-parse on every change
         // detection pass, and so an unknown ref is resolved once into the "renders unlinked" shape.
         artifactRefs: parseArtifactRefs(res.artifactRefs),
@@ -1192,8 +1215,23 @@ export class ProductChatComponent implements AfterViewChecked, OnDestroy {
     this.conversationId = id;
   }
 
-  private acceptFault(reason: string, question: string, askedAt: number, bookId: string | null): void {
-    this.fileForRequest({ kind: 'fault', id: this.nextId++, reason, question, bookId }, askedAt);
+  /**
+   * @param messageId Show C2: the PERSISTED assistant row this refusal was written to, or null. Null on
+   * the `network` path, where no response came back and therefore no row was written; non-null on a
+   * server fail-safe, which IS persisted (flagged) and which the feedback widget is deliberately mounted
+   * on.
+   */
+  private acceptFault(
+    reason: string,
+    question: string,
+    askedAt: number,
+    bookId: string | null,
+    messageId: string | null = null
+  ): void {
+    this.fileForRequest(
+      { kind: 'fault', id: this.nextId++, reason, question, bookId, messageId },
+      askedAt
+    );
     this.settle();
   }
 

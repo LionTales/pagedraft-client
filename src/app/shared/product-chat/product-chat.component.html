@@ -324,6 +324,25 @@
                     </span>
                   </div>
                 }
+
+                <!-- ── FEEDBACK (Show C2, mount #1) ────────────────────────────────────────────────
+                     ONE LINE, and that is the todo's acceptance criterion rather than a boast: three
+                     inputs and the widget does the rest through `FeedbackService` - the voter identity,
+                     the route, the open book and chapter, the locale. Mounting it on a proofread
+                     suggestion card later is this same line with a different `area` and `targetId`.
+
+                     `answer.messageId` is C1's PERSISTED id, not the transcript's local counter. It is
+                     null when the answer's persistence write faulted, and the widget renders NOTHING for
+                     a null rather than a button whose vote could never be stored. It is deliberately NOT
+                     guarded here: the widget owns that rule so no host can forget it.
+
+                     Placed in the bubble's FOOTER, outside `.pc-answer`, on purpose: the answer carries
+                     the SERVER's answer language on its `dir`, and the widget is chrome. It sets its own
+                     `dir` from `lang`, so its note popover is placed against the chrome direction even
+                     when it sits beside an English answer in a Hebrew drawer. -->
+                <app-feedback-widget
+                  [targetId]="answer.messageId"
+                  [lang]="lang" />
               </div>
             </div>
           }
@@ -344,6 +363,18 @@
                 <button class="pc-retry" type="button" [disabled]="!canRetry(fault)" (click)="retry(fault)">
                   {{ label('retry') }}
                 </button>
+
+                <!-- A FAILED ANSWER THAT PERSISTED TAKES FEEDBACK, and that is half the point of C2
+                     rather than an edge case: a thumbs-down on a refusal tells us the refusal was wrong,
+                     which is more actionable than a thumbs-down on a thin answer. C1 persists a failed
+                     exchange flagged rather than dropping it, precisely so this is possible.
+
+                     Null on a `network` fault (no response came back, so no row was written) and on a
+                     restored failure whose answer row hydration could not identify - and the widget
+                     renders nothing for a null, so those cases show no control at all. -->
+                <app-feedback-widget
+                  [targetId]="fault.messageId"
+                  [lang]="lang" />
               </div>
             </div>
           }

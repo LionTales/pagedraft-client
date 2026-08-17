@@ -189,7 +189,13 @@ export function hydrateTranscript(
    *
    * The fault keeps carrying the question as well, because `retry()` re-asks from exactly that field.
    */
-  const flushFailed = (fallbackBook: string | null): void => {
+  /**
+   * @param assistantMessageId Show C2: the stored id of the flagged ASSISTANT row that closed this pair,
+   * so a restored failure can still take feedback exactly as a live one does. Null on every other call
+   * site, and that is correct rather than lazy: those are dangling failures whose answer row never
+   * arrived, so there is no stored assistant turn for a vote to anchor to.
+   */
+  const flushFailed = (fallbackBook: string | null, assistantMessageId: string | null = null): void => {
     if (!failedQuestion) return;
     const bookId = failedQuestion.bookId ?? fallbackBook;
     // An EMPTY question is not a turn anybody took: it is the synthesized stand-in below for a flagged
@@ -212,6 +218,7 @@ export function hydrateTranscript(
       reason: RESTORED_FAULT_REASON,
       question: failedQuestion.text,
       bookId,
+      messageId: assistantMessageId,
     });
     failedQuestion = null;
   };
@@ -269,7 +276,10 @@ export function hydrateTranscript(
       // fail-safe sentences for several codes, and the client's per-reason copy is what the surface
       // shows, exactly as it does for a live failure.
       if (!failedQuestion) failedQuestion = { text: '', bookId: askBook, at: index };
-      flushFailed(askBook);
+      // The FLAGGED ASSISTANT ROW's own id travels onto the fault (C2), so a resumed transcript offers
+      // feedback on a failure exactly as a live one does. That row exists in storage - a failed exchange
+      // is persisted flagged, not dropped - which is what makes the vote anchorable.
+      flushFailed(askBook, message.id ?? null);
       continue;
     }
 
@@ -286,6 +296,9 @@ export function hydrateTranscript(
         bookId: askBook,
         artifactRefs: parseArtifactRefs(message.grounding?.artifactRefs),
         bookFaultReason: message.grounding?.bookFaultReason ?? null,
+        // Show C2: the stored row's OWN id, which is the one thing a resumed transcript has that a live
+        // one had to be told - so a conversation reopened days later takes feedback on the same terms.
+        messageId: message.id ?? null,
         // NEVER RESTORED. Clarify chips re-ask a question against a chapter list captured at answer
         // time, and that list is not stored; offering chips built from today's chapters would re-ask an
         // old question against a book that has moved on, which is the wrong-chapter fabrication the
