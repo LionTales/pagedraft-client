@@ -224,14 +224,22 @@ describe('ProductChatComponent (chatbot phase A)', () => {
       expect(fixture.debugElement.query(By.css('.pc-empty'))).toBeNull();
     });
 
-    it('shows NO phase C affordance: no history list, no quota readout, no settings control', () => {
-      // Phase A must not imply the phase C surfaces. Asserted on the rendered DOM rather than on the
-      // string map alone, because a control can exist without a localized label.
+    it('shows NO quota readout and no settings control (Show C1 shipped the history one)', () => {
+      // The surface must not imply a capability that does not exist. Asserted on the rendered DOM
+      // rather than on the string map alone, because a control can exist without a localized label.
+      //
+      // THE HISTORY HALF OF THIS CLAIM RETIRED WITH SHOW C1, which built it: the empty state now
+      // carries the affordance that opens the stored conversations, deliberately, because a fresh
+      // session with nothing on screen is exactly when an author reaches for yesterday's conversation.
+      // What still does not exist is a token/quota readout (it needs a usage-metering backend) and a
+      // customization surface.
       const html = (fixture.nativeElement as HTMLElement).innerHTML;
-      expect(html).not.toMatch(/quota|token|histor|previous conversation|customi[sz]/i);
+      expect(html).not.toMatch(/quota|token|credit|customi[sz]|מכסה|טוקנ/i);
       expect(fixture.debugElement.queryAll(By.css('.pc-pane button')).length)
-        .withContext('3 examples + send = 4 controls, nothing more (the shell\'s own controls are the dock\'s)')
-        .toBe(4);
+        .withContext('3 examples + send + the history affordance = 5 controls, nothing more')
+        .toBe(5);
+      // ...and the fifth one really is the history affordance, not some other control that drifted in.
+      expect(fixture.debugElement.query(By.css('[data-testid="pc-history-toggle"]'))).not.toBeNull();
     });
   });
 
@@ -571,10 +579,15 @@ describe('ProductChatComponent (chatbot phase A)', () => {
       fixture.detectChanges();
     }
 
-    it('offers NO reset control until there is a conversation to clear', () => {
+    it('offers NO new-conversation control until there is a conversation to step away from', () => {
       // The cheapest footgun guard: in the empty state the control does not exist to be mis-clicked.
-      expect(fixture.debugElement.query(By.css('.pc-conversation-bar'))).toBeNull();
       expect(fixture.debugElement.query(By.css('.pc-new'))).toBeNull();
+      // The BAR itself is present from the start now (C1), because it also carries the history
+      // affordance - and the empty state is exactly when an author reaches for yesterday's
+      // conversation, so gating history on "there is something here already" would hide it where it is
+      // needed most.
+      expect(fixture.debugElement.query(By.css('.pc-conversation-bar'))).not.toBeNull();
+      expect(fixture.debugElement.query(By.css('[data-testid="pc-history-toggle"]'))).not.toBeNull();
 
       exchange('how do I import?', 'answer one');
       expect(fixture.debugElement.query(By.css('.pc-new'))).not.toBeNull();
@@ -621,8 +634,10 @@ describe('ProductChatComponent (chatbot phase A)', () => {
       expect(fixture.debugElement.queryAll(By.css('.pc-example')).length).toBe(3);
       expect(fixture.debugElement.query(By.css('.pc-grounding-note'))).not.toBeNull();
 
-      // ...and the bar itself is gone again, because there is nothing left to clear.
-      expect(fixture.debugElement.query(By.css('.pc-conversation-bar'))).toBeNull();
+      // ...and the new-conversation control is gone again, because there is nothing left to step away
+      // from. The bar stays, carrying the history affordance (C1).
+      expect(fixture.debugElement.query(By.css('.pc-new'))).toBeNull();
+      expect(fixture.debugElement.query(By.css('.pc-reset-confirm'))).toBeNull();
     });
 
     it('the NEXT request goes up with an EMPTY history', () => {
@@ -743,7 +758,7 @@ describe('ProductChatComponent (chatbot phase A)', () => {
       http.expectOne('/api/product-chat').flush(groundedAnswer());
     });
 
-    it('renders the reset copy in Hebrew chrome, and implies no saved history', () => {
+    it('renders the new-conversation copy in Hebrew chrome, and implies no quota surface', () => {
       exchange('first', 'first answer');
       expect(fixture.debugElement.query(By.css('.pc-new')).nativeElement.textContent.trim())
         .toContain(CHAT_STRINGS_HE['newConversation']);
@@ -755,8 +770,10 @@ describe('ProductChatComponent (chatbot phase A)', () => {
       expect(bar.textContent).toContain(CHAT_STRINGS_HE['newConversationConfirm']);
       expect(bar.textContent).toContain(CHAT_STRINGS_HE['newConversationConfirmYes']);
       expect(bar.textContent).toContain(CHAT_STRINGS_HE['newConversationCancel']);
-      // Still no phase C: the bar clears a conversation, it never offers to keep or reopen one.
-      expect(bar.innerHTML).not.toMatch(/quota|token|histor|previous conversation|sav(e|ed)|customi[sz]/i);
+      // The persistence vocabulary is no longer forbidden here - C1 shipped the persistence, and the
+      // bar's own history control names it. What must still be absent is the surface that does NOT
+      // exist: a token/quota readout or a customization affordance.
+      expect(bar.innerHTML).not.toMatch(/quota|token|credit|customi[sz]|מכסה|טוקנ/i);
     });
 
     it('renders the same control in ENGLISH chrome (he/en parity on the rendered surface)', () => {

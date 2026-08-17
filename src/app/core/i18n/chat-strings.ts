@@ -43,16 +43,24 @@
  * Hebrew here is DRAFT and needs native-speaker review. No em-dash in any user-facing string; both
  * are pinned by `chat-strings.spec.ts`.
  *
- * ── What is deliberately absent ────────────────────────────────────────────────────────────────────
- * There is no string for a SAVED or PREVIOUS conversation, a conversation list or title, or a token or
- * quota count, or a "customize the assistant" affordance. Those are phase C, and the quota one
- * additionally needs a usage-metering backend that does not exist. A string here would imply the
- * feature exists, so none is written.
+ * ── What is deliberately absent, and what SHOW C1 moved out of that list ──────────────────────────
+ * There is still no string here for a token or quota count, or a "customize the assistant" affordance.
+ * Those need a usage-metering backend and a settings surface that do not exist, and a string would
+ * imply a feature that is not there.
  *
- * The reset strings added in A.1 (w2) are the one place the word "conversation" appears, and they say
- * only that the CURRENT one is being cleared. Nothing in them offers to keep, name, list or reopen it,
- * because none of that exists; `chat-strings.spec.ts` pins that distinction rather than banning the
- * word outright.
+ * HISTORY IS NO LONGER ON THAT LIST. Show C1 persists conversations, lists them, and resumes them, so
+ * the vocabulary this file used to ban outright is now true. The history panel's own strings live in
+ * `history-strings.ts` (strings travel with the control they name, the same rule that moved the dock's
+ * launcher/close/widen copy into `dock-strings.ts`); what changed HERE is the reset copy below.
+ *
+ * ── The reset copy now says NEW, because "clear" stopped being true (C1) ──────────────────────────
+ * A.1 (w2) shipped these five strings promising that the CURRENT conversation was being cleared -
+ * "לנקות את השיחה הנוכחית?" / "Clear the current conversation?" - and that was exactly right while
+ * nothing was persisted: clearing meant gone. Under C1 nothing is destroyed. The conversation stays
+ * listed with everything it held and can be reopened, and the only thing that actually changes is that
+ * the next question is asked with an empty window in a new thread. Copy that still promised a
+ * destruction would be the surface telling the author something false about their own work, so the
+ * confirmation now asks about starting new AND says where the old one goes.
  */
 
 import {
@@ -120,9 +128,12 @@ export type ChatStringKey =
   | 'example1'
   | 'example2'
   | 'example3'
-  // ── starting over (A.1, w2): clears the IN-MEMORY transcript. Not history, not persistence ──
-  // The confirmation is two strings, not one, because the destructive step must be labelled with what
-  // it does rather than with a bare "OK": the author is throwing a conversation away.
+  // ── starting NEW (A.1, w2; re-worded by C1) ──
+  // Empties the transcript on screen and stops threading the stored conversation, so the next question
+  // is asked clean in a new thread. It no longer throws anything away: the old conversation stays in
+  // the history list. The confirmation is still two strings rather than one, because the second click
+  // must be labelled with what it does rather than with a bare "OK" - what it does is now "start new",
+  // not "destroy".
   | 'newConversation'
   | 'newConversationBusy'
   | 'newConversationConfirm'
@@ -258,8 +269,8 @@ export const CHAT_STRINGS_HE: Record<ChatStringKey, string> = {
 
   newConversation:          'שיחה חדשה',
   newConversationBusy:      'אפשר להתחיל שיחה חדשה אחרי שהתשובה תגיע.',
-  newConversationConfirm:   'לנקות את השיחה הנוכחית?',
-  newConversationConfirmYes: 'כן, לנקות',
+  newConversationConfirm:   'להתחיל שיחה חדשה? הנוכחית תישאר ברשימת השיחות הקודמות.',
+  newConversationConfirmYes: 'כן, שיחה חדשה',
   newConversationCancel:    'ביטול',
 
   faultTitle:        'לא הצלחתי לענות מתוך המדריכים',
@@ -342,8 +353,8 @@ export const CHAT_STRINGS_EN: Record<ChatStringKey, string> = {
 
   newConversation:          'New conversation',
   newConversationBusy:      'You can start a new conversation once this answer arrives.',
-  newConversationConfirm:   'Clear the current conversation?',
-  newConversationConfirmYes: 'Yes, clear it',
+  newConversationConfirm:   'Start a new conversation? This one stays in your previous conversations.',
+  newConversationConfirmYes: 'Yes, start a new one',
   newConversationCancel:    'Cancel',
 
   faultTitle:        'I could not answer from the guides',

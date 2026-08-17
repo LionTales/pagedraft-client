@@ -8,10 +8,16 @@
  * wire calls a plain string; see {@link ProductChatResponseDto.faultReason} for the one field that is
  * deliberately NOT narrowed.
  *
- * Phase A boundary, stated here because the types are where it would first leak: there is no
- * conversation id, no persisted transcript, no token or quota field, and no customization payload.
- * Those are phase C and the quota one additionally needs a usage-metering backend that does not
+ * SHOW C1 MOVED ONE OF THE PHASE-A BOUNDARY STONES, and only one. There IS a conversation id now
+ * ({@link ProductChatRequest.conversationId} and the three id fields on the response), because
+ * conversations are persisted and the drawer threads them. There is still no token or quota field and
+ * no customization payload; the quota one additionally needs a usage-metering backend that does not
  * exist. Do not add a field here "for later".
+ *
+ * The conversation id is a THREADING KEY AND NOTHING ELSE. The server does not read the stored
+ * transcript to compose a prompt: the client remains the sender of the history window, exactly as
+ * phase B shipped it, and this field only says where to WRITE. That is what keeps C1 a persistence
+ * feature rather than a change to the seven-gate prompt path.
  */
 
 /** The two languages the assistant answers in. Server-decided, never re-detected on the client. */
@@ -85,6 +91,19 @@ export interface ProductChatRequest {
    * can invalidate while the id is durable.
    */
   ambientChapterOrder?: number | null;
+
+  /**
+   * The persisted conversation this question continues, or OMITTED to start one (Show C1).
+   *
+   * OMITTED RATHER THAN SENT AS NULL when there is none, on exactly the rule {@link bookId} follows:
+   * the server treats absent and null identically, and a body with no such property is byte-identical
+   * to the one phase B measured. A first question therefore travels the wire it always did, and the
+   * server returns the id it created, which the client adopts and threads from the second question on.
+   *
+   * An id that does not resolve is not an error server-side: a new conversation is started and its id
+   * returned. Refusing the question over a stale id would cost the author an answer for bookkeeping.
+   */
+  conversationId?: string;
 }
 
 /**
@@ -166,6 +185,35 @@ export interface ProductChatResponseDto {
    * reading rule.
    */
   needsChapterClarification?: boolean;
+
+  /**
+   * Show C1. The persisted conversation this exchange was written to: the one the request named, or
+   * the one implicitly created for it. THE CLIENT ADOPTS AN ID IT DID NOT SEND, which is how a first
+   * question starts threading and how a stale id is silently replaced by the live one.
+   *
+   * NULL MEANS NOT EVEN THE QUESTION WAS STORED (the user-turn write faulted server-side, or the
+   * conversation was deleted out from under the request). When only the ASSISTANT write faulted, this
+   * id and {@link userMessageId} still arrive - those rows exist, and threading them is what stops the
+   * next question starting a duplicate conversation - while {@link assistantMessageId} alone is null.
+   * It is a null rather than an error because an answer the author can read beats a 500 over
+   * bookkeeping, so the client must treat it as "keep going, unthreaded" and never as a failure of
+   * the answer.
+   */
+  conversationId?: string | null;
+
+  /**
+   * Show C1. The stored id of the question turn, null exactly when {@link conversationId} is. C2
+   * attaches feedback to these ids; nothing in C1 renders them.
+   */
+  userMessageId?: string | null;
+
+  /**
+   * Show C1. The stored id of the answer turn, null when the ANSWER was not stored - which can happen
+   * while the question's own ids still arrive (see {@link conversationId}). Present on FAIL-SAFE
+   * answers too: a failed exchange is persisted flagged rather than dropped, because a thumbs-down on
+   * a failure is signal and not noise.
+   */
+  assistantMessageId?: string | null;
 }
 
 /**

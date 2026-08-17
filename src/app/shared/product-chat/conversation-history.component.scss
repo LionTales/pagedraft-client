@@ -1,0 +1,310 @@
+/*
+ * Conversation history styles (Show C1, c2). Uses --pd-* design tokens throughout.
+ *
+ * LOGICAL PROPERTIES ONLY (inline-start/end, margin-inline, text-align: start). This panel lives in a
+ * drawer that is RTL by default and LTR in English chrome, and every physical edge written here would
+ * be a second layout to keep in step. The one place a physical value would be needed is a directional
+ * arrow, which is exactly why the pager is labelled with words instead.
+ */
+
+:host {
+  /* A non-layout container, matching the chat pane it replaces: it must not add a box between the
+     dock's flex column and this panel, or the list could not scroll on its own. */
+  display: contents;
+}
+
+.ch-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-4);
+  padding: var(--pd-space-5) var(--pd-space-6);
+  font-family: var(--pd-font-ui);
+}
+
+/* ── Head ─────────────────────────────────────────────────────────────────── */
+
+.ch-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--pd-space-3);
+}
+
+.ch-title {
+  margin: 0;
+  font-size: var(--pd-text-h5);
+  line-height: var(--pd-lh-h5);
+  font-weight: var(--pd-weight-bold);
+  color: var(--pd-text);
+}
+
+/* Two explicit states rather than one checkbox, so "all conversations" is a place the author returns
+   to rather than the absence of a setting. */
+.ch-filter {
+  display: flex;
+  gap: var(--pd-space-2);
+}
+
+.ch-filter-btn {
+  padding: 2px var(--pd-space-3);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-surface);
+  color: var(--pd-text-secondary);
+  font: inherit;
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  cursor: pointer;
+}
+
+.ch-filter-btn--on {
+  border-color: var(--pd-primary-500);
+  background: var(--pd-primary-100);
+  color: var(--pd-primary-700);
+  font-weight: var(--pd-weight-medium);
+}
+
+/* ── States ───────────────────────────────────────────────────────────────── */
+
+.ch-status,
+.ch-empty {
+  margin: 0;
+  color: var(--pd-text-muted);
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+  text-align: start;
+}
+
+.ch-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pd-space-3);
+}
+
+.ch-error-text {
+  margin: 0;
+  color: var(--pd-sev-high);
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+  text-align: start;
+}
+
+.ch-near-cap {
+  margin: 0;
+  color: var(--pd-text-muted);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  text-align: start;
+}
+
+/* ── The list ─────────────────────────────────────────────────────────────── */
+
+.ch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-3);
+}
+
+.ch-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-2);
+  padding: var(--pd-space-3);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-surface);
+}
+
+/* The conversation already on screen. A quiet tint plus the badge in the row, not a colour alone:
+   colour is not a label. */
+.ch-item--current {
+  border-color: var(--pd-primary-300);
+  background: var(--pd-primary-50);
+}
+
+/* The row body IS the open action, so it fills the row and reads as text rather than as a button. */
+.ch-open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.ch-open:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.ch-open:focus-visible {
+  outline: 2px solid var(--pd-ring);
+  outline-offset: 2px;
+  border-radius: var(--pd-radius-sm);
+}
+
+/* The author's own words, so they get the weight. `overflow-wrap` rather than an ellipsis: a title cut
+   mid-word in a narrow drawer identifies the conversation worse than a second line does. */
+.ch-item-title {
+  font-weight: var(--pd-weight-medium);
+  color: var(--pd-text);
+  overflow-wrap: anywhere;
+}
+
+.ch-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pd-space-3);
+  color: var(--pd-text-muted);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+}
+
+.ch-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pd-space-2);
+}
+
+.ch-badge {
+  padding: 1px var(--pd-space-2);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  overflow-wrap: anywhere;
+}
+
+.ch-badge--book {
+  background: var(--pd-primary-100);
+  color: var(--pd-primary-700);
+}
+
+.ch-badge--current {
+  background: var(--pd-primary-500);
+  color: var(--pd-on-primary);
+}
+
+/* ── Row actions ──────────────────────────────────────────────────────────── */
+
+.ch-item-actions,
+.ch-rename-actions,
+.ch-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pd-space-2);
+}
+
+.ch-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--pd-space-2);
+}
+
+.ch-confirm-text {
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+}
+
+.ch-btn {
+  padding: 2px var(--pd-space-3);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-text-secondary);
+  font: inherit;
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+  cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+
+.ch-btn:hover:not(:disabled) {
+  background: var(--pd-neutral-100);
+}
+
+.ch-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.ch-btn--quiet {
+  border-color: transparent;
+  color: var(--pd-text-muted);
+}
+
+.ch-btn--primary {
+  border-color: var(--pd-primary-500);
+  background: var(--pd-primary-500);
+  color: var(--pd-on-primary);
+}
+
+/* The destructive step, coloured as well as labelled. The LABEL is what carries the meaning (see the
+   template); the colour only makes it hard to hit by accident. */
+.ch-btn--danger {
+  border-color: var(--pd-sev-high);
+  color: var(--pd-sev-high);
+  font-weight: var(--pd-weight-medium);
+}
+
+/* ── Rename ───────────────────────────────────────────────────────────────── */
+
+.ch-rename {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-2);
+}
+
+.ch-rename-input {
+  width: 100%;
+  padding: var(--pd-space-2) var(--pd-space-3);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-text);
+  font: inherit;
+  font-size: var(--pd-text-body-sm);
+}
+
+/* ── Pager ────────────────────────────────────────────────────────────────── */
+
+.ch-pager {
+  justify-content: space-between;
+}
+
+.ch-page {
+  color: var(--pd-text-muted);
+  font-size: var(--pd-text-caption);
+  line-height: var(--pd-lh-caption);
+}
+
+/* ── a11y ─────────────────────────────────────────────────────────────────── */
+
+.ch-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

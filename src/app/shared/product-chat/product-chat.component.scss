@@ -89,13 +89,51 @@
    already puts its actions (the send button sits at the same edge, a panel-height away). Only present
    once there is a conversation to clear, so the empty state has nothing to mis-click. Deliberately
    understated: it is an escape hatch, not a primary action, and the primary action is Send. */
+/* Two controls with different availability rules (C1): history is always here, "new conversation" only
+   once there is one to step away from. `space-between` rather than `flex-end` so the always-present one
+   anchors the inline-start edge and the conditional one does not shift position as it appears. Both
+   edges are logical, so the bar mirrors with the chrome language for free. */
 .pc-conversation-bar {
   flex-shrink: 0;
   display: flex;
-  justify-content: flex-end;
+  flex-wrap: wrap;
+  justify-content: space-between;
   align-items: center;
   gap: var(--pd-space-2);
   padding: var(--pd-space-2) var(--pd-space-6) 0;
+}
+
+/* The history affordance. Styled QUIETER than the new-conversation control beside it: this one is
+   navigation and that one changes the thread, and the louder of the two should be the one with a
+   consequence. */
+.pc-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-caption);
+  padding: var(--pd-space-2) var(--pd-space-3);
+  border: 1px solid transparent;
+  border-radius: var(--pd-radius-pill);
+  background: none;
+  color: var(--pd-text-muted);
+  cursor: pointer;
+  transition: background var(--pd-dur-fast) var(--pd-ease);
+}
+
+.pc-history-toggle:hover {
+  background: var(--pd-surface-sunken);
+  color: var(--pd-text);
+}
+
+.pc-history-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.pc-history-icon {
+  font-size: 12px;
+  line-height: 1;
 }
 
 .pc-new {

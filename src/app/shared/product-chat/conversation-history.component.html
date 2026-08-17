@@ -1,0 +1,228 @@
+<!--
+  THE CONVERSATION HISTORY LIST (Show C1, c2): newest first, paged, filterable to the open book.
+
+  It REPLACES the transcript inside Show's tab rather than sitting beside it. The drawer is narrow by
+  default and full-height, so a list rendered alongside a conversation would leave neither of them
+  readable; the transcript is not destroyed by being covered, and the bar above carries the control
+  that goes back to it.
+
+  Every row states the same four facts in the same order: the title, when it was last active, how much
+  is in it, and which book it belongs to (nothing, for an app-level product conversation). The row's
+  own body is the OPEN action, so resuming is one press and the two secondary actions sit beside it
+  rather than competing with it.
+-->
+
+<div class="ch-panel">
+
+  <div class="ch-head">
+    <h3 class="ch-title">{{ label('historyTitle') }}</h3>
+
+    <!-- THE BOOK FILTER, offered only inside a book, because outside one there is nothing to filter
+         to. Two explicit choices rather than a checkbox: "all" is a real state the author returns to,
+         and a cleared checkbox does not say what clearing it shows. -->
+    @if (canFilterByBook) {
+      <div class="ch-filter" role="group" [attr.aria-label]="label('historyTitle')">
+        <button
+          class="ch-filter-btn"
+          [class.ch-filter-btn--on]="!bookOnly"
+          type="button"
+          data-testid="ch-filter-all"
+          [attr.aria-pressed]="!bookOnly"
+          (click)="setBookOnly(false)">{{ label('historyFilterAll') }}</button>
+        <button
+          class="ch-filter-btn"
+          [class.ch-filter-btn--on]="bookOnly"
+          type="button"
+          data-testid="ch-filter-book"
+          [attr.aria-pressed]="bookOnly"
+          (click)="setBookOnly(true)">{{ label('historyFilterBook') }}</button>
+      </div>
+    }
+  </div>
+
+  @if (loading) {
+    <p class="ch-status" data-testid="ch-loading">{{ label('historyLoading') }}</p>
+  }
+
+  <!-- An honest failure, in the same register the transcript's own faults use: it says what did not
+       happen and offers the one action that can change it. -->
+  @if (loadError) {
+    <div class="ch-error" role="status" data-testid="ch-load-error">
+      <p class="ch-error-text">{{ label('historyLoadError') }}</p>
+      <button class="ch-retry" type="button" (click)="load()">{{ label('historyRetry') }}</button>
+    </div>
+  }
+
+  <!-- The resume failed. Stated HERE, where the author pressed, and the panel stays open: closing onto
+       an unchanged transcript would look like the resume had worked. -->
+  @if (resumeError) {
+    <p class="ch-error-text" role="status" data-testid="ch-resume-error">
+      {{ label('historyResumeError') }}
+    </p>
+  }
+
+  @if (deleteError) {
+    <p class="ch-error-text" role="status" data-testid="ch-delete-error">
+      {{ label('historyDeleteError') }}
+    </p>
+  }
+
+  @if (!loading && !loadError && items.length === 0) {
+    <p class="ch-empty" data-testid="ch-empty">{{ label(emptyKey) }}</p>
+  }
+
+  @if (items.length) {
+    <ul class="ch-list" data-testid="ch-list">
+      @for (item of items; track item.id) {
+        <li class="ch-item" [class.ch-item--current]="isCurrent(item)">
+
+          @if (renamingId === item.id) {
+            <!-- INLINE RENAME. `dir="auto"` on the field: the author names a conversation in whichever
+                 language they held it in, which need not be the chrome's. -->
+            <div class="ch-rename">
+              <label class="ch-visually-hidden" [attr.for]="'ch-rename-' + item.id">
+                {{ label('historyRenameLabel') }}
+              </label>
+              <input
+                class="ch-rename-input"
+                type="text"
+                dir="auto"
+                data-testid="ch-rename-input"
+                [id]="'ch-rename-' + item.id"
+                [(ngModel)]="renameDraft"
+                (keydown.enter)="$event.preventDefault(); saveRename(item)" />
+              <div class="ch-rename-actions">
+                <button
+                  class="ch-btn ch-btn--primary"
+                  type="button"
+                  data-testid="ch-rename-save"
+                  [disabled]="!!savingRenameId"
+                  (click)="saveRename(item)">{{ label('historyRenameSave') }}</button>
+                <!-- Disabled while THIS row's save is in flight: the PATCH cannot be recalled, so a
+                     cancel that closed the editor here would be followed by the title changing anyway.
+                     The handler carries the same guard for non-pointer paths. -->
+                <button
+                  class="ch-btn"
+                  type="button"
+                  data-testid="ch-rename-cancel"
+                  [disabled]="savingRenameId === item.id"
+                  (click)="cancelRename()">{{ label('historyRenameCancel') }}</button>
+              </div>
+              @if (renameError === 'blank') {
+                <p class="ch-error-text" data-testid="ch-rename-blank">{{ label('historyRenameBlank') }}</p>
+              }
+              @if (renameError === 'failed') {
+                <p class="ch-error-text" data-testid="ch-rename-error">{{ label('historyRenameError') }}</p>
+              }
+            </div>
+          } @else {
+            <!-- The row's body IS the open action. A separate "open" link beside a non-interactive row
+                 would put two targets on one line where only one of them does the obvious thing. -->
+            <button
+              class="ch-open"
+              type="button"
+              data-testid="ch-open"
+              [disabled]="!!resumingId || isCurrent(item)"
+              (click)="open(item)">
+              <!-- The verb PRECEDES the title rather than replacing it: an `aria-label` here would
+                   compute the button's whole accessible name from itself alone, discarding the title,
+                   relative time, message count and book badge rendered below it - every row would then
+                   announce the identical name to assistive tech. This span is visually hidden, not
+                   `display:none`, so it stays in the accessibility tree while the sighted row reads as
+                   plain text (see `.ch-visually-hidden`, already used for the rename label above). -->
+              <span class="ch-visually-hidden">{{ label('historyOpenItem') }}</span>
+              <span class="ch-item-title" dir="auto">{{ item.title }}</span>
+              <span class="ch-item-meta">
+                <span class="ch-item-time">{{ relativeTime(item.updatedAt) }}</span>
+                <span class="ch-item-count">{{ messageCountLabel(item) }}</span>
+              </span>
+              <span class="ch-item-tags">
+                <!-- The BOOK BADGE, present only when the conversation was held inside a book. An
+                     app-level product conversation carries none: that is the ordinary state of this
+                     assistant, and a badge saying "no book" would turn it into a remark. -->
+                @if (badge(item); as bookName) {
+                  <span class="ch-badge ch-badge--book" data-testid="ch-book-badge" dir="auto">
+                    {{ bookName }}
+                  </span>
+                }
+                @if (isCurrent(item)) {
+                  <span class="ch-badge ch-badge--current" data-testid="ch-current-badge">
+                    {{ label('historyCurrent') }}
+                  </span>
+                }
+                @if (resumingId === item.id) {
+                  <span class="ch-badge" data-testid="ch-resuming">{{ label('historyResuming') }}</span>
+                }
+              </span>
+            </button>
+
+            <div class="ch-item-actions">
+              @if (confirmingDeleteId === item.id) {
+                <!-- The destructive step is labelled with what it DOES, exactly like the drawer's own
+                     two-step control. A hard delete has no undo, so a bare "OK" would leave the author
+                     confirming a question they may have stopped reading. -->
+                <span class="ch-confirm" role="group" [attr.aria-label]="label('historyDeleteConfirm')">
+                  <span class="ch-confirm-text">{{ label('historyDeleteConfirm') }}</span>
+                  <button
+                    class="ch-btn ch-btn--danger"
+                    type="button"
+                    data-testid="ch-delete-yes"
+                    [disabled]="!!deletingId"
+                    (click)="confirmDelete(item)">{{ label('historyDeleteYes') }}</button>
+                  <!-- Disabled once THIS row's DELETE is on the wire: the deliberate click already
+                       happened and the server removes the row regardless, so an enabled cancel here
+                       would hide the confirmation and then have the row vanish anyway. The handler
+                       carries the same guard for non-pointer paths. -->
+                  <button
+                    class="ch-btn"
+                    type="button"
+                    data-testid="ch-delete-no"
+                    [disabled]="deletingId === item.id"
+                    (click)="cancelDelete()">{{ label('historyDeleteCancel') }}</button>
+                </span>
+              } @else {
+                <button
+                  class="ch-btn ch-btn--quiet"
+                  type="button"
+                  data-testid="ch-rename"
+                  (click)="startRename(item)">{{ label('historyRename') }}</button>
+                <button
+                  class="ch-btn ch-btn--quiet"
+                  type="button"
+                  data-testid="ch-delete"
+                  (click)="requestDelete(item)">{{ label('historyDelete') }}</button>
+              }
+            </div>
+          }
+        </li>
+      }
+    </ul>
+  }
+
+  <!-- Newest first, so the PREVIOUS page holds newer conversations. The controls are named by what
+       they show rather than by a direction arrow, which would mean the opposite thing in RTL. -->
+  @if (hasNewer || hasOlder) {
+    <div class="ch-pager" data-testid="ch-pager">
+      <button
+        class="ch-btn"
+        type="button"
+        data-testid="ch-newer"
+        [disabled]="!hasNewer"
+        (click)="newer()">{{ label('historyNewer') }}</button>
+      <span class="ch-page">{{ pageLabel() }}</span>
+      <button
+        class="ch-btn"
+        type="button"
+        data-testid="ch-older"
+        [disabled]="!hasOlder"
+        (click)="older()">{{ label('historyOlder') }}</button>
+    </div>
+  }
+
+  <!-- The SOFT cap. Informational and enforced nowhere: nothing is ever auto-deleted, because authors
+       keep notebooks and this feature does not get to decide which of an author's conversations stop
+       mattering. -->
+  @if (nearCapWarning) {
+    <p class="ch-near-cap" data-testid="ch-near-cap">{{ label('historyNearCap') }}</p>
+  }
+</div>
