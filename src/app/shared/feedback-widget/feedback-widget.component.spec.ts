@@ -408,6 +408,64 @@ describe('FeedbackWidgetComponent (Show C2)', () => {
 
   // ── The note ──────────────────────────────────────────────────────────────────────────────────────
 
+  /**
+   * THE PHANTOM VOTE, found by Bugbot on `pagedraft-client#45` and the one window where the widget's own
+   * promise ("no phantom vote survives a refusal") could be broken.
+   *
+   * A down-vote opens the note editor WHILE its own vote request is still on the wire - that is the
+   * deliberate design, since the thumbs are never disabled during a request. So a reader who types fast and
+   * saves supersedes their own in-flight vote, which makes that vote's arms no-ops. `pending` was assigned
+   * by the superseded request and only its arms cleared it, so a failing note save left the thumb LIT for a
+   * vote the server never accepted - with `saved` still null, which also made retract a no-op, so the
+   * reader could not take the phantom back.
+   *
+   * This block does NOT reuse the note describe's setup below, and that is the whole point: that one flushes
+   * the first vote before opening the editor, so `saved` is populated and the phantom cannot form. The
+   * defect needs the first vote UNRESOLVED.
+   */
+  describe('a note save that fails while the first vote is still in flight', () => {
+    const REASON = 'the answer named the wrong chapter';
+
+    it('leaves NO lit thumb, because nothing was ever stored', async () => {
+      click('fw-down');
+      // Captured before the second POST exists, since expectOne refuses to choose between two matches.
+      const firstVote = pendingVote();
+      await fixture.whenStable();
+      fixture.detectChanges();
+
+      typeNote(REASON);
+      click('fw-note-save');
+      const noteSave = pendingVote();
+
+      // NON-VACUITY: the optimistic vote really is showing at this moment, so the assertions below are
+      // measuring a value that was there to be cleared rather than one that never got set. Asserted through
+      // the PUBLIC surface the reader sees - `verdict` and the rendered `aria-pressed` - because `pending`
+      // is private and a test reaching past the getter would pass on a field the thumb no longer reads.
+      expect(component.verdict)
+        .withContext('the optimistic down-vote must be on screen before the save fails')
+        .toBe('down');
+      expect(pressed('fw-down')).toBe('true');
+
+      noteSave.flush('boom', { status: 500, statusText: 'Server Error' });
+      fixture.detectChanges();
+
+      expect(component.saved)
+        .withContext('nothing was ever stored, so there is no row and retract has no id to use')
+        .toBeNull();
+      expect(component.verdict).toBeNull();
+      expect(pressed('fw-down'))
+        .withContext('a lit thumb here is a vote the server never accepted')
+        .toBe('false');
+      expect(pressed('fw-up')).toBe('false');
+
+      // And the superseded vote landing late cannot resurrect it.
+      firstVote.flush(storedRow({ id: 'fb-n', verdict: 'down' }));
+      fixture.detectChanges();
+      expect(component.verdict).toBeNull();
+      expect(pressed('fw-down')).toBe('false');
+    });
+  });
+
   describe('the note', () => {
     beforeEach(() => {
       click('fw-down');

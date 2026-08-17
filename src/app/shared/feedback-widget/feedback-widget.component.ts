@@ -488,6 +488,17 @@ export class FeedbackWidgetComponent implements OnChanges, OnDestroy {
         },
         error: () => {
           if (gen !== this.generation) return;
+          // REVERT, for the same reason vote()'s failure arm does it, and this arm has to be the one that
+          // does: a down-vote opens the note editor while its own vote request is still on the wire, so a
+          // reader who types and saves fast SUPERSEDES that vote - which makes its arms no-ops and leaves
+          // `pending` set by a request that can no longer clear it. Without this line a failed note save
+          // left the thumb lit for a vote the server never accepted, with `saved` still null, so retract
+          // was a no-op too (no row id to delete) and the reader could not even take the phantom back.
+          //
+          // `supersede()` CANNOT own this. vote() assigns `pending` and then supersedes, so a supersede
+          // that cleared it would erase the optimistic value one line after it was set. The field belongs
+          // to the arms, which is why all six of them now clear it.
+          this.pending = undefined;
           // The editor STAYS OPEN with the reader's text in it: losing what they wrote on a transport
           // failure would make retrying mean rewriting.
           this.savingNote = false;
