@@ -20,8 +20,13 @@ import {
  * answer is grounded, and does NOT map a fault code to prose - it hands the DTO through untouched and
  * lets the surface render the server's verdict.
  *
- * There is no GET here and no conversation id: phase A holds the transcript in the drawer component
- * for the life of the session and persists nothing. Cross-session history is phase C.
+ * SHOW C1 ADDED ONE FIELD AND NOT ONE RULE: {@link ask} now carries an optional conversation id, and
+ * that id is a threading key for the server's WRITE, never an instruction to read. The server does not
+ * compose from stored history; this client still sends the window, still bounded by
+ * {@link MaxSentTurns}, and every selection rule that decides WHICH turns reach that window lives where
+ * it always did, in `ProductChatComponent.historyForServer`. Reading the stored transcript back is a
+ * different service (`ConversationService`) against different endpoints, so there is no path from
+ * storage into a prompt on this seam at all.
  */
 @Injectable({ providedIn: 'root' })
 export class ProductChatService {
@@ -56,7 +61,8 @@ export class ProductChatService {
     history: readonly ProductChatTurnDto[],
     language: ChatLanguage,
     bookId?: string | null,
-    ambientChapter?: AmbientChapterKey | null
+    ambientChapter?: AmbientChapterKey | null,
+    conversationId?: string | null
   ): Observable<ProductChatResponseDto> {
     const body: ProductChatRequest = {
       question,
@@ -82,6 +88,11 @@ export class ProductChatService {
       body.ambientChapterId = ambientChapter?.id ?? null;
       body.ambientChapterOrder = ambientChapter?.order ?? null;
     }
+    // SHOW C1, and written LAST and OMITTED WHEN ABSENT for the same reason `bookId` is: a first
+    // question in a fresh conversation has no id to send, and a body that carries no such property is
+    // byte-identical to the one phase B measured. The server mints the conversation on that request
+    // and returns its id, so threading starts from the answer rather than from a client-side guess.
+    if (conversationId) body.conversationId = conversationId;
     return this.http.post<ProductChatResponseDto>(this.url, body);
   }
 }
