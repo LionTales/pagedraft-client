@@ -1,4 +1,5 @@
 import {
+  AfterViewChecked,
   ChangeDetectionStrategy,
   ChangeDetectorRef,
   Component,
@@ -23,6 +24,12 @@ import {
 import { BookContextService, CurrentBook } from '../../core/services/book-context.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { ProductChatService } from '../../core/services/product-chat.service';
+import { HistoryStringKey, historyString } from '../../core/i18n/history-strings';
+import {
+  ConversationHistoryComponent,
+  ConversationResume,
+} from './conversation-history.component';
+import { hydrateTranscript } from './conversation-hydration';
 import {
   AmbientChapterKey,
   ChatLanguage,
@@ -87,21 +94,44 @@ export type {
  * the server's `language` field per message, so a Hebrew answer reads RTL inside English chrome
  * without the client re-detecting anything.
  *
- * ── Phase A boundary ───────────────────────────────────────────────────────────────────────────────
- * The transcript lives here, in memory, for the life of the session. There is deliberately
- * no history list, no "previous conversations", no token or quota readout, and no settings affordance
- * anywhere in this template, because all three are phase C and the quota one additionally needs a
- * usage-metering backend that does not exist. The UI must not imply a feature that is not there.
+ * ── PERSISTED CONVERSATIONS (Show C1, c2) ─────────────────────────────────────────────────────────
+ * The transcript is no longer only in memory. Every exchange is written server-side as it happens, the
+ * drawer threads a {@link conversationId} through its requests, and {@link ConversationHistoryComponent}
+ * lists what is stored so a conversation can be reopened days later. A browser refresh, a tab close and
+ * a new conversation all stop destroying the only copy.
  *
- * ── STARTING OVER (A.1, w2) ────────────────────────────────────────────────────────────────────────
- * That session-long transcript is also a liability, and the owner hit it: with two refusals still
- * inside the history window the assistant drifted to answering about a different editing pass than the
- * one asked about, and kept re-litigating the refusals. {@link startNewConversation} is the escape
- * hatch. It empties the transcript so the very next request goes up with an empty `history` array,
- * which is the property that actually stops one bad turn poisoning the rest of the session.
+ * WHAT DID NOT CHANGE, AND IS THE WHOLE POINT: the composed prompt. This client is still the SENDER of
+ * the history window - {@link historyForServer} selects it, `ProductChatService` caps it, the server
+ * reads what arrives - and the conversation id is a threading key for the server's WRITE, never an
+ * instruction to read. Resuming a conversation therefore does not compose anything: it rebuilds
+ * `entries` (see `conversation-hydration.ts`) into the same four entry types a live session holds, and
+ * the unchanged selection above then produces the same window an unbroken session would have sent. C1
+ * re-ran no gate, and that identity is what makes that safe rather than assumed.
  *
- * It is emphatically NOT phase C: nothing is saved, named, listed or reopenable, and the control that
- * drives it is deliberately unlabelled with any of that vocabulary. Clearing here means gone.
+ * The quota vocabulary is still absent and still must be: tokens, credits and usage need a metering
+ * backend that does not exist, and a string would imply a feature that is not there.
+ *
+ * FILE SIZE, WAIVED AGAIN AND STATED. This file was already past the repo's ~700-line soft ceiling with
+ * two prior waivers. C1 took everything separable out rather than adding it here: the list, its paging,
+ * its filter, its rename and its two-step delete are {@link ConversationHistoryComponent}, the row/entry
+ * conversion is the pure `conversation-hydration.ts`, and the strings are `history-strings.ts`. What
+ * stayed is what cannot leave - the conversation id is threaded through {@link ask} and cleared by
+ * {@link startNewConversation}, and resuming REPLACES `entries` - because `entries`, `pending` and the
+ * `reset$` unsubscribe are one invariant, and splitting them would put "a discarded conversation's
+ * answer can never be appended" in two files.
+ *
+ * ── STARTING OVER, WHICH IS NOW STARTING NEW (A.1, w2; re-read under C1) ──────────────────────────
+ * The session-long transcript was a liability, and the owner hit it: with two refusals still inside the
+ * history window the assistant drifted to answering about a different editing pass than the one asked
+ * about, and kept re-litigating the refusals. {@link startNewConversation} is the escape hatch. It
+ * empties the transcript on screen and stops threading the old conversation, so the very next request
+ * goes up with an empty `history` array and a new conversation is minted for it - which is the property
+ * that actually stops one bad turn poisoning the rest of the session.
+ *
+ * UNDER C1 IT DESTROYS NOTHING: the conversation it steps away from stays listed, with everything it
+ * held, and can be reopened from the history panel. There is ONE way to start fresh and it now reads as
+ * "new" rather than "clear" in both languages, because the old copy promised a destruction that no
+ * longer happens (see `chat-strings.ts`).
  *
  * THE CONTROL LIVES IN THIS TAB BODY, not in the dock header, on two grounds. The state it acts on
  * ({@link entries}, {@link pending}, the in-flight subscription) lives only here, so a header button
@@ -185,11 +215,17 @@ export type {
   selector: 'app-product-chat',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AsyncPipe, FormsModule, RouterLink, MarkdownTextComponent],
+  imports: [
+    AsyncPipe,
+    FormsModule,
+    RouterLink,
+    MarkdownTextComponent,
+    ConversationHistoryComponent,
+  ],
   templateUrl: './product-chat.component.html',
   styleUrl: './product-chat.component.scss',
 })
-export class ProductChatComponent implements OnDestroy {
+export class ProductChatComponent implements AfterViewChecked, OnDestroy {
   private readonly chat = inject(ProductChatService);
   private readonly overlays = inject(AppOverlayService);
   private readonly bookContext = inject(BookContextService);
@@ -219,6 +255,25 @@ export class ProductChatComponent implements OnDestroy {
   @ViewChild('composerInput') composerInput?: ElementRef<HTMLTextAreaElement>;
 
   /**
+   * A resumed conversation is waiting to be put at its newest turn.
+   *
+   * ONE-SHOT, CONSUMED BY THE FIRST VIEW CHECK THAT FINDS THE CONTAINER (see
+   * {@link ngAfterViewChecked}). {@link scrollToLatest}'s deferred write cannot serve a resume, and the
+   * reason was measured in the running app rather than reasoned about: `.pc-body` lives in the `@else`
+   * arm of the history branch, so the change-detection pass that follows `historyOpen = false` is the
+   * one that creates it for the first time, and with `eventCoalescing: true`
+   * (`app.config.ts`) that pass runs LATER than a `setTimeout(0)` scheduled from the same
+   * turn. Inside that timer the ViewChild was unresolved AND `document.querySelector('.pc-body')` was
+   * null, so the write did not land short - it did not happen at all, and a resumed 16-message
+   * conversation opened 3,347px above its newest turn.
+   *
+   * A FLAG RATHER THAN A LONGER TIMER because the moment it needs has a name: the check that runs once
+   * the container is in the DOM, whenever that is. It is lowered as it is consumed, so no later check
+   * re-scrolls.
+   */
+  private pendingScrollToLatest = false;
+
+  /**
    * App-level chrome language. Hebrew-default per the app-level i18n convention (see the class doc).
    * Hardcoded for now because no global i18n service exists; change here when one is added. Kept
    * private and mirrored on {@link lang} so a spec can flip it the same way the Activity Center's
@@ -234,8 +289,52 @@ export class ProductChatComponent implements OnDestroy {
    */
   readonly isTabShowing$ = this.overlays.isTabShowing$('assistant');
 
-  /** The in-memory transcript. Session-scoped: nothing here is persisted or reloaded. */
+  /**
+   * The transcript on screen.
+   *
+   * No longer session-scoped (Show C1): every exchange in it is also written server-side, and this
+   * array can be REBUILT from those rows when a conversation is resumed. It is still the only thing
+   * {@link historyForServer} reads, which is what keeps the resend window one rule rather than two.
+   */
   entries: ChatEntry[] = [];
+
+  /**
+   * The persisted conversation these turns belong to, or null when nothing has been threaded yet
+   * (Show C1).
+   *
+   * NULL IS A NORMAL, FREQUENT STATE and not an error: a fresh drawer has no conversation until the
+   * first answer comes back with the id the server minted for it. It also goes null when the author
+   * starts a new conversation, and when the conversation being threaded is deleted from history.
+   *
+   * ADOPTION RULE: whatever id the server returns is taken, including one that differs from the id
+   * sent. A stale id does not fail a request server-side - a new conversation is started and its id
+   * returned - so a client that kept sending the dead id would write every subsequent turn into a new
+   * conversation of its own and list one exchange per row. Its ONE exception is an id the author
+   * deleted while the answer was in flight; see {@link deletedConversationIds}.
+   */
+  conversationId: string | null = null;
+
+  /**
+   * Conversations deleted from the history list during this session, so their ids can never be adopted
+   * back onto the thread (see {@link onConversationDeleted} for why this rather than `reset$`).
+   *
+   * NEVER CLEARED, including by {@link startNewConversation}. A conversation id is a server-minted
+   * GUID and a deleted one is never handed out again, so a recorded id can never name a live
+   * conversation later and refusing it forever refuses nothing the author wants. Clearing it on a new
+   * conversation would be SAFE - that gesture fires `reset$`, so no request that could return the id is
+   * still alive by then - but it would buy nothing, and the set grows by one entry per delete the
+   * author performs by hand, one two-step confirmation at a time.
+   */
+  private readonly deletedConversationIds = new Set<string>();
+
+  /**
+   * The history list is showing INSTEAD of the transcript.
+   *
+   * Instead of, not beside: the drawer is narrow by default and full-height, so a list rendered
+   * alongside a conversation would leave neither readable. The transcript is not destroyed by being
+   * covered, and the bar above carries the control that goes back to it.
+   */
+  historyOpen = false;
 
   /** The composer's text. Two-way bound. */
   draft = '';
@@ -295,10 +394,14 @@ export class ProductChatComponent implements OnDestroy {
     // and be completed days later by a click the author no longer connects to the question, which is
     // precisely the accident the confirmation exists to prevent.
     this.isTabShowing$.pipe(takeUntil(this.destroy$)).subscribe(showing => {
-      if (!showing && this.confirmingReset) {
-        this.confirmingReset = false;
-        this.cdr.markForCheck();
-      }
+      if (showing) return;
+      // Also RETURN TO THE CONVERSATION on the way out (C1). The history list is a detour, not a
+      // place: reopening the drawer onto a list the author left open minutes ago would hide the
+      // conversation they came back for, and the list is one press away either way.
+      const armed = this.confirmingReset || this.historyOpen;
+      this.confirmingReset = false;
+      this.historyOpen = false;
+      if (armed) this.cdr.markForCheck();
     });
 
     // C13: "Open Show" clicked while the assistant tab is already showing is a no-op on
@@ -435,6 +538,18 @@ export class ProductChatComponent implements OnDestroy {
   /** Resolve a localized chrome string. */
   label(key: ChatStringKey): string {
     return chatString(this.appLang, key);
+  }
+
+  /**
+   * Resolve a localized HISTORY string (Show C1).
+   *
+   * A second resolver rather than more keys in `chat-strings.ts`, on the rule that moved the dock's own
+   * strings out: strings travel with the control they name, and the history strings belong to
+   * {@link ConversationHistoryComponent}. This component reads only the two that label the affordance
+   * on its own bar.
+   */
+  historyLabel(key: HistoryStringKey): string {
+    return historyString(this.appLang, key);
   }
 
   /** The display title of a cited guide, falling back to the raw id for a guide we do not know. */
@@ -670,11 +785,15 @@ export class ProductChatComponent implements OnDestroy {
   }
 
   /**
-   * ARM the reset. The first click destroys nothing.
+   * ARM the "start new". The first click changes nothing.
    *
-   * A one-click reset of a long thread is unrecoverable here in a way it is not in a product with
-   * saved history: phase A persists nothing, so a mis-click is the conversation, gone. Hence a
-   * two-step gesture whose second step is labelled with what it does rather than "OK".
+   * THE SECOND STEP SURVIVED C1, and it is worth saying why, because the reason it was introduced did
+   * not. A1 argued a mis-click was the conversation, gone; under C1 nothing is gone, the old
+   * conversation stays listed and reopenable. What the gesture still buys is that starting new EMPTIES
+   * THE WINDOW - the next question is answered with no memory of what came before - and an author who
+   * did not mean to do that gets a confusingly amnesiac answer rather than a visible loss. One
+   * deliberate click is cheap; the confirmation now asks about a change of thread rather than about a
+   * destruction, and the copy says so.
    *
    * Refused while a request is in flight, so the armed state cannot be waiting when the answer lands.
    */
@@ -695,23 +814,120 @@ export class ProductChatComponent implements OnDestroy {
   }
 
   /**
-   * Empty the transcript so the next question is asked clean.
+   * Start a NEW conversation: empty the transcript on screen and stop threading the old one.
+   *
+   * THE ONE WAY TO START FRESH (C1's own instruction). The A.1 reset and "new conversation" are not
+   * two features that happen to look alike; they are one, and this method is it. Dropping
+   * {@link conversationId} is what makes the next question mint a new conversation server-side, so the
+   * old one stays listed with everything it held and this method destroys nothing.
    *
    * Public because it is the mechanism rather than the gesture: the UI reaches it only through the
    * two-step confirmation above, and it is written to be SAFE on its own terms so that any other
    * caller (a keyboard shortcut, a spec, a future deep link) cannot corrupt the fresh transcript.
-   * `reset$` unsubscribes anything in flight before the transcript is replaced, so the discarded
-   * conversation's answer can no longer be delivered anywhere. See {@link reset$}.
+   * `reset$` unsubscribes anything in flight before the transcript is replaced, so the previous
+   * conversation's answer can no longer be delivered anywhere - and, since that request is cancelled
+   * before its response is read, its conversation id is never adopted onto the fresh thread either.
+   * See {@link reset$}.
    *
    * The COMPOSER's text is deliberately left alone: it is what the author is about to say, not part of
-   * what they just cleared, and silently blanking it would make a reset destroy more than it offered
+   * what they just stepped away from, and silently blanking it would make this do more than it offered
    * to.
    */
   startNewConversation(): void {
     this.reset$.next();
     this.entries = [];
+    this.conversationId = null;
     this.pending = false;
     this.confirmingReset = false;
+    this.historyOpen = false;
+    this.cdr.markForCheck();
+  }
+
+  // ── History (Show C1) ───────────────────────────────────────────────────────────────────────────
+
+  /** Show the history list, or go back to the conversation. One control, two labels. */
+  toggleHistory(): void {
+    this.historyOpen = !this.historyOpen;
+    // Opening history is an answer to "did you mean to start a new conversation?" as clearly as Cancel
+    // is: the author is going somewhere else.
+    this.confirmingReset = false;
+    this.cdr.markForCheck();
+  }
+
+  /** The label on that control: it names where the press GOES, not the state it leaves. */
+  get historyToggleLabel(): string {
+    return this.historyLabel(this.historyOpen ? 'historyBack' : 'historyTrigger');
+  }
+
+  /**
+   * The author picked a conversation out of history, and the panel has already loaded its whole
+   * transcript.
+   *
+   * THIS IS WHERE C1's ACCEPTANCE CRITERION IS MET OR MISSED. The rows are rebuilt into the same entry
+   * types a live session holds, with the same per-entry ask-time book, with failed exchanges as faults
+   * rather than as turns, and with the context-change markers re-derived - because the UNCHANGED
+   * {@link historyForServer} runs over the result, and it is the identity of ITS output that the
+   * byte-identity pin is about. Nothing here composes, caps or selects.
+   *
+   * `reset$` first, for the same reason {@link startNewConversation} fires it: a request belonging to
+   * the conversation being left must not be able to append its answer to the one being opened, and it
+   * must not be able to have its conversation id adopted onto it either.
+   */
+  resumeConversation(resumed: ConversationResume): void {
+    if (!resumed?.id) return;
+    this.reset$.next();
+    this.pending = false;
+    this.confirmingReset = false;
+
+    const hydrated = hydrateTranscript(resumed.messages ?? [], {
+      firstId: this.nextId,
+      currentBookId: this.bookId,
+      currentBookTitle: this.book?.title ?? null,
+      fallbackLanguage: this.appLang,
+    });
+
+    this.entries = hydrated.entries;
+    // Continue the session's own counter rather than restarting it: ids are never reused, so a turn the
+    // view is still tearing down can never collide with a hydrated one.
+    this.nextId = hydrated.nextId;
+    this.conversationId = resumed.id;
+    this.historyOpen = false;
+    // ASK FOR THE SCROLL, do not attempt it: the container this needs does not exist yet, and will not
+    // exist until the check the line above triggers. See {@link pendingScrollToLatest}.
+    this.pendingScrollToLatest = true;
+    this.cdr.markForCheck();
+  }
+
+  /**
+   * A conversation was deleted from the list.
+   *
+   * The TRANSCRIPT IS LEFT ON SCREEN when the deleted one was the current thread, and only the
+   * threading stops. Emptying the pane would be a second, unasked destruction of what the author is
+   * reading; leaving it threaded to a row that no longer exists would write the next exchange into a
+   * conversation the server has to re-create anyway. So the next question starts a new one, which is
+   * the same state a fresh drawer is in.
+   *
+   * ── WHY THIS DOES NOT FIRE `reset$`, and records the id instead ───────────────────────────────────
+   * Nulling {@link conversationId} on its own is not enough: a request sent BEFORE the delete is still
+   * in flight, still carries the deleted id, and {@link adoptConversation} takes whatever id comes back
+   * - so the dead id is written straight back onto the fresh thread, the next question threads a
+   * conversation that no longer exists, the server mints a replacement for it, and the author's list
+   * grows a stray one-exchange row they never started.
+   *
+   * `reset$` would close that, and it is the WRONG remedy here: it unsubscribes the request, which
+   * throws away an answer the author is sitting waiting for. Deleting a conversation from a list is not
+   * a statement about the question currently being answered. So the answer is allowed to land, and the
+   * deleted id is recorded in {@link deletedConversationIds} for `adoptConversation` to refuse.
+   *
+   * RECORDED WHETHER OR NOT IT IS THE THREAD ON SCREEN, because the refusal costs nothing on an id no
+   * request will ever return, and a guard that only records the current one is a guard that depends on
+   * the threading argument above staying true.
+   */
+  onConversationDeleted(id: string): void {
+    if (!id) return;
+    this.deletedConversationIds.add(id);
+    if (this.conversationId !== id) return;
+    this.conversationId = null;
     this.cdr.markForCheck();
   }
 
@@ -742,6 +958,15 @@ export class ProductChatComponent implements OnDestroy {
    * {@link ask} path, so a retried question travels exactly the same code as a fresh one. The
    * alternative - keeping the user turn and re-sending - would either duplicate that turn (once in
    * the history, once as the question) or need a second, differently-shaped send path.
+   *
+   * THE TURN ABOVE IS CUT ONLY IF IT IS THIS FAULT'S OWN QUESTION, and that check is not belt and
+   * braces. Live it is always true and this method has not moved: `ask()` writes the same string into
+   * the `user` entry's `text` and into the fault's `question`, and `fileForRequest` files a late fault
+   * directly above whatever marker was drawn since, never above another turn. A RESTORED transcript
+   * can hold a shape a live one never does, though: hydration withholds the question of a failure it
+   * reads as retried and emits the fault alone (see `conversation-hydration.ts`), so the entry above
+   * that fault belongs to a DIFFERENT exchange - and without this comparison, retrying it would delete
+   * that unrelated question out of the author's transcript and off the next request's window.
    */
   retry(entry: FaultEntry): void {
     if (this.pending) return;
@@ -751,7 +976,8 @@ export class ProductChatComponent implements OnDestroy {
     if (entry.bookId !== this.bookId) return;
     const at = this.entries.indexOf(entry);
     if (at < 0) return;
-    const from = at > 0 && this.entries[at - 1].kind === 'user' ? at - 1 : at;
+    const above = at > 0 ? this.entries[at - 1] : null;
+    const from = above?.kind === 'user' && above.text === entry.question ? at - 1 : at;
     // CUT THE PAIR OUT, do not truncate the tail. A fault is no longer necessarily the last entry:
     // `fileForRequest` files a late one ABOVE any marker written while it was in flight, so a
     // `slice(0, from)` would take the marker and every turn after it with it.
@@ -836,7 +1062,10 @@ export class ProductChatComponent implements OnDestroy {
       : null;
 
     this.chat
-      .ask(question, history, this.appLang, bookId, ambient)
+      // The conversation id rides along as a THREADING KEY (C1): it says where the server writes this
+      // exchange, and nothing about what the server reads. Null on the first question of a fresh
+      // conversation, which is how the server knows to mint one and hand the id back.
+      .ask(question, history, this.appLang, bookId, ambient, this.conversationId)
       // `reset$` as well as `destroy$`: a reset ends this request outright, so its answer cannot be
       // appended to the transcript that replaced the one it was asked in.
       .pipe(takeUntil(this.destroy$), takeUntil(this.reset$))
@@ -880,6 +1109,11 @@ export class ProductChatComponent implements OnDestroy {
     bookId: string | null,
     askedAt: number
   ): void {
+    // ADOPTED BEFORE THE isGrounded BRANCH, deliberately: a fail-safe exchange is persisted too (a
+    // thumbs-down on a failure is signal, not noise), so its answer carries a conversation id just as a
+    // good one does. Threading only on success would start a fresh conversation for every question
+    // asked after a refusal.
+    this.adoptConversation(res);
     if (!res?.isGrounded) {
       this.acceptFault(res?.faultReason ?? 'unknown', question, askedAt, bookId);
       return;
@@ -934,6 +1168,30 @@ export class ProductChatComponent implements OnDestroy {
     return { question, choices: chapters, bookId };
   }
 
+  /**
+   * Take the conversation id the server used for this exchange (C1).
+   *
+   * WHATEVER COMES BACK WINS, including an id that differs from the one sent. A stale id is not an
+   * error server-side - a new conversation is started and its id returned - so a client that kept its
+   * own dead id would write every later turn into yet another new conversation and fill the list with
+   * one-exchange rows.
+   *
+   * A NULL is left alone rather than clearing the thread. Null means the persistence write itself
+   * faulted while the answer stood, which is a state the author must not be punished for: dropping the
+   * id would detach the next question from a conversation that does exist.
+   *
+   * A DELETED id is the one exception to "whatever comes back wins", and it is the same rule read the
+   * other way round: the reason to take a returned id is that it names a conversation the next turn can
+   * be written into, and a conversation the author deleted while this answer was in flight is exactly
+   * an id for which that is false. See {@link onConversationDeleted}.
+   */
+  private adoptConversation(res: ProductChatResponseDto | null | undefined): void {
+    const id = res?.conversationId;
+    if (!id || id === this.conversationId) return;
+    if (this.deletedConversationIds.has(id)) return;
+    this.conversationId = id;
+  }
+
   private acceptFault(reason: string, question: string, askedAt: number, bookId: string | null): void {
     this.fileForRequest({ kind: 'fault', id: this.nextId++, reason, question, bookId }, askedAt);
     this.settle();
@@ -953,6 +1211,12 @@ export class ProductChatComponent implements OnDestroy {
    * teach it that refusing is the register of this conversation. Only real turns are sent; the
    * service then applies its own upper bound on how many of them go on the wire, and the server
    * applies the window it actually reads.
+   *
+   * SHOW C1 DID NOT TOUCH ONE LINE OF THIS, and that is the feature's central guarantee rather than an
+   * oversight. A resumed conversation reaches this method as ordinary `entries` (see
+   * `conversation-hydration.ts`), so the window it produces after a resume is the window it would have
+   * produced had the drawer never closed - which is exactly what the byte-identity pin asserts. Any
+   * change here is a change to a gated prompt path, for hydrated and live sessions at once.
    */
   private historyForServer(): ProductChatTurnDto[] {
     const current = this.bookId;
@@ -974,12 +1238,35 @@ export class ProductChatComponent implements OnDestroy {
     return turns;
   }
 
-  /** Keep the newest turn in view. Deferred a frame so the new node exists before we measure. */
+  /**
+   * Keep the newest turn in view. Deferred a frame so the new node exists before we measure.
+   *
+   * THE LIVE-APPEND PATH ONLY. A resume cannot use this: see {@link pendingScrollToLatest} for the
+   * measurement that says why, and for the cycle it waits for instead.
+   */
   private scrollToLatest(): void {
     setTimeout(() => {
       const el = this.scroller?.nativeElement;
       if (el) el.scrollTop = el.scrollHeight;
     });
+  }
+
+  /**
+   * The view has been checked. If a resume is waiting for its container, this is the cycle it wanted.
+   *
+   * Costs one boolean read on every check and does nothing else, which is the price of not adding a
+   * second timer whose delay nobody can justify.
+   */
+  ngAfterViewChecked(): void {
+    if (!this.pendingScrollToLatest) return;
+    const el = this.scroller?.nativeElement;
+    // Still no container: leave the request standing so the check that finally renders it can serve it.
+    if (!el) return;
+    // LOWERED BEFORE THE WRITE, so every later check is a single boolean read that does nothing. An
+    // author who scrolls up to re-read a resumed conversation must not be dragged back down by the next
+    // unrelated change-detection pass.
+    this.pendingScrollToLatest = false;
+    el.scrollTop = el.scrollHeight;
   }
 
   /**
