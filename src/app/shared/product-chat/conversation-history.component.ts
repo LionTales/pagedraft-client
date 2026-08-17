@@ -334,7 +334,14 @@ export class ConversationHistoryComponent implements OnInit, OnChanges, OnDestro
     this.cdr.markForCheck();
   }
 
+  /**
+   * INERT WHILE THE SAVE IS IN FLIGHT. Cancel cannot abort the PATCH already dispatched - the server
+   * renames whether or not the editor is still open - so honouring it here would close the editor and
+   * then change the title anyway, which reads as a cancel that lied. The button is disabled in the
+   * template for the same window; this guard is what makes that true for Escape-key paths and tests.
+   */
   cancelRename(): void {
+    if (this.savingRenameId) return;
     this.renamingId = null;
     this.renameDraft = '';
     this.renameError = null;
@@ -374,16 +381,25 @@ export class ConversationHistoryComponent implements OnInit, OnChanges, OnDestro
           this.items = this.items.map(row =>
             row.id === item.id ? { ...row, title: updated?.title ?? title } : row
           );
-          this.renamingId = null;
-          this.renameDraft = '';
-          this.renameError = null;
+          // The editor state is cleared ONLY when it still belongs to this save. The author can open
+          // another row's editor while this PATCH is in flight (startRename has no reason to refuse),
+          // and an unconditional clear here would wipe that newer editor and the text typed into it -
+          // a stale response deciding what a newer gesture shows, the exact class load() is superseded
+          // to prevent. The title update above is unconditional on purpose: the server renamed THIS
+          // row whatever editor is open now.
+          if (this.renamingId === item.id) {
+            this.renamingId = null;
+            this.renameDraft = '';
+            this.renameError = null;
+          }
           this.cdr.markForCheck();
         },
         error: () => {
           // The editor stays OPEN with the author's text in it: losing what they typed on a transport
-          // failure would make retrying mean retyping.
+          // failure would make retrying mean retyping. The error is shown only if that editor is still
+          // the one on screen - flagging it under a DIFFERENT row's editor would blame the wrong title.
           this.savingRenameId = null;
-          this.renameError = 'failed';
+          if (this.renamingId === item.id) this.renameError = 'failed';
           this.cdr.markForCheck();
         },
       });
@@ -398,7 +414,16 @@ export class ConversationHistoryComponent implements OnInit, OnChanges, OnDestro
     this.cdr.markForCheck();
   }
 
+  /**
+   * INERT ONCE THE ARMED ROW'S DELETE IS IN FLIGHT. The deliberate second click already happened and
+   * the DELETE is on the wire; the server removes the row whether or not this handler runs, so
+   * honouring a cancel here would hide the confirmation, look like a reprieve, and then have the row
+   * vanish anyway. Aborting the HTTP call would be the same lie with extra steps - the server may
+   * already have processed it. A DIFFERENT row's armed confirmation (armed while this delete flies)
+   * cancels normally: nothing is in flight for it.
+   */
   cancelDelete(): void {
+    if (this.confirmingDeleteId && this.deletingId === this.confirmingDeleteId) return;
     this.confirmingDeleteId = null;
     this.cdr.markForCheck();
   }
@@ -425,7 +450,10 @@ export class ConversationHistoryComponent implements OnInit, OnChanges, OnDestro
           this.deletingId = null;
           this.items = this.items.filter(row => row.id !== item.id);
           this.totalCount = Math.max(0, this.totalCount - 1);
-          this.confirmingDeleteId = null;
+          // Disarmed ONLY if the armed confirmation still belongs to this delete: the author may have
+          // armed ANOTHER row while this one was in flight, and clearing unconditionally would disarm
+          // a confirmation they just deliberately opened - the same stale-response rule as saveRename.
+          if (this.confirmingDeleteId === item.id) this.confirmingDeleteId = null;
           this.cdr.markForCheck();
           // Told even when it was not the current one: the drawer is the only thing that knows whether
           // the id it is threading has just stopped existing.
@@ -444,7 +472,9 @@ export class ConversationHistoryComponent implements OnInit, OnChanges, OnDestro
         },
         error: () => {
           this.deletingId = null;
-          this.confirmingDeleteId = null;
+          // Same ownership rule as the success arm. The error banner itself stays unconditional: the
+          // delete of THIS row failed and the author should hear it whichever row is armed now.
+          if (this.confirmingDeleteId === item.id) this.confirmingDeleteId = null;
           this.deleteError = true;
           this.cdr.markForCheck();
         },

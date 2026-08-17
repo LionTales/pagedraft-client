@@ -191,23 +191,27 @@ export interface ProductChatResponseDto {
    * the one implicitly created for it. THE CLIENT ADOPTS AN ID IT DID NOT SEND, which is how a first
    * question starts threading and how a stale id is silently replaced by the live one.
    *
-   * NULL MEANS THE EXCHANGE WAS NOT STORED, which happens only when the persistence write itself
-   * faulted server-side. It is a null rather than an error because an answer the author can read beats
-   * a 500 over bookkeeping, so the client must treat it as "keep going, unthreaded" and never as a
-   * failure of the answer.
+   * NULL MEANS NOT EVEN THE QUESTION WAS STORED (the user-turn write faulted server-side, or the
+   * conversation was deleted out from under the request). When only the ASSISTANT write faulted, this
+   * id and {@link userMessageId} still arrive - those rows exist, and threading them is what stops the
+   * next question starting a duplicate conversation - while {@link assistantMessageId} alone is null.
+   * It is a null rather than an error because an answer the author can read beats a 500 over
+   * bookkeeping, so the client must treat it as "keep going, unthreaded" and never as a failure of
+   * the answer.
    */
   conversationId?: string | null;
 
   /**
-   * Show C1. The stored id of the question turn, null when the exchange was not stored. C2 attaches
-   * feedback to these ids; nothing in C1 renders them.
+   * Show C1. The stored id of the question turn, null exactly when {@link conversationId} is. C2
+   * attaches feedback to these ids; nothing in C1 renders them.
    */
   userMessageId?: string | null;
 
   /**
-   * Show C1. The stored id of the answer turn, null when the exchange was not stored. Present on
-   * FAIL-SAFE answers too: a failed exchange is persisted flagged rather than dropped, because a
-   * thumbs-down on a failure is signal and not noise.
+   * Show C1. The stored id of the answer turn, null when the ANSWER was not stored - which can happen
+   * while the question's own ids still arrive (see {@link conversationId}). Present on FAIL-SAFE
+   * answers too: a failed exchange is persisted flagged rather than dropped, because a thumbs-down on
+   * a failure is signal and not noise.
    */
   assistantMessageId?: string | null;
 }

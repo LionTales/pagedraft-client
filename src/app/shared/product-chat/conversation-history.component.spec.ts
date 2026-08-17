@@ -595,6 +595,87 @@ describe('ConversationHistoryComponent (Show C1)', () => {
       expect(text()).toContain('Old name');
       expect(fixture.debugElement.query(By.css('[data-testid="ch-rename-input"]'))).toBeNull();
     });
+
+    it('cancel is INERT while its own save is in flight: a cancel cannot precede a rename that lands anyway', () => {
+      // The PATCH is already on the wire and cannot be recalled, so a cancel honoured here would close
+      // the editor and then have the title change regardless - a cancel that lied. The PATCH is held
+      // unflushed across the press, which is the only window in which the defect exists.
+      open([row({ id: 'c-1', title: 'Old name' })]);
+      click('ch-rename');
+      component.renameDraft = 'The export question';
+      fixture.detectChanges();
+      click('ch-rename-save');
+
+      const cancel = fixture.debugElement.query(By.css('[data-testid="ch-rename-cancel"]'))
+        .nativeElement as HTMLButtonElement;
+      expect(cancel.disabled)
+        .withContext('the cancel button stayed pressable while its own PATCH was in flight')
+        .toBeTrue();
+      component.cancelRename(); // the non-pointer path (Escape, a test) must be refused by the handler too
+      fixture.detectChanges();
+      expect(fixture.debugElement.query(By.css('[data-testid="ch-rename-input"]')))
+        .withContext('cancel closed the editor while the PATCH it could not stop was still in flight')
+        .not.toBeNull();
+
+      http.expectOne('/api/conversations/c-1').flush({
+        id: 'c-1', title: 'The export question', bookId: null,
+        createdAt: '', updatedAt: '', messageCount: 4,
+      });
+      fixture.detectChanges();
+      expect(text()).toContain('The export question');
+    });
+
+    it("a save landing after the author moved to ANOTHER row's editor does not wipe what they typed there", () => {
+      // startRename has no reason to refuse while an earlier row's PATCH is in flight, so the stale
+      // response must not decide what the newer editor shows - the same rule the superseded page read
+      // pins for load().
+      open([row({ id: 'c-1', title: 'First row' }), row({ id: 'c-2', title: 'Second row' })], { totalCount: 2 });
+      click('ch-rename'); // opens c-1's editor
+      component.renameDraft = 'renamed first row';
+      fixture.detectChanges();
+      click('ch-rename-save');
+
+      // c-1 is mid-save; the only quiet rename button left belongs to c-2.
+      click('ch-rename');
+      component.renameDraft = 'typed into the second editor';
+      fixture.detectChanges();
+
+      http.expectOne('/api/conversations/c-1').flush({
+        id: 'c-1', title: 'renamed first row', bookId: null,
+        createdAt: '', updatedAt: '', messageCount: 4,
+      });
+      fixture.detectChanges();
+
+      expect(component.renamingId)
+        .withContext("the stale save's success closed the editor the author had just opened on the other row")
+        .toBe('c-2');
+      expect(component.renameDraft)
+        .withContext('the text typed into the second editor was wiped by the first save landing')
+        .toBe('typed into the second editor');
+      expect(text())
+        .withContext('the first row was renamed by the server and must show it whichever editor is open')
+        .toContain('renamed first row');
+    });
+
+    it("a save failing after the author moved on does not pin its failure on the OTHER row's editor", () => {
+      open([row({ id: 'c-1', title: 'First row' }), row({ id: 'c-2', title: 'Second row' })], { totalCount: 2 });
+      click('ch-rename');
+      component.renameDraft = 'renamed first row';
+      fixture.detectChanges();
+      click('ch-rename-save');
+
+      click('ch-rename'); // c-2's editor
+      component.renameDraft = 'typed into the second editor';
+      fixture.detectChanges();
+
+      http.expectOne('/api/conversations/c-1').error(new ProgressEvent('network error'));
+      fixture.detectChanges();
+
+      expect(fixture.debugElement.query(By.css('[data-testid="ch-rename-error"]')))
+        .withContext("c-1's transport failure was flagged under c-2's editor, blaming the wrong title")
+        .toBeNull();
+      expect(component.renameDraft).toBe('typed into the second editor');
+    });
   });
 
   // ── Delete ──────────────────────────────────────────────────────────────────────────────────────
@@ -664,6 +745,51 @@ describe('ConversationHistoryComponent (Show C1)', () => {
       expect(fixture.debugElement.query(By.css('[data-testid="ch-delete-error"]')))
         .withContext('a delete that removed the row was reported to the author as a failure')
         .toBeNull();
+    });
+
+    it("cancel is INERT once the armed row's DELETE is on the wire: the row is going whatever is pressed", () => {
+      // The deliberate second click already happened; the server removes the row whether or not the
+      // confirmation stays visible. A cancel honoured here would hide the confirmation, read as a
+      // reprieve, and then have the row vanish anyway. The DELETE is held unflushed across the press.
+      open([row({ id: 'c-1' }), row({ id: 'c-2' })], { totalCount: 2 });
+      click('ch-delete');
+      click('ch-delete-yes');
+
+      const no = fixture.debugElement.query(By.css('[data-testid="ch-delete-no"]'))
+        .nativeElement as HTMLButtonElement;
+      expect(no.disabled)
+        .withContext('the cancel button stayed pressable after the DELETE it cannot stop went out')
+        .toBeTrue();
+      component.cancelDelete(); // the non-pointer path must be refused by the handler too
+      fixture.detectChanges();
+      expect(fixture.debugElement.query(By.css('[data-testid="ch-delete-yes"]')))
+        .withContext('cancel hid the armed confirmation while its own DELETE was still in flight')
+        .not.toBeNull();
+
+      http.expectOne('/api/conversations/c-1').flush(null, { status: 204, statusText: 'No Content' });
+      fixture.detectChanges();
+      expect(fixture.debugElement.queryAll(By.css('.ch-item')).length).toBe(1);
+    });
+
+    it('a delete landing after the author armed ANOTHER row does not disarm that confirmation', () => {
+      // Arming row two while row one's DELETE is in flight is one click away; the stale response must
+      // not stand down a confirmation the author just deliberately opened.
+      open([row({ id: 'c-1' }), row({ id: 'c-2' })], { totalCount: 2 });
+      click('ch-delete'); // arms c-1
+      click('ch-delete-yes'); // c-1's DELETE goes out, held unflushed
+      click('ch-delete'); // the only quiet delete button left belongs to c-2: arms it
+
+      http.expectOne('/api/conversations/c-1').flush(null, { status: 204, statusText: 'No Content' });
+      fixture.detectChanges();
+
+      expect(component.confirmingDeleteId)
+        .withContext("c-1's delete landing disarmed the confirmation the author had just opened on c-2")
+        .toBe('c-2');
+      expect(fixture.debugElement.query(By.css('[data-testid="ch-delete-yes"]')))
+        .withContext('the second row\'s armed confirmation vanished when the first delete landed')
+        .not.toBeNull();
+      expect(fixture.debugElement.queryAll(By.css('.ch-item')).length).toBe(1);
+      click('ch-delete-no'); // stands down normally: nothing is in flight for c-2
     });
 
     it('states a failed delete rather than pretending the row went', () => {

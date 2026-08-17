@@ -98,10 +98,14 @@
                   data-testid="ch-rename-save"
                   [disabled]="!!savingRenameId"
                   (click)="saveRename(item)">{{ label('historyRenameSave') }}</button>
+                <!-- Disabled while THIS row's save is in flight: the PATCH cannot be recalled, so a
+                     cancel that closed the editor here would be followed by the title changing anyway.
+                     The handler carries the same guard for non-pointer paths. -->
                 <button
                   class="ch-btn"
                   type="button"
                   data-testid="ch-rename-cancel"
+                  [disabled]="savingRenameId === item.id"
                   (click)="cancelRename()">{{ label('historyRenameCancel') }}</button>
               </div>
               @if (renameError === 'blank') {
@@ -165,10 +169,15 @@
                     data-testid="ch-delete-yes"
                     [disabled]="!!deletingId"
                     (click)="confirmDelete(item)">{{ label('historyDeleteYes') }}</button>
+                  <!-- Disabled once THIS row's DELETE is on the wire: the deliberate click already
+                       happened and the server removes the row regardless, so an enabled cancel here
+                       would hide the confirmation and then have the row vanish anyway. The handler
+                       carries the same guard for non-pointer paths. -->
                   <button
                     class="ch-btn"
                     type="button"
                     data-testid="ch-delete-no"
+                    [disabled]="deletingId === item.id"
                     (click)="cancelDelete()">{{ label('historyDeleteCancel') }}</button>
                 </span>
               } @else {
