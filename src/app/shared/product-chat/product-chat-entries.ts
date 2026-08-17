@@ -56,6 +56,19 @@ export interface AssistantEntry {
   language: ChatLanguage;
 
   /**
+   * Show C2. The PERSISTED `ConversationMessage.Id` of this answer, or null when the answer was not
+   * stored.
+   *
+   * The distinction between {@link id} and this one is the whole reason both exist: `id` is a monotonic
+   * counter local to this browser session, used only for `track` identity, and it names nothing the
+   * server has ever heard of. THIS is the id a feedback row anchors to, and it can legitimately be null
+   * - C1's contract is that the answer stands even when its persistence write faults, and a null here is
+   * exactly that state. The feedback widget is mounted on the null case as NOTHING rather than as a
+   * button whose vote could never be stored (see `FeedbackWidgetComponent`).
+   */
+  messageId: string | null;
+
+  /**
    * Phase B. The book this answer was ABOUT, captured when the question was sent.
    *
    * Chips are routed against THIS id and not against whichever book is open when the chip is clicked.
@@ -131,6 +144,20 @@ export interface FaultEntry {
   id: number;
   reason: string;
   question: string;
+
+  /**
+   * Show C2. The PERSISTED id of the assistant row this refusal was written to, or null.
+   *
+   * A FAILED EXCHANGE IS PERSISTED FLAGGED RATHER THAN DROPPED, precisely so a thumbs-down on a failure
+   * is collectable - the server's own words on why both turns carry the flag. So a fault that has an id
+   * DOES take feedback, and that signal is half the reason C2 exists: an author telling us a refusal was
+   * wrong is more actionable than one telling us an answer was thin.
+   *
+   * Null on the two shapes that never reached storage: a client-side `network` fault (no response came
+   * back at all, so no row was written) and a restored failure whose stored answer row hydration could
+   * not identify.
+   */
+  messageId: string | null;
   /**
    * The book this question was ASKED in, or null outside one. Carried for the same reason the clarify
    * chips carry it: a fault outlives a book switch, and retrying it would re-ask against whatever book

@@ -429,6 +429,15 @@
 /* Inside the answer card, above the fold of the next turn, and never smaller than caption size: the
    citation is how an author learns the guides exist, so it is styled as a component of the answer
    rather than as a de-emphasised footnote. */
+// Show C2, mount #1 adds NO RULE TO THIS FILE, deliberately. The vote widget sits in the answer
+// bubble's footer and owns its own `:host` spacing, so mounting it costs this stylesheet nothing.
+//
+// That is partly principle - the widget is infrastructure that mounts elsewhere next, and a host that
+// restyled it would be where the two mounts started to diverge - and partly arithmetic: this file is
+// within ~30 bytes of Angular's HARD component-style budget (12.29 kB), and the first attempt at a
+// one-declaration `.pc-feedback` rule here failed the build by 32 bytes. A future host addition here
+// has to buy its bytes from somewhere.
+
 .pc-citation {
   margin-block-start: var(--pd-space-4);
   padding-block-start: var(--pd-space-3);

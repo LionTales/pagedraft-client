@@ -1,0 +1,316 @@
+<!--
+  THE TRIAGE VIEW (Show C2), behind `Feedback:TriageEnabled`.
+
+  Two states in one route, deliberately: the LIST, and one row's DETAIL rendered in its place. Not a
+  child route, because the list is not reloaded to come back and a URL for a single feedback row would
+  be a shareable link into the manuscript-bearing surface, which is precisely what the flag exists to
+  keep off a deployment with no auth in front of it.
+
+  Deliberately plain: v1 is a reading tool, per d1. No bulk operations, no charts, no aggregates beyond
+  the paged count.
+-->
+<section class="ft">
+
+  @if (!selected) {
+    <header class="ft-head">
+      <h1 class="ft-title">{{ label('triageTitle') }}</h1>
+      <p class="ft-intro">{{ label('triageIntro') }}</p>
+      <!-- Stated on the surface itself, not only in a doc: the evidence below is read here and goes
+           nowhere. Whoever adds an export affordance should have to delete this sentence first. -->
+      <p class="ft-privacy">{{ label('triagePrivacy') }}</p>
+    </header>
+
+    <!-- ── Filters ─────────────────────────────────────────────────────────────────────────────────
+         "Any" is the empty value on every select, and it means EVERY row rather than a default subset:
+         the service turns it into an ABSENT query parameter, which is not the same request as a filter
+         set to the empty string. -->
+    <div class="ft-filters" role="group" [attr.aria-label]="label('filterTitle')">
+      <label class="ft-filter">
+        <span class="ft-filter-label">{{ label('filterArea') }}</span>
+        <select
+          id="ft-filter-area"
+          name="ftFilterArea"
+          data-testid="ft-filter-area"
+          [(ngModel)]="filters.area"
+          (change)="applyFilters()">
+          <option value="">{{ label('filterAny') }}</option>
+          @for (area of areas; track area) {
+            <option [value]="area">{{ area }}</option>
+          }
+        </select>
+      </label>
+
+      <label class="ft-filter">
+        <span class="ft-filter-label">{{ label('filterStatus') }}</span>
+        <select
+          id="ft-filter-status"
+          name="ftFilterStatus"
+          data-testid="ft-filter-status"
+          [(ngModel)]="filters.status"
+          (change)="applyFilters()">
+          <option value="">{{ label('filterAny') }}</option>
+          @for (status of statuses; track status) {
+            <option [value]="status">{{ statusLabel(status) }}</option>
+          }
+        </select>
+      </label>
+
+      <label class="ft-filter">
+        <span class="ft-filter-label">{{ label('filterVerdict') }}</span>
+        <select
+          id="ft-filter-verdict"
+          name="ftFilterVerdict"
+          data-testid="ft-filter-verdict"
+          [(ngModel)]="filters.verdict"
+          (change)="applyFilters()">
+          <option value="">{{ label('filterAny') }}</option>
+          @for (verdict of verdicts; track verdict) {
+            <option [value]="verdict">{{ verdictLabel(verdict) }}</option>
+          }
+        </select>
+      </label>
+
+      <label class="ft-filter">
+        <span class="ft-filter-label">{{ label('filterBook') }}</span>
+        <!-- A raw id field, on purpose. There is no book PICKER here because the filter resolves through
+             the evidence join rather than a column, so it can only ever match rows whose target still
+             exists; dressing it as a picker would promise a completeness it does not have. -->
+        <input
+          type="text"
+          id="ft-filter-book"
+          name="ftFilterBook"
+          data-testid="ft-filter-book"
+          [placeholder]="label('filterBookPlaceholder')"
+          [(ngModel)]="filters.bookId"
+          (change)="applyFilters()" />
+      </label>
+
+      @if (anyFilter) {
+        <button type="button" class="ft-filter-clear" data-testid="ft-filter-clear" (click)="clearFilters()">
+          {{ label('filterClear') }}
+        </button>
+      }
+    </div>
+
+    @if (loading) {
+      <p class="ft-state" data-testid="ft-loading">{{ label('triageLoading') }}</p>
+    } @else if (loadError) {
+      <div class="ft-state ft-state--error" data-testid="ft-load-error" role="status">
+        <span>{{ label('triageLoadError') }}</span>
+        <button type="button" (click)="load()">{{ label('triageRetry') }}</button>
+      </div>
+    } @else if (detailError) {
+      <!-- A DETAIL read that failed leaves the LIST on screen and says so here. Swapping to an empty
+           detail pane would imitate `available: false`, which is a real and different state. -->
+      <p class="ft-state ft-state--error" data-testid="ft-detail-error" role="status">
+        {{ label('detailLoadError') }}
+      </p>
+    }
+
+    @if (!loading && !loadError) {
+      @if (items.length === 0) {
+        <p class="ft-state" data-testid="ft-empty">{{ label('triageEmpty') }}</p>
+      } @else {
+        <p class="ft-count" data-testid="ft-count">{{ countLabel() }}</p>
+        <ul class="ft-list" data-testid="ft-list">
+          @for (item of items; track item.id) {
+            <li class="ft-row" [attr.data-feedback-id]="item.id">
+              <span class="ft-row-verdict" [class.ft-row-verdict--down]="item.verdict === 'down'">
+                {{ verdictLabel(item.verdict) }}
+              </span>
+              <span class="ft-row-status" data-testid="ft-row-status">{{ statusLabel(item.status) }}</span>
+              <span class="ft-row-area">{{ item.area }}</span>
+              <!-- `dir="auto"`: the reader wrote it, in whichever language they think in. -->
+              <span class="ft-row-note" dir="auto">
+                {{ item.text?.trim() ? item.text : label('listNoNote') }}
+              </span>
+              @if (item.targetDeletedAt) {
+                <span class="ft-row-tombstone">{{ label('listTargetDeleted') }}</span>
+              }
+              <span class="ft-row-when">{{ when(item.createdAt) }}</span>
+              <button
+                type="button"
+                class="ft-row-open"
+                data-testid="ft-row-open"
+                [disabled]="openingId === item.id"
+                (click)="open(item)">{{ label('listOpen') }}</button>
+            </li>
+          }
+        </ul>
+
+        <div class="ft-pager">
+          <button type="button" data-testid="ft-newer" [disabled]="!hasNewer" (click)="newer()">
+            {{ label('pageNewer') }}
+          </button>
+          <span class="ft-page">{{ pageLabel() }}</span>
+          <button type="button" data-testid="ft-older" [disabled]="!hasOlder" (click)="older()">
+            {{ label('pageOlder') }}
+          </button>
+        </div>
+      }
+    }
+  }
+
+  <!-- ── DETAIL ───────────────────────────────────────────────────────────────────────────────────
+       The row, its stored context, its joined evidence, and the transitions it may make. -->
+  @if (selected; as detail) {
+    <article class="ft-detail" data-testid="ft-detail">
+      <button type="button" class="ft-back" data-testid="ft-back" (click)="closeDetail()">
+        {{ label('detailBack') }}
+      </button>
+
+      <header class="ft-detail-head">
+        <span class="ft-row-verdict" [class.ft-row-verdict--down]="detail.feedback.verdict === 'down'">
+          {{ verdictLabel(detail.feedback.verdict) }}
+        </span>
+        <span class="ft-row-area">{{ detail.feedback.area }}</span>
+        <span class="ft-detail-when">{{ label('detailCreated') }}: {{ when(detail.feedback.createdAt) }}</span>
+        <span class="ft-detail-when">
+          {{ label('detailStatusChanged') }}: {{ when(detail.feedback.statusChangedAt) }}
+        </span>
+      </header>
+
+      @if (detail.feedback.text?.trim()) {
+        <section class="ft-block">
+          <h2 class="ft-block-title">{{ label('detailNote') }}</h2>
+          <p class="ft-note" data-testid="ft-detail-note" dir="auto">{{ detail.feedback.text }}</p>
+        </section>
+      }
+
+      <!-- ── The transitions ──────────────────────────────────────────────────────────────────────
+           Only the LEGAL moves are offered. The server is still the authority, and when the two
+           disagree its refusal is rendered verbatim below rather than swallowed. -->
+      <section class="ft-block">
+        <h2 class="ft-block-title">{{ label('statusTitle') }}</h2>
+        <p class="ft-status-current">
+          {{ label('statusCurrent') }}:
+          <strong data-testid="ft-detail-status">{{ statusLabel(detail.feedback.status) }}</strong>
+        </p>
+        @if (transitions.length === 0) {
+          <p class="ft-state" data-testid="ft-no-transitions">{{ label('statusNone') }}</p>
+        } @else {
+          <div class="ft-transitions" role="group" [attr.aria-label]="label('statusTitle')">
+            @for (next of transitions; track next) {
+              <button
+                type="button"
+                class="ft-transition"
+                [attr.data-transition]="next"
+                [disabled]="statusSaving"
+                (click)="changeStatus(next)">{{ statusLabel(next) }}</button>
+            }
+          </div>
+        }
+        @if (statusSaving) {
+          <p class="ft-state" data-testid="ft-status-saving">{{ label('statusSaving') }}</p>
+        }
+        @if (statusError) {
+          <p class="ft-state ft-state--error" data-testid="ft-status-error" role="status">
+            {{ statusError === 'notAllowed' ? label('statusNotAllowed') : label('statusFailed') }}
+          </p>
+        }
+      </section>
+
+      <!-- ── The stored context ───────────────────────────────────────────────────────────────────
+           What no join can recover: where the reader was, in which locale, at VOTE time. -->
+      <section class="ft-block">
+        <h2 class="ft-block-title">{{ label('detailContext') }}</h2>
+        @if (detail.feedback.context; as ctx) {
+          <ul class="ft-context">
+            @if (ctx.route) {
+              <!-- The route is a latin path with a LEADING slash - a bidi-neutral character with nothing
+                   before it in the run. `li` carries `unicode-bidi: isolate` from the UA stylesheet by
+                   default, and isolate keeps the run at the INHERITED `direction: rtl`, so that leading
+                   neutral resolves to the RTL embedding level and the slash renders at the far end (the
+                   same mechanism already recorded for the markdown-text code span's leading dot). Scoped
+                   to `.ft-context-value--path`, not the whole `li`, because the label text beside it is
+                   itself Hebrew under RTL chrome and plaintext on the WHOLE line would pick the label's
+                   first strong character instead. -->
+              <li>
+                <span class="ft-context-key">{{ label('detailContextRoute') }}:</span>
+                <span class="ft-context-value ft-context-value--path" data-testid="ft-context-route">{{ ctx.route }}</span>
+              </li>
+            }
+            <!-- bookId, chapterId and uiLanguage are left as plain text, deliberately: a bare GUID and a
+                 bare locale code start and end on a strong latin/digit character, so isolate's inherited
+                 RTL embedding has no leading/trailing neutral to misplace, and this was MEASURED to
+                 render correctly as-is. Only the route carries the shape that breaks. -->
+            @if (ctx.bookId) {
+              <li><span class="ft-context-key">{{ label('detailContextBook') }}:</span> {{ ctx.bookId }}</li>
+            }
+            @if (ctx.chapterId) {
+              <li><span class="ft-context-key">{{ label('detailContextChapter') }}:</span> {{ ctx.chapterId }}</li>
+            }
+            @if (ctx.uiLanguage) {
+              <li><span class="ft-context-key">{{ label('detailContextLanguage') }}:</span> {{ ctx.uiLanguage }}</li>
+            }
+          </ul>
+        } @else {
+          <p class="ft-state">{{ label('detailContextNone') }}</p>
+        }
+      </section>
+
+      <!-- ── THE EVIDENCE, joined live and read in place ──────────────────────────────────────────
+           A MISS IS A STATE, NOT A FAILURE: a row whose conversation was deleted was KEPT on purpose,
+           so it renders with a reason rather than an error. -->
+      <section class="ft-block ft-evidence">
+        <h2 class="ft-block-title">{{ label('evidenceTitle') }}</h2>
+
+        @if (!detail.evidence.available) {
+          <p class="ft-state" data-testid="ft-evidence-unavailable">{{ unavailableText() }}</p>
+        } @else {
+          @if (detail.evidence.conversationTitle) {
+            <p class="ft-evidence-conversation" dir="auto">
+              {{ label('evidenceConversation') }}: {{ detail.evidence.conversationTitle }}
+            </p>
+          }
+
+          @if (detail.evidence.answerFailed) {
+            <p class="ft-state ft-state--flag" data-testid="ft-answer-failed">
+              {{ label('evidenceAnswerFailed') }}
+            </p>
+          }
+
+          <h3 class="ft-evidence-title">{{ label('evidenceQuestion') }}</h3>
+          <!-- The author's own sentence, in whichever language they asked it. `dir="auto"` is right here
+               precisely because it is one short utterance, unlike the answer below. -->
+          <p class="ft-evidence-question" data-testid="ft-evidence-question" dir="auto">
+            {{ detail.evidence.question }}
+          </p>
+
+          <h3 class="ft-evidence-title">{{ label('evidenceAnswer') }}</h3>
+          <!-- THE SAME RENDERER SHOW USES. Not a second markdown path: two would mean two escaping
+               stories and only one of them would keep being reviewed. `blockDirBase` gives it the
+               answer's own direction so a block written in the other script gets its own `dir`. -->
+          <div class="ft-evidence-answer" data-testid="ft-evidence-answer" [attr.dir]="answerDir()">
+            <app-markdown-text [text]="detail.evidence.answer" [blockDirBase]="answerDir()" />
+          </div>
+
+          <h3 class="ft-evidence-title">{{ label('evidenceGrounding') }}</h3>
+          @if (!hasGrounding) {
+            <p class="ft-state" data-testid="ft-no-grounding">{{ label('evidenceNoGrounding') }}</p>
+          } @else {
+            <!-- READ-ONLY CHIPS. Labelled by the same functions the transcript's own citation chips use,
+                 rendered as inert spans: a link would navigate the owner out of the row they are
+                 triaging, and a chip can point at a guide for an answer whose conversation is gone. -->
+            @if (guideLabels().length) {
+              <div class="ft-chips" data-testid="ft-guide-chips">
+                <span class="ft-chips-label">{{ label('evidenceGuides') }}</span>
+                @for (name of guideLabels(); track name) {
+                  <span class="ft-chip">{{ name }}</span>
+                }
+              </div>
+            }
+            @if (artifactLabels().length) {
+              <div class="ft-chips" data-testid="ft-artifact-chips">
+                <span class="ft-chips-label">{{ label('evidenceArtifacts') }}</span>
+                @for (name of artifactLabels(); track name) {
+                  <span class="ft-chip ft-chip--book">{{ name }}</span>
+                }
+              </div>
+            }
+          }
+        }
+      </section>
+    </article>
+  }
+</section>

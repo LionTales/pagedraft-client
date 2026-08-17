@@ -1,0 +1,332 @@
+/**
+ * The triage view's chrome (Show C2). Deliberately plain: v1 is a reading tool, per d1.
+ *
+ * Every directional property is LOGICAL, so the page mirrors with the host's `dir` (bound from the chrome
+ * language) without a second rule. The one place a physical direction would have been tempting - the
+ * joined answer - is handled by a `dir` attribute on that element instead, because the answer runs in the
+ * language it was WRITTEN in, which need not be the chrome's.
+ *
+ * Nothing here reaches into `app-markdown-text`'s rendered output. That component is deliberately
+ * `ViewEncapsulation.None` and owns its own namespaced rules; a descendant selector written from this
+ * file would carry THIS component's scoping attribute and match nothing, because those nodes arrive via
+ * `[innerHTML]` and Angular never stamped them. Anything the evidence pane needs from rendered markdown
+ * has to be added there, namespaced the same way.
+ */
+
+:host {
+  display: block;
+  padding: var(--pd-space-6);
+  max-width: 60rem;
+  margin-inline: auto;
+  font-family: var(--pd-font-ui);
+  font-size: var(--pd-text-body-sm);
+  line-height: var(--pd-lh-body-sm);
+  color: var(--pd-text);
+}
+
+.ft-title {
+  margin: 0 0 var(--pd-space-2);
+  font-size: var(--pd-text-h3);
+  line-height: var(--pd-lh-h3);
+  color: var(--pd-primary-900);
+}
+
+.ft-intro,
+.ft-privacy {
+  margin: 0 0 var(--pd-space-2);
+  color: var(--pd-text-secondary);
+}
+
+.ft-privacy {
+  font-size: var(--pd-text-caption);
+}
+
+/* ── Filters ─────────────────────────────────────────────────────────────────────────────────────── */
+
+.ft-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pd-space-3);
+  align-items: flex-end;
+  margin: var(--pd-space-5) 0;
+  padding: var(--pd-space-3);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-md);
+  background: var(--pd-surface-sunken);
+}
+
+.ft-filter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-1);
+  font-size: var(--pd-text-caption);
+}
+
+.ft-filter-label {
+  color: var(--pd-text-secondary);
+}
+
+.ft-filter select,
+.ft-filter input {
+  font-family: inherit;
+  font-size: var(--pd-text-body-sm);
+  padding: var(--pd-space-2) var(--pd-space-3);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-text);
+}
+
+.ft-filter-clear,
+.ft-row-open,
+.ft-back,
+.ft-transition,
+.ft-pager button,
+.ft-state--error button {
+  font-family: inherit;
+  font-size: var(--pd-text-caption);
+  padding: var(--pd-space-2) var(--pd-space-3);
+  border: 1px solid var(--pd-border-strong);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+  color: var(--pd-text);
+  cursor: pointer;
+}
+
+.ft-filter-clear:hover,
+.ft-row-open:hover:not(:disabled),
+.ft-back:hover,
+.ft-transition:hover:not(:disabled),
+.ft-pager button:hover:not(:disabled) {
+  background: var(--pd-neutral-100);
+}
+
+.ft-filter-clear:focus-visible,
+.ft-row-open:focus-visible,
+.ft-back:focus-visible,
+.ft-transition:focus-visible,
+.ft-pager button:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+}
+
+.ft-row-open:disabled,
+.ft-transition:disabled,
+.ft-pager button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── The list ────────────────────────────────────────────────────────────────────────────────────── */
+
+.ft-count {
+  margin: 0 0 var(--pd-space-3);
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-caption);
+}
+
+.ft-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-2);
+}
+
+.ft-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--pd-space-3);
+  flex-wrap: wrap;
+  padding: var(--pd-space-3);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface);
+}
+
+/* The verdict is carried by a WORD, not by a colour alone, so it survives a reader who cannot separate
+   the two; the colour is a second channel on top of it. */
+.ft-row-verdict {
+  font-weight: var(--pd-weight-semibold);
+  color: var(--pd-primary-700);
+}
+
+.ft-row-verdict--down {
+  color: var(--pd-cut);
+}
+
+.ft-row-status,
+.ft-row-area,
+.ft-row-tombstone {
+  font-size: var(--pd-text-caption);
+  padding: 1px var(--pd-space-3);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-secondary);
+}
+
+.ft-row-tombstone {
+  background: var(--pd-cut-bg);
+  color: var(--pd-cut);
+}
+
+.ft-row-note {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ft-row-when {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+}
+
+.ft-pager {
+  display: flex;
+  align-items: center;
+  gap: var(--pd-space-3);
+  margin-block-start: var(--pd-space-5);
+}
+
+.ft-page {
+  color: var(--pd-text-secondary);
+  font-size: var(--pd-text-caption);
+}
+
+/* ── Detail ──────────────────────────────────────────────────────────────────────────────────────── */
+
+.ft-back {
+  margin-block-end: var(--pd-space-5);
+}
+
+.ft-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pd-space-3);
+  align-items: baseline;
+  margin-block-end: var(--pd-space-5);
+}
+
+.ft-detail-when {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+}
+
+.ft-block {
+  margin-block-end: var(--pd-space-6);
+  padding-block-end: var(--pd-space-4);
+  border-block-end: 1px solid var(--pd-divider);
+}
+
+.ft-block-title {
+  margin: 0 0 var(--pd-space-3);
+  font-size: var(--pd-text-h5);
+  line-height: var(--pd-lh-h5);
+}
+
+.ft-note,
+.ft-evidence-question {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ft-status-current {
+  margin: 0 0 var(--pd-space-3);
+}
+
+.ft-transitions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--pd-space-2);
+}
+
+.ft-context {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--pd-text-caption);
+  overflow-wrap: anywhere;
+}
+
+.ft-context-key {
+  color: var(--pd-text-secondary);
+}
+
+/* The route value only - see the template comment beside `ctx.route` for the mechanism. `isolate` was
+   measured to NOT fix this: it keeps the run at the inherited `direction: rtl`, so a leading bidi-neutral
+   (the route's leading slash) still resolves to the RTL end. `plaintext` resolves the run's own direction
+   from ITS OWN first strong character instead, matching the fix already shipped for the markdown-text
+   inline code span. */
+.ft-context-value--path {
+  unicode-bidi: plaintext;
+}
+
+.ft-evidence-conversation {
+  margin: 0 0 var(--pd-space-3);
+  color: var(--pd-text-secondary);
+}
+
+.ft-evidence-title {
+  margin: var(--pd-space-4) 0 var(--pd-space-2);
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+}
+
+.ft-evidence-answer {
+  padding: var(--pd-space-3);
+  border: 1px solid var(--pd-border);
+  border-radius: var(--pd-radius-sm);
+  background: var(--pd-surface-sunken);
+  /* Grounding output can carry a wide code block; it scrolls inside its own box rather than making the
+     page scroll sideways. */
+  overflow-x: auto;
+}
+
+.ft-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--pd-space-2);
+  margin-block-start: var(--pd-space-2);
+}
+
+.ft-chips-label {
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+}
+
+/* Inert by construction: a span, never an anchor. See the template for why read-only is the decision. */
+.ft-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--pd-text-caption);
+  padding: 1px var(--pd-space-3);
+  border-radius: var(--pd-radius-pill);
+  background: var(--pd-neutral-100);
+  color: var(--pd-text-secondary);
+}
+
+.ft-chip--book {
+  background: var(--pd-info-bg);
+  color: var(--pd-primary-700);
+}
+
+/* ── States ──────────────────────────────────────────────────────────────────────────────────────── */
+
+.ft-state {
+  margin: var(--pd-space-2) 0;
+  color: var(--pd-text-secondary);
+}
+
+.ft-state--error {
+  color: var(--pd-cut);
+  display: flex;
+  gap: var(--pd-space-3);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ft-state--flag {
+  color: var(--pd-cut);
+}
