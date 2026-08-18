@@ -23,7 +23,18 @@ export interface LanguageEngineResult {
 export interface IssuesResponse {
   issues: LanguageIssue[];
   languageToolUnavailable?: boolean | null;
+  /**
+   * The server's own English sentence. STILL SENT, DELIBERATELY NOT RENDERED: it is English on a
+   * Hebrew-default UI, which is what bug 3 was. Kept on the wire (and on this type) for one release so
+   * the client can ship independently of the API that added the code beside it.
+   */
   languageToolMessage?: string | null;
+  /**
+   * Stable, localizable reason the checker produced nothing: `hebrew-unsupported`, `disabled`,
+   * `unavailable` or `timeout` (LanguageToolEngine's four `ServiceUnavailableCode` values). ABSENT on a
+   * legacy API build that predates the code, which is exactly the case the client falls back for.
+   */
+  languageToolCode?: string | null;
 }
 
 export interface LanguageIssue {

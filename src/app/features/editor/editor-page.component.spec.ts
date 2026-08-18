@@ -1232,8 +1232,17 @@ class StubAnalysisPanelComponent implements OnDestroy {
   }
 }
 
+/**
+ * b2: `bookLanguage` is DECLARED here rather than being swallowed by NO_ERRORS_SCHEMA, because the
+ * issue panel now HIDES its detect button when this input resolves to Hebrew (and it defaults to `'he'`
+ * inside the panel). An unwired binding would therefore hide the button on English books too, and with
+ * NO_ERRORS_SCHEMA on, a deleted binding would fail nothing. Declaring the input makes the wire itself
+ * assertable.
+ */
 @Component({ selector: 'app-issue-panel', standalone: true, template: '' })
-class StubIssuePanelComponent {}
+class StubIssuePanelComponent {
+  @Input() bookLanguage: string | null = null;
+}
 
 @Component({ selector: 'app-chapter-tree', standalone: true, template: '' })
 class StubChapterTreeComponent {}
@@ -1491,6 +1500,42 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
     fixture.detectChanges();
     expect(has('app-analysis-panel')).toBe(true);
     expect(has('app-issue-panel')).toBe(false);
+  });
+
+  // ── 3b. b2: the issue panel's bookLanguage binding is REAL ────────────────────────────
+  //
+  // The panel gates its detect button on this input and defaults it to 'he' internally, so an unbound
+  // (or deleted) binding would hide the button on every English book while every panel-level spec still
+  // passed. This asserts the wire from `book.language` through `editor-page.component.html`.
+
+  it('binds the issue panel bookLanguage from the loaded book (English book => en)', () => {
+    component.bookId = 'book-1';
+    component.book = { ...BOOK, language: 'en' };
+    component.reviewMode = 'edit';
+    component.editHelpView = 'language';
+    fixture.detectChanges();
+
+    const panel = fixture.debugElement.query(By.directive(StubIssuePanelComponent));
+    expect(panel).not.toBeNull();
+    expect(panel.componentInstance.bookLanguage).toBe('en');
+  });
+
+  it('binds the issue panel bookLanguage to he for a Hebrew book, and to he when no book is loaded', () => {
+    component.bookId = 'book-1';
+    component.book = BOOK; // language: 'he'
+    component.reviewMode = 'edit';
+    component.editHelpView = 'language';
+    fixture.detectChanges();
+    expect(
+      fixture.debugElement.query(By.directive(StubIssuePanelComponent)).componentInstance.bookLanguage
+    ).toBe('he');
+
+    // No book yet: the template's own `?? 'he'` keeps the Hebrew default rather than sending null.
+    component.book = { ...BOOK, language: null as unknown as string };
+    fixture.detectChanges();
+    expect(
+      fixture.debugElement.query(By.directive(StubIssuePanelComponent)).componentInstance.bookLanguage
+    ).toBe('he');
   });
 
   // ── 4. rf-c02 (migrated by Wave 3 / w3): the whole-book "running" signal, now IN THE SPINE ──────────

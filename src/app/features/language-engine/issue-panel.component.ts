@@ -27,7 +27,11 @@ export interface ApplyCorrectionEvent {
       <header class="panel-header">
         <h3>{{ titleLabel }}</h3>
         <div class="header-actions">
+          <!-- b2: the checker cannot work on Hebrew (LanguageToolEngine returns Issues=[] on its Hebrew
+               branch by design), so a Hebrew book gets the note below instead of a button that does
+               nothing and then explains itself. -->
           <button
+            *ngIf="canDetect"
             type="button"
             class="pd-btn pd-btn-ghost"
             [disabled]="isDetecting"
@@ -47,6 +51,13 @@ export interface ApplyCorrectionEvent {
       <div class="service-unavailable-banner" *ngIf="serviceUnavailableMessage">
         <span class="banner-icon" aria-hidden="true">ℹ️</span>
         <p class="banner-text">{{ serviceUnavailableMessage }}</p>
+      </div>
+
+      <!-- b2: an HTTP failure used to be a console line only, so a 500 rendered exactly like
+           "no issues found". It gets its own banner, distinct from the checker-unavailable one. -->
+      <div class="request-error-banner" *ngIf="requestErrorMessage" role="alert">
+        <span class="banner-icon" aria-hidden="true">⚠️</span>
+        <p class="banner-text">{{ requestErrorMessage }}</p>
       </div>
 
       <section class="issues-section" *ngIf="issues.length > 0; else noIssues">
@@ -110,8 +121,15 @@ export interface ApplyCorrectionEvent {
 
       <ng-template #noIssues>
         <div class="no-issues pd-empty">
-          <p *ngIf="!hasDetected">{{ emptyPromptLabel }}</p>
-          <p *ngIf="hasDetected">{{ emptyCleanLabel }}</p>
+          <!-- Exactly one line renders. For a Hebrew book that is the unsupported note, which replaces
+               BOTH the "press Detect" prompt (there is no button) and the English server banner. -->
+          <p *ngIf="!canDetect" class="detect-unsupported-note">{{ detectUnsupportedNote }}</p>
+          <p *ngIf="canDetect && !hasDetected">{{ emptyPromptLabel }}</p>
+          <!-- "No issues detected. Great!" is a CLAIM ABOUT THE TEXT, so it must not render when the
+               checker never ran: an unavailable checker returns zero issues, and the browser gate caught
+               the clean line sitting directly under the unavailable banner saying the opposite. The
+               banner is the only statement in that state. -->
+          <p *ngIf="canDetect && hasDetected && !serviceUnavailableMessage">{{ emptyCleanLabel }}</p>
         </div>
       </ng-template>
 
@@ -291,10 +309,25 @@ export interface ApplyCorrectionEvent {
       border: 1px solid var(--pd-primary-100);
       font-size: var(--pd-text-body-sm);
     }
+    .request-error-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--pd-space-3);
+      padding: var(--pd-space-3) var(--pd-space-4);
+      border-radius: var(--pd-radius-md);
+      background: var(--pd-surface-sunken);
+      border: 1px solid var(--pd-sev-high);
+      font-size: var(--pd-text-body-sm);
+    }
     .banner-icon { font-size: var(--pd-text-body); }
     .banner-text {
       margin: 0;
       color: var(--pd-primary-900);
+      line-height: var(--pd-lh-body-sm);
+    }
+    .request-error-banner .banner-text { color: var(--pd-text); }
+    .detect-unsupported-note {
+      margin: 0;
       line-height: var(--pd-lh-body-sm);
     }
   `]
@@ -312,9 +345,33 @@ export class IssuePanelComponent implements OnInit, OnChanges {
     return (this.bookLanguage?.trim().toLowerCase() || 'he').startsWith('en') ? 'en' : 'he';
   }
 
+  /**
+   * b2: whether the "Detect issues" affordance is offered at all.
+   *
+   * FALSE for a Hebrew book, because the feature cannot work there: `LanguageToolEngine`'s Hebrew branch
+   * returns `Issues = []` with a service-unavailable reason BY DESIGN (no Hebrew LanguageTool server is
+   * deployed), so the button ran, found nothing, and then explained itself in the server's English. The
+   * note that replaces it says the same thing once, in the reader's language.
+   *
+   * NOTE THE AXIS: this is the BOOK's language (the `bookLanguage` @Input the editor binds from
+   * `book.language`), not the chapter's detected text language. An English book whose chapter happens to
+   * hold Hebrew still gets the button, and the server's `hebrew-unsupported` code then explains the empty
+   * result through the map below.
+   */
+  get canDetect(): boolean {
+    return this.langKey !== 'he';
+  }
+
   // ---- Localized chrome strings (he/en parity). -----------------------------
   // DRAFT Hebrew - flag for native-speaker review before sign-off.
   get titleLabel(): string { return this.langKey === 'he' ? 'בעיות שפה' : 'Language Issues'; }
+  /**
+   * b2 KEPT DELIBERATELY, THOUGH THE HEBREW HALF IS CURRENTLY UNREACHABLE. `canDetect` is false for a
+   * Hebrew book, so `detectLabel` / `detectingLabel` / `emptyPromptLabel` / `emptyCleanLabel` only ever
+   * render their `en` arm today. The gate is a fact about the deployed checker, not about the product:
+   * the day a Hebrew LanguageTool server exists, `canDetect` flips and these strings render again.
+   * Deleting the Hebrew arms now would turn that flip into a silent English regression.
+   */
   get detectLabel(): string { return this.langKey === 'he' ? 'אתר בעיות' : 'Detect Issues'; }
   get detectingLabel(): string { return this.langKey === 'he' ? 'מאתר...' : 'Detecting...'; }
   get rewriteLabel(): string { return this.langKey === 'he' ? 'שכתב' : 'Rewrite'; }
@@ -358,6 +415,58 @@ export class IssuePanelComponent implements OnInit, OnChanges {
     return this.langKey === 'he' ? 'בודק השפה אינו זמין.' : 'The language checker is not available.';
   }
 
+  /**
+   * The note that stands in for the detect button on a Hebrew book. DRAFT he - needs native review.
+   * It points at the pass that DOES handle Hebrew rather than leaving the reader with a dead end.
+   */
+  get detectUnsupportedNote(): string {
+    return this.langKey === 'he'
+      ? 'בודק השפה האוטומטי אינו תומך בעברית, ולכן איתור בעיות אינו זמין בספר הזה. להגהה בעברית אפשר להריץ את מעבר "הגהה" בלשונית "ניתוח".'
+      : 'The automatic language checker does not support Hebrew, so issue detection is not available for this book. For Hebrew, run the Proofread pass in the Analysis tab.';
+  }
+
+  /** Localized banner for an HTTP failure (a 500 used to be indistinguishable from "no issues found"). */
+  get requestFailedLabel(): string {
+    return this.langKey === 'he'
+      ? 'בדיקת השפה נכשלה. אפשר לנסות שוב.' // DRAFT he - needs native review
+      : 'The language check failed. Please try again.';
+  }
+
+  /**
+   * b2: code -> localized sentence, keyed on `LanguageToolEngine.ServiceUnavailableCode`.
+   *
+   * The four keys are the API's whole vocabulary (`hebrew-unsupported`, `disabled`, `unavailable`,
+   * `timeout`). ANY other value - and a legacy payload that carries only the English
+   * `languageToolMessage` and no code at all - falls back to {@link serviceUnavailableFallback}, which is
+   * why this ships whether or not the API half is deployed. The server's own sentence is never rendered:
+   * it is English, and this panel is Hebrew by default.
+   * DRAFT he on all four - needs native review.
+   */
+  private static readonly UNAVAILABLE_COPY: Readonly<Record<string, { he: string; en: string }>> = {
+    'hebrew-unsupported': {
+      he: 'בודק השפה אינו תומך בעברית, ולכן הטקסט הזה לא נבדק.',
+      en: 'The language checker does not support Hebrew, so this text was not checked.',
+    },
+    disabled: {
+      he: 'בודק השפה כבוי בהגדרות השרת.',
+      en: 'The language checker is turned off in the server settings.',
+    },
+    unavailable: {
+      he: 'בודק השפה אינו זמין כרגע. אפשר לנסות שוב מאוחר יותר.',
+      en: 'The language checker is not available right now. Please try again later.',
+    },
+    timeout: {
+      he: 'בודק השפה לא הגיב בזמן. אפשר לנסות שוב.',
+      en: 'The language checker did not respond in time. Please try again.',
+    },
+  };
+
+  /** Resolve an unavailable reason to localized copy, falling back for an unknown or absent code. */
+  unavailableCopyFor(code: string | null | undefined): string {
+    const entry = code ? IssuePanelComponent.UNAVAILABLE_COPY[code] : undefined;
+    return entry ? entry[this.langKey] : this.serviceUnavailableFallback;
+  }
+
   issues: LanguageIssue[] = [];
   rewrittenText?: string;
   isDetecting = false;
@@ -365,6 +474,8 @@ export class IssuePanelComponent implements OnInit, OnChanges {
   hasDetected = false;
   /** Shown when the language checker (e.g. LanguageTool) is unavailable. */
   serviceUnavailableMessage: string | null = null;
+  /** Shown when the request itself failed (network / 5xx), distinct from a checker that answered. */
+  requestErrorMessage: string | null = null;
 
   get errorCount(): number {
     return this.issues.filter(i => i.severity === 'error').length;
@@ -396,45 +507,63 @@ export class IssuePanelComponent implements OnInit, OnChanges {
       this.rewrittenText = undefined;
       this.hasDetected = false;
       this.serviceUnavailableMessage = null;
+      this.requestErrorMessage = null;
       if (this.bookId && this.chapterId) {
         this.loadIssues();
       }
     }
   }
 
+  /**
+   * Set (or clear) the checker-unavailable banner from a response.
+   *
+   * SUPPRESSED ENTIRELY FOR A HEBREW BOOK: there, "the checker produced nothing" is the expected,
+   * permanent state that {@link detectUnsupportedNote} already states once, and an expected absence is
+   * not an outage to banner about.
+   */
+  private applyUnavailable(unavailable: unknown, code: unknown): void {
+    if (!unavailable || !this.canDetect) {
+      this.serviceUnavailableMessage = null;
+      return;
+    }
+    this.serviceUnavailableMessage = this.unavailableCopyFor(typeof code === 'string' ? code : null);
+  }
+
   loadIssues(): void {
     if (!this.bookId || !this.chapterId) return;
 
+    this.requestErrorMessage = null;
     this.languageEngineService.getIssues(this.bookId, this.chapterId).subscribe({
       next: (res) => {
         this.issues = res.issues;
         this.hasDetected = true;
-        this.serviceUnavailableMessage = res.languageToolUnavailable
-          ? (res.languageToolMessage ?? this.serviceUnavailableFallback)
-          : null;
+        this.applyUnavailable(res.languageToolUnavailable, res.languageToolCode);
       },
-      error: (err) => {
-        console.error('Failed to load issues', err);
+      error: () => {
+        // b2: was a console line, which left a 5xx looking exactly like "no issues found".
+        this.requestErrorMessage = this.requestFailedLabel;
       }
     });
   }
 
   detectIssues(): void {
-    if (!this.bookId || !this.chapterId || this.isDetecting) return;
+    if (!this.bookId || !this.chapterId || this.isDetecting || !this.canDetect) return;
 
     this.isDetecting = true;
+    this.requestErrorMessage = null;
     this.languageEngineService.detectIssues(this.bookId, this.chapterId).subscribe({
       next: (result) => {
         this.issues = result.issues;
         this.hasDetected = true;
         this.isDetecting = false;
-        this.serviceUnavailableMessage = result.metadata?.['languageToolUnavailable']
-          ? (result.metadata?.['languageToolMessage'] ?? this.serviceUnavailableFallback)
-          : null;
+        this.applyUnavailable(
+          result.metadata?.['languageToolUnavailable'],
+          result.metadata?.['languageToolCode']
+        );
       },
-      error: (err) => {
-        console.error('Failed to detect issues', err);
+      error: () => {
         this.isDetecting = false;
+        this.requestErrorMessage = this.requestFailedLabel;
       }
     });
   }
