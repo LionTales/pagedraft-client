@@ -78,9 +78,14 @@ interface GuideReadResult {
   template: `
     <div class="reader" [attr.dir]="dir">
       <nav class="reader-bar">
-        <a class="reader-back" [routerLink]="['/help']" [queryParams]="{ lang: lang }">
-          <span class="reader-back-icon" aria-hidden="true">←</span>{{ label('backToIndex') }}
-        </a>
+        <div class="reader-back-group">
+          <a class="reader-back-books" [routerLink]="['/books']">
+            <span class="reader-back-books-icon" aria-hidden="true">←</span>{{ label('backToBooks') }}
+          </a>
+          <a class="reader-back" [routerLink]="['/help']" [queryParams]="{ lang: lang }">
+            <span class="reader-back-icon" aria-hidden="true">←</span>{{ label('backToIndex') }}
+          </a>
+        </div>
 
         <div class="reader-lang" role="group" [attr.aria-label]="label('languageToggleLabel')">
           <button
@@ -156,6 +161,12 @@ interface GuideReadResult {
       padding-block-end: var(--pd-space-4);
       border-block-end: 1px solid var(--pd-divider);
     }
+    .reader-back-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--pd-space-4);
+    }
     .reader-back {
       color: var(--pd-text-link);
       text-decoration: none;
@@ -169,6 +180,18 @@ interface GuideReadResult {
     /* The arrow is a PHYSICAL glyph, so it is mirrored by layout direction rather than by content. */
     :host-context([dir='rtl']) .reader-back-icon,
     .reader[dir='rtl'] .reader-back-icon { transform: scaleX(-1); }
+    .reader-back-books {
+      color: var(--pd-text-link);
+      text-decoration: none;
+      font-size: var(--pd-text-body-sm);
+      display: inline-flex;
+      align-items: center;
+      gap: var(--pd-space-2);
+    }
+    .reader-back-books:hover { text-decoration: underline; }
+    .reader-back-books:focus-visible { outline: none; box-shadow: var(--pd-ring); border-radius: var(--pd-radius-sm); }
+    :host-context([dir='rtl']) .reader-back-books-icon,
+    .reader[dir='rtl'] .reader-back-books-icon { transform: scaleX(-1); }
     .reader-lang {
       display: flex;
       gap: var(--pd-space-1);

@@ -78,6 +78,12 @@ interface IndexReadResult {
   imports: [RouterLink],
   template: `
     <div class="help" [attr.dir]="dir">
+      <nav class="help-bar">
+        <a class="help-back-books" [routerLink]="['/books']">
+          <span class="help-back-books-icon" aria-hidden="true">←</span>{{ label('backToBooks') }}
+        </a>
+      </nav>
+
       <header class="help-header">
         <h1 class="help-title">{{ label('indexTitle') }}</h1>
 
@@ -141,6 +147,25 @@ interface IndexReadResult {
       max-inline-size: var(--pd-reading-measure);
       margin-inline: auto;
     }
+    .help-bar {
+      display: flex;
+      margin-block-end: var(--pd-space-4);
+      padding-block-end: var(--pd-space-4);
+      border-block-end: 1px solid var(--pd-divider);
+    }
+    .help-back-books {
+      color: var(--pd-text-link);
+      text-decoration: none;
+      font-size: var(--pd-text-body-sm);
+      display: inline-flex;
+      align-items: center;
+      gap: var(--pd-space-2);
+    }
+    .help-back-books:hover { text-decoration: underline; }
+    .help-back-books:focus-visible { outline: none; box-shadow: var(--pd-ring); border-radius: var(--pd-radius-sm); }
+    /* The arrow is a PHYSICAL glyph, so it is mirrored by layout direction rather than by content. */
+    :host-context([dir='rtl']) .help-back-books-icon,
+    .help[dir='rtl'] .help-back-books-icon { transform: scaleX(-1); }
     .help-header {
       display: flex;
       flex-wrap: wrap;

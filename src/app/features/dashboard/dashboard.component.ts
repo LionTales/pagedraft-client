@@ -7,6 +7,8 @@ import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookDto } from '../../core/models/book';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { guidesString } from '../../core/i18n/guides-strings';
+import { feedbackString } from '../../core/i18n/feedback-strings';
+import { FeedbackAvailabilityService } from '../../core/services/feedback-availability.service';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
 import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { clearCollapseState } from '../../shared/collapsible-section/collapse-store';
@@ -43,6 +45,13 @@ function collectChangedIds(previous: ReadonlySet<string>, next: ReadonlySet<stri
                app lands on - says so out loud rather than leaving them to be discovered through the
                assistant's citations. The dock carries the same link on every other route. -->
           <a class="dash-help-link" routerLink="/help" [queryParams]="{ lang: langKey }" [attr.aria-label]="helpAria">{{ helpLabel }}</a>
+          <!-- e2: the OWNER's triage view. Rendered only when the deployment actually serves it, because
+               the route is gated by the same flag and an ungated link would fall through the wildcard
+               back to this very page - a link that silently does nothing. No lang query parameter,
+               unlike the guides link beside it: the triage view has no language toggle to carry. -->
+          @if (feedbackAvailable) {
+            <a class="dash-help-link dash-feedback-link" routerLink="/feedback" [attr.aria-label]="feedbackAria">{{ feedbackLabel }}</a>
+          }
           @if (!showCreateForm) {
             <button class="pd-btn pd-btn-primary" (click)="showCreateForm = true">{{ label('newBook') }}</button>
           }
@@ -298,6 +307,28 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return guidesString(this.langKey, 'helpLinkAria');
   }
 
+  // ── The feedback entry (e2) ─────────────────────────────────────────────────────────────────────
+  //
+  // Show C2 shipped the triage view reachable by TYPED URL ALONE: nothing in this client linked to
+  // `/feedback`. This is that link, and the reason it is guarded rather than always drawn is the route
+  // table itself - `/feedback` is a `canMatch` route, so with the flag off it does not match and the URL
+  // falls through the wildcard to `/books`. An unconditional link would therefore be a link that
+  // reloads the page the owner is already on. Both this flag and the guard's come from
+  // `FeedbackAvailabilityService`, so they cannot disagree; see that service for why this one is the
+  // CACHED read and the guard's is live.
+
+  /** Whether this deployment serves the triage view. False until the read lands, so nothing flashes. */
+  feedbackAvailable = false;
+
+  /** Named by the surface it opens, from the feedback strings rather than this component's label map. */
+  get feedbackLabel(): string {
+    return feedbackString(this.langKey, 'entryLink');
+  }
+
+  get feedbackAria(): string {
+    return feedbackString(this.langKey, 'entryLinkAria');
+  }
+
   // ── Wave 3 / w3: the compact stage spine, one per book row ────────────────────────────────────
   //
   // WHAT COMPACT SHOWS HERE, AND WHY IT IS NOT MORE. The books list makes exactly ONE request
@@ -324,14 +355,21 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private runningBriefs = new Set<string>();
   private runningReview = new Set<string>();
   private jobsSub: Subscription | null = null;
+  private availabilitySub: Subscription | null = null;
 
   constructor(
     private bookService: BookService,
     private router: Router,
     private jobRegistry: JobRegistryService,
+    private feedbackAvailability: FeedbackAvailabilityService,
   ) {}
 
   ngOnInit(): void {
+    // One read per session, shared with every later mount of this page (e2). It cannot fail open: the
+    // service answers false for a failed read, so a link the deployment does not serve is never drawn.
+    this.availabilitySub = this.feedbackAvailability.once().subscribe(available => {
+      this.feedbackAvailable = available;
+    });
     this.bookService.getAll().subscribe(list => {
       this.books = list;
       // The list itself changed (rows added/removed/reordered): every row's signals are candidates.
@@ -361,6 +399,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.jobsSub?.unsubscribe();
     this.jobsSub = null;
+    // Unsubscribing does NOT cancel the availability request: the cache holds it with `refCount: false`
+    // precisely so a page destroyed mid-read does not make the next mount ask again.
+    this.availabilitySub?.unsubscribe();
+    this.availabilitySub = null;
   }
 
   /**

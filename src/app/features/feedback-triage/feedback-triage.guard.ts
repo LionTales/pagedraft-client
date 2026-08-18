@@ -1,8 +1,7 @@
 import { inject } from '@angular/core';
 import { CanMatchFn } from '@angular/router';
-import { catchError, map, of } from 'rxjs';
 
-import { FeedbackService } from '../../core/services/feedback.service';
+import { FeedbackAvailabilityService } from '../../core/services/feedback-availability.service';
 
 /**
  * THE FLAG GUARD for the owner's triage route (Show C2, `Feedback:TriageEnabled`).
@@ -25,15 +24,15 @@ import { FeedbackService } from '../../core/services/feedback.service';
  * Deliberate, and it is the safe direction: the surface this gates composes MANUSCRIPT-BEARING evidence,
  * and the flag is what keeps it off a deployment that has no auth in front of it. Guessing "on" because a
  * request failed would open the one surface the flag exists to close. The cost of guessing wrong the
- * other way is that the owner retries a URL.
+ * other way is that the owner retries a URL. Since e2 the rule is IMPLEMENTED in
+ * `FeedbackAvailabilityService` rather than inline here, so that the header entry cannot fail open while
+ * the route fails closed; it is restated here because it is the reason this route is gated at all.
  *
  * It is re-evaluated on every navigation to the route rather than cached, because a config flip should
  * not need a page reload to take effect, and the request is one small GET the owner makes deliberately.
+ * That is why this reads {@link FeedbackAvailabilityService.read} and NOT its cached `once` twin: e2 gave
+ * the flag a second reader (the dashboard header's entry link) and moved the derivation into that service
+ * so the two cannot disagree, but the freshness decision above is the guard's own and survives the move.
+ * The header may draw its link from a cached answer because a link is not the boundary; this is.
  */
-export const feedbackTriageCanMatch: CanMatchFn = () => {
-  const feedback = inject(FeedbackService);
-  return feedback.availability().pipe(
-    map(res => res?.triageEnabled === true),
-    catchError(() => of(false))
-  );
-};
+export const feedbackTriageCanMatch: CanMatchFn = () => inject(FeedbackAvailabilityService).read();
