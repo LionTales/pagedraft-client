@@ -1017,6 +1017,98 @@ describe('EditorPageComponent (focused logic)', () => {
       component.onReviewResizeKeydown({ key: 'ArrowRight', preventDefault: () => {} } as KeyboardEvent);
       expect(component.reviewPanelWidth).toBe(400);
     });
+
+    // ─── c1: the ceiling follows the viewport ────────────────────────────────
+    //
+    // 640 stopped being the ceiling and became its FLOOR: the panel may now reach half the viewport,
+    // so a large screen can show a suggestion card at a readable width. These specs pin both ends of
+    // `max(640, round(50vw))` and the re-clamp that keeps a wide panel from surviving into a small
+    // window. `window.innerWidth` is redefined rather than spied on because the karma host window is
+    // whatever size the runner gives it, which is not a number a spec may assume.
+    describe('width ceiling (c1)', () => {
+      let originalInnerWidth: PropertyDescriptor | undefined;
+
+      const setViewportWidth = (px: number) => {
+        Object.defineProperty(window, 'innerWidth', { value: px, configurable: true });
+      };
+
+      beforeEach(() => {
+        originalInnerWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+      });
+
+      afterEach(() => {
+        if (originalInnerWidth) {
+          Object.defineProperty(window, 'innerWidth', originalInnerWidth);
+        } else {
+          delete (window as unknown as Record<string, unknown>)['innerWidth'];
+        }
+      });
+
+      it('keeps the 640 floor on a laptop-sized viewport (50vw is smaller)', () => {
+        setViewportWidth(1000);
+        expect(component.reviewPanelMaxWidth).toBe(640);
+      });
+
+      it('raises the ceiling to half the viewport on a large screen', () => {
+        setViewportWidth(2560);
+        expect(component.reviewPanelMaxWidth).toBe(1280);
+      });
+
+      it('lets a drag reach the raised ceiling and no further', () => {
+        setViewportWidth(2560);
+        const handle = document.createElement('div');
+        spyOn(handle, 'setPointerCapture');
+        spyOn(handle, 'releasePointerCapture');
+        component.reviewPanelWidth = 380;
+
+        component.onReviewResizeStart({
+          pointerId: 1, clientX: 2000, currentTarget: handle, preventDefault: () => {},
+        } as unknown as PointerEvent);
+        // Drag far past the old hard 640 (widen = 2000 - 100 = 1900 -> 380 + 1900).
+        component.onReviewResizeMove({ pointerId: 1, clientX: 100 } as PointerEvent);
+
+        expect(component.reviewPanelWidth).toBe(1280);
+        component.onReviewResizeEnd({ pointerId: 1 } as PointerEvent);
+      });
+
+      it('Home jumps to the viewport-derived ceiling, not to 640', () => {
+        setViewportWidth(2560);
+        component.onReviewResizeKeydown({ key: 'Home', preventDefault: () => {} } as KeyboardEvent);
+        expect(component.reviewPanelWidth).toBe(1280);
+      });
+
+      it('re-clamps the panel when the window shrinks below the current width', () => {
+        setViewportWidth(2560);
+        component.onReviewResizeKeydown({ key: 'Home', preventDefault: () => {} } as KeyboardEvent);
+        expect(component.reviewPanelWidth).toBe(1280);
+
+        setViewportWidth(1000);
+        window.dispatchEvent(new Event('resize'));
+
+        expect(component.reviewPanelWidth).toBe(640);
+      });
+
+      it('does not overwrite the persisted preference when a resize re-clamps', () => {
+        setViewportWidth(2560);
+        component.onReviewResizeKeydown({ key: 'Home', preventDefault: () => {} } as KeyboardEvent);
+        expect(localStorage.getItem(KEY)).toBe('1280');
+
+        setViewportWidth(1000);
+        window.dispatchEvent(new Event('resize'));
+
+        expect(component.reviewPanelWidth).toBe(640);
+        expect(localStorage.getItem(KEY))
+          .withContext('a window resize is not a user choice, so the stored width must survive it')
+          .toBe('1280');
+      });
+
+      it('leaves a width that still fits alone on resize', () => {
+        setViewportWidth(2560);
+        component.reviewPanelWidth = 500;
+        window.dispatchEvent(new Event('resize'));
+        expect(component.reviewPanelWidth).toBe(500);
+      });
+    });
   });
 
   // ─── NIT-2: onReviewModeChange typed handler ────────────────────────────────

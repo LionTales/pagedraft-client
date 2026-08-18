@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { AfterViewChecked, Component, DoCheck, OnInit, OnDestroy, ViewChild } from '@angular/core';
+import { AfterViewChecked, Component, DoCheck, HostListener, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ImportHandoffCardComponent } from './import-handoff-card/import-handoff-card.component';
 import { ReplaySubject, Subject, merge } from 'rxjs';
@@ -191,15 +191,37 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
   // ── ReviewPanel resize (draggable inline-start gutter) ─────────────────────
   /** Default right-panel width (px). Raised from the old fixed 320 so the scorecard fits out of the box. */
   static readonly REVIEW_PANEL_DEFAULT_WIDTH = 380;
-  /** Min/max clamp for the resizable right panel (px). */
+  /** Min clamp for the resizable right panel (px). */
   static readonly REVIEW_PANEL_MIN_WIDTH = 300;
+  /**
+   * The panel's width ceiling FLOOR (px) - the smallest the ceiling is ever allowed to be, not the
+   * ceiling itself.
+   *
+   * c1: this used to be a hard 640, which on a large screen was the whole complaint - a result the
+   * author wanted to read wide could not be made wider than 640px no matter how much screen was free.
+   * The effective ceiling is now `max(640, round(50vw))`: half the viewport on a big screen, and this
+   * unchanged 640 on anything up to 1280px wide, so a laptop behaves exactly as it did. Read it
+   * through {@link reviewPanelMaxWidth} (or {@link effectiveReviewPanelMaxWidth}) and never as the
+   * clamp itself.
+   */
   static readonly REVIEW_PANEL_MAX_WIDTH = 640;
   private static readonly REVIEW_PANEL_WIDTH_KEY = 'pd.reviewPanelWidth';
   /** Current right-panel width in px; bound to the grid via the --review-panel-width custom property. */
   reviewPanelWidth = EditorPageComponent.REVIEW_PANEL_DEFAULT_WIDTH;
+  /**
+   * The width ceiling for THIS viewport: `max(640, round(50vw))`, computed on every read rather than
+   * cached, so a drag, a keyboard jump and a window resize all clamp against the same live number.
+   * Falls back to the 640 floor when there is no window to measure (SSR / a detached test host).
+   */
+  private static effectiveReviewPanelMaxWidth(): number {
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+    const half = Number.isFinite(viewportWidth) ? Math.round(viewportWidth / 2) : 0;
+    return Math.max(EditorPageComponent.REVIEW_PANEL_MAX_WIDTH, half);
+  }
+
   /** Template-readable clamp bounds (statics are not accessible from the template). */
   get reviewPanelMinWidth(): number { return EditorPageComponent.REVIEW_PANEL_MIN_WIDTH; }
-  get reviewPanelMaxWidth(): number { return EditorPageComponent.REVIEW_PANEL_MAX_WIDTH; }
+  get reviewPanelMaxWidth(): number { return EditorPageComponent.effectiveReviewPanelMaxWidth(); }
   /** True while a resize drag is in progress; drives a class that suppresses text selection during drag. */
   isResizingReviewPanel = false;
   /** Drag state captured on pointerdown; null when not dragging. */
@@ -953,12 +975,33 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
 
   // ── ReviewPanel resize ──────────────────────────────────────────────────────
 
-  /** Clamp a candidate panel width to the allowed [min, max] range. */
+  /**
+   * Clamp a candidate panel width to the allowed range. The max end is the VIEWPORT-DERIVED ceiling
+   * (see {@link REVIEW_PANEL_MAX_WIDTH}), so the same call clamps a drag on a 4K screen and a restore
+   * on a laptop correctly.
+   */
   private clampReviewPanelWidth(px: number): number {
     return Math.max(
       EditorPageComponent.REVIEW_PANEL_MIN_WIDTH,
-      Math.min(EditorPageComponent.REVIEW_PANEL_MAX_WIDTH, Math.round(px))
+      Math.min(EditorPageComponent.effectiveReviewPanelMaxWidth(), Math.round(px))
     );
+  }
+
+  /**
+   * Re-clamp the panel when the window changes size, because the ceiling moves with the viewport: a
+   * panel dragged to 1200px on a wide monitor would otherwise keep 1200px after the window is shrunk
+   * to 1000px and swallow the whole editor.
+   *
+   * Deliberately does NOT persist. The stored width is the author's CHOICE; a window resize is not,
+   * and overwriting the preference would mean docking once on a small screen permanently lost the
+   * wide layout. The stored value is re-clamped again on the next load anyway.
+   */
+  @HostListener('window:resize')
+  onWindowResize(): void {
+    const clamped = this.clampReviewPanelWidth(this.reviewPanelWidth);
+    if (clamped !== this.reviewPanelWidth) {
+      this.reviewPanelWidth = clamped;
+    }
   }
 
   /** Restore the persisted panel width from localStorage (clamped); falls back to the default. */
@@ -1050,7 +1093,9 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
         next = this.reviewPanelWidth - step;
         break;
       case 'Home':
-        next = EditorPageComponent.REVIEW_PANEL_MAX_WIDTH;
+        // The viewport-derived ceiling, not the 640 floor, so the keyboard reaches the same width a
+        // drag can.
+        next = EditorPageComponent.effectiveReviewPanelMaxWidth();
         break;
       case 'End':
         next = EditorPageComponent.REVIEW_PANEL_MIN_WIDTH;

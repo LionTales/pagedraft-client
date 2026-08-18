@@ -1,7 +1,12 @@
+// c1: `min-height`, NOT `height`. A fixed `height: 100%` pinned this column to the review panel's
+// height, which is the constraint every box below it inherited - the run tab could never be taller
+// than the panel, so a long result had to scroll inside a pane instead of scrolling the panel. As a
+// minimum it still fills the panel when the result is short (an empty state should not float in a
+// half-height column) and simply grows when the result is long, letting `.review-body` scroll once.
 .analysis-panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  min-height: 100%;
   gap: var(--pd-space-4);
   font-family: var(--pd-font-ui);
   color: var(--pd-text);
