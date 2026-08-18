@@ -427,6 +427,41 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     expect(fixture.debugElement.query(By.css('app-book-review-findings'))).toBeNull();
   });
 
+  // ── d1: openFinding waits for the ledger to mount, then forwards ────────────
+
+  it('d1: openFinding selects the Findings tab and forwards to the ledger once it has mounted', (done) => {
+    component.onReviewStateChange('ready');
+    component.reviewTab = 'bible';
+    fixture.detectChanges();
+    expect(fixture.debugElement.query(By.css('app-book-review-findings'))).toBeNull();
+
+    component.openFinding('f-9');
+    // Held, not dropped: the ledger is @if-mounted behind the tab this call just selected.
+    expect(component.reviewTab).toBe('findings');
+    expect((component as any).pendingOpenFindingId).toBe('f-9');
+
+    fixture.detectChanges();
+    const ledger = component.findingsPanel;
+    expect(ledger).toBeDefined();
+    const openSpy = spyOn(ledger!, 'openFinding');
+    // The drain runs from ngAfterViewChecked, which detectChanges above has already triggered once;
+    // the request is published on a timer so the ledger's view state is not mutated inside that pass.
+    setTimeout(() => {
+      expect(openSpy).toHaveBeenCalledOnceWith('f-9');
+      done();
+    });
+  });
+
+  it('d1: a held finding is dropped if the reader moves to the Story Bible before the ledger mounts', () => {
+    component.onReviewStateChange('ready');
+    component.openFinding('f-9');
+    component.reviewTab = 'bible';
+
+    component.ngAfterViewChecked();
+
+    expect((component as any).pendingOpenFindingId).toBeNull();
+  });
+
   it('does NOT render the review tabs until the review is ready/stale', () => {
     expect(fixture.debugElement.query(By.css('[data-testid="review-tab-findings"]'))).toBeNull();
     expect(fixture.debugElement.query(By.css('app-book-story-bible'))).toBeNull();

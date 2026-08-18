@@ -473,4 +473,22 @@ describe('ChapterFindingsChecklistComponent (rf-f05)', () => {
     query('[data-testid="checklist-open-f-1"]').nativeElement.click();
     expect(emitted).toBeTrue();
   });
+
+  it('d1: "View" emits the CLICKED finding\'s id, and "back to findings" emits null', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(
+      of(makeFindingsDto([makeFinding({ id: 'f-1' }), makeFinding({ id: 'f-2' })]))
+    );
+    triggerInit();
+
+    const emitted: (string | null)[] = [];
+    component.switchToReview.subscribe((id) => emitted.push(id));
+
+    // The argument used to be discarded, so both rows emitted the same bare switch.
+    query('[data-testid="checklist-open-f-2"]').nativeElement.click();
+    query('[data-testid="checklist-open-f-1"]').nativeElement.click();
+    component.onBackToFindings();
+
+    expect(emitted).toEqual(['f-2', 'f-1', null]);
+  });
 });

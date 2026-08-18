@@ -279,8 +279,12 @@ export class ChapterFindingsChecklistComponent implements OnInit, OnChanges, OnD
   /**
    * Emitted when the user clicks "back to findings" (context chip) or "view finding" (checklist row).
    * The editor-page handles it by calling onReviewModeChange('review') which switches the panel.
+   *
+   * d1: the payload is the finding to open in the ledger, or null for the plain "back to findings"
+   * gesture, which is about the LIST rather than about one row. Both are best-effort: an id the ledger
+   * cannot find leaves the reader on the Findings tab, which is exactly where the bare emit put them.
    */
-  @Output() switchToReview = new EventEmitter<void>();
+  @Output() switchToReview = new EventEmitter<string | null>();
 
   /** All findings for the current book, fetched from BookReviewService. */
   private allFindings: (BookFinding & { patching?: boolean })[] = [];
@@ -381,13 +385,18 @@ export class ChapterFindingsChecklistComponent implements OnInit, OnChanges, OnD
 
   onBackToFindings(): void {
     this.reviseContext.clear();
-    this.switchToReview.emit();
+    // No finding id: this gesture is "show me the list again", not "show me this row".
+    this.switchToReview.emit(null);
   }
 
-  onOpenFinding(_f: BookFinding): void {
-    // Best-effort: switch to Review/Findings tab. The Findings tab is the dashboard default
-    // (reviewTab = 'findings' on book-dashboard), so switching the mode is sufficient.
-    this.switchToReview.emit();
+  /**
+   * d1: switch to Review/Findings AND name the finding the reader clicked. This used to discard its
+   * argument and emit a bare switch, which landed on the Findings tab scrolled wherever it happened to
+   * be - on a ledger of dozens of rows, the row the reader asked for was frequently off-screen and
+   * collapsed. The id travels to BookReviewFindingsComponent.openFinding via the editor host.
+   */
+  onOpenFinding(f: BookFinding): void {
+    this.switchToReview.emit(f?.id ?? null);
   }
 
   /**
