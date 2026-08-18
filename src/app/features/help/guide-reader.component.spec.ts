@@ -166,6 +166,24 @@ describe('GuideReaderComponent (chatbot phase A.2, c1)', () => {
       expect(back.getAttribute('href')).toBe('/help?lang=en');
       expect(back.textContent).toContain(GUIDES_STRINGS_EN['backToIndex']);
     });
+
+    it('also offers the way back to the books list, in Hebrew', () => {
+      create('import');
+      flushGuide(content());
+
+      const back = fixture.debugElement.query(By.css('.reader-back-books')).nativeElement as HTMLAnchorElement;
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain(GUIDES_STRINGS_HE['backToBooks']);
+    });
+
+    it('also offers the way back to the books list, in English', () => {
+      create('import', 'en');
+      flushGuide(content({ language: 'en', body: ENGLISH_BODY }), 'en');
+
+      const back = fixture.debugElement.query(By.css('.reader-back-books')).nativeElement as HTMLAnchorElement;
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain(GUIDES_STRINGS_EN['backToBooks']);
+    });
   });
 
   // ── Language: the sibling FILE, not a translation ───────────────────────────────────────────────

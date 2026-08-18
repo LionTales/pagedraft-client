@@ -141,6 +141,32 @@ describe('HelpIndexComponent (chatbot phase A.2, c1)', () => {
     });
   });
 
+  // ── Navigation back to the app (e1) ─────────────────────────────────────────────────────────────
+  //
+  // Guides is an orphan surface off the flat route table: there is no shared chrome to fall back on,
+  // so the page must carry its own way back to the books list.
+
+  describe('navigation', () => {
+    it('links back to the books list, in Hebrew', () => {
+      flushIndex(corpus());
+
+      const back = fixture.debugElement.query(By.css('.help-back-books')).nativeElement as HTMLAnchorElement;
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain(GUIDES_STRINGS_HE['backToBooks']);
+    });
+
+    it('links back to the books list, in English', () => {
+      flushIndex(corpus());
+      setLang('en');
+      fixture.detectChanges();
+      flushIndex(corpus('en'), 'en');
+
+      const back = fixture.debugElement.query(By.css('.help-back-books')).nativeElement as HTMLAnchorElement;
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain(GUIDES_STRINGS_EN['backToBooks']);
+    });
+  });
+
   // ── Language ────────────────────────────────────────────────────────────────────────────────────
 
   describe('language', () => {

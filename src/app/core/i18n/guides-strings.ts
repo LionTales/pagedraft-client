@@ -47,6 +47,8 @@ export type GuidesStringKey =
   | 'indexEmpty'
   // ── reader page ──
   | 'backToIndex'
+  // ── navigation back to the app, present on both the index and the reader (e1) ──
+  | 'backToBooks'
   | 'updatedPrefix'
   | 'languageToggleLabel'
   | 'readInHebrew'
@@ -72,6 +74,7 @@ export const GUIDES_STRINGS_HE: Record<GuidesStringKey, string> = {
   indexEmpty:    'אין מדריכים להצגה.',                          // DRAFT he - needs native review
 
   backToIndex:   'חזרה לרשימת המדריכים',                        // DRAFT he - needs native review
+  backToBooks:   'חזרה לרשימת הספרים',                          // DRAFT he - needs native review
   updatedPrefix: 'עודכן',                                       // DRAFT he - needs native review
   languageToggleLabel: 'שפת המדריך',                            // DRAFT he - needs native review
   readInHebrew:  'עברית',
@@ -97,6 +100,7 @@ export const GUIDES_STRINGS_EN: Record<GuidesStringKey, string> = {
   indexEmpty:    'There are no guides to show.',
 
   backToIndex:   'Back to the guides',
+  backToBooks:   'Back to the books',
   updatedPrefix: 'Updated',
   languageToggleLabel: 'Guide language',
   readInHebrew:  'Hebrew',
