@@ -241,12 +241,16 @@ describe('AppDock layout (chatbot phase A.1)', () => {
     expect(drawer.querySelector('.ac-panel')).toBeNull();
   });
 
-  it('the marked badge still FITS the 48px launcher, on the outer corner in both directions', () => {
+  it('the marked badge still FITS the 56px launcher, on the outer corner in both directions', () => {
     // c02 chose to widen the badge (a `⟳` mark beside the number) rather than change the launcher's
-    // icon, so the thing that could go wrong is crowding: the badge is now two glyphs wide on a 48px
+    // icon, so the thing that could go wrong is crowding: the badge is two glyphs wide on a small
     // control. Measured rather than eyeballed, at the widest count the badge is likely to carry.
-    // A.2 swapped the icon itself (emoji -> Show's 32px avatar) and this measurement is why: a bigger
-    // icon leaves the badge less room, so the clearance below is now doing real work.
+    // A.2 swapped the icon itself (emoji -> Show's avatar) and this measurement is why: a bigger icon
+    // leaves the badge less room, so the clearance below is doing real work.
+    // f2b took the button 48 -> 56 and the icon 32 -> 48, which CLOSES that clearance rather than
+    // opening it: the icon grew by 16 and the button by only 8, so the gap between the badge and the
+    // face is 4px narrower than the arrangement this spec was first written against. The size below is
+    // re-pinned, not relaxed, and every clearance assertion after it is unchanged.
     registry.setActive(12);
     fixture.detectChanges();
 
@@ -257,7 +261,10 @@ describe('AppDock layout (chatbot phase A.1)', () => {
       const icon = rect('.dock-launcher-icon');
 
       expect(badge.width).withContext(`${lang}: non-vacuity, the badge has a box`).toBeGreaterThan(0);
-      expect(launcher.width).withContext(`${lang}: the launcher is the documented 48px`).toBe(48);
+      expect(launcher.width).withContext(`${lang}: the launcher is the documented 56px`).toBe(56);
+      expect(icon.width)
+        .withContext(`${lang}: and the face inside it is the documented 48px`)
+        .toBe(48);
 
       // It may overhang the corner (it is designed to, by 4px) but it must not grow into a second
       // control: the badge stays no wider than the button it annotates.
@@ -291,6 +298,49 @@ describe('AppDock layout (chatbot phase A.1)', () => {
           .toBeGreaterThan(launcher.right - 1);
       }
       expect(badge.top).withContext(`${lang}: and off the TOP of it`).toBeLessThan(launcher.top + 1);
+    }
+  });
+
+  it('the launcher itself is what a click lands on, not the face drawn inside it', () => {
+    // f2b added this because the comment in app-dock.component.scss claimed it already existed. It did
+    // not: the only `elementFromPoint` contract in this file was the drawer TAB's, and the launcher's
+    // `pointer-events: none` was load-bearing but unpinned. It matters more at f2b's sizes than it did
+    // before - the face now fills 48 of the button's 56px, so an icon that swallowed pointer events
+    // would swallow nearly the whole control, and the click handler and accessible name are both on
+    // the BUTTON. Hit-tested at the dead centre, which is the one point the icon certainly covers.
+    //
+    // THE VISIBILITY LINE BELOW IS WHAT MAKES THIS TEST NON-VACUOUS, and dropping it would silently
+    // gut the spec. Karma's headless Chrome reports `prefers-reduced-motion: no-preference`, so the
+    // flip block applies and the <img> is `visibility: hidden` - and a hidden element is not
+    // hit-testable AT ALL, so the button would come back topmost whether or not `pointer-events` were
+    // ever declared. Forcing the image visible reproduces exactly what a reader who has asked for
+    // reduced motion sees, which is the branch where the property actually does the work, and leaves
+    // `pointer-events: none` as the only thing standing between the icon and the click.
+    for (const lang of ['he', 'en'] as const) {
+      useLang(lang);
+      const launcher = q('.dock-launcher').nativeElement as HTMLElement;
+      const iconEl = q('.dock-launcher-icon').nativeElement as HTMLElement;
+      iconEl.style.visibility = 'visible';
+
+      const box = launcher.getBoundingClientRect();
+      expect(box.width).withContext(`${lang}: non-vacuity, the launcher has a box`).toBeGreaterThan(10);
+
+      // Non-vacuity for the hit test itself: the icon must actually BE there and actually cover the
+      // centre, or "the button is topmost" would be true of an empty button and prove nothing.
+      const icon = iconEl.getBoundingClientRect();
+      const centre = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      expect(icon.left < centre.x && centre.x < icon.right && icon.top < centre.y && centre.y < icon.bottom)
+        .withContext(`${lang}: the icon must cover the centre for this test to mean anything`)
+        .toBeTrue();
+      expect(getComputedStyle(iconEl).visibility)
+        .withContext(`${lang}: and it must be hit-testable, or pointer-events is not what is being read`)
+        .toBe('visible');
+
+      expect(document.elementFromPoint(centre.x, centre.y))
+        .withContext(`${lang}: the icon (or the flip overlay) is intercepting the launcher's clicks`)
+        .toBe(launcher as Element);
+
+      iconEl.style.visibility = '';
     }
   });
 

@@ -37,8 +37,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
+  /* 56px, up from 48 (f2b). The owner judged the shipped launcher and said the icon was too small; the
+     face inside it is what had to grow, and 48px of button could not hold a face big enough to also
+     make the page flip legible. 56 is as far as this goes: it is the standard floating-action size, it
+     keeps the 4px surface ring that makes the control read as a BUTTON rather than as a loose sticker,
+     and it is still small enough not to unbalance a corner that sits permanently over the manuscript. */
+  width: 56px;
+  height: 56px;
   border: 1px solid var(--pd-primary-200);
   border-radius: var(--pd-radius-pill);
   background: var(--pd-surface);
@@ -63,11 +68,22 @@
 }
 
 .dock-launcher-icon {
-  /* 32px drawn from a 96px source, so it stays crisp on a 2x/3x display. `pointer-events: none` is
-     load-bearing, not defensive: dock-layout.spec.ts hit-tests the launcher's own corner and expects
-     to land on the BUTTON, which an image child would otherwise intercept. */
-  width: 32px;
-  height: 32px;
+  /* 48px drawn from a 144px source (3x), so it stays crisp on a 2x/3x display. `pointer-events: none`
+     keeps every pointer event on the BUTTON, which is what carries the click handler and the accessible
+     name; an image child would otherwise intercept the middle of the control. NOTE, corrected in f2b:
+     the comment here used to claim dock-layout.spec.ts pins this by hit-testing the launcher's corner.
+     It does not - that spec (`no launcher may sit in the top inline-start corner`) asserts the launcher
+     is ABSENT from the drawer header's corner, which is a different regression entirely. The only
+     `elementFromPoint` contract in the suite is the TAB's, on `.dock-tab-icon`. So this property is
+     correct and worth keeping, but it is UNPINNED here: deleting it would not turn a spec red.
+
+     WHY 32 -> 48 IS NOT THE WHOLE ENLARGEMENT (f2b): the box grew 1.5x, but the FACE grew 2.2x, because
+     the derivation was padding the art twice over. tools/regen-show-icons.ps1 carries the measurement -
+     the source art fills 70% of its own canvas and f1 then drew it at 76% of the icon, so the visible
+     face was 53% of this box. It is 80% of it now. Nothing here can express that; it lives in the PNG,
+     which is why the number to change is in the script and not in this file. */
+  width: 48px;
+  height: 48px;
   border-radius: var(--pd-radius-pill);
   object-fit: cover;
   flex: 0 0 auto;
@@ -91,10 +107,20 @@
  * THE PAGE FLIP (f2, 8b).
  *
  * Show's book turns one of its own pages every few seconds. The artwork is a raster PNG with no
- * addressable parts, so the frames are BAKED by tools/regen-show-icons.ps1 into a 6-frame horizontal
- * strip (`show-flip-sprite.png`, 576x96) and stepped through here. Frame 0 of that strip is the same
+ * addressable parts, so the frames are BAKED by tools/regen-show-icons.ps1 into a 7-frame horizontal
+ * strip (`show-flip-sprite.png`, 1008x144) and stepped through here. Frame 0 of that strip is the same
  * composite as `show-header.png`, which is what lets this overlay sit on frame 0 for most of the cycle
  * and be indistinguishable from the plain icon while it does.
+ *
+ * RE-TUNED AT THE NEW SIZE (f2b). Everything that makes the turn legible is in the script's parameters
+ * and in the PNG, not here - the tilt went 7 -> 30 degrees, the strip gained a frame, and the page the
+ * leaf lifts OFF is now redrawn darkened underneath it. Those two are the whole change: the tilt lifts
+ * the leaf's far corner out of the book's silhouette into the flat background above it, and the
+ * darkened reveal gives it somewhere to have lifted FROM. The leaf's own shading went the other way
+ * (0.22 -> 0.30, after a first cut at 0.48 read as a shadow sweeping the icon rather than as paper).
+ * The only thing this file owns is the count, the geometry and the timing, so a re-tune that changes
+ * the frame COUNT must touch three numbers here in step: `background-size`, the keyframe stops, and
+ * their offsets. A re-tune that changes only the tilt or the shading touches nothing here at all.
  *
  * WHY AN ::after AND NOT THE <img> ITSELF: an <img> takes no pseudo-element and cannot carry a
  * background sprite, and stacking a second translucent copy of the face over the first would raise the
@@ -118,9 +144,11 @@
  * anyway. `inset: 0` + `margin: auto` centres the layer without naming a physical side, so it lands in
  * the same place in Hebrew and in English.
  *
- * NOT APPLIED TO THE 18px TAB, deliberately: at 18px the whole book band is about three pixels tall
- * and the turning leaf resolves to a single pixel changing value, which reads as a flicker rather than
- * as motion. It was rendered and looked at before being left out.
+ * NOT APPLIED TO THE TAB, deliberately: even at f2b's 20px, and even with the enlarged face, the tab's
+ * book band is under three pixels tall and the turning leaf resolves to a single pixel changing value,
+ * which reads as a flicker rather than as motion. It was rendered and looked at before being left out,
+ * at both sizes. The tab also only exists while the drawer is OPEN, i.e. while the author is reading
+ * the panel next to it, which is the worst possible moment for a moving thing in the corner of the eye.
  */
 @media (prefers-reduced-motion: no-preference) {
   .dock-launcher-icon {
@@ -132,15 +160,17 @@
     position: absolute;
     inset: 0;
     margin: auto;
-    width: 32px;
-    height: 32px;
+    /* MUST track .dock-launcher-icon exactly: this layer stands in for that image, so a size that
+       disagrees with it would move the face the moment the flip starts. */
+    width: 48px;
+    height: 48px;
     border-radius: var(--pd-radius-pill);
     pointer-events: none;
 
     background-image: url('/assistant/show-flip-sprite.png');
     background-repeat: no-repeat;
-    /* 6 frames of 32px = 192px wide, drawn 32px tall. */
-    background-size: 192px 32px;
+    /* 7 frames of 48px = 336px wide, drawn 48px tall. */
+    background-size: 336px 48px;
     background-position: 0 0;
 
     opacity: 0.75;
@@ -158,14 +188,19 @@
   }
 }
 
+/* Six moving frames over the last 12% of the 9s cycle: a turn of about 1.08s, each frame held for
+   0.15s. The stops are 1.7% apart rather than a round 2% because six of them have to fit where five
+   used to, and the LAST one has to land back on frame 0 exactly at 100% - a loop that restarts on any
+   other frame is a visible jump once every nine seconds. */
 @keyframes dock-page-flip {
   0%,
   88% { background-position: 0 0; }
-  90% { background-position: -32px 0; }
-  92% { background-position: -64px 0; }
-  94% { background-position: -96px 0; }
-  96% { background-position: -128px 0; }
-  98% { background-position: -160px 0; }
+  89.7% { background-position: -48px 0; }
+  91.4% { background-position: -96px 0; }
+  93.1% { background-position: -144px 0; }
+  94.8% { background-position: -192px 0; }
+  96.5% { background-position: -240px 0; }
+  98.2% { background-position: -288px 0; }
   100% { background-position: 0 0; }
 }
 
@@ -390,8 +425,24 @@
    (the regression it pins is the old bell sitting on top of that same spot); without this the icon
    could win that hit test purely by where the text happens to wrap around it. */
 .dock-tab-icon {
-  width: 18px;
-  height: 18px;
+  /* 20px, up from 18 (f2b). The owner said "the icon" is too small without naming a mount, and this is
+     the same face; leaving it alone while the launcher went 32 -> 48 would have made the drawer's own
+     header the one place Show stays a speck.
+
+     WHY IT STOPS AT 20 is a judgement, NOT a layout limit, and the difference matters to whoever
+     changes it next. It is not crowding: measured at :4201 with the drawer forced to 300/331/360px and
+     this icon stepped 18/20/21/22/26px, `scrollWidth - clientWidth` on `.dock-tab-label` is 0 in every
+     one of the fifteen combinations, so nothing here ellipsizes at any size worth trying. The strip
+     does not move either - `.dock-tabs` is `flex: 1 1 auto` and fills the header row regardless. 20 is
+     where it stops because the tab is a NAVIGATION label two of which sit side by side, and past 20 the
+     face starts to outweigh the word next to it and the row reads as two icons rather than as two tabs.
+     Raise it if the owner disagrees; just do not raise it believing you are fixing a clip.
+
+     Most of the growth here is not this number anyway - the asset's own padding was corrected in
+     tools/regen-show-icons.ps1 (76% -> 112%), so the FACE inside these 20px is about half again as big
+     as the face inside the old 18. */
+  width: 20px;
+  height: 20px;
   border-radius: var(--pd-radius-pill);
   object-fit: cover;
   flex: 0 0 auto;

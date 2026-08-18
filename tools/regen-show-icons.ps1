@@ -18,7 +18,7 @@
     assets again; re-run this script after any source-art update.
 
     THE PAGE-FLIP SPRITE (f2, 8b, 2026-08-18): the same source also drives `show-flip-sprite.png`, a
-    horizontal strip of 6 frames in which the book's RIGHT PAGE turns over onto the left. Frame 0 is
+    horizontal strip of 7 frames in which the book's RIGHT PAGE turns over onto the left. Frame 0 is
     byte-for-byte the same composite as `show-header.png`, which is what lets the CSS park an overlay
     on frame 0 for most of its cycle and stay invisible there (see app-dock.component.scss).
 
@@ -34,23 +34,49 @@
     The scale runs 1 -> -1 (`cos(pi*t)`), so the page passes through a vertical sliver at t=0.5 and
     lands MIRRORED on the left half, where the artwork is near-symmetric, so the final frame nearly
     coincides with the resting left page and the cycle can loop back to frame 0 without a visible snap.
-    The moving page is darkened slightly at mid-turn (a turning leaf catches less light), which is the
-    only thing separating it from the page beneath it at 32px.
+    The moving page is darkened at mid-turn (a turning leaf catches less light) and the page it lifts
+    OFF is darkened under it (see New-FlipFrame) - between them those two shades are the whole depth
+    cue, since an affine transform gives no curl and no foreshortening to supply one.
+
+    A NOTE ON DIRECTION, unresolved and worth the owner's eye: the leaf turns right-to-left, i.e. the
+    way a LATIN book is read. PageDraft's default language is Hebrew, whose books turn the other way.
+    Mirroring it is a one-line change (negate the phase's sign about the spine) but it would then be
+    wrong for the English UI, and the icon is one static asset serving both, so this is a choice about
+    the artwork rather than a bug to fix here.
+
+    THE SCALE, RE-DERIVED BY MEASUREMENT (f2b, 2026-08-18). The owner's verdict on the shipped icon was
+    "the icon today is too small". The cause was PADDING APPLIED TWICE, and it is worth writing down
+    because nothing about it is visible from the CSS:
+
+        the 1024x1024 source art fills only 716x677 of its own canvas (70% x 66%; measured on the
+        alpha channel), and f1 then drew that at 76% of the target canvas
+
+    so the face the user actually saw was 0.76 x 0.70 = 53% of the icon box wide - a 32px launcher icon
+    carrying a 17px face inside a 48px button, i.e. the button was 2.8x the artwork. f1's 76% was chosen
+    by eye against the risk that the CSS's inscribed-circle mask clips the head, and that risk is real
+    but it is also MEASURABLE: the farthest opaque pixel in the source sits 365.3px from the canvas
+    centre, against an inscribed radius of 512, so the art clears the circle at any scale up to 140.1%.
+    76% was 1.8x more conservative than it needed to be.
+
+    112% is the shipped value: the art then reaches 80% of the mask's radius, which leaves a fifth of
+    the radius as visible margin inside the icon's own circle plus the launcher's 4px surface ring. Do
+    not raise this past ~130% without re-measuring - the bound above is for THIS artwork, and a source
+    re-export that moves the book or the head moves the bound with it. The measurement is a short alpha
+    scan; re-run it rather than re-guessing.
 
     Usage:
         pwsh ./tools/regen-show-icons.ps1
-        pwsh ./tools/regen-show-icons.ps1 -ScalePercent 72   # if 76 crowds the 18px tab mount
+        pwsh ./tools/regen-show-icons.ps1 -ScalePercent 95    # if 112 ever crowds a mount
         pwsh ./tools/regen-show-icons.ps1 -DebugFramesDir C:\some\dir   # also dump 256px frames
 
-    Sizes:
-        show-header.png       96x96    (dock launcher, drawn at 32px; product-chat empty state at 56px)
-        show-tab.png          48x48    (dock assistant tab, drawn at 18px)
-        show-flip-sprite.png  576x96   (6 x 96, the launcher's flip overlay)
+    Sizes (f2b raised all three, because the launcher mount went 32px -> 48px):
+        show-header.png       144x144  (dock launcher, drawn at 48px; product-chat empty state at 56px;
+                                        product-chat speaker byline at 20px)
+        show-tab.png          64x64    (dock assistant tab, drawn at 20px)
+        show-flip-sprite.png  1008x144 (7 x 144, the launcher's flip overlay)
 
-    Scale: the artwork is scaled to ScalePercent of the target canvas and centred, so an inscribed
-    circle (the CSS mask) never touches the art. 76% was verified by eye at all three mount sizes
-    (32px launcher, 18px tab, 56px chat empty state) at :4201 on 2026-08-18 - nothing clipped, so
-    the fallback 72% was not needed.
+    Every derived size is at least 3x its largest mount, which is what keeps all four crisp on a 3x
+    display. Change a mount size in the CSS and the matching number here has to move with it.
 #>
 
 [CmdletBinding()]
@@ -59,9 +85,9 @@ param(
     [string]$HeaderOutPath,
     [string]$TabOutPath,
     [string]$SpriteOutPath,
-    [int]$HeaderSize = 96,
-    [int]$TabSize = 48,
-    [double]$ScalePercent = 76,
+    [int]$HeaderSize = 144,
+    [int]$TabSize = 64,
+    [double]$ScalePercent = 112,
 
     # Where in the 1024x1024 source the book's RIGHT PAGE lives, as a polygon: spine-top,
     # outer-top, outer-bottom, spine-bottom. Read off a 3x zoom of the source with a 20px grid on
@@ -74,14 +100,44 @@ param(
     [int]$SpineY = 392,
 
     # The turn, sampled at these phases of a half rotation (t in 0..1, scaleX = cos(pi*t)). Frame 0 is
-    # the resting icon and carries no moving page at all.
-    [double[]]$FramePhases = @(0.28, 0.46, 0.62, 0.80, 0.93),
+    # the resting icon and carries no moving page at all. Six moving frames rather than f2's five: the
+    # extra one buys an early "the leaf has lifted but is still wide" pose, which is what tells the eye
+    # a PAGE is moving before the leaf gets too narrow to have a shape.
+    # The last phase is 0.95 rather than f2's 0.93 on purpose: at 0.95 the leaf has all but landed
+    # (scaleX = -0.988, tilt 4.7 degrees at the shipped TiltDegrees), so the frame the cycle holds
+    # before jumping home to frame 0 is nearly frame 0 already and the loop has almost nothing to
+    # snap over. Raise TiltDegrees and this number is the one that has to be re-checked with it.
+    [double[]]$FramePhases = @(0.14, 0.30, 0.45, 0.60, 0.78, 0.95),
 
     # Peak tilt of the moving leaf, degrees, scaled by sin(pi*t) so it is 0 at rest and at landing.
-    [double]$TiltDegrees = 7,
+    # 30, up from f2's 7. This is the parameter that carries the whole gesture, and the reason is
+    # geometric rather than aesthetic: the leaf's SQUASH is invisible at icon size (the right page is
+    # about 11px wide at a 48px mount, so a whole frame of the turn moves its outer edge two pixels),
+    # but the tilt lifts the leaf's far corner OUT of the book's silhouette and into the flat teal
+    # background above it, where a two-pixel shape has nothing to hide against. Frames 1, 2 and 5 all
+    # read as "a sheet is up in the air" only because of this term; at f2's 7 degrees the lift was
+    # under a pixel and the frames were indistinguishable from rest. Compared 22 / 30 / 38 side by
+    # side at the real 48px (see the zoom sheets): 22 lifts too little to separate from the book's own
+    # top edge, and by 38 the leaf arcs so far it stops reading as attached to the spine at all and
+    # starts to look like a wing. 30 is the middle that was actually looked at, not a split difference.
+    [double]$TiltDegrees = 30,
 
-    # Peak darkening of the moving leaf (0 = none, 1 = black) - the only depth cue at 32px.
-    [double]$ShadeStrength = 0.22,
+    # Peak darkening of the moving leaf (0 = none, 1 = black), applied as sin^2 so it is 0 at both ends.
+    # 0.30, and this is DOWN from the 0.48 the first cut of f2b tried. Turning the leaf darker is the
+    # obvious move and it is the wrong one: at 0.48 the leaf renders as a grey-brown wedge and the
+    # gesture reads as a SHADOW sweeping across the icon rather than as a page turning, because paper
+    # is the one thing a dark shape cannot be. What separates the leaf from its background is the
+    # darkened reveal below (UnderShadeStrength), not the leaf's own tone, so the leaf only needs
+    # enough shade to have an edge. Judged at 48px against 0.16 / 0.24 / 0.30 / 0.36 / 0.48.
+    [double]$ShadeStrength = 0.30,
+
+    # Peak darkening of the page REVEALED under the turning leaf, at the moment the leaf lifts. Decays
+    # linearly to nothing by the end of the turn: the leaf that was casting the shadow has gone.
+    # 0.20, also down from the first cut's 0.36. This layer dims the whole page region uniformly rather
+    # than as a gradient hugging the leaf's edge (System.Drawing gives a colour matrix, not a soft
+    # shadow), so past about 0.25 it stops reading as a shadow and starts reading as the right page
+    # changing colour - which is a different, wronger animation. Kept just deep enough to hold an edge.
+    [double]$UnderShadeStrength = 0.20,
 
     # Optional: also write each frame upscaled to this size, one PNG per frame, for human review.
     [string]$DebugFramesDir,
@@ -198,8 +254,40 @@ function New-RightPageLayer {
 }
 
 <#
-    One frame of the turn, at 1024, as a full composite of the icon: base art, then the right-page
-    layer squashed about the spine (scaleX = cos(pi*t)) with a sin(pi*t) tilt and shade.
+    Build the 5x4 colour matrix that multiplies RGB by $Shade and leaves alpha alone.
+#>
+function New-ShadeAttributes {
+    param([double]$Shade)
+
+    $attrs = New-Object System.Drawing.Imaging.ImageAttributes
+    $cm = New-Object System.Drawing.Imaging.ColorMatrix
+    $cm.Matrix00 = [single]$Shade
+    $cm.Matrix11 = [single]$Shade
+    $cm.Matrix22 = [single]$Shade
+    $cm.Matrix33 = [single]1.0
+    $cm.Matrix44 = [single]1.0
+    $attrs.SetColorMatrix($cm)
+    return $attrs
+}
+
+<#
+    One frame of the turn, at 1024, as a full composite of the icon, in three layers:
+
+      1. the base art,
+      2. the page REVEALED beneath the turning leaf - the same page layer drawn in place and darkened,
+      3. the leaf itself, squashed about the spine (scaleX = cos(pi*t)) with a sin(pi*t) tilt and shade.
+
+    LAYER 2 IS WHAT MAKES THIS READ AS A PAGE TURN (f2b), and its absence is why the first cut did not.
+    The base art keeps its right page in every frame, so a leaf drawn on top of it was only ever a
+    shape sweeping ACROSS a book whose right page never left - at 32px that was a shimmer near the
+    spine. Redrawing the page region darkened is what gives the leaf somewhere to lift OFF: the eye
+    sees a lit page go dim under a moving edge and reads a sheet coming up. The darkening decays to
+    nothing by the end of the turn, so the last frame's right page is already back at full brightness
+    and the loop home to frame 0 has nothing left to snap.
+
+    The artwork has no second page drawn under the first - it is one flat illustration - so "the page
+    beneath" is the same pixels dimmed rather than different pixels. Under a stylized flat icon at
+    48px that is indistinguishable from a real one, and it costs no new art.
 #>
 function New-FlipFrame {
     param(
@@ -213,6 +301,13 @@ function New-FlipFrame {
     try {
         $g.Clear([System.Drawing.Color]::Transparent)
         $g.DrawImage($SourceImage, 0, 0, $SourceImage.Width, $SourceImage.Height)
+
+        # The revealed page. Deepest as the leaf lifts (it is what casts the shadow), gone by landing.
+        $underShade = 1.0 - ($UnderShadeStrength * (1.0 - $Phase))
+        $underAttrs = New-ShadeAttributes -Shade $underShade
+        $pageRect = New-Object System.Drawing.Rectangle 0, 0, $PageLayer.Width, $PageLayer.Height
+        $g.DrawImage($PageLayer, $pageRect, 0, 0, $PageLayer.Width, $PageLayer.Height, [System.Drawing.GraphicsUnit]::Pixel, $underAttrs)
+        $underAttrs.Dispose()
 
         $pi = [Math]::PI
         $scaleX = [Math]::Cos($pi * $Phase)
@@ -233,14 +328,7 @@ function New-FlipFrame {
         $matrix.Scale([single]$scaleX, [single]1.0)
         $matrix.Translate([single](-$SpineX), [single](-$SpineY))
 
-        $attrs = New-Object System.Drawing.Imaging.ImageAttributes
-        $cm = New-Object System.Drawing.Imaging.ColorMatrix
-        $cm.Matrix00 = [single]$shade
-        $cm.Matrix11 = [single]$shade
-        $cm.Matrix22 = [single]$shade
-        $cm.Matrix33 = [single]1.0
-        $cm.Matrix44 = [single]1.0
-        $attrs.SetColorMatrix($cm)
+        $attrs = New-ShadeAttributes -Shade $shade
 
         $g.Transform = $matrix
         $destRect = New-Object System.Drawing.Rectangle 0, 0, $PageLayer.Width, $PageLayer.Height
