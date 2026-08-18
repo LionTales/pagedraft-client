@@ -1,6 +1,6 @@
 /**
- * Every user-facing string of the FEEDBACK surfaces (Show C2, c2-client): the shared vote widget and
- * the owner's triage view.
+ * Every user-facing string of the FEEDBACK surfaces (Show C2, c2-client): the shared vote widget, the
+ * owner's triage view, and (e2) the entry link that finally makes the triage view reachable by clicking.
  *
  * ── Why its own file ──────────────────────────────────────────────────────────────────────────────
  * The rule `history-strings.ts` and `dock-strings.ts` already follow: STRINGS TRAVEL WITH THE CONTROL
@@ -29,6 +29,12 @@ import { FEEDBACK_TEXT_MAX, FeedbackStatus, FeedbackVerdict } from '../models/fe
 
 /** Every string the two feedback surfaces can show. Closed on purpose. */
 export type FeedbackStringKey =
+  // ── the affordance that opens the triage view, wherever it is mounted (e2) ──
+  // Here rather than in the dashboard's own label map, on the rule `helpLink` already follows in
+  // `guides-strings.ts`: the affordance is named by the SURFACE IT OPENS, so a second mount site cannot
+  // end up calling the same page something else.
+  | 'entryLink'
+  | 'entryLinkAria'
   // ── the widget ──
   // The pair of thumbs. `Aria` variants exist because the buttons are ICON-ONLY: a glyph has no
   // computed name, so unlike the history trigger (whose visible label names it) these genuinely need
@@ -128,6 +134,9 @@ export type FeedbackStringKey =
  * reads: v1 of triage is a reading tool, not a product.
  */
 export const FEEDBACK_STRINGS_HE: Record<FeedbackStringKey, string> = {
+  entryLink:         'משוב',
+  entryLinkAria:     'פתיחת רשימת המשוב',
+
   voteUpAria:        'התשובה עזרה',
   voteDownAria:      'התשובה לא עזרה',
   voteRetractAria:   'ביטול הדירוג',
@@ -215,6 +224,9 @@ export const FEEDBACK_STRINGS_HE: Record<FeedbackStringKey, string> = {
 };
 
 export const FEEDBACK_STRINGS_EN: Record<FeedbackStringKey, string> = {
+  entryLink:         'Feedback',
+  entryLinkAria:     'Open the feedback list',
+
   voteUpAria:        'This answer helped',
   voteDownAria:      'This answer did not help',
   voteRetractAria:   'Undo this rating',

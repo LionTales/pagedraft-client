@@ -12,6 +12,7 @@ import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { STAGE_NAMES } from '../../shared/stage-spine/stage-spine.copy';
 import { collapseStorageKey } from '../../shared/collapsible-section/collapse-store';
 import { GUIDES_STRINGS_HE } from '../../core/i18n/guides-strings';
+import { FEEDBACK_STRINGS_HE } from '../../core/i18n/feedback-strings';
 
 /**
  * Wave 3 / w3 - the BOOKS LIST as the first place a user is oriented.
@@ -80,11 +81,23 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
     httpMock.verify();
   });
 
-  /** Render the page and answer the books-list request with the given rows. */
-  function load(books: BookDto[]): void {
+  /**
+   * Render the page and answer BOTH of its page-level requests: the books list, and (e2) the feedback
+   * availability probe that decides whether the header draws the triage entry. The probe defaults to
+   * OFF here so that every pre-existing assertion in this suite sees the header it always saw.
+   */
+  function load(books: BookDto[], triageEnabled = false): void {
     fixture.detectChanges();
+    answerAvailability(triageEnabled);
     httpMock.expectOne(r => r.method === 'GET' && r.url.endsWith('/api/books')).flush(books);
     fixture.detectChanges();
+  }
+
+  /** Answer the e2 availability probe. Its own budget claim is asserted in `the request budget` below. */
+  function answerAvailability(triageEnabled: boolean): void {
+    httpMock
+      .expectOne(r => r.method === 'GET' && r.url.endsWith('/api/feedback/availability'))
+      .flush({ triageEnabled });
   }
 
   function compactSpines(): HTMLElement[] {
@@ -102,17 +115,31 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
   // ── THE REQUEST BUDGET ──────────────────────────────────────────────────────────────────────────
 
   describe('the request budget', () => {
-    it('makes EXACTLY ONE request for the whole page, with three books on it', () => {
+    /**
+     * THE CONTRACT IS PER-ROW COST, and that is what this now says out loud.
+     *
+     * It used to read "exactly one request for the whole page", which was the same claim while the page
+     * made exactly one. e2 added a second PAGE-LEVEL request (the feedback availability probe, one per
+     * mount, independent of the row count), so the assertion is written against the thing that actually
+     * matters: the set of requests is enumerated and named, and NOTHING in it is per row. A regression
+     * that turned one list request into 1 + 4N still fails here, which is the whole point of the suite.
+     */
+    it('makes only PAGE-LEVEL requests, never one per row, with three books on it', () => {
       fixture.detectChanges();
-      const list = httpMock.expectOne(r => r.method === 'GET' && r.url.endsWith('/api/books'));
-      list.flush([
+
+      const issued = httpMock.match(() => true);
+      const urls = issued.map(r => r.request.url).sort();
+      expect(urls).toEqual(['/api/books', '/api/feedback/availability']);
+
+      issued.find(r => r.request.url === '/api/feedback/availability')!.flush({ triageEnabled: false });
+      issued.find(r => r.request.url === '/api/books')!.flush([
         book({ id: 'a', chapterCount: 0, chaptersWithTextCount: 0 }),
         book({ id: 'b', chapterCount: 12, chaptersWithTextCount: 12 }),
         book({ id: 'c', chapterCount: 3, chaptersWithTextCount: 0 }),
       ]);
       fixture.detectChanges();
 
-      // Three rows, three spines - and no second request of any kind. httpMock.verify() in afterEach is
+      // Three rows, three spines - and no further request of any kind. httpMock.verify() in afterEach is
       // the fence: any per-row status/summary/review/chapters call would fail the suite here.
       expect(compactSpines().length).toBe(3);
       httpMock.verify();
@@ -351,6 +378,55 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
       fixture.detectChanges();
 
       expect(fixture.debugElement.query(By.css('.dash-help-link'))).not.toBeNull();
+    });
+  });
+
+  // ── The feedback entry (e2) ─────────────────────────────────────────────────────────────────────
+  //
+  // Show C2 shipped `/feedback` reachable by TYPED URL ALONE. The entry has to be gated on the SAME
+  // signal as the route, because `/feedback` is a `canMatch` route: with the flag off it does not match
+  // and the URL falls through the wildcard to `/books`, so an ungated link would be a link that reloads
+  // the page the owner is standing on. These two tests are that gate, from the DOM.
+
+  describe('the feedback entry', () => {
+    function feedbackLink(): HTMLAnchorElement | null {
+      const found = fixture.debugElement.query(By.css('.dash-feedback-link'));
+      return found ? (found.nativeElement as HTMLAnchorElement) : null;
+    }
+
+    it('renders beside the guides link, pointing at /feedback, when the deployment serves triage', () => {
+      load([book({ id: 'a' })], true);
+
+      const link = feedbackLink();
+      expect(link)
+        .withContext('the triage view was reachable only by typed URL before this entry existed')
+        .not.toBeNull();
+      expect(link!.getAttribute('href')).toBe('/feedback');
+      expect(link!.textContent?.trim()).toBe(FEEDBACK_STRINGS_HE['entryLink']);
+      expect(link!.getAttribute('aria-label')).toBe(FEEDBACK_STRINGS_HE['entryLinkAria']);
+      // Beside the guides link, in the same header actions group, not in place of it.
+      const actions = fixture.nativeElement.querySelector('.dash-header-actions') as HTMLElement;
+      expect(actions.contains(link)).toBeTrue();
+      expect(actions.querySelector('.dash-help-link:not(.dash-feedback-link)')).not.toBeNull();
+    });
+
+    it('is ABSENT when the deployment does not serve triage, so it can never point into the wildcard', () => {
+      load([book({ id: 'a' })], false);
+      expect(feedbackLink()).toBeNull();
+      // The rest of the header is untouched by the flag.
+      expect(fixture.debugElement.query(By.css('.dash-help-link'))).not.toBeNull();
+    });
+
+    it('is absent when the availability read FAILS, which is the fail-closed direction', () => {
+      fixture.detectChanges();
+      httpMock
+        .expectOne(r => r.url.endsWith('/api/feedback/availability'))
+        .flush('down', { status: 500, statusText: 'Server Error' });
+      httpMock.expectOne(r => r.url.endsWith('/api/books')).flush([book({ id: 'a' })]);
+      fixture.detectChanges();
+
+      // A failed read must not draw a link into a surface this deployment may not be serving.
+      expect(feedbackLink()).toBeNull();
     });
   });
 });
