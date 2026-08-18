@@ -284,11 +284,26 @@
   margin-inline-end: auto;
 }
 
-.review-body app-analysis-panel,
 .review-body app-issue-panel,
 .review-body app-book-dashboard {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* c1: the analysis panel is deliberately SPLIT OUT of the rule above, because it is the one host in
+   `.review-body` that must be allowed to outgrow the panel. `min-height: 0` on a flex item switches
+   off the automatic minimum size, which is exactly what capped the analysis column at the panel's
+   height and forced a long result to scroll inside a 31px pane. Without it the host is at least as
+   tall as its content, `.review-body` (the single `overflow-y: auto` box) scrolls once, and `flex: 1`
+   still stretches the host to fill the panel when the content is short.
+
+   The other two hosts KEEP the cap: their own internals were not part of this fix and their inner
+   scroll boxes still expect a height-bounded host. Releasing them is a separate change with its own
+   browser gate. */
+.review-body app-analysis-panel {
+  flex: 1;
   display: flex;
   flex-direction: column;
 }

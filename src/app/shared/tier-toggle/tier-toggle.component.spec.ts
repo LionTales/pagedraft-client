@@ -1605,8 +1605,10 @@ describe('TierToggleComponent tierChanged (tier-ux-rework fixes c04)', () => {
   `,
   styles: [
     `
-      /* The real surfaces are narrow scrolling columns: the analysis run tab is ~347px with overflow:auto,
-         the book dashboard the same, and the book default card is that minus 16px of card padding a side. */
+      /* The real surfaces are narrow scrolling columns: the analysis run tab is ~347px wide inside the
+         review panel's single overflow-y:auto box (c1 collapsed the run tab's own scroller into that
+         one; the WIDTH, which is what these specs measure, did not change), the book dashboard the same,
+         and the book default card is that minus 16px of card padding a side. */
       .tt-spec-scroller {
         inline-size: 305px;
         block-size: 400px;
