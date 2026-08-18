@@ -72,6 +72,101 @@
   object-fit: cover;
   flex: 0 0 auto;
   pointer-events: none;
+
+  /* IDLE TRANSPARENCY (f2, 8b). The launcher is a fixed control sitting permanently over the author's
+     manuscript, so at rest it steps back; touching it, or tabbing to it, brings it fully forward.
+     There is no "while the drawer is open" rule to write here because the launcher is not rendered
+     at all in that state (see the template's `@if (!isOpen)`), which is the same intent by structure.
+     Opacity only - no size or position change, so nothing here can move the hit target. */
+  opacity: 0.75;
+  transition: opacity var(--pd-dur-fast) var(--pd-ease);
+}
+
+.dock-launcher:hover .dock-launcher-icon,
+.dock-launcher:focus-visible .dock-launcher-icon {
+  opacity: 1;
+}
+
+/*
+ * THE PAGE FLIP (f2, 8b).
+ *
+ * Show's book turns one of its own pages every few seconds. The artwork is a raster PNG with no
+ * addressable parts, so the frames are BAKED by tools/regen-show-icons.ps1 into a 6-frame horizontal
+ * strip (`show-flip-sprite.png`, 576x96) and stepped through here. Frame 0 of that strip is the same
+ * composite as `show-header.png`, which is what lets this overlay sit on frame 0 for most of the cycle
+ * and be indistinguishable from the plain icon while it does.
+ *
+ * WHY AN ::after AND NOT THE <img> ITSELF: an <img> takes no pseudo-element and cannot carry a
+ * background sprite, and stacking a second translucent copy of the face over the first would raise the
+ * icon's effective opacity above the 0.75 that idle state is supposed to mean. So under
+ * `no-preference` the <img> is hidden and this layer draws instead. It is `visibility: hidden` rather
+ * than `display: none` ON PURPOSE: the image keeps its box, so the button's geometry - which
+ * dock-layout.spec.ts measures - is byte-identical either way. Under `prefers-reduced-motion: reduce`,
+ * and in any engine that does not know the media feature at all, none of this block applies and the
+ * plain <img> renders exactly as it did before.
+ *
+ * THE TRADE THAT BUYS, stated so nobody has to rediscover it: if the sprite ever fails to load, a
+ * motion-allowing browser shows the launcher with NO face, because the <img> that would have covered
+ * for it is hidden. Accepted knowingly over the alternative - drawing both layers at 0.75 each, which
+ * composites to about 0.94 and turns every flip into a brightness pulse, i.e. a visible blink on an
+ * animation whose whole point is to be quiet. The button, its ring, its badge and its accessible name
+ * are unaffected either way, so the failure degrades the launcher rather than breaking it, and both
+ * assets are static files from the same directory: if one 404s, so has the other since f1.
+ *
+ * The hit-test contract survives by construction: a pseudo-element is never returned by
+ * `elementFromPoint` (it resolves to its originating element), and `pointer-events: none` says so
+ * anyway. `inset: 0` + `margin: auto` centres the layer without naming a physical side, so it lands in
+ * the same place in Hebrew and in English.
+ *
+ * NOT APPLIED TO THE 18px TAB, deliberately: at 18px the whole book band is about three pixels tall
+ * and the turning leaf resolves to a single pixel changing value, which reads as a flicker rather than
+ * as motion. It was rendered and looked at before being left out.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .dock-launcher-icon {
+    visibility: hidden;
+  }
+
+  .dock-launcher::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--pd-radius-pill);
+    pointer-events: none;
+
+    background-image: url('/assistant/show-flip-sprite.png');
+    background-repeat: no-repeat;
+    /* 6 frames of 32px = 192px wide, drawn 32px tall. */
+    background-size: 192px 32px;
+    background-position: 0 0;
+
+    opacity: 0.75;
+    transition: opacity var(--pd-dur-fast) var(--pd-ease);
+
+    /* A LONG cycle with a SHORT active window: nine seconds of stillness-shaped rest, then a turn of
+       just under a second. `steps(1, end)` (step-end) holds each keyframe's value for its whole
+       interval, so the strip advances frame by frame instead of sliding between positions. */
+    animation: dock-page-flip 9s steps(1, end) infinite;
+  }
+
+  .dock-launcher:hover::after,
+  .dock-launcher:focus-visible::after {
+    opacity: 1;
+  }
+}
+
+@keyframes dock-page-flip {
+  0%,
+  88% { background-position: 0 0; }
+  90% { background-position: -32px 0; }
+  92% { background-position: -64px 0; }
+  94% { background-position: -96px 0; }
+  96% { background-position: -128px 0; }
+  98% { background-position: -160px 0; }
+  100% { background-position: 0 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -100,6 +195,9 @@
   position: absolute;
   top: -4px;
   inset-inline-end: -4px;
+  /* Above the flip overlay (f2, 8b). That overlay is a `::after`, so it is generated as the launcher's
+     LAST child and would otherwise paint over this badge's corner wherever the two boxes meet. */
+  z-index: 1;
   min-width: 18px;
   height: 18px;
   padding: 0 var(--pd-space-2);
