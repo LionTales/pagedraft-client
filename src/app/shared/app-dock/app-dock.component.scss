@@ -89,13 +89,27 @@
   flex: 0 0 auto;
   pointer-events: none;
 
-  /* IDLE TRANSPARENCY (f2, 8b). The launcher is a fixed control sitting permanently over the author's
-     manuscript, so at rest it steps back; touching it, or tabbing to it, brings it fully forward.
-     There is no "while the drawer is open" rule to write here because the launcher is not rendered
-     at all in that state (see the template's `@if (!isOpen)`), which is the same intent by structure.
-     Opacity only - no size or position change, so nothing here can move the hit target. */
-  opacity: 0.75;
-  transition: opacity var(--pd-dur-fast) var(--pd-ease);
+  /* IDLE TRANSPARENCY (f2, 8b; re-levelled in f2c). The launcher is a fixed control sitting permanently
+     over the author's manuscript, so at rest it steps back; touching it, or tabbing to it, brings it
+     fully forward. There is no "while the drawer is open" rule to write here because the launcher is
+     not rendered at all in that state (see the template's `@if (!isOpen)`), which is the same intent by
+     structure. Opacity only - no size or position change, so nothing here can move the hit target.
+
+     0.75 -> 0.5 (f2c): the owner judged the enlarged launcher and said it was "not transparent enough
+     when not clicking". 0.5 is the floor, not a midpoint on the way to less: at 48px the face's own
+     contrast against the white button surface is what carries it, and by 0.45 the eyes and mouth start
+     dissolving into that surface - which matters because this face IS the affordance, not decoration on
+     one. All three of 0.55 / 0.5 / 0.45 were rendered at real size in the browser and looked at before
+     this number was picked.
+
+     WHY THE TRANSITION GREW WITH IT: the idle -> hover jump doubled (0.25 -> 0.5), and the same 120ms
+     would have doubled the fade's SPEED, which is what turns a fade into a flash. `--pd-dur-base`
+     (200ms) holds the rate at roughly what the owner already accepted (0.25/120ms ~ 0.5/200ms), so the
+     hover reads as the same fade covering more ground. The button's own lift/tint stay on
+     `--pd-dur-fast`: they are position and colour on a different layer, so the icon settling just after
+     the button lifts reads as sequence, not as desync. */
+  opacity: 0.5;
+  transition: opacity var(--pd-dur-base) var(--pd-ease);
 }
 
 .dock-launcher:hover .dock-launcher-icon,
@@ -124,7 +138,7 @@
  *
  * WHY AN ::after AND NOT THE <img> ITSELF: an <img> takes no pseudo-element and cannot carry a
  * background sprite, and stacking a second translucent copy of the face over the first would raise the
- * icon's effective opacity above the 0.75 that idle state is supposed to mean. So under
+ * icon's effective opacity above the 0.5 that idle state is supposed to mean. So under
  * `no-preference` the <img> is hidden and this layer draws instead. It is `visibility: hidden` rather
  * than `display: none` ON PURPOSE: the image keeps its box, so the button's geometry - which
  * dock-layout.spec.ts measures - is byte-identical either way. Under `prefers-reduced-motion: reduce`,
@@ -133,8 +147,8 @@
  *
  * THE TRADE THAT BUYS, stated so nobody has to rediscover it: if the sprite ever fails to load, a
  * motion-allowing browser shows the launcher with NO face, because the <img> that would have covered
- * for it is hidden. Accepted knowingly over the alternative - drawing both layers at 0.75 each, which
- * composites to about 0.94 and turns every flip into a brightness pulse, i.e. a visible blink on an
+ * for it is hidden. Accepted knowingly over the alternative - drawing both layers at 0.5 each, which
+ * composites to 0.75 and turns every flip into a brightness pulse, i.e. a visible blink on an
  * animation whose whole point is to be quiet. The button, its ring, its badge and its accessible name
  * are unaffected either way, so the failure degrades the launcher rather than breaking it, and both
  * assets are static files from the same directory: if one 404s, so has the other since f1.
@@ -173,8 +187,11 @@
     background-size: 336px 48px;
     background-position: 0 0;
 
-    opacity: 0.75;
-    transition: opacity var(--pd-dur-fast) var(--pd-ease);
+    /* MUST track .dock-launcher-icon's idle level and fade exactly, for the same reason the size does:
+       this layer IS the icon under `no-preference`, so a disagreement here would be a step in
+       brightness the moment the media query applies. Both moved 0.75 -> 0.5 in f2c. */
+    opacity: 0.5;
+    transition: opacity var(--pd-dur-base) var(--pd-ease);
 
     /* A LONG cycle with a SHORT active window: nine seconds of stillness-shaped rest, then a turn of
        just under a second. `steps(1, end)` (step-end) holds each keyframe's value for its whole
