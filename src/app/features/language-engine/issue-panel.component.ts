@@ -1,5 +1,6 @@
-import { Component, Input, Output, EventEmitter, OnInit, OnChanges, SimpleChanges } from '@angular/core';
+import { Component, Input, Output, EventEmitter, OnInit, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Subscription } from 'rxjs';
 import { LanguageEngineService } from '../../core/services/language-engine.service';
 import { LanguageIssue } from '../../core/models/language-engine';
 
@@ -121,15 +122,16 @@ export interface ApplyCorrectionEvent {
 
       <ng-template #noIssues>
         <div class="no-issues pd-empty">
-          <!-- Exactly one line renders. For a Hebrew book that is the unsupported note, which replaces
-               BOTH the "press Detect" prompt (there is no button) and the English server banner. -->
-          <p *ngIf="!canDetect" class="detect-unsupported-note">{{ detectUnsupportedNote }}</p>
-          <p *ngIf="canDetect && !hasDetected">{{ emptyPromptLabel }}</p>
-          <!-- "No issues detected. Great!" is a CLAIM ABOUT THE TEXT, so it must not render when the
-               checker never ran: an unavailable checker returns zero issues, and the browser gate caught
-               the clean line sitting directly under the unavailable banner saying the opposite. The
-               banner is the only statement in that state. -->
-          <p *ngIf="canDetect && hasDetected && !serviceUnavailableMessage">{{ emptyCleanLabel }}</p>
+          <!-- f01: AT MOST ONE line renders, and WHICH one is decided in ONE place
+               ({@link emptyStateLine}) rather than by three independent *ngIf conjunctions. Three
+               conjunctions are how the previous partial fix shipped: the clean line was gated against
+               the unavailable banner and NOT against the request-error banner, so an English chapter
+               that had already loaded clean and then failed a Detect said "No issues detected. Great!"
+               directly under "The language check failed". A getter with a total order cannot leave a
+               cell of that cross product open. -->
+          <p *ngIf="emptyStateLine === 'unsupported'" class="detect-unsupported-note">{{ detectUnsupportedNote }}</p>
+          <p *ngIf="emptyStateLine === 'prompt'" class="detect-prompt">{{ emptyPromptLabel }}</p>
+          <p *ngIf="emptyStateLine === 'clean'" class="no-issues-clean">{{ emptyCleanLabel }}</p>
         </div>
       </ng-template>
 
@@ -332,7 +334,7 @@ export interface ApplyCorrectionEvent {
     }
   `]
 })
-export class IssuePanelComponent implements OnInit, OnChanges {
+export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
   @Input() bookId?: string;
   @Input() chapterId?: string;
   /** Book-scoped chrome language: Hebrew default, English only for an English book. */
@@ -477,6 +479,34 @@ export class IssuePanelComponent implements OnInit, OnChanges {
   /** Shown when the request itself failed (network / 5xx), distinct from a checker that answered. */
   requestErrorMessage: string | null = null;
 
+  /**
+   * f01: WHICH empty-state line renders, as ONE total function of the panel's state.
+   *
+   * The empty state is a cross product of {he, en} x {not-yet-detected, detected-clean,
+   * detected-with-issues} x {no banner, unavailable banner, request-error banner}, and the previous
+   * three-*ngIf form left one of its cells rendering two contradictory statements at once. Deciding it
+   * here makes "exactly one line, or none" a property of the code instead of an invariant three
+   * separate conjunctions have to agree on. The order below IS the rule:
+   *
+   *  1. `unsupported` - the checker cannot work on this book at all, so the capability note stands in
+   *     for the button that is not there. This outranks everything else because it is a fact about the
+   *     deployment, not a claim about the text or about one request.
+   *  2. `none` - A BANNER IS SPEAKING, and a banner is the only statement in its cell. Both banners say
+   *     the text was NOT checked (the checker was unavailable, or the request never answered), so no
+   *     line about the text may sit under either one - neither the clean claim ("No issues detected")
+   *     nor the prompt, which would invite a second press while the failure is still on screen.
+   *  3. `clean` / `prompt` - the ordinary two states: the checker ran and found nothing, or it has not
+   *     run yet.
+   *
+   * `detected-with-issues` never reaches here at all: the template renders the issue list instead of
+   * this block whenever `issues.length > 0`.
+   */
+  get emptyStateLine(): 'unsupported' | 'prompt' | 'clean' | 'none' {
+    if (!this.canDetect) return 'unsupported';
+    if (this.requestErrorMessage || this.serviceUnavailableMessage) return 'none';
+    return this.hasDetected ? 'clean' : 'prompt';
+  }
+
   get errorCount(): number {
     return this.issues.filter(i => i.severity === 'error').length;
   }
@@ -493,6 +523,54 @@ export class IssuePanelComponent implements OnInit, OnChanges {
     return this.issues.length > 0 && !this.isDetecting;
   }
 
+  /**
+   * c03: the (bookId, chapterId) tuple a request was issued FOR, captured at issue time.
+   *
+   * Every response handler compares this against the panel's live tuple before touching anything. The
+   * offsets in an issue are indexes into ONE chapter's text, and `applySuggestion` emits them straight
+   * to the editor, so a response that lands after the reader has moved on must not be allowed to set
+   * `issues` - the editor would apply chapter A's range into chapter B's document.
+   */
+  private requestKeyFor(bookId?: string, chapterId?: string): string {
+    return `${bookId ?? ''}||${chapterId ?? ''}`;
+  }
+
+  private get currentRequestKey(): string {
+    return this.requestKeyFor(this.bookId, this.chapterId);
+  }
+
+  /**
+   * c03: THE ONE in-flight issue fetch, GET or detect.
+   *
+   * Both kinds write the same three fields (`issues`, `hasDetected`, the banners), so a second fetch of
+   * EITHER kind supersedes the first rather than racing it: the stale-context guard alone cannot settle
+   * two requests for the SAME key resolving out of order, and there the older, slower one wins.
+   */
+  private inFlightFetch?: Subscription;
+  /** c03: same rule for the rewrite call, which owns `rewrittenText` and the `isRewriting` latch. */
+  private inFlightRewrite?: Subscription;
+
+  /**
+   * c03: drop the in-flight fetch AND LOWER ITS LATCH IN THE SAME PLACE.
+   *
+   * Unsubscribing destroys the handlers that would have lowered `isDetecting`, and a stranded
+   * `isDetecting` disables the Detect button for the rest of the panel's life. So the cancel point owns
+   * the latch: whoever cancels leaves the spinner down, and a caller that is about to issue its own
+   * request raises it again immediately afterwards.
+   */
+  private cancelInFlightFetch(): void {
+    this.inFlightFetch?.unsubscribe();
+    this.inFlightFetch = undefined;
+    this.isDetecting = false;
+  }
+
+  /** c03: the rewrite counterpart, with its own latch lowered at the same cancel point. */
+  private cancelInFlightRewrite(): void {
+    this.inFlightRewrite?.unsubscribe();
+    this.inFlightRewrite = undefined;
+    this.isRewriting = false;
+  }
+
   constructor(private languageEngineService: LanguageEngineService) {}
 
   ngOnInit(): void {
@@ -503,6 +581,11 @@ export class IssuePanelComponent implements OnInit, OnChanges {
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['bookId'] || changes['chapterId']) {
+      // c03: cancel BEFORE resetting, so the abandoned request cannot write into the new context even
+      // if its handler had already been queued. Both cancels lower their own latch, which is what keeps
+      // a chapter switch during a detect from stranding the button at "Detecting...".
+      this.cancelInFlightFetch();
+      this.cancelInFlightRewrite();
       this.issues = [];
       this.rewrittenText = undefined;
       this.hasDetected = false;
@@ -512,6 +595,12 @@ export class IssuePanelComponent implements OnInit, OnChanges {
         this.loadIssues();
       }
     }
+  }
+
+  /** c03: a panel torn down mid-request must not keep a live subscription writing into a dead view. */
+  ngOnDestroy(): void {
+    this.cancelInFlightFetch();
+    this.cancelInFlightRewrite();
   }
 
   /**
@@ -529,19 +618,53 @@ export class IssuePanelComponent implements OnInit, OnChanges {
     this.serviceUnavailableMessage = this.unavailableCopyFor(typeof code === 'string' ? code : null);
   }
 
+  /**
+   * f02: THE RULE FOR A FAILED FETCH, and it is one rule for BOTH fetch paths.
+   *
+   * A failure CLEARS THE PREVIOUS RESULT and leaves the failure banner as the only statement:
+   *
+   *  - `issues` goes empty, because a list the panel cannot refresh is still rendered as though it
+   *     described the text now in the editor, and `applySuggestion` emits its `startOffset`/`endOffset`
+   *     straight to the editor. A suggestion list whose offsets may no longer match the document is a
+   *     shape this workspace has already paid for; the failure is the moment to drop it.
+   *  - `hasDetected` goes false, because it is the panel's "the checker has answered for this text"
+   *     flag and a failed request is not an answer.
+   *  - `serviceUnavailableMessage` is cleared, because otherwise a previous unavailable banner STACKS
+   *     with this one and the panel says "the checker is unavailable" and "the check failed" at once.
+   *     Exactly one banner describes the last thing that happened.
+   *
+   * Both error handlers call THIS, so they cannot drift apart: the two-error-handler pair is the sibling
+   * shape where fixing one and leaving the other is the recorded failure.
+   */
+  private applyRequestFailure(): void {
+    this.issues = [];
+    this.hasDetected = false;
+    this.serviceUnavailableMessage = null;
+    // b2: was a console line, which left a 5xx looking exactly like "no issues found".
+    this.requestErrorMessage = this.requestFailedLabel;
+  }
+
   loadIssues(): void {
     if (!this.bookId || !this.chapterId) return;
 
+    const key = this.currentRequestKey;
+    this.cancelInFlightFetch();
     this.requestErrorMessage = null;
-    this.languageEngineService.getIssues(this.bookId, this.chapterId).subscribe({
+    this.inFlightFetch = this.languageEngineService.getIssues(this.bookId, this.chapterId).subscribe({
       next: (res) => {
+        // c03: THE GUARD RUNS FIRST, before any flag is set or cleared. A stale response must be a
+        // complete no-op, not a partial write.
+        if (key !== this.currentRequestKey) return;
         this.issues = res.issues;
         this.hasDetected = true;
         this.applyUnavailable(res.languageToolUnavailable, res.languageToolCode);
       },
       error: () => {
-        // b2: was a console line, which left a 5xx looking exactly like "no issues found".
-        this.requestErrorMessage = this.requestFailedLabel;
+        // c03: guard first here TOO - a stale failure must not banner over the current chapter, which
+        // is fine to leave as it is. The latch is already down (this path never raised it, and a
+        // context change lowered whatever was up at `cancelInFlightFetch`).
+        if (key !== this.currentRequestKey) return;
+        this.applyRequestFailure();
       }
     });
   }
@@ -549,10 +672,16 @@ export class IssuePanelComponent implements OnInit, OnChanges {
   detectIssues(): void {
     if (!this.bookId || !this.chapterId || this.isDetecting || !this.canDetect) return;
 
+    const key = this.currentRequestKey;
+    // c03: supersede any fetch already running for this chapter (an auto GET from mount can still be
+    // open when the reader presses Detect, and it writes the same fields). This lowers `isDetecting`,
+    // so raise it AFTER the cancel, never before.
+    this.cancelInFlightFetch();
     this.isDetecting = true;
     this.requestErrorMessage = null;
-    this.languageEngineService.detectIssues(this.bookId, this.chapterId).subscribe({
+    this.inFlightFetch = this.languageEngineService.detectIssues(this.bookId, this.chapterId).subscribe({
       next: (result) => {
+        if (key !== this.currentRequestKey) return;
         this.issues = result.issues;
         this.hasDetected = true;
         this.isDetecting = false;
@@ -562,22 +691,34 @@ export class IssuePanelComponent implements OnInit, OnChanges {
         );
       },
       error: () => {
+        // c03: guard first, THEN lower the latch. The early return does not strand it: the only way to
+        // get here stale is a context change, and `ngOnChanges` lowered it at the cancel point.
+        if (key !== this.currentRequestKey) return;
         this.isDetecting = false;
-        this.requestErrorMessage = this.requestFailedLabel;
+        this.applyRequestFailure();
       }
     });
   }
 
+  /**
+   * c03 EXTENDS TO REWRITE, which is the same defect in the same file: `rewrittenText` is offered to the
+   * reader as a replacement for the chapter now open, and `applyRewrite` emits it as a full-text
+   * correction, so chapter A's rewrite landing after a switch to B would offer to overwrite B.
+   */
   rewriteText(): void {
     if (!this.bookId || !this.chapterId || this.isRewriting || !this.canRewrite) return;
 
+    const key = this.currentRequestKey;
+    this.cancelInFlightRewrite();
     this.isRewriting = true;
-    this.languageEngineService.rewriteText(this.bookId, this.chapterId).subscribe({
+    this.inFlightRewrite = this.languageEngineService.rewriteText(this.bookId, this.chapterId).subscribe({
       next: (result) => {
+        if (key !== this.currentRequestKey) return;
         this.rewrittenText = result.rewrittenText;
         this.isRewriting = false;
       },
       error: (err) => {
+        if (key !== this.currentRequestKey) return;
         console.error('Failed to rewrite text', err);
         this.isRewriting = false;
       }
