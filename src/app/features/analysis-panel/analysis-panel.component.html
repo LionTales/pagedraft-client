@@ -89,21 +89,21 @@
       type="button"
       class="sub-tab"
       [class.active]="activeSubTab === 'run'"
-      (click)="activeSubTab = 'run'">
+      (click)="selectSubTab('run')">
       {{ panelLabel('tabRun') }}
     </button>
     <button
       type="button"
       class="sub-tab"
       [class.active]="activeSubTab === 'history'"
-      (click)="activeSubTab = 'history'">
+      (click)="selectSubTab('history')">
       {{ panelLabel('tabHistory') }}
     </button>
     <button
       type="button"
       class="sub-tab"
       [class.active]="activeSubTab === 'versions'"
-      (click)="activeSubTab = 'versions'; loadVersions()">
+      (click)="selectSubTab('versions')">
       {{ panelLabel('tabVersions') }}
     </button>
   </nav>

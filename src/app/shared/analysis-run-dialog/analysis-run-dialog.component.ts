@@ -154,10 +154,18 @@ export interface RunDialogMinimizeEvent {
  * no new state, no second terminal predicate and no timer in this view.
  *
  * `run-finished` (c01) is the panel's own terminal rather than an orchestration event: it says the run is
- * over with nothing to report, which today means it was cancelled by the panel being destroyed mid-run or
- * never started because a pre-run save rejected. Without it the dialog outlives its emitter and keeps a
- * live indeterminate bar up for a run that no longer exists - the panel is `@if`-mounted in the editor and
- * this dialog is not, so the panel really can vanish while this card is on screen.
+ * over with nothing to report, which today means a PANEL-OWNED run was cancelled by the panel being
+ * destroyed mid-run, or a run never started because a pre-run save rejected. Without it the dialog
+ * outlives its emitter and keeps a live indeterminate bar up for a run that no longer exists - the panel
+ * is `@if`-mounted in the editor and this dialog is not, so the panel really can vanish while this card
+ * is on screen.
+ *
+ * a1 NARROWED which runs that covers. `AnalysisRunOrchestrationService.startRun` now owns the run's
+ * subscription for every run the analyze button starts, so unmounting the panel cancels nothing and the
+ * panel emits no terminal for it. Only the streaming path is still panel-owned and still reports here.
+ * The card for an unmounted SYNC run therefore stays in state (a) with its own labelled close, which is
+ * the honest end state: the run is genuinely still in flight, and this component has no other channel to
+ * hear its outcome on (a sync run is never registry-tracked - see the c02 note on `minimize`).
  *
  * `result-dropped` (c06) is the other panel-emitted member, and it is the ONE signal that resolves the
  * card to nothing rather than to a terminal: it says the run produced a result and the panel discarded it
@@ -349,13 +357,19 @@ export interface RunDialogMinimizeEvent {
                  chunk, the user could minimize the popup" and KEPT it; see the c02 note below.
 
                  c02 replaced the hint. It used to reuse state (b)'s keepsRunning ("this keeps running
-                 in the background"), which state (a) cannot keep: on the SYNC route the run lives in an
-                 HTTP subscription the analysis PANEL owns, and AnalysisPanelComponent.ngOnDestroy
-                 unsubscribes it (emitting run-finished), so leaving the editor or switching the
-                 Edit-help sub-tab CANCELS the run. Telling the user "keeps running in the background"
+                 in the background"), which state (a) could not keep: on the SYNC route the run lived in
+                 an HTTP subscription the analysis PANEL owned, and AnalysisPanelComponent.ngOnDestroy
+                 unsubscribed it (emitting run-finished), so leaving the editor or switching the
+                 Edit-help sub-tab CANCELLED the run. Telling the user "keeps running in the background"
                  right as we invite them to close the card is exactly the promise that gets broken. The
                  state-(a) wording is the weaker, always-true statement instead; the moment the run turns
-                 out to be async the card moves to (b) and shows the stronger one. -->
+                 out to be async the card moves to (b) and shows the stronger one.
+
+                 a1 removed the cancellation (AnalysisRunOrchestrationService owns the subscription now),
+                 so the weaker string is no longer the strongest TRUE one here. It is KEPT anyway and the
+                 stronger one is not promoted: keepsRunning promises the Activity Center will carry the
+                 run, and a sync run still has no row there and no way to be reattached, so it would be a
+                 different broken promise. Revisit only with a surface behind it. -->
             <div class="rd-actions">
               <button class="rd-close" type="button" (click)="dismiss()">
                 {{ label('close') }}
@@ -771,11 +785,12 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
    * `JobRegistryService` behind a client-minted id, so state (b) and every surface it feeds work
    * uniformly. It was rejected on three facts, all of them checkable in this repo:
    *
-   *  1. A SYNC RUN HAS NO EXISTENCE OUTSIDE THE MOUNTED PANEL. `AnalysisPanelComponent.ngOnDestroy`
-   *     unsubscribes the run and emits `run-finished`, i.e. leaving the editor or switching the
-   *     Edit-help sub-tab CANCELS it. The Activity Center is app-level, cross-book chrome whose entire
-   *     promise is "you can navigate away and it is still there". A row for a run that dies when you
-   *     navigate away does not merely lack a feature, it makes the bell mean two different things.
+   *  1. A SYNC RUN HAS NO EXISTENCE OUTSIDE THIS BROWSER TAB. It used to have none outside the mounted
+   *     panel - `AnalysisPanelComponent.ngOnDestroy` unsubscribed it, so an Edit-help sub-tab switch
+   *     CANCELLED it - and a1 fixed that half: `AnalysisRunOrchestrationService` owns the subscription,
+   *     so the run now survives an unmount and a navigation within the SPA. It still dies with a reload,
+   *     because it is an in-flight XHR (see 2). The Activity Center is app-level chrome whose promise is
+   *     "you can navigate away and it is still there", and a reload is squarely inside that promise.
    *  2. IT CAN NEVER BE REATTACHED. The sync route persists its result with a NULL JobId (verified in
    *     the database, 2026-08-03), so the reattach seam's `getActiveAnalysisJobs` cannot return it and
    *     no backend read can rediscover it. Its work lives in an in-flight XHR that a refresh aborts.
@@ -1086,9 +1101,10 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
 
       case 'run-finished':
         // c01: (a) -> (c) on the panel's own run terminal. Reaching this line means the run ended without
-        // ANY of the terminal events above - the panel was destroyed mid-run (which cancels the run), or
-        // the save that had to precede it rejected. So the status is 'canceled', not 'succeeded': there is
-        // no result behind this card. Percent stays null; nothing about progress is read off this event.
+        // ANY of the terminal events above - a PANEL-OWNED run was destroyed mid-run (which cancels that
+        // run; a1 left only the streaming path in that class), or the save that had to precede it
+        // rejected. So the status is 'canceled', not 'succeeded': there is no result behind this card.
+        // Percent stays null; nothing about progress is read off this event.
         //
         // The `registryOwnsRun` guard is load-bearing, not defensive: a registry-tracked run (state (b))
         // genuinely keeps running server-side after the panel goes away, which is the entire point of the
