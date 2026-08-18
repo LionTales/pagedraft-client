@@ -45,6 +45,8 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
   // rf-c02: the hosted status rows publish their build to the registry. Spy so the real (root) registry is
   // not pulled in and so we can assert the row->registry publish when a build is driven through the host.
   let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
+  /** a1: the review build the registry reports for this book; the handle the a1 specs drive. */
+  let reviewJob$: BehaviorSubject<TrackedJob | null>;
 
   beforeEach(async () => {
     // `activeJobs$` is read by the dashboard itself since Wave 3 / w2 (the spine's stage-4 running marks),
@@ -52,9 +54,12 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     // `jobs$` joined it in c04: the hosted briefs row injects the shared profile continuation, which
     // watches the registry for briefs builds reaching their terminal - the wiring that makes the profile
     // get built when nothing is mounted to see it happen.
+    // a1: `jobByKindForBook$` joined them: the dashboard now watches this book's REVIEW build in the
+    // registry, so a build that finishes while the status row is unmounted still refreshes the ledger.
+    reviewJob$ = new BehaviorSubject<TrackedJob | null>(null);
     jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>(
       'JobRegistryService',
-      ['track'],
+      { track: undefined, jobByKindForBook$: reviewJob$.asObservable() },
       { activeJobs$: of([]), jobs$: of([]) },
     );
     await TestBed.configureTestingModule({
@@ -352,6 +357,62 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
     fixture.detectChanges();
     expect(component.showFindings).toBeTrue();
     expect(fixture.debugElement.query(By.css('app-book-review-findings'))).not.toBeNull();
+  });
+
+  // ── a1: the review build's terminal, observed where it cannot be unmounted ────
+  //
+  // The terminal used to be observed ONLY by the status row's own progress poll, which its ngOnDestroy
+  // tears down - so a build that finished while that row was off screen left the ledger showing the
+  // PREVIOUS review with nothing to correct it. The registry polls the same job regardless of who is
+  // mounted, so the dashboard watches it there.
+  describe('a1: the review build terminal is observed on the dashboard, not only on the row', () => {
+    /** A tracked whole-book review build for this book. */
+    function reviewJob(status: TrackedJob['status'], id = 'review-job-1'): TrackedJob {
+      return {
+        id, kind: 'review', bookId: 'book-1',
+        scopeLabel: 'הספר כולו', titleHe: 'סקירת הספר', titleEn: 'Reviewing book',
+        status, percent: status === 'succeeded' ? 100 : 50,
+        completedChunks: null, totalChunks: null, chunkClock: EMPTY_CHUNK_CLOCK,
+        message: '', startedAt: '2026-08-18T00:00:00.000Z', updatedAt: '2026-08-18T00:00:00.000Z',
+      };
+    }
+
+    it('bumps the findings token when a build finishes WITH THE STATUS ROW UNMOUNTED', () => {
+      // The ledger is already on screen over the previous review, so `onReviewStateChange` sees no
+      // transition and would bump nothing: the token is the only thing that makes it re-read.
+      component.onReviewStateChange('ready');
+      // The row is not there - exactly the state its own ngOnDestroy leaves behind.
+      (component as any).reviewRow = undefined;
+      const before = component.findingsRefreshToken;
+
+      reviewJob$.next(reviewJob('running'));
+      reviewJob$.next(reviewJob('succeeded'));
+
+      expect(component.findingsRefreshToken).toBe(before + 1);
+    });
+
+    it('does NOT bump for a terminal the MOUNTED row has already handled (no duplicate re-read)', () => {
+      component.onReviewStateChange('ready');
+      // The row is present and its own poll drove this very job to terminal a moment ago.
+      (component as any).reviewRow = { handledTerminalJobId: 'review-job-1', loadBookReviewStatus: () => {} };
+      const before = component.findingsRefreshToken;
+
+      reviewJob$.next(reviewJob('running'));
+      reviewJob$.next(reviewJob('succeeded'));
+
+      expect(component.findingsRefreshToken).toBe(before);
+    });
+
+    it('does NOT bump for a build that was already terminal when this dashboard mounted', () => {
+      component.onReviewStateChange('ready');
+      (component as any).reviewRow = undefined;
+      const before = component.findingsRefreshToken;
+
+      // Never seen running here, so it is the state the page loaded with, not an event.
+      reviewJob$.next(reviewJob('succeeded'));
+
+      expect(component.findingsRefreshToken).toBe(before);
+    });
   });
 
   it('bumps the findings refresh token on the transition INTO a findings-bearing state', () => {
@@ -1371,7 +1432,7 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
         // (HttpClient), not the component that introduced it, so a future test that happens to open the
         // panel would fail somewhere that reads nothing like this change.
         { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', { track: undefined, jobByKindForBook$: of(null) }, { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1514,7 +1575,7 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
         // (HttpClient), not the component that introduced it, so a future test that happens to open the
         // panel would fail somewhere that reads nothing like this change.
         { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', { track: undefined, jobByKindForBook$: of(null) }, { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1703,7 +1764,7 @@ describe('BookDashboardComponent issues no extra whole-book server call, now tha
         // (HttpClient), not the component that introduced it, so a future test that happens to open the
         // panel would fail somewhere that reads nothing like this change.
         { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', { track: undefined, jobByKindForBook$: of(null) }, { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -1826,7 +1887,7 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
         // (HttpClient), not the component that introduced it, so a future test that happens to open the
         // panel would fail somewhere that reads nothing like this change.
         { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', { track: undefined, jobByKindForBook$: of(null) }, { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -2027,7 +2088,7 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
         // (HttpClient), not the component that introduced it, so a future test that happens to open the
         // panel would fail somewhere that reads nothing like this change.
         { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', { track: undefined, jobByKindForBook$: of(null) }, { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -2215,7 +2276,7 @@ describe('BookDashboardComponent survives an in-session language change with loa
         // (HttpClient), not the component that introduced it, so a future test that happens to open the
         // panel would fail somewhere that reads nothing like this change.
         { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', { track: undefined, jobByKindForBook$: of(null) }, { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', {
@@ -2373,7 +2434,7 @@ describe('BookDashboardComponent finding 19: the chapter breakdown reads an expl
         // (HttpClient), not the component that introduced it, so a future test that happens to open the
         // panel would fail somewhere that reads nothing like this change.
         { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$, jobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', { track: undefined, jobByKindForBook$: of(null) }, { activeJobs$, jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, getById: NEVER }),
@@ -2496,7 +2557,7 @@ describe('BookDashboardComponent w6: first-run orientation', () => {
       imports: [BookDashboardComponent],
       providers: [
         { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
-        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }) },
+        { provide: JobRegistryService, useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', { track: undefined, jobByKindForBook$: of(null) }, { activeJobs$: of([]), jobs$: of([]) }) },
         {
           provide: BookService,
           useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, getById: NEVER }),
@@ -3040,7 +3101,7 @@ describe('BookDashboardComponent - the ask card is gone and Show is pointed to (
         { provide: GuidesService, useValue: { get: () => NEVER, list: () => NEVER } },
         {
           provide: JobRegistryService,
-          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track'], { activeJobs$: of([]), jobs$: of([]) }),
+          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', { track: undefined, jobByKindForBook$: of(null) }, { activeJobs$: of([]), jobs$: of([]) }),
         },
         {
           provide: BookService,

@@ -700,6 +700,7 @@ describe('AnalysisRunOrchestrationService run-string localization (c02)', () => 
       noLatin(he);
     });
   });
+
 });
 
 /**
@@ -953,6 +954,61 @@ describe('AnalysisRunOrchestrationService bounded start budget (c01)', () => {
 
     sub2.unsubscribe();
   }));
+
+  // ── a1: the service OWNS the run ────────────────────────────────────────────────────────────────
+  //
+  // The analysis panel is mounted under an `@if` and destroyed on every Edit-help tab switch. While its
+  // subscription was the only one, that destruction CANCELLED the in-flight `/analyze`: the user's run
+  // stopped, silently, and the run dialog was told `canceled`. `startRun` subscribes the run here, so a
+  // caller detaching is just a caller detaching. The subjects this describe already uses are exactly
+  // what makes that observable: `runSubject.observed` IS "the request is still in flight".
+  describe('a1 startRun: the run outlives its caller', () => {
+    it('keeps the request alive when the CALLER unsubscribes, and publishes the run while it is in flight', () => {
+      const events: AnalysisRunEvent[] = [];
+      const sub = service.startRun(syncCtx()).subscribe(e => events.push(e));
+
+      expect(service.activeRun)
+        .withContext('a surface that was not there when the run started has to be able to see it')
+        .toEqual(jasmine.objectContaining({ bookId: 'b', chapterId: 'c', analysisType: 'Proofread', jobId: null }));
+      // The opening status is REPLAYED: the service subscribes before returning, so a caller that
+      // subscribes on the next line would otherwise never see it.
+      expect(events.map(e => e.kind)).toEqual(['status']);
+
+      sub.unsubscribe();
+
+      expect(runSubject.observed)
+        .withContext('this is the whole fix: detaching a view must not cancel the analysis')
+        .toBeTrue();
+      expect(service.activeRun).not.toBeNull();
+
+      // ...and it still resolves, with no caller attached at all.
+      runSubject.next({ id: 'r1', chapterId: 'c', type: 'Proofread', resultText: 'x', createdAt: '' } as AnalysisResultDto);
+      runSubject.complete();
+      expect(service.activeRun).toBeNull();
+    });
+
+    it('publishes the job id once the run dispatches async, so a consumer can tell the two apart', () => {
+      const sub = service.startRun(asyncCtx()).subscribe();
+      startAsyncSubject.next({ jobId: 'job-77' });
+
+      expect(service.activeRun?.jobId).toBe('job-77');
+      sub.unsubscribe();
+    });
+
+    it('SUPERSEDES the previous owned run rather than accumulating them', () => {
+      const first = service.startRun(syncCtx()).subscribe();
+      const firstRunId = service.activeRun?.runId;
+      expect(runSubject.observed).toBeTrue();
+
+      runSubject = new Subject<AnalysisResultDto>();
+      const second = service.startRun(syncCtx()).subscribe();
+
+      expect(service.activeRun?.runId).not.toBe(firstRunId);
+      expect(service.activeRun?.runId).toBeTruthy();
+      first.unsubscribe();
+      second.unsubscribe();
+    });
+  });
 
   it('bounds a pre-run save that never settles: the one path that emits NOTHING at all', fakeAsync(() => {
     // `runAnalysisAfterSave` gates the whole run behind `saveBeforeRun()`, so a save that hangs never

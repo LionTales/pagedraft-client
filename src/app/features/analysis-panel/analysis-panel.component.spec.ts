@@ -2,17 +2,18 @@ import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testin
 import { Component, SimpleChange } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { By } from '@angular/platform-browser';
-import { EMPTY, NEVER, Observable, Subject, of, throwError, takeUntil } from 'rxjs';
+import { BehaviorSubject, EMPTY, NEVER, Observable, ReplaySubject, Subject, of, throwError, takeUntil } from 'rxjs';
 import { AnalysisPanelComponent } from './analysis-panel.component';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { AnalysisService } from '../../core/services/analysis.service';
-import { AnalysisRunOrchestrationService, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
+import { ActiveRunContext, AnalysisRunOrchestrationService, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '../../core/models/analysis';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
-import { JobRegistryService } from '../../core/services/job-registry.service';
+import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { runString } from '../../core/i18n/run-strings';
@@ -47,17 +48,47 @@ class PanelUnmountHostComponent {
   readonly events: AnalysisRunEvent[] = [];
 }
 
+/** The shape `startRun` needs off a run context; the stub never reads more than this. */
+interface AnalysisRunContextLike {
+  bookId: string;
+  chapterId: string;
+  sceneId: string | null;
+  selectedAnalysisType: string;
+}
+
+/** The orchestration stub's own surface, so `startRun` can reach its (re-stubbed) siblings. */
+interface OrchestrationStub {
+  runAnalysisAfterSave(ctx: AnalysisRunContextLike, save?: () => Promise<void>): Observable<AnalysisRunEvent>;
+  __runSub?: { unsubscribe(): void };
+}
+
+/** Monotonic run ids for the stub, so two runs in one spec are distinguishable. */
+let stubRunSeq = 0;
+
 describe('AnalysisPanelComponent (focused logic)', () => {
   let component: AnalysisPanelComponent;
   let fixture: ComponentFixture<AnalysisPanelComponent>;
   // rf-c02: the run tab publishes its style-baseline build to the registry on start. Spy so we can assert
   // track() and so the real (root) registry (with its transitive deps) is not pulled into this TestBed.
   let jobRegistrySpy: jasmine.SpyObj<JobRegistryService>;
+  /** a1: the registry's job list, so a spec can drive the panel's derived "a run is in flight" state. */
+  let registryJobs: BehaviorSubject<TrackedJob[]>;
+  /** a1: the orchestration service's owned run, same purpose for the SYNC half. */
+  let ownedRun: BehaviorSubject<ActiveRunContext | null>;
 
   beforeEach(async () => {
     // `jobById$` is read by the in-panel progress bar (app-job-progress-inline) inside the async banner.
     // Without it on the stub, every async-banner test dies with a TypeError from that grandchild.
-    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track', 'jobById$']);
+    // a1: `jobs$` is a PROPERTY, not a method - the panel derives "is a run in flight for this context?"
+    // from it - so it goes in createSpyObj's third (property) argument. `registryJobs` is the handle a
+    // spec pushes through to drive that derivation.
+    registryJobs = new BehaviorSubject<TrackedJob[]>([]);
+    ownedRun = new BehaviorSubject<ActiveRunContext | null>(null);
+    jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>(
+      'JobRegistryService',
+      ['track', 'jobById$'],
+      { jobs$: registryJobs.asObservable() },
+    );
     jobRegistrySpy.jobById$.and.returnValue(of(null));
     await TestBed.configureTestingModule({
       imports: [AnalysisPanelComponent],
@@ -85,6 +116,10 @@ describe('AnalysisPanelComponent (focused logic)', () => {
         },
         {
           provide: AnalysisRunOrchestrationService,
+          // a1: `startRun` is what the panel calls now, and the stub DELEGATES to `runAnalysisAfterSave`
+          // so the ~15 specs that swap that method in to drive a run keep working unchanged. `activeRun$`
+          // / `activeRun` are the service's published description of the run it owns; the stub keeps them
+          // inert by default and a spec drives them through `ownedRun` when that is what it is testing.
           useValue: {
             stopProgressPolling: () => {},
             confirmReanalysisIfPendingSuggestions: () => true,
@@ -92,7 +127,44 @@ describe('AnalysisPanelComponent (focused logic)', () => {
             formatRunDuration: () => null,
             runAnalysisAfterSave: () => EMPTY,
             doRunStreaming: () => EMPTY,
-          },
+            activeRun$: ownedRun.asObservable(),
+            get activeRun() { return ownedRun.value; },
+            /**
+             * a1: models the REAL contract, not a pass-through - the two properties that matter to the
+             * panel are that the service subscribes the run ITSELF (so the caller unsubscribing does not
+             * cancel it) and that it publishes a description of the run while it is in flight. A stub
+             * that merely handed the cold stream back would let an unmount spec pass against the very
+             * cancellation this todo removed.
+             */
+            startRun(ctx: AnalysisRunContextLike, save?: () => Promise<void>) {
+              const self = this as unknown as OrchestrationStub;
+              const events = new ReplaySubject<AnalysisRunEvent>(64);
+              ownedRun.next({
+                runId: `stub-run-${++stubRunSeq}`,
+                bookId: ctx.bookId,
+                chapterId: ctx.chapterId,
+                sceneId: ctx.sceneId ?? null,
+                analysisType: ctx.selectedAnalysisType,
+                jobId: null,
+              });
+              const end = () => {
+                if (ownedRun.value) ownedRun.next(null);
+                events.complete();
+              };
+              self.__runSub?.unsubscribe();
+              self.__runSub = self.runAnalysisAfterSave(ctx, save).subscribe({
+                next: (event: AnalysisRunEvent) => {
+                  if (event.kind === 'job-started' && ownedRun.value) {
+                    ownedRun.next({ ...ownedRun.value, jobId: event.jobId });
+                  }
+                  events.next(event);
+                },
+                error: end,
+                complete: end,
+              });
+              return events.asObservable();
+            },
+          } as OrchestrationStub,
         },
         {
           provide: SuggestionAnchorService,
@@ -1624,6 +1696,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-1', {
         analysisType: 'Proofread',
         chapterId: 'chap-1',
+        sceneId: undefined,
         scopeLabel: 'פרק',
       });
     });
@@ -1639,6 +1712,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-le', {
         analysisType: 'LineEdit',
         chapterId: 'chap-1',
+        sceneId: undefined,
         scopeLabel: 'פרק',
       });
     });
@@ -1654,6 +1728,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-la', {
         analysisType: 'LinguisticAnalysis',
         chapterId: 'chap-1',
+        sceneId: undefined,
         scopeLabel: 'פרק',
       });
     });
@@ -1705,6 +1780,9 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-scene', {
         analysisType: 'LinguisticAnalysis',
         chapterId: 'chap-1',
+        // a1: the scene half of the scope is carried now, not merely encoded in the label - so a panel
+        // showing the CHAPTER can tell this job apart from a chapter-scoped run of the same type.
+        sceneId: 'scene-1',
         scopeLabel: 'סצנה',
       });
     });
@@ -1728,6 +1806,8 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-race', {
         analysisType: 'LinguisticAnalysis',
         chapterId: 'chap-scene-origin',
+        // a1: the scene id comes off the CAPTURED origin too, for the same reason the chapter does.
+        sceneId: 'scene-origin',
         scopeLabel: 'סצנה',
       });
     });
@@ -1902,29 +1982,31 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
     afterEach(() => hostFixture.destroy());
 
-    it('emits run-finished ONCE to the host when an untracked (sync-path) run is unmounted mid-flight', () => {
+    // a1 INVERTED THE TWO CASES BELOW, and the inversion is the point of the todo. `run-finished` said
+    // "the run is over with nothing to report", and the dialog reads it as `canceled`. That was TRUE only
+    // because destroying the panel cancelled the run. `AnalysisRunOrchestrationService.startRun` owns the
+    // subscription now, so the run survives the unmount and the terminal would be a lie.
+    it('does NOT emit run-finished when a SERVICE-OWNED run is unmounted mid-flight: it is still running', () => {
       panel.runAnalysis();
       runStream$.next({ kind: 'status', message: 'Running Proofread analysis...' });
       hostFixture.detectChanges();
 
-      // Precondition: genuinely mid-flight, and nothing has told the host the run is over.
       expect((panel as any).isRunning).toBeTrue();
       expect(host.events.some(e => e.kind === 'run-finished')).toBeFalse();
 
-      // The user switches the Edit-help sub-tab: the `@if` destroys the panel and cancels the run.
+      // The user switches the Edit-help sub-tab: the `@if` destroys the panel.
       host.mounted = false;
       hostFixture.detectChanges();
 
       expect(hostFixture.debugElement.query(By.directive(AnalysisPanelComponent))).toBeNull();
-      // The terminal crossed the binding even though the emitter was being torn down.
-      expect(host.events.filter(e => e.kind === 'run-finished').length).toBe(1);
-      // ...and it is the LAST thing the host heard, so the dialog resolves rather than hanging.
-      expect(host.events[host.events.length - 1].kind).toBe('run-finished');
-      // The run really was cancelled: the client stream has no subscriber left.
-      expect(runStream$.observed).toBeFalse();
+      // No terminal, because there IS no terminal: reporting one would put a "Canceled" card over a run
+      // the server is still working on, which is exactly the bug this todo removes.
+      expect(host.events.filter(e => e.kind === 'run-finished').length).toBe(0);
+      // And the run really did survive: the service is still subscribed to it.
+      expect(runStream$.observed).toBeTrue();
     });
 
-    it('emits run-finished on unmount for a TRACKED run too (the dialog, not the panel, guards state (b))', () => {
+    it('does NOT emit run-finished on unmount for a TRACKED run either (the registry owns it)', () => {
       panel.runAnalysis();
       runStream$.next({ kind: 'job-started', jobId: 'job-A' });
       hostFixture.detectChanges();
@@ -1933,11 +2015,66 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       host.mounted = false;
       hostFixture.detectChanges();
 
-      // The panel does not second-guess the host: it reports that ITS run is over. Whether the card
-      // resolves is the dialog's call, and the dialog keeps a registry-tracked job waiting (d1 item 6) -
-      // pinned by "does NOT resolve a TRACKED run" in analysis-run-dialog.component.spec.ts. Keeping the
-      // guard in ONE place stops the two surfaces from disagreeing about what "tracked" means.
+      expect(host.events.filter(e => e.kind === 'run-finished').length).toBe(0);
+      expect(runStream$.observed).toBeTrue();
+    });
+
+    it('STILL emits run-finished for a PANEL-owned run (the streaming path), which an unmount does cancel', () => {
+      // `runStreaming` subscribes `doRunStreaming` directly - the service owns nothing - so this panel's
+      // subscription really is the only thing holding that run open. The c01 protection is kept exactly
+      // for this branch rather than deleted wholesale, and a future panel-owned call site inherits it.
+      const streamEvents$ = new Subject<AnalysisRunEvent>();
+      const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
+      orch.doRunStreaming = () => streamEvents$.asObservable();
+
+      panel.runStreaming();
+      streamEvents$.next({ kind: 'streaming-token', token: 'x' });
+      hostFixture.detectChanges();
+      expect((panel as any).isRunning).toBeTrue();
+
+      host.mounted = false;
+      hostFixture.detectChanges();
+
       expect(host.events.filter(e => e.kind === 'run-finished').length).toBe(1);
+      expect(streamEvents$.observed).toBeFalse();
+    });
+
+    it('bug 1: a run that ANSWERS while the panel is unmounted lands on the instance that remounts', () => {
+      // The other half of the inversion above, and the todo's bug 1 end to end. Not derivable from the
+      // "does not emit run-finished" cases: those prove the run survived the unmount, this proves its
+      // result reaches the user - through a BRAND NEW instance whose own fields know nothing about it.
+      const analysis = TestBed.inject(AnalysisService) as any;
+      const finished = {
+        id: 'res-late', chapterId: 'chap-1', type: 'Proofread', analysisType: 'Proofread',
+        resultText: 'fixed while you were away', createdAt: '2026-08-18T02:00:00.000Z', status: 'Active',
+      } as AnalysisResultDto;
+
+      panel.runAnalysis();
+      runStream$.next({ kind: 'status', message: 'Running Proofread analysis...' });
+      hostFixture.detectChanges();
+
+      // The Edit-help sub-tab switch destroys the panel mid-run.
+      host.mounted = false;
+      hostFixture.detectChanges();
+      expect(runStream$.observed)
+        .withContext('precondition: before a1 the unmount cancelled this request, so there was no result to land')
+        .toBeTrue();
+
+      // The server answers with NO panel on screen at all.
+      analysis.getHistory = () => of([finished]);
+      runStream$.next({ kind: 'sync-result', result: finished });
+      runStream$.complete();
+
+      // The user comes back to the Analysis sub-tab.
+      host.mounted = true;
+      hostFixture.detectChanges();
+      const remounted = hostFixture.debugElement.query(By.directive(AnalysisPanelComponent))
+        .componentInstance as AnalysisPanelComponent;
+
+      expect(remounted).not.toBe(panel);
+      expect(remounted.latestResult?.id)
+        .withContext('the finished result is on screen for an instance that never started the run')
+        .toBe('res-late');
     });
 
     it('does NOT emit run-finished when the panel is destroyed with no run in flight', () => {
@@ -1946,6 +2083,163 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       hostFixture.detectChanges();
 
       expect(host.events.filter(e => e.kind === 'run-finished').length).toBe(0);
+    });
+  });
+
+  // ── a1: run state that outlives the instance ─────────────────────────────────────────────────────
+  //
+  // The panel is destroyed on every Edit-help tab switch while the run keeps going, so a FRESH instance
+  // has to answer two questions with no help from its own fields: "is a run in flight for what I am
+  // showing?" (the analyze button - bug 2) and "did one just finish?" (the result - bug 1). Both are
+  // answered off the two owners that survive an unmount, and both are driven here through those owners.
+  describe('a1 the registry and the owned run answer for an instance that was not there', () => {
+    let host: PanelUnmountHostComponent;
+    let hostFixture: ComponentFixture<PanelUnmountHostComponent>;
+
+    /** A tracked chapter-analysis job for the host's own (book-1, chap-1, no scene, Proofread) unit. */
+    function proofreadJob(status: TrackedJob['status'], id = 'job-A'): TrackedJob {
+      return {
+        id,
+        kind: 'proofread',
+        bookId: 'book-1',
+        chapterId: 'chap-1',
+        analysisType: 'Proofread',
+        scopeLabel: 'פרק',
+        titleHe: 'הגהה',
+        titleEn: 'Proofreading',
+        status,
+        percent: status === 'succeeded' ? 100 : 40,
+        completedChunks: null,
+        totalChunks: null,
+        chunkClock: EMPTY_CHUNK_CLOCK,
+        message: '',
+        startedAt: '2026-08-18T00:00:00.000Z',
+        updatedAt: '2026-08-18T00:00:00.000Z',
+      };
+    }
+
+    function mountHost(): AnalysisPanelComponent {
+      hostFixture = TestBed.createComponent(PanelUnmountHostComponent);
+      host = hostFixture.componentInstance;
+      hostFixture.detectChanges();
+      return hostFixture.debugElement.query(By.directive(AnalysisPanelComponent))
+        .componentInstance as AnalysisPanelComponent;
+    }
+
+    function runButton(): HTMLButtonElement {
+      return hostFixture.nativeElement.querySelector('.actions-row .run-btn') as HTMLButtonElement;
+    }
+
+    beforeEach(() => {
+      // The file-level `fixture` mounts a SECOND panel against the same service stubs and the same
+      // registry stream, so it answers this describe's registry pushes too - and doubles every history
+      // read counted below. Drop it: these cases are about ONE instance's reaction to the owners.
+      fixture?.destroy();
+    });
+
+    afterEach(() => hostFixture?.destroy());
+
+    it('bug 2: a panel MOUNTED mid-run renders the analyze button disabled, having started no run itself', () => {
+      // The run was started by an instance that no longer exists; only the registry remembers it.
+      registryJobs.next([proofreadJob('running')]);
+
+      const panel = mountHost();
+      hostFixture.detectChanges();
+
+      expect(panel.isRunningForCurrentContext)
+        .withContext('a fresh instance answers from the registry, not from its own blank fields')
+        .toBeTrue();
+      expect(runButton().disabled).toBeTrue();
+
+      // ...and it is genuinely SCOPED: the same job in a different chapter must not disable this one.
+      registryJobs.next([{ ...proofreadJob('running'), chapterId: 'chap-2' }]);
+      hostFixture.detectChanges();
+      expect(panel.isRunningForCurrentContext).toBeFalse();
+      expect(runButton().disabled).toBeFalse();
+    });
+
+    it('bug 2: a SCENE run does not disable the chapter-scoped panel showing the same chapter', () => {
+      registryJobs.next([{ ...proofreadJob('running'), sceneId: 'scene-9' }]);
+
+      const panel = mountHost();
+      hostFixture.detectChanges();
+
+      expect(panel.isRunningForCurrentContext)
+        .withContext('the scene half of the scope is carried now, so the two runs are different jobs')
+        .toBeFalse();
+    });
+
+    it('bug 1: a job that finishes while this instance is showing the chapter refetches history ONCE', () => {
+      const analysis = TestBed.inject(AnalysisService) as any;
+      let historyReads = 0;
+      const finished: AnalysisResultDto = {
+        id: 'res-new', chapterId: 'chap-1', type: 'Proofread', analysisType: 'Proofread',
+        resultText: 'fixed', createdAt: '2026-08-18T01:00:00.000Z', status: 'Active',
+      } as AnalysisResultDto;
+      analysis.getHistory = () => { historyReads++; return of([finished]); };
+
+      registryJobs.next([proofreadJob('running')]);
+      const panel = mountHost();
+      const readsAfterMount = historyReads;
+
+      // The run this panel never started reaches its terminal.
+      registryJobs.next([proofreadJob('succeeded')]);
+      hostFixture.detectChanges();
+
+      expect(historyReads).toBe(readsAfterMount + 1);
+      expect(panel.latestResult?.id)
+        .withContext('the finished result is selected, not merely fetched')
+        .toBe('res-new');
+
+      // Deduped per instance: a re-emission of the same terminal is not a second event.
+      registryJobs.next([proofreadJob('succeeded')]);
+      hostFixture.detectChanges();
+      expect(historyReads).toBe(readsAfterMount + 1);
+    });
+
+    it('bug 1: a terminal for a job this instance never saw RUNNING is history, not news', () => {
+      const analysis = TestBed.inject(AnalysisService) as any;
+      let historyReads = 0;
+      analysis.getHistory = () => { historyReads++; return of([]); };
+
+      // Already finished before this panel existed: the ordinary mount-time load covers it.
+      registryJobs.next([proofreadJob('succeeded')]);
+      mountHost();
+      const readsAfterMount = historyReads;
+
+      registryJobs.next([proofreadJob('succeeded')]);
+      hostFixture.detectChanges();
+
+      expect(historyReads).toBe(readsAfterMount);
+    });
+
+    it('refetches history when the analysis TYPE is switched, instead of rendering the cache alone', () => {
+      const analysis = TestBed.inject(AnalysisService) as any;
+      let historyReads = 0;
+      analysis.getHistory = () => { historyReads++; return of([]); };
+
+      const panel = mountHost();
+      const readsAfterMount = historyReads;
+
+      panel.onSelectAnalysisType('LineEdit');
+
+      expect(historyReads)
+        .withContext('the cached array can be arbitrarily old for the type just selected')
+        .toBe(readsAfterMount + 1);
+    });
+
+    it('refetches history when the HISTORY sub-tab is opened', () => {
+      const analysis = TestBed.inject(AnalysisService) as any;
+      let historyReads = 0;
+      analysis.getHistory = () => { historyReads++; return of([]); };
+
+      const panel = mountHost();
+      const readsAfterMount = historyReads;
+
+      panel.selectSubTab('history');
+
+      expect(historyReads).toBe(readsAfterMount + 1);
+      expect(panel.activeSubTab).toBe('history');
     });
   });
 
@@ -2594,6 +2888,11 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
             formatRunDuration: () => null,
             runAnalysisAfterSave: () => EMPTY,
             doRunStreaming: () => EMPTY,
+            // a1: `startRun` is the panel's entry point now. Inert here: neither of these describes
+            // drives a run, they only need the injection to resolve.
+            activeRun$: of(null),
+            activeRun: null,
+            startRun: () => EMPTY,
           },
         },
         {
@@ -2629,10 +2928,12 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
         {
           provide: JobRegistryService,
           // `jobById$` feeds the in-panel progress bar inside the async banner (Wave 1d c2).
-          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', {
-            track: undefined,
-            jobById$: of(null),
-          }),
+          // a1: `jobs$` is a property, so it goes in the third argument (see the top-of-file twin).
+          useValue: jasmine.createSpyObj<JobRegistryService>(
+            'JobRegistryService',
+            { track: undefined, jobById$: of(null) },
+            { jobs$: of([] as TrackedJob[]) },
+          ),
         },
         {
           provide: AiTierService,
@@ -2837,10 +3138,12 @@ describe('AnalysisPanelComponent final-result retry vs a context change (c01)', 
         },
         {
           provide: JobRegistryService,
-          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', {
-            track: undefined,
-            jobById$: of(null),
-          }),
+          // a1: `jobs$` is a property, so it goes in the third argument (see the top-of-file twin).
+          useValue: jasmine.createSpyObj<JobRegistryService>(
+            'JobRegistryService',
+            { track: undefined, jobById$: of(null) },
+            { jobs$: of([] as TrackedJob[]) },
+          ),
         },
         {
           provide: AiTierService,
@@ -3040,10 +3343,12 @@ describe('AnalysisPanelComponent run-failure banner i18n (c02)', () => {
         },
         {
           provide: JobRegistryService,
-          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', {
-            track: undefined,
-            jobById$: of(null),
-          }),
+          // a1: `jobs$` is a property, so it goes in the third argument (see the top-of-file twin).
+          useValue: jasmine.createSpyObj<JobRegistryService>(
+            'JobRegistryService',
+            { track: undefined, jobById$: of(null) },
+            { jobs$: of([] as TrackedJob[]) },
+          ),
         },
         {
           provide: AiTierService,
@@ -3173,6 +3478,11 @@ describe('AnalysisPanelComponent - the w7 removals and the Show pointer', () => 
             formatRunDuration: () => null,
             runAnalysisAfterSave: () => EMPTY,
             doRunStreaming: () => EMPTY,
+            // a1: `startRun` is the panel's entry point now. Inert here: neither of these describes
+            // drives a run, they only need the injection to resolve.
+            activeRun$: of(null),
+            activeRun: null,
+            startRun: () => EMPTY,
           },
         },
         {
@@ -3189,10 +3499,12 @@ describe('AnalysisPanelComponent - the w7 removals and the Show pointer', () => 
         },
         {
           provide: JobRegistryService,
-          useValue: jasmine.createSpyObj<JobRegistryService>('JobRegistryService', {
-            track: undefined,
-            jobById$: of(null),
-          }),
+          // a1: `jobs$` is a property, so it goes in the third argument (see the top-of-file twin).
+          useValue: jasmine.createSpyObj<JobRegistryService>(
+            'JobRegistryService',
+            { track: undefined, jobById$: of(null) },
+            { jobs$: of([] as TrackedJob[]) },
+          ),
         },
         {
           provide: AiTierService,

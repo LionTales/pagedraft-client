@@ -164,6 +164,21 @@ export class BookReviewStatusRowComponent implements OnChanges, OnDestroy {
   /** Loop guard for review build: a jobId already driven to terminal here will not reattach. */
   private bookReviewHandledTerminalJobId: string | null = null;
 
+  /**
+   * a1: the build job id whose terminal THIS row has already handled, or null.
+   *
+   * Read by the dashboard, which now watches the same build in the job registry so a terminal reached
+   * while this row is unmounted still refreshes the findings ledger. When the row IS mounted its poll
+   * gets there first and has already re-read the status, so the dashboard skips on this id rather than
+   * issuing a duplicate status GET and a redundant ledger re-read. Deliberately the id and not a boolean:
+   * "this row has handled A build" would suppress the refresh for the NEXT one.
+   *
+   * Cleared on destroy and at the start of every new build, exactly as the private field always was.
+   */
+  get handledTerminalJobId(): string | null {
+    return this.bookReviewHandledTerminalJobId;
+  }
+
   constructor(
     private bookReviewService: BookReviewService,
     private jobRegistry: JobRegistryService,

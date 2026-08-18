@@ -14,7 +14,7 @@ import {
 } from '../../core/models/book';
 import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
-import { CHAPTER_SCOPED_KINDS, JobRegistryService } from '../../core/services/job-registry.service';
+import { CHAPTER_SCOPED_KINDS, JobRegistryService, isTerminal } from '../../core/services/job-registry.service';
 import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
 import { BookStyleBaselineStatusRowComponent } from './book-style-baseline-status-row.component';
 import { BookReviewState, BookReviewStatusRowComponent } from './book-review-status-row.component';
@@ -1066,6 +1066,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
   ngOnInit(): void {
     this.loadProfile();
     this.watchRunningChapters();
+    this.watchReviewBuild();
     this.rebuildSpineSignals();
     this.focusSub = this.surfaceFocus.focus$.subscribe(req => this.onSurfaceFocus(req));
   }
@@ -1073,6 +1074,8 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
   ngOnDestroy(): void {
     this.runningChaptersSub?.unsubscribe();
     this.runningChaptersSub = null;
+    this.reviewJobSub?.unsubscribe();
+    this.reviewJobSub = null;
     this.focusSub?.unsubscribe();
     this.focusSub = null;
     // c01: a held scroll owns a pending timer and a closure over this view. Both die with the component.
@@ -1287,6 +1290,8 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
       // The registry watch is filtered by the CURRENT bookId, so a book switch must re-scope it or the
       // previous book's in-flight chapter runs would keep marking rows in the new book's stage 4.
       this.watchRunningChapters();
+      // a1: same reason - the review watch below is scoped to the CURRENT bookId.
+      this.watchReviewBuild();
     }
     // The chapter list drives stages 1 and 4 directly, so any rebinding of it (including the host's
     // in-place mutations after a create/delete/reorder, which arrive as a new array) refreshes the spine.
@@ -1561,6 +1566,59 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
       }
       this.runningChapterIds = next;
       this.rebuildSpineSignals();
+    });
+  }
+
+  // ── a1: the review build's terminal, observed where it cannot be unmounted ───────────────────────
+  //
+  // The developmental review's terminal used to be observed ONLY by `BookReviewStatusRowComponent`'s own
+  // progress poll, which its `ngOnDestroy` tears down. That poll is the only thing that re-reads the
+  // review status and therefore the only thing that moves `reviewState` into ready/stale, which is what
+  // {@link onReviewStateChange} bumps {@link findingsRefreshToken} off. So a build that finished while
+  // that row was not on screen left the ledger showing the PREVIOUS review with nothing to correct it.
+  //
+  // `JobRegistryService` polls the same job to terminal regardless of who is mounted (the row already
+  // publishes every build to it via `track()`), so the observation moves here, one level up. This is an
+  // ADD, not a replacement: the row keeps its own detailed BUILDING/READY/STALE machine and its own
+  // outcome banner, both of which need the poll's payload, which the registry does not carry.
+
+  /** The registry subscription following this book's review build. */
+  private reviewJobSub: Subscription | null = null;
+  /** The review job id last seen RUNNING here, so its terminal can be told from a stale entry. */
+  private observedReviewJobId: string | null = null;
+
+  /**
+   * Watch this book's review build in the registry and, when it finishes, re-read the status and bump
+   * the findings token.
+   *
+   * DEDUPED AGAINST THE ROW: when the row is mounted its own poll has already done both by the time this
+   * fires, and it records which job id that was ({@link BookReviewStatusRowComponent.handledTerminalJobId}).
+   * Repeating the work would issue a second status GET and force the ledger to re-read findings it has
+   * just read. The dedupe is on the JOB ID rather than on "is the row mounted", so a row that is present
+   * but was mounted after the build finished (and therefore handled nothing) still gets the refresh.
+   */
+  private watchReviewBuild(): void {
+    this.reviewJobSub?.unsubscribe();
+    this.reviewJobSub = null;
+    this.observedReviewJobId = null;
+    if (!this.bookId) return;
+    this.reviewJobSub = this.jobRegistry.jobByKindForBook$(this.bookId, 'review').subscribe(job => {
+      if (!job || job.bookId !== this.bookId) return;
+      if (!isTerminal(job.status)) {
+        this.observedReviewJobId = job.id;
+        return;
+      }
+      // Only a build this dashboard actually saw RUNNING is news: a job that was already terminal when
+      // this watch started is the state the page loaded with, not a transition.
+      if (this.observedReviewJobId !== job.id) return;
+      this.observedReviewJobId = null;
+      if (this.reviewRow?.handledTerminalJobId === job.id) return;
+      // The row (if any) re-reads its own status through its own loader, which cancels its previous
+      // in-flight GET and re-checks (book, language) on the answer - the same seam `onSummaryTerminal`
+      // uses. The token bump covers the case the status read cannot: the ledger is already mounted on a
+      // ready/stale review, so `onReviewStateChange` sees no transition and would bump nothing.
+      this.reviewRow?.loadBookReviewStatus();
+      this.findingsRefreshToken++;
     });
   }
 
