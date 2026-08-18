@@ -233,7 +233,7 @@
               [bookId]="bookId"
               [chapterId]="selectedChapterId"
               [bookLanguage]="book?.language ?? 'he'"
-              (switchToReview)="onChecklistSwitchToReview()">
+              (switchToReview)="onChecklistSwitchToReview($event)">
             </app-chapter-findings-checklist>
           }
         } @else if (fullSpineVisible && bookId && book) {

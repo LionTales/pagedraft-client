@@ -20,7 +20,7 @@ import {
 } from '../../core/services/book-surface-focus.service';
 import { AmbientChapterService } from '../../core/services/ambient-chapter.service';
 import { BookDetailDto, ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
-import { ChapterAnchor } from '../../core/models/book-review';
+import { FindingNavigationTarget } from '../../core/models/book-review';
 import { ChapterTreeComponent } from '../chapter-tree/chapter-tree.component';
 import { AnalysisPanelComponent } from '../analysis-panel/analysis-panel.component';
 import { IssuePanelComponent, ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
@@ -46,6 +46,34 @@ import { ColorPicker } from '@syncfusion/ej2-inputs';
 import { DropDownButton, SplitButton } from '@syncfusion/ej2-splitbuttons';
 import { HighlightColor } from '@syncfusion/ej2-documenteditor';
 import { createElement, classList, EventHandler } from '@syncfusion/ej2-base';
+
+/**
+ * d1: reduce a finding's evidence excerpt to the phrase handed to the editor's existing search fallback.
+ *
+ * WHY IT IS TRIMMED AT ALL. `selectRangeInEditor`'s last-resort path is Syncfusion's `searchModule.find`,
+ * a LITERAL match. A full evidence excerpt is often a whole paragraph and routinely differs from the
+ * manuscript by the things a review copies loosely - a trailing ellipsis, an added closing quote, a line
+ * break the SFDT does not carry - and any one of those makes the whole-paragraph match fail while its
+ * opening clause would have matched. Taking the first words keeps the anchor as long as it can be while
+ * staying inside one line of prose.
+ *
+ * Returns '' when there is nothing usable, which callers read as "no hint, land at the chapter top".
+ * Exported so the word count is pinned by a test rather than being a number buried in a component.
+ */
+export function excerptSearchPhrase(excerpt: string | null | undefined, maxWords = 12): string {
+  const collapsed = (excerpt ?? '')
+    // Leading/trailing quotation marks and ellipses are the review's framing, not the author's text.
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^["'“”‘’«»]+/, '')
+    .replace(/^\.{3}|^…/, '')
+    .trim();
+  if (!collapsed) return '';
+  const words = collapsed.split(' ').filter((w) => w.length > 0);
+  if (words.length === 0) return '';
+  return words.slice(0, maxWords).join(' ');
+}
 
 @Component({
   selector: 'app-editor-page',
@@ -405,11 +433,45 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    * Consistent with how the spine's open-findings action selects the Findings tab from within the
    * dashboard itself: here we do the same selection from the outside via the ViewChild reference.
    */
-  onChecklistSwitchToReview(): void {
+  onChecklistSwitchToReview(findingId?: string | null): void {
     this.onReviewModeChange('review');
     if (this.dashboardComp) {
       this.dashboardComp.reviewTab = 'findings';
     }
+    // d1: "הצג" names ONE finding, and the ledger it names lives behind the mode switch that has only
+    // just been requested - the dashboard is `@if`-mounted, so `dashboardComp` above is very often still
+    // undefined at this moment (which is why the tab selection above is already written as a best-effort
+    // `if`). HOLD the id and let {@link ngAfterViewChecked} publish it once the dashboard is really there,
+    // the same mechanism and for the same measured reason as `pendingSurfaceFocus`.
+    this.pendingOpenFindingId = findingId ?? null;
+  }
+
+  /**
+   * A finding waiting for the dashboard to exist so it can be opened in the ledger. Null when nothing
+   * is waiting. Dropped on a mode change back to Edit and on teardown, matching `pendingSurfaceFocus`.
+   */
+  private pendingOpenFindingId: string | null = null;
+
+  /**
+   * Publish a held open-finding request once the dashboard has mounted.
+   *
+   * Mirrors {@link ngAfterViewChecked}'s surface-focus drain deliberately, including the timer: honouring
+   * the request mutates the dashboard's (and then the ledger's) own view state, and doing that inside the
+   * change-detection pass that just checked it is the classic ExpressionChangedAfterChecked. The mode is
+   * re-read here rather than hung off the mode writers, for the reason recorded on `pendingSurfaceFocus`:
+   * reading the VALUE at the one consuming site covers every writer, present and future.
+   */
+  private drainPendingOpenFinding(): void {
+    const id = this.pendingOpenFindingId;
+    if (!id) return;
+    if (this.reviewMode !== 'review') {
+      this.pendingOpenFindingId = null;
+      return;
+    }
+    const dash = this.dashboardComp;
+    if (!dash) return;
+    this.pendingOpenFindingId = null;
+    setTimeout(() => dash.openFinding(id));
   }
 
   /**
@@ -770,6 +832,8 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    * segmented control going back to Edit says "show me something else".
    */
   ngAfterViewChecked(): void {
+    // d1: a second, independent hold drains here for the same reason the first one does.
+    this.drainPendingOpenFinding();
     const request = this.pendingSurfaceFocus;
     if (!request) return;
     if (this.reviewMode !== 'review') {
@@ -1617,6 +1681,10 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
           this.documentOwnerSceneId = null;
           // open() resets the zoom to 100%; re-fit the page to the frame (focus mode only).
           this.applyFocusFit();
+          // d1: the document this chapter's evidence phrase was aimed at is now the one that is open.
+          // Consumed here rather than at the call site because the load is async and the search is a
+          // literal match against the OPEN document; running it any earlier would search the outgoing one.
+          this.consumePendingExcerptNavigation(chapterId);
         } finally {
           this.isOpeningDocument = false;
         }
@@ -2121,9 +2189,22 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    * existing selectChapter path (which handles save-before-switch and document load). Resolves strictly
    * by chapterId — the order fallback was removed because deleted/reordered chapters can cause the
    * wrong chapter to be opened.
-   * No character-offset navigation: whole-book findings are chapter-level only.
+   * d1 added the two edges that made the click land somewhere the reader could use.
+   *
+   * THE MODE SWITCH. The same click has already armed two Edit-mode surfaces - the ReviseContextService
+   * "addressing" chip and the per-chapter findings checklist (editor-page.component.html:173, 231-238) -
+   * so leaving the panel in Review mode showed the chapter change behind an unchanged panel, with the
+   * things the click just set up rendering in a mode the reader was not in.
+   *
+   * THE PASSAGE SCROLL is best-effort and deliberately reuses the EXISTING locate path rather than
+   * adding a second search: the excerpt is held until the chapter's document has actually opened (the
+   * load is async, so selecting before it lands would search the OUTGOING chapter), then handed to
+   * {@link selectRangeInEditor} as `originalText`. Every way it can fail - no excerpt on the finding, an
+   * excerpt the review paraphrased rather than quoted, prose the author has since rewritten - lands the
+   * reader at the top of the chapter, which is exactly what shipped before this and therefore cannot
+   * regress.
    */
-  onOpenChapterFromDashboard(anchor: ChapterAnchor): void {
+  onOpenChapterFromDashboard(anchor: FindingNavigationTarget): void {
     if (!this.book) return;
     const ch = this.book.chapters.find(c => c.id === anchor.chapterId) ?? null;
     if (!ch) {
@@ -2133,7 +2214,32 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
         : 'Chapter not found - it may have been deleted.');
       return;
     }
+    this.onReviewModeChange('edit');
+    const phrase = excerptSearchPhrase(anchor.excerpt);
+    // Set BEFORE selectChapter: the load is queued from inside it, and the chapter id stamped here is
+    // what stops a hint from a previous click landing in whatever chapter is open when it finally runs.
+    this.pendingExcerptNavigation = phrase ? { chapterId: ch.id, phrase } : null;
     this.selectChapter(ch);
+  }
+
+  /**
+   * d1: an evidence phrase waiting for its chapter's document to finish opening. Stamped with the
+   * chapter it belongs to, and consumed exactly once by {@link consumePendingExcerptNavigation}.
+   */
+  private pendingExcerptNavigation: { chapterId: string; phrase: string } | null = null;
+
+  /**
+   * Hand a held evidence phrase to the existing locate path, once the chapter it belongs to is the one
+   * actually open in the editor. Consumed unconditionally: a phrase that does not match is a silent
+   * no-op inside `selectRangeInEditor`, and holding it for a later load would aim it at a chapter the
+   * reader never asked about.
+   */
+  private consumePendingExcerptNavigation(chapterId: string): void {
+    const pending = this.pendingExcerptNavigation;
+    if (!pending) return;
+    this.pendingExcerptNavigation = null;
+    if (pending.chapterId !== chapterId) return;
+    this.selectRangeInEditor({ originalText: pending.phrase });
   }
 
   onRevertToVersion(versionId: string): void {

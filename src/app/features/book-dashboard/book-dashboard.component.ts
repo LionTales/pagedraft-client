@@ -12,7 +12,7 @@ import {
   PlotStructure,
   ConflictEntry
 } from '../../core/models/book';
-import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
+import { BookReviewStatusDto, FindingNavigationTarget } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { CHAPTER_SCOPED_KINDS, JobRegistryService, isTerminal } from '../../core/services/job-registry.service';
 import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
@@ -931,8 +931,12 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    * wb3-f01 navigation output: bubbles a chapter-anchor click up to the host (editor-page) so it can
    * call the existing selectChapter path. The host (editor-page) owns the chapter list and the
    * selectChapter logic; the dashboard only emits the anchor.
+   *
+   * d1: the payload is a FindingNavigationTarget - the same ChapterAnchor plus the optional excerpt /
+   * finding-id hints the Findings ledger attaches. The Story Bible and the stage spine keep emitting a
+   * bare anchor, which is assignable, so only the ledger's clicks carry hints.
    */
-  @Output() openChapter = new EventEmitter<ChapterAnchor>();
+  @Output() openChapter = new EventEmitter<FindingNavigationTarget>();
 
   /**
    * Emitted when a spine stage's action needs the review surfaces in view. The host (editor-page)
@@ -994,6 +998,13 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
 
   /** rf-f04: anchor element just above the findings/bible tabs; scrolled to when the Revise CTA is clicked. */
   @ViewChild('findingsAnchor') findingsAnchor?: ElementRef<HTMLElement>;
+
+  /**
+   * d1: the Findings ledger, when the Findings tab is selected. `@if`-mounted, so this is undefined
+   * whenever the Story Bible tab is showing - {@link drainPendingOpenFinding} waits for it rather than
+   * assuming it.
+   */
+  @ViewChild(BookReviewFindingsComponent) findingsPanel?: BookReviewFindingsComponent;
 
   /**
    * Chatbot phase B: the two sections a citation chip can deep-link to that are not already anchored.
@@ -1232,6 +1243,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    * loading hint. `scrollIntoView` is idempotent, so a repeat that finds nothing moved costs nothing.
    */
   ngAfterViewChecked(): void {
+    this.drainPendingOpenFinding();
     const hold = this.focusHold;
     if (!hold) return;
     const height = this.focusContentHeight();
@@ -1239,6 +1251,28 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
     hold.asserted = true;
     hold.contentHeight = height;
     hold.scroll();
+  }
+
+  /**
+   * d1: hand a held open-finding request to the ledger as soon as it has mounted.
+   *
+   * Published on a timer rather than inline, for the reason the host's equivalent drain records: honouring
+   * it mutates the LEDGER's own view state (its expanded set) and doing that inside the change-detection
+   * pass that just checked it is the classic ExpressionChangedAfterItHasBeenChecked. The tab is re-checked
+   * here rather than trusted, so a reader who switched to the Story Bible before the ledger mounted does
+   * not get yanked back.
+   */
+  private drainPendingOpenFinding(): void {
+    const id = this.pendingOpenFindingId;
+    if (!id) return;
+    if (this.reviewTab !== 'findings') {
+      this.pendingOpenFindingId = null;
+      return;
+    }
+    const panel = this.findingsPanel;
+    if (!panel) return;
+    this.pendingOpenFindingId = null;
+    setTimeout(() => panel.openFinding(id));
   }
 
   /**
@@ -1334,6 +1368,8 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    */
   private resetOwnState(): void {
     this.reviewTab = 'findings';
+    // d1: a held open-finding request is about the PREVIOUS book's ledger. Drop it with the rest.
+    this.pendingOpenFindingId = null;
     this.synopsisExpanded = false;
     this.expandedPlotNode = null;
     this.reviewState = 'unknown';
@@ -1857,9 +1893,28 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    * host (editor-page) via @Output() openChapter so the host can call its existing selectChapter path.
    * The dashboard does NOT know about the chapter list or the editor — the host owns both.
    */
-  onOpenChapterFromFinding(anchor: ChapterAnchor): void {
+  onOpenChapterFromFinding(anchor: FindingNavigationTarget): void {
     this.openChapter.emit(anchor);
   }
+
+  /**
+   * d1: open one named finding in the ledger, on behalf of the editor host (the per-chapter checklist's
+   * "הצג" button). Selects the Findings tab and forwards to the ledger.
+   *
+   * HELD RATHER THAN CALLED INLINE, for the reason the host records at its own hold site: the ledger is
+   * `@if`-mounted behind the tab this method is in the middle of selecting, so at the moment of the call
+   * the ViewChild is very often still undefined. {@link ngAfterViewChecked} publishes it once the ledger
+   * is actually there, which is a fact rather than a guess about ordering. The ledger then does its own
+   * holding for the case where its rows have not been fetched yet.
+   */
+  openFinding(findingId: string): void {
+    if (!findingId) return;
+    this.reviewTab = 'findings';
+    this.pendingOpenFindingId = findingId;
+  }
+
+  /** A finding waiting for the ledger to exist. Null when nothing is waiting. */
+  private pendingOpenFindingId: string | null = null;
 
   /**
    * The effective book language for BOTH the server calls and the chrome, matching the contract the sibling

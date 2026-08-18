@@ -2,6 +2,7 @@ import { CommonModule } from '@angular/common';
 import {
   ChangeDetectorRef,
   Component,
+  ElementRef,
   EventEmitter,
   Input,
   OnChanges,
@@ -17,6 +18,7 @@ import {
   Dimension,
   DimensionScore,
   DimensionScoreLabel,
+  FindingNavigationTarget,
   FindingStatus,
   Verdict,
 } from '../../core/models/book-review';
@@ -89,8 +91,13 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
   /**
    * Navigation seam for wb3-f01: emitted when the user clicks a chapter-anchor chip. The host (later)
    * wires this to focus the chapter in the editor. No navigation path is invented in this component.
+   *
+   * d1 widened the payload from a bare ChapterAnchor to a FindingNavigationTarget, which is the same
+   * anchor plus two optional hints (the finding's evidence excerpt for that chapter, and the finding
+   * id). The chapter fields are unchanged, so a host that reads only chapterId/order/title is
+   * unaffected; the hints let the editor land near the passage instead of at the chapter top.
    */
-  @Output() openChapter = new EventEmitter<ChapterAnchor>();
+  @Output() openChapter = new EventEmitter<FindingNavigationTarget>();
 
   /** All findings for the current (book, language); the ledger derives its groups from this list. */
   findings: LedgerFinding[] = [];
@@ -130,10 +137,18 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
   /** In-flight status PATCH subscriptions keyed by finding id, so a context change can tear them down. */
   private patchSubs = new Map<string, Subscription>();
 
+  /**
+   * d1: a finding the host asked to open (see {@link openFinding}) whose row did not exist yet -
+   * typically because the request arrived while the first findings fetch was still in flight. Held
+   * here and re-applied at the end of {@link loadFindings}; dropped outright on a context change.
+   */
+  private pendingOpenFindingId: string | null = null;
+
   constructor(
     private bookReviewService: BookReviewService,
     private cdr: ChangeDetectorRef,
     private reviseContext: ReviseContextService,
+    private host: ElementRef<HTMLElement>,
   ) {}
 
   /** Effective book language for findings calls (defaults to 'he'). */
@@ -180,6 +195,8 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
         this.loading = false;
         this.loadError = false;
         this.cdr.detectChanges();
+        // d1: the rows now exist, so a request held while this fetch was in flight can land.
+        this.applyPendingOpenFinding();
       },
       error: () => {
         if (this.bookId !== bookId || this.language !== lang) return;
@@ -194,6 +211,9 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
     this.dimensionFilter = null;
     this.verdictFilter = null;
     this.expandedIds.clear();
+    // d1: a held open-finding request is about ONE book's ledger; a book/language switch discards it
+    // rather than letting it re-aim at whatever the next ledger happens to contain.
+    this.pendingOpenFindingId = null;
     this.findings = [];
     this.scores = [];
     this.loadError = false;
@@ -319,7 +339,75 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
     // Truncate the rationale to a one-liner (first sentence or 120 chars, whichever is shorter).
     const oneLiner = truncateOneLiner(finding.rationale);
     this.reviseContext.set({ findingId: finding.id, oneLiner, chapterId: anchor.chapterId });
-    this.openChapter.emit(anchor);
+    // d1: carry the evidence excerpt for THIS chapter so the host can try to land on the passage.
+    const excerpt = this.excerptForAnchor(anchor, finding);
+    this.openChapter.emit({
+      ...anchor,
+      ...(excerpt ? { excerpt } : {}),
+      findingId: finding.id,
+    });
+  }
+
+  /**
+   * d1: the finding's evidence excerpt for the clicked chapter, or '' when it has none.
+   *
+   * SCOPED TO THE CLICKED CHAPTER ON PURPOSE. A finding can be anchored in several chapters and carry
+   * evidence from several more, so handing the host "the first excerpt" would routinely search chapter
+   * A's text for a sentence that lives in chapter B - a miss that costs nothing but also helps nobody,
+   * and that reads in a log like a broken search rather than like an absent hint. Evidence rows whose
+   * chapterId is null (the BE contract allows it) fall back to matching on chapterOrder.
+   */
+  private excerptForAnchor(anchor: ChapterAnchor, finding: BookFinding): string {
+    const evidence = finding.evidence ?? [];
+    const match =
+      evidence.find((e) => e.chapterId === anchor.chapterId && !!e.excerpt?.trim()) ??
+      evidence.find((e) => e.chapterId == null && e.chapterOrder === anchor.order && !!e.excerpt?.trim());
+    return match?.excerpt?.trim() ?? '';
+  }
+
+  /**
+   * d1: open one specific finding from OUTSIDE the ledger - the per-chapter checklist's "הצג" button,
+   * routed through the editor host and the dashboard. Expands the finding's detail and scrolls its row
+   * into view.
+   *
+   * Everything here is best-effort, matching the rest of this navigation path: filters are cleared
+   * first (a finding hidden behind an active filter would otherwise be "opened" onto nothing), the
+   * request is HELD when the ledger has not fetched its rows yet and re-applied by {@link loadFindings},
+   * and a finding id that is not in this book's ledger at all is simply dropped once the fetch lands.
+   */
+  openFinding(findingId: string): void {
+    if (!findingId) return;
+    this.dimensionFilter = null;
+    this.verdictFilter = null;
+    this.expandedIds.add(findingId);
+    this.pendingOpenFindingId = findingId;
+    this.cdr.detectChanges();
+    this.applyPendingOpenFinding();
+  }
+
+  /**
+   * Scroll the held finding's row into view if it is rendered. Leaves the request held when the row is
+   * not there yet, so the next successful fetch can land it; clears it as soon as it is honoured.
+   */
+  private applyPendingOpenFinding(): void {
+    const id = this.pendingOpenFindingId;
+    if (!id) return;
+    let row: Element | null = null;
+    try {
+      row = this.host.nativeElement.querySelector(`[data-testid="finding-row-${id}"]`);
+    } catch {
+      // A malformed id would make an invalid selector; treat it as "not found" and drop the request.
+      this.pendingOpenFindingId = null;
+      return;
+    }
+    if (!row) {
+      // Not rendered (still loading, or genuinely absent). Drop it once the ledger HAS loaded, so a
+      // stale id cannot ambush the next refresh; keep holding while a fetch is still in flight.
+      if (!this.loading && this.findings.length > 0) this.pendingOpenFindingId = null;
+      return;
+    }
+    this.pendingOpenFindingId = null;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   /**

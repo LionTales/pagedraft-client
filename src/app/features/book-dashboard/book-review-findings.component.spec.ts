@@ -26,6 +26,7 @@ import {
   BookReviewFindingsDto,
   ChapterAnchor,
   DimensionScore,
+  FindingNavigationTarget,
   FindingStatus,
 } from '../../core/models/book-review';
 
@@ -551,6 +552,138 @@ describe('BookReviewFindingsComponent (wb3-c02)', () => {
     // openChapter must still be emitted so the editor navigates to the chapter.
     expect(emitted).not.toBeNull();
     expect(emitted!.chapterId).toBe('c-3');
+  });
+
+  // ── d1: the excerpt hint on the anchor click ─────────────────────────────────
+
+  it('d1: the anchor click carries the evidence excerpt FOR THAT CHAPTER plus the finding id', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(
+      of(
+        makeFindingsDto({
+          findings: [
+            makeFinding({
+              chapterAnchors: [
+                { chapterId: 'c-3', order: 3, title: 'The Turn' },
+                { chapterId: 'c-7', order: 7, title: 'The Fall' },
+              ],
+              evidence: [
+                { chapterId: 'c-7', chapterOrder: 7, excerpt: 'He never came back down.' },
+                { chapterId: 'c-3', chapterOrder: 3, excerpt: 'She turned, and everything changed.' },
+              ],
+            }),
+          ],
+        }),
+      ),
+    );
+    triggerInit();
+    fixture.detectChanges();
+
+    const emitted: FindingNavigationTarget[] = [];
+    component.openChapter.subscribe((t) => emitted.push(t));
+
+    query('[data-testid="anchor-chip-f-1-c-3"]').nativeElement.click();
+    query('[data-testid="anchor-chip-f-1-c-7"]').nativeElement.click();
+
+    // Each chip carries ITS OWN chapter's excerpt, not simply the first one on the finding.
+    expect(emitted.length).toBe(2);
+    expect(emitted[0].chapterId).toBe('c-3');
+    expect(emitted[0].excerpt).toBe('She turned, and everything changed.');
+    expect(emitted[0].findingId).toBe('f-1');
+    expect(emitted[1].chapterId).toBe('c-7');
+    expect(emitted[1].excerpt).toBe('He never came back down.');
+  });
+
+  it('d1: a chapter with no evidence of its own emits NO excerpt (never another chapter\'s)', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(
+      of(
+        makeFindingsDto({
+          findings: [
+            makeFinding({
+              chapterAnchors: [{ chapterId: 'c-9', order: 9, title: 'The Quiet' }],
+              evidence: [{ chapterId: 'c-3', chapterOrder: 3, excerpt: 'Belongs to another chapter.' }],
+            }),
+          ],
+        }),
+      ),
+    );
+    triggerInit();
+    fixture.detectChanges();
+
+    let emitted: FindingNavigationTarget | null = null;
+    component.openChapter.subscribe((t) => (emitted = t));
+
+    query('[data-testid="anchor-chip-f-1-c-9"]').nativeElement.click();
+
+    expect(emitted).not.toBeNull();
+    expect(emitted!.chapterId).toBe('c-9');
+    expect(emitted!.excerpt).toBeUndefined();
+  });
+
+  // ── d1: openFinding (called by the host after the checklist's "הצג") ──────────
+
+  it('d1: openFinding expands the named finding, clears filters and scrolls its row into view', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(
+      of(
+        makeFindingsDto({
+          findings: [
+            makeFinding({ id: 'f-1', dimension: 'plot' }),
+            makeFinding({ id: 'f-2', dimension: 'pacing', verdict: 'cut' }),
+          ],
+        }),
+      ),
+    );
+    triggerInit();
+    fixture.detectChanges();
+
+    // A filter that hides the target: without the clear, "opening" it would land on nothing.
+    component.dimensionFilter = 'plot';
+    fixture.detectChanges();
+    expect(query('[data-testid="finding-row-f-2"]')).toBeNull();
+
+    const scrollSpy = spyOn(Element.prototype, 'scrollIntoView');
+    component.openFinding('f-2');
+    fixture.detectChanges();
+
+    expect(component.dimensionFilter).toBeNull();
+    expect(component.isExpanded('f-2')).toBeTrue();
+    expect(query('[data-testid="finding-detail-f-2"]')).not.toBeNull();
+    // The RIGHT row: assert the element scrolled, not merely that something scrolled.
+    expect(scrollSpy).toHaveBeenCalled();
+    const scrolled = scrollSpy.calls.mostRecent().object as HTMLElement;
+    expect(scrolled.getAttribute('data-testid')).toBe('finding-row-f-2');
+  });
+
+  it('d1: openFinding before the ledger has loaded is HELD and applied when the fetch lands', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    const findings$ = new Subject<BookReviewFindingsDto>();
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(findings$.asObservable());
+    triggerInit();
+    fixture.detectChanges();
+
+    // Nothing rendered yet - the request must not be thrown away.
+    expect(query('[data-testid="finding-row-f-2"]')).toBeNull();
+    component.openFinding('f-2');
+
+    findings$.next(
+      makeFindingsDto({ findings: [makeFinding({ id: 'f-1' }), makeFinding({ id: 'f-2' })] }),
+    );
+    fixture.detectChanges();
+
+    expect(component.isExpanded('f-2')).toBeTrue();
+    expect(query('[data-testid="finding-detail-f-2"]')).not.toBeNull();
+  });
+
+  it('d1: openFinding with an id this ledger does not carry is dropped silently', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(of(makeFindingsDto()));
+    triggerInit();
+    fixture.detectChanges();
+
+    expect(() => component.openFinding('f-does-not-exist')).not.toThrow();
+    expect(query('[data-testid="findings-ledger"]')).not.toBeNull();
   });
 
   // ── he/en parity ─────────────────────────────────────────────────────────────

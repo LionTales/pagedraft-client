@@ -10,7 +10,7 @@ import {
   SceneUpdatedEvent,
 } from '../../core/models/book';
 import { of, EMPTY, NEVER, throwError, Subject, BehaviorSubject, Observable, map } from 'rxjs';
-import { EditorPageComponent } from './editor-page.component';
+import { EditorPageComponent, excerptSearchPhrase } from './editor-page.component';
 import { BookService } from '../../core/services/book.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { BookReviewService } from '../../core/services/book-review.service';
@@ -731,6 +731,117 @@ describe('EditorPageComponent (focused logic)', () => {
 
       expect(component.selectedChapterId).toBe('chap-b');
     });
+
+    // ── d1: the two edges added on top of the resolution ─────────────────────
+
+    it('d1: lands in EDIT mode, because the same click armed two Edit-mode surfaces', () => {
+      component.reviewMode = 'review';
+      component.hasPendingChanges = false;
+
+      component.onOpenChapterFromDashboard({ chapterId: 'chap-b', order: 1, title: 'Chapter B' });
+
+      expect(component.reviewMode).toBe('edit');
+    });
+
+    it('d1: a chapter that cannot be resolved leaves the mode alone (no half-navigation)', () => {
+      component.reviewMode = 'review';
+      spyOn(window, 'alert');
+
+      component.onOpenChapterFromDashboard({ chapterId: 'ghost', order: 99, title: 'Ghost' });
+
+      expect(component.reviewMode).toBe('review');
+    });
+
+    it('d1: holds the trimmed excerpt STAMPED with the chapter it belongs to, and does not search yet', () => {
+      component.hasPendingChanges = false;
+      const selectRangeSpy = spyOn(component, 'selectRangeInEditor');
+
+      component.onOpenChapterFromDashboard({
+        chapterId: 'chap-b',
+        order: 1,
+        title: 'Chapter B',
+        excerpt: 'She turned, and everything changed for good and forever and then some more words here.',
+        findingId: 'f-1',
+      });
+
+      // Held, not fired: the chapter's document load is async, so searching now would search the
+      // OUTGOING chapter's text.
+      expect(selectRangeSpy).not.toHaveBeenCalled();
+      expect((component as any).pendingExcerptNavigation).toEqual({
+        chapterId: 'chap-b',
+        phrase: 'She turned, and everything changed for good and forever and then some',
+      });
+    });
+
+    it('d1: a finding with no excerpt holds nothing, so the reader lands at the chapter top', () => {
+      component.hasPendingChanges = false;
+
+      component.onOpenChapterFromDashboard({ chapterId: 'chap-b', order: 1, title: 'Chapter B' });
+
+      expect((component as any).pendingExcerptNavigation).toBeNull();
+    });
+
+    it('d1: a held phrase aimed at chapter A is DROPPED when chapter B is what opened', () => {
+      const selectRangeSpy = spyOn(component, 'selectRangeInEditor');
+      (component as any).pendingExcerptNavigation = { chapterId: 'chap-a', phrase: 'some words' };
+
+      (component as any).consumePendingExcerptNavigation('chap-b');
+
+      expect(selectRangeSpy).not.toHaveBeenCalled();
+      // Consumed either way: a hint the reader has navigated past must not fire later.
+      expect((component as any).pendingExcerptNavigation).toBeNull();
+    });
+
+    it('d1: a held phrase for the chapter that opened is handed to selectRangeInEditor as originalText', () => {
+      const selectRangeSpy = spyOn(component, 'selectRangeInEditor');
+      (component as any).pendingExcerptNavigation = { chapterId: 'chap-b', phrase: 'She turned' };
+
+      (component as any).consumePendingExcerptNavigation('chap-b');
+
+      expect(selectRangeSpy).toHaveBeenCalledOnceWith({ originalText: 'She turned' });
+      expect((component as any).pendingExcerptNavigation).toBeNull();
+    });
+
+    it('d1: a phrase that matches nothing in the document is a silent no-op (today\'s fallback)', () => {
+      // selectRangeInEditor's own contract: no editor, or no match, returns without throwing.
+      (component as any).docEditor = undefined;
+      expect(() =>
+        component.selectRangeInEditor({ originalText: 'a sentence the author has since rewritten' }),
+      ).not.toThrow();
+    });
+  });
+
+  // ─── d1: the excerpt is trimmed before it reaches the literal search ────────
+
+  describe('excerptSearchPhrase (d1)', () => {
+    it('keeps at most the first 12 words, so one loose clause cannot fail the whole match', () => {
+      const excerpt =
+        'one two three four five six seven eight nine ten eleven twelve thirteen fourteen';
+      expect(excerptSearchPhrase(excerpt)).toBe(
+        'one two three four five six seven eight nine ten eleven twelve',
+      );
+    });
+
+    it('collapses line breaks and runs of whitespace, which the SFDT does not carry verbatim', () => {
+      expect(excerptSearchPhrase('She turned,\n  and everything\tchanged.')).toBe(
+        'She turned, and everything changed.',
+      );
+    });
+
+    it('strips the review\'s own leading framing (quote marks, ellipsis)', () => {
+      expect(excerptSearchPhrase('"She turned"')).toBe('She turned"');
+      expect(excerptSearchPhrase('...she turned')).toBe('she turned');
+    });
+
+    it('returns empty for nothing usable, which callers read as "land at the chapter top"', () => {
+      expect(excerptSearchPhrase(null)).toBe('');
+      expect(excerptSearchPhrase(undefined)).toBe('');
+      expect(excerptSearchPhrase('   ')).toBe('');
+    });
+
+    it('handles Hebrew prose unchanged (word split is whitespace, not script)', () => {
+      expect(excerptSearchPhrase('היא הסתובבה, והכול השתנה')).toBe('היא הסתובבה, והכול השתנה');
+    });
   });
 
   // ─── ds-c05: focus / distraction-light mode ─────────────────────────
@@ -949,6 +1060,51 @@ describe('EditorPageComponent (focused logic)', () => {
     it('does not throw when dashboardComp is undefined (checklist visible while dashboard is unmounted)', () => {
       (component as any).dashboardComp = undefined;
       expect(() => component.onChecklistSwitchToReview()).not.toThrow();
+    });
+
+    // ── d1: the finding id survives the mode switch that mounts the ledger ────
+
+    it('d1: holds the finding id until the dashboard exists, then opens it there', (done) => {
+      component.reviewMode = 'edit';
+      // The dashboard is @if-mounted behind the mode switch, so it is NOT there at click time.
+      (component as any).dashboardComp = undefined;
+
+      component.onChecklistSwitchToReview('f-7');
+      expect(component.reviewMode).toBe('review');
+      expect((component as any).pendingOpenFindingId).toBe('f-7');
+
+      // Nothing to publish to yet: the drain must leave the request held, not drop it.
+      component.ngAfterViewChecked();
+      expect((component as any).pendingOpenFindingId).toBe('f-7');
+
+      const openSpy = jasmine.createSpy('openFinding');
+      (component as any).dashboardComp = { reviewTab: 'bible', openFinding: openSpy };
+      component.ngAfterViewChecked();
+      expect((component as any).pendingOpenFindingId).toBeNull();
+
+      // Published on a timer, so the ledger's own view state is not mutated inside this CD pass.
+      setTimeout(() => {
+        expect(openSpy).toHaveBeenCalledOnceWith('f-7');
+        done();
+      });
+    });
+
+    it('d1: "back to findings" (no id) holds nothing, so the ledger is not re-scrolled', () => {
+      component.reviewMode = 'edit';
+      component.onChecklistSwitchToReview(null);
+      expect((component as any).pendingOpenFindingId).toBeNull();
+    });
+
+    it('d1: a held id is DROPPED when the reader goes back to Edit before the ledger mounts', () => {
+      component.reviewMode = 'edit';
+      (component as any).dashboardComp = undefined;
+      component.onChecklistSwitchToReview('f-7');
+
+      // The reader changed their mind: back to Edit before any dashboard appeared.
+      component.onReviewModeChange('edit');
+      component.ngAfterViewChecked();
+
+      expect((component as any).pendingOpenFindingId).toBeNull();
     });
   });
 
