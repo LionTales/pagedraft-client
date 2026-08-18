@@ -370,11 +370,32 @@
   align-items: flex-start;
 }
 
+/* `inline-flex` + `gap` so the assistant turns can put Show's face before his name without the
+   template needing a wrapper element and without a whitespace text node deciding the spacing (a flex
+   container drops whitespace-only children, which is why the template's `><img` line joins are safe).
+   The USER's turn carries no icon, and an empty flex row is laid out exactly like the old inline span,
+   so this is shared by all three role labels rather than split into an assistant-only class. */
 .pc-role {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pd-space-2);
   font-family: var(--pd-font-ui);
   font-size: var(--pd-text-caption);
   font-weight: var(--pd-weight-medium);
   color: var(--pd-text-muted);
+}
+
+/* Show's face at speaker-attribution size (f2, 8c): the smallest of his four mounts, because it
+   repeats once per assistant turn down a scrolling transcript and has to read as a byline rather than
+   as an illustration. Same circular treatment as the tab and launcher, so f1's padded 96px source is
+   what keeps the head clear of the mask here too. */
+.pc-role-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--pd-radius-pill);
+  object-fit: cover;
+  flex: 0 0 auto;
+  pointer-events: none;
 }
 
 .pc-bubble {
