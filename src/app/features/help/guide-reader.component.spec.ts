@@ -19,7 +19,6 @@ import { BehaviorSubject } from 'rxjs';
 
 import { GuideReaderComponent } from './guide-reader.component';
 import { GuideContentDto } from '../../core/models/guide';
-import { GUIDES_STRINGS_EN, GUIDES_STRINGS_HE } from '../../core/i18n/guides-strings';
 
 const ENGLISH_BODY = [
   '# Importing your manuscript',
@@ -154,7 +153,12 @@ describe('GuideReaderComponent (chatbot phase A.2, c1)', () => {
       flushGuide(content({ language: 'en', body: ENGLISH_BODY }), 'en');
 
       const stamp = fixture.debugElement.query(By.css('.reader-stamp')).nativeElement.textContent;
-      expect(stamp).toContain(GUIDES_STRINGS_EN['updatedPrefix']);
+      // f10: every GUIDES_STRINGS_HE/EN literal below is transcribed independently from
+      // guides-strings.ts (DRAFT he) rather than read back through the constant itself - comparing the
+      // constant to itself catches a MISSING string but never a WRONG one, and Hebrew here is draft
+      // copy that is exactly the case a typo can slip through unreviewed. Update each literal in
+      // lockstep with a deliberate copy change to the matching key in guides-strings.ts.
+      expect(stamp).toContain('Updated');
       expect(stamp).not.toContain('2026-08-02');
     });
 
@@ -164,7 +168,25 @@ describe('GuideReaderComponent (chatbot phase A.2, c1)', () => {
 
       const back = fixture.debugElement.query(By.css('.reader-back')).nativeElement as HTMLAnchorElement;
       expect(back.getAttribute('href')).toBe('/help?lang=en');
-      expect(back.textContent).toContain(GUIDES_STRINGS_EN['backToIndex']);
+      expect(back.textContent).toContain('Back to the guides'); // f10: transcribed, see comment above
+    });
+
+    it('also offers the way back to the books list, in Hebrew', () => {
+      create('import');
+      flushGuide(content());
+
+      const back = fixture.debugElement.query(By.css('.reader-back-books')).nativeElement as HTMLAnchorElement;
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain('חזרה לרשימת הספרים'); // f10: transcribed, see comment above
+    });
+
+    it('also offers the way back to the books list, in English', () => {
+      create('import', 'en');
+      flushGuide(content({ language: 'en', body: ENGLISH_BODY }), 'en');
+
+      const back = fixture.debugElement.query(By.css('.reader-back-books')).nativeElement as HTMLAnchorElement;
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain('Back to the books'); // f10: transcribed, see comment above
     });
   });
 
@@ -299,7 +321,7 @@ describe('GuideReaderComponent (chatbot phase A.2, c1)', () => {
 
       expect(component.failure).toBe('missing');
       expect(fixture.debugElement.query(By.css('.reader-failure-title')).nativeElement.textContent.trim())
-        .toBe(GUIDES_STRINGS_HE['guideNotFoundTitle']);
+        .toBe('המדריך הזה לא קיים'); // f10: transcribed, see comment above
       expect(fixture.debugElement.query(By.css('.reader-doc'))).toBeNull();
     });
 
@@ -313,7 +335,7 @@ describe('GuideReaderComponent (chatbot phase A.2, c1)', () => {
       expect(component.failure).toBe('language');
       expect(component.otherLanguage).toBe('en');
       expect(fixture.debugElement.query(By.css('.reader-failure-title')).nativeElement.textContent.trim())
-        .toBe(GUIDES_STRINGS_HE['guideLanguageUnavailableTitle']);
+        .toBe('המדריך הזה עדיין לא קיים בעברית'); // f10: transcribed, see comment above
 
       const navigate = spyOn(TestBed.inject(Router), 'navigate').and.resolveTo(true);
       fixture.debugElement.query(By.css('.reader-failure button')).nativeElement.click();
@@ -329,7 +351,7 @@ describe('GuideReaderComponent (chatbot phase A.2, c1)', () => {
 
       expect(component.failure).toBe('corpus');
       expect(fixture.debugElement.query(By.css('.reader-failure-body')).nativeElement.textContent.trim())
-        .toBe(GUIDES_STRINGS_HE['corpusUnavailable']);
+        .toBe('המדריכים לא נמצאו בשרת הזה. זו תקלה בהתקנה, לא חוסר בתוכן.'); // f10: transcribed, see comment above
 
       // Retry stays available: a redeployed server does recover from this fault.
       fixture.debugElement.query(By.css('.reader-failure button')).nativeElement.click();
@@ -345,7 +367,7 @@ describe('GuideReaderComponent (chatbot phase A.2, c1)', () => {
 
       expect(component.failure).toBe('network');
       expect(fixture.debugElement.query(By.css('.reader-failure-body')).nativeElement.textContent.trim())
-        .toBe(GUIDES_STRINGS_HE['loadFailedBody']);
+        .toBe('לא הצלחתי להגיע לשרת. בדקו את החיבור ונסו שוב.'); // f10: transcribed, see comment above
 
       fixture.debugElement.query(By.css('.reader-failure button')).nativeElement.click();
       flushGuide(content());
@@ -361,7 +383,7 @@ describe('GuideReaderComponent (chatbot phase A.2, c1)', () => {
 
     expect(component.loading).toBeFalse();
     expect(fixture.debugElement.query(By.css('.reader-failure-title')).nativeElement.textContent.trim())
-      .toBe(GUIDES_STRINGS_HE['guideNotFoundTitle']);
+      .toBe('המדריך הזה לא קיים'); // f10: transcribed, see comment above
     http.expectNone(() => true);
   });
 

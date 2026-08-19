@@ -11,11 +11,22 @@
 
 .tier-toggle {
   // THE POPOVER'S CONTAINING BLOCK. Deliberately the whole ROW, not the 1.15rem `?` wrapper: every surface
-  // that hosts this control is a narrow scrolling column (the analysis run tab is ~347px wide with
-  // `overflow: auto`, the book dashboard the same), so a panel anchored to a button sitting mid-row grows
-  // straight out through the clipping ancestor's inline edge and the copy is unrecoverable - there is no
-  // horizontal scrollbar to chase it with. Anchored to the row instead, `max-inline-size: min(18rem, 100%)`
-  // clamps the panel to the row, and the row is by construction inside the scroller.
+  // that hosts this control is a narrow scrolling column (~347px), so a panel anchored to a button sitting
+  // mid-row grows straight out through the clipping ancestor's inline edge and the copy is unrecoverable -
+  // there is no horizontal scrollbar to chase it with. Anchored to the row instead,
+  // `max-inline-size: min(18rem, 100%)` clamps the panel to the row, and the row is by construction inside
+  // the scroller.
+  //
+  // The clipping ancestor is NOT the same box in both scopes, and it moved under this control once already:
+  // the run tab used to own its own `overflow: auto` (`.run-tab-content`), but client-review-panel-layout's
+  // c1 deleted it (analysis-run-tab.component.scss) so the editor's whole review column scrolls once, at
+  // `.review-body` (`overflow-y: auto`, editor-page.component.scss). For the run-tab scope that IS the
+  // clipping ancestor now - nothing between the tier-toggle host and `.review-body` sets a non-visible
+  // overflow (`.analysis-panel` and `.run-tab-content` are both `overflow: visible`). The book-dashboard
+  // scope was untouched by that change: `.book-dashboard` still carries its own `overflow-y: auto;
+  // max-height: 100%` (book-dashboard.component.ts), so a book-scope popover is contained by THAT scroller,
+  // one level inside `.review-body`, not by `.review-body` itself. Either way the row is inside its
+  // scroller by construction, so the clamp above holds.
   position: relative;
   display: flex;
   flex-wrap: wrap;

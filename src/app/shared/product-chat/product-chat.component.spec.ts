@@ -376,6 +376,61 @@ describe('ProductChatComponent (chatbot phase A)', () => {
     });
   });
 
+  // ── Speaker attribution (f2, 8c) ────────────────────────────────────────────────────────────────
+
+  describe("Show's avatar on his own turns", () => {
+    beforeEach(() => openDrawer());
+
+    it('renders his face beside the role label on an answered turn, and NOT on the author\'s', () => {
+      ask('how do I import?');
+      http.expectOne('/api/product-chat').flush(groundedAnswer());
+      fixture.detectChanges();
+
+      const assistantIcon = fixture.debugElement.query(
+        By.css('.pc-turn--assistant .pc-role .pc-role-icon'),
+      );
+      expect(assistantIcon).not.toBeNull();
+      expect((assistantIcon.nativeElement as HTMLImageElement).getAttribute('src'))
+        .toBe('/assistant/show-header.png');
+
+      // The author's turn keeps a bare label. Putting Show's face on it would attribute the author's
+      // own question to the assistant, which is worse than having no avatar at all.
+      expect(fixture.debugElement.query(By.css('.pc-turn--user .pc-role-icon'))).toBeNull();
+    });
+
+    it('the in-flight row carries the same avatar, so his name does not shift when the answer lands', () => {
+      ask('how do I import?');
+      fixture.detectChanges();
+
+      expect(fixture.debugElement.query(By.css('.pc-pending .pc-role .pc-role-icon'))).not.toBeNull();
+      http.expectOne('/api/product-chat').flush(groundedAnswer());
+    });
+
+    it('is decorative to a screen reader: the label beside it already names him', () => {
+      // The whole reason the image is silent. `roleAssistant` is the accessible name for this row, so
+      // an alt text here would announce Show twice on every single turn of a long transcript.
+      ask('how do I import?');
+      http.expectOne('/api/product-chat').flush(groundedAnswer());
+      fixture.detectChanges();
+
+      const icon = fixture.debugElement.query(By.css('.pc-role-icon')).nativeElement as HTMLImageElement;
+      expect(icon.getAttribute('alt')).toBe('');
+      expect(icon.getAttribute('aria-hidden')).toBe('true');
+      expect(fixture.debugElement.query(By.css('.pc-turn--assistant .pc-role')).nativeElement.textContent.trim())
+        .toContain(CHAT_STRINGS_HE['roleAssistant']);
+    });
+
+    it('does NOT put his face on a fail-safe block, which is not an assistant turn', () => {
+      // Guards the same boundary the fail-safe suite pins for `.pc-role`: a refusal that wears the
+      // assistant's face reads as him having answered.
+      ask('does PageDraft have a dark mode toggle?');
+      http.expectOne('/api/product-chat').flush(failSafe('guides-unavailable'));
+      fixture.detectChanges();
+
+      expect(fixture.debugElement.query(By.css('.pc-fault .pc-role-icon'))).toBeNull();
+    });
+  });
+
   // ── Citation ────────────────────────────────────────────────────────────────────────────────────
 
   describe('citation', () => {

@@ -1,9 +1,9 @@
 import { CommonModule } from '@angular/common';
-import { AfterViewChecked, Component, DoCheck, OnInit, OnDestroy, ViewChild } from '@angular/core';
+import { AfterViewChecked, Component, DoCheck, NgZone, OnInit, OnDestroy, ViewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ImportHandoffCardComponent } from './import-handoff-card/import-handoff-card.component';
 import { ReplaySubject, Subject, merge } from 'rxjs';
-import { debounceTime, takeUntil } from 'rxjs/operators';
+import { debounceTime, take, takeUntil } from 'rxjs/operators';
 import { DocumentEditorContainerComponent, DocumentEditorContainerModule, ToolbarService } from '@syncfusion/ej2-angular-documenteditor';
 import { BookService } from '../../core/services/book.service';
 import { ChapterService } from '../../core/services/chapter.service';
@@ -20,7 +20,7 @@ import {
 } from '../../core/services/book-surface-focus.service';
 import { AmbientChapterService } from '../../core/services/ambient-chapter.service';
 import { BookDetailDto, ChapterSummaryDto, SceneSummaryDto } from '../../core/models/book';
-import { ChapterAnchor } from '../../core/models/book-review';
+import { FindingNavigationTarget } from '../../core/models/book-review';
 import { ChapterTreeComponent } from '../chapter-tree/chapter-tree.component';
 import { AnalysisPanelComponent } from '../analysis-panel/analysis-panel.component';
 import { IssuePanelComponent, ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
@@ -46,6 +46,68 @@ import { ColorPicker } from '@syncfusion/ej2-inputs';
 import { DropDownButton, SplitButton } from '@syncfusion/ej2-splitbuttons';
 import { HighlightColor } from '@syncfusion/ej2-documenteditor';
 import { createElement, classList, EventHandler } from '@syncfusion/ej2-base';
+
+/**
+ * d1: reduce a finding's evidence excerpt to the phrase handed to the editor's existing search fallback.
+ *
+ * THIS PATH FINDS NOTHING TODAY, AND THAT IS NOT AN OCCASIONAL MISS - IT IS EVERY FINDING.
+ * `FindingEvidence.excerpt`, as the review engine emits it, is an analyst PARAPHRASE of the passage,
+ * not a quotation of it. Measured 2026-08-19 against the live API over the two seeded Hebrew books:
+ * 0 of 19 evidence/chapter pairs on שברי מדבר and 0 of 39 on איחוד היסודות appear verbatim in the
+ * chapter they cite - the whole excerpt and this function's trimmed phrase alike, zero either way.
+ * METHOD: `GET /api/books/{id}/review/findings`, then each evidence's own chapter document
+ * (unwrapping Syncfusion's compressed SFDT), whitespace collapsed on both sides, containment tested
+ * per paragraph and against the whole chapter. The instrument was validated by a positive control -
+ * a 12-word slice taken FROM the chapter itself, found for 19 of 19 and 39 of 39 - so the zero is
+ * the corpus, not the measurement. The plan that shipped this measured the same zero a day earlier
+ * with denominators 19 and 36; only the second book's finding count has moved since.
+ *
+ * SO THE SEARCH EDGE IS CURRENTLY DEAD: every finding click lands the reader at the chapter top,
+ * which is exactly what shipped before d1. It is kept anyway because it is the CLIENT HALF of a
+ * two-sided change, and the successor API work is its prerequisite. THE CONDITION THAT MAKES IT
+ * LIVE is the API emitting QUOTED evidence - an excerpt copied from the manuscript rather than
+ * summarized from it - and nothing on this side can produce that, so do not try to "fix" the miss
+ * here (a fuzzier match would land the reader on a coincidence, which is worse than the chapter
+ * top). Re-run the measurement above before claiming either state has changed.
+ *
+ * WHY IT IS TRIMMED AT ALL, given that. `selectRangeInEditor`'s last-resort path is Syncfusion's
+ * `searchModule.find`, a LITERAL match, and the trim is built for the excerpt the API does not send yet:
+ * a real quotation, often a whole paragraph, differing from the manuscript only by the things a review
+ * copies loosely - a trailing ellipsis, an added closing quote, a line break the SFDT does not carry -
+ * any one of which makes the whole-paragraph match fail while its opening clause would have matched.
+ * Taking the first words keeps the anchor as long as it can be while staying inside one line of prose.
+ * That is a real failure mode of quoted evidence; it is NOT what is happening today, where the excerpt
+ * is not a copy of the prose at all and no amount of trimming reaches it.
+ *
+ * Returns '' when there is nothing usable, which callers read as "no hint, land at the chapter top".
+ * Exported so the word count is pinned by a test rather than being a number buried in a component.
+ */
+export function excerptSearchPhrase(excerpt: string | null | undefined, maxWords = 12): string {
+  let collapsed = (excerpt ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Leading/trailing quotation marks and ellipses are the review's framing, not the author's text.
+  // A single pass is order-dependent (an outer ellipsis can hide an inner quote, e.g. '..."she turned'),
+  // so loop each of the four strips until a pass changes nothing, re-trimming whitespace every pass
+  // since stripping framing can expose new whitespace at the edge it just uncovered. A trailing
+  // manuscript `.`/`,`/`!`/`?` is the author's own punctuation, not framing, and is never touched -
+  // only the quote-mark class and the `...`/`…` ellipsis are stripped, and only at the edges.
+  let previous: string;
+  do {
+    previous = collapsed;
+    collapsed = collapsed
+      .replace(/^["'“”‘’«»]+/, '')
+      .replace(/^\.{3}|^…/, '')
+      .replace(/["'“”‘’«»]+$/, '')
+      .replace(/\.{3}$|…$/, '')
+      .trim();
+  } while (collapsed !== previous);
+  if (!collapsed) return '';
+  const words = collapsed.split(' ').filter((w) => w.length > 0);
+  if (words.length === 0) return '';
+  return words.slice(0, maxWords).join(' ');
+}
 
 @Component({
   selector: 'app-editor-page',
@@ -163,19 +225,53 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
   // ── ReviewPanel resize (draggable inline-start gutter) ─────────────────────
   /** Default right-panel width (px). Raised from the old fixed 320 so the scorecard fits out of the box. */
   static readonly REVIEW_PANEL_DEFAULT_WIDTH = 380;
-  /** Min/max clamp for the resizable right panel (px). */
+  /** Min clamp for the resizable right panel (px). */
   static readonly REVIEW_PANEL_MIN_WIDTH = 300;
+  /**
+   * The panel's width ceiling FLOOR (px) - the smallest the ceiling is ever allowed to be, not the
+   * ceiling itself.
+   *
+   * c1: this used to be a hard 640, which on a large screen was the whole complaint - a result the
+   * author wanted to read wide could not be made wider than 640px no matter how much screen was free.
+   * The effective ceiling is now `max(640, round(window.innerWidth / 2))`: half the viewport on a big
+   * screen, and this unchanged 640 on anything up to 1280px wide, so a laptop behaves exactly as it did.
+   * P3-71: named after `innerWidth` here and at {@link effectiveReviewPanelMaxWidth}, deliberately NOT
+   * as CSS "50vw" - the two compute the same number today, and calling it "50vw" in prose is an
+   * invitation for a future stylesheet `max-width: 50vw` rule to become a second, silently-diverging
+   * owner of it. Read the ceiling through {@link reviewPanelMaxWidth} (the public getter) and never as
+   * the clamp itself.
+   */
   static readonly REVIEW_PANEL_MAX_WIDTH = 640;
   private static readonly REVIEW_PANEL_WIDTH_KEY = 'pd.reviewPanelWidth';
   /** Current right-panel width in px; bound to the grid via the --review-panel-width custom property. */
   reviewPanelWidth = EditorPageComponent.REVIEW_PANEL_DEFAULT_WIDTH;
+  /**
+   * The width ceiling for THIS viewport: `max(640, round(window.innerWidth / 2))`, computed on every
+   * read rather than cached, so a drag, a keyboard jump and a window resize all clamp against the same
+   * live number. P3-71: named after `innerWidth`, not CSS `50vw` - see {@link REVIEW_PANEL_MAX_WIDTH}.
+   * Falls back to the 640 floor when there is no window to measure (SSR / a detached test host).
+   */
+  private static effectiveReviewPanelMaxWidth(): number {
+    const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 0;
+    const half = Number.isFinite(viewportWidth) ? Math.round(viewportWidth / 2) : 0;
+    return Math.max(EditorPageComponent.REVIEW_PANEL_MAX_WIDTH, half);
+  }
+
   /** Template-readable clamp bounds (statics are not accessible from the template). */
   get reviewPanelMinWidth(): number { return EditorPageComponent.REVIEW_PANEL_MIN_WIDTH; }
-  get reviewPanelMaxWidth(): number { return EditorPageComponent.REVIEW_PANEL_MAX_WIDTH; }
+  get reviewPanelMaxWidth(): number { return EditorPageComponent.effectiveReviewPanelMaxWidth(); }
   /** True while a resize drag is in progress; drives a class that suppresses text selection during drag. */
   isResizingReviewPanel = false;
   /** Drag state captured on pointerdown; null when not dragging. */
   private resizeDrag: { pointerId: number; startX: number; startWidth: number; handle: HTMLElement } | null = null;
+  /**
+   * True while a deferred `documentEditor.resize()` is already scheduled, which is what coalesces a held
+   * arrow key (and any burst of width changes) down to a single relayout. See
+   * {@link notifyEditorFrameResize}.
+   */
+  private editorFrameResizePending = false;
+  /** Pending rAF for the coalesced window-resize re-clamp; see {@link onWindowResizeEvent}. */
+  private windowResizeFrame: number | null = null;
 
   // ── Wave 1d: the analysis run-progress dialog ──────────────────────────────
   //
@@ -405,11 +501,55 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    * Consistent with how the spine's open-findings action selects the Findings tab from within the
    * dashboard itself: here we do the same selection from the outside via the ViewChild reference.
    */
-  onChecklistSwitchToReview(): void {
+  onChecklistSwitchToReview(findingId?: string | null): void {
     this.onReviewModeChange('review');
     if (this.dashboardComp) {
       this.dashboardComp.reviewTab = 'findings';
     }
+    // d1: "הצג" names ONE finding, and the ledger it names lives behind the mode switch that has only
+    // just been requested - the dashboard is `@if`-mounted, so `dashboardComp` above is very often still
+    // undefined at this moment (which is why the tab selection above is already written as a best-effort
+    // `if`). HOLD the id and let {@link ngAfterViewChecked} publish it once the dashboard is really there,
+    // the same mechanism and for the same measured reason as `pendingSurfaceFocus`.
+    this.pendingOpenFindingId = findingId ?? null;
+  }
+
+  /**
+   * A finding waiting for the dashboard to exist so it can be opened in the ledger. Null when nothing
+   * is waiting.
+   *
+   * DROPPED ON A MODE CHANGE BACK TO EDIT (by {@link drainPendingOpenFinding}, which re-reads the mode
+   * on every checked pass), ON A BOOK CHANGE and ON TEARDOWN (both by
+   * {@link clearPendingNavigationIntents}) - the same three triggers as `pendingSurfaceFocus`.
+   *
+   * c04: the last two of those three were a CLAIM before they were code. This page survives a book
+   * switch (the route params change in place, the component does not), and neither `ngOnDestroy` nor
+   * the book-id reconcile touched this field, so a request held while the reader navigated to another
+   * book was published into the NEXT book's ledger - where `openFinding` cleared that book's filters
+   * for an id it does not carry.
+   */
+  private pendingOpenFindingId: string | null = null;
+
+  /**
+   * Publish a held open-finding request once the dashboard has mounted.
+   *
+   * Mirrors {@link ngAfterViewChecked}'s surface-focus drain deliberately, including the timer: honouring
+   * the request mutates the dashboard's (and then the ledger's) own view state, and doing that inside the
+   * change-detection pass that just checked it is the classic ExpressionChangedAfterChecked. The mode is
+   * re-read here rather than hung off the mode writers, for the reason recorded on `pendingSurfaceFocus`:
+   * reading the VALUE at the one consuming site covers every writer, present and future.
+   */
+  private drainPendingOpenFinding(): void {
+    const id = this.pendingOpenFindingId;
+    if (!id) return;
+    if (this.reviewMode !== 'review') {
+      this.pendingOpenFindingId = null;
+      return;
+    }
+    const dash = this.dashboardComp;
+    if (!dash) return;
+    this.pendingOpenFindingId = null;
+    setTimeout(() => dash.openFinding(id));
   }
 
   /**
@@ -770,6 +910,8 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    * segmented control going back to Edit says "show me something else".
    */
   ngAfterViewChecked(): void {
+    // d1: a second, independent hold drains here for the same reason the first one does.
+    this.drainPendingOpenFinding();
     const request = this.pendingSurfaceFocus;
     if (!request) return;
     if (this.reviewMode !== 'review') {
@@ -789,11 +931,18 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    * is the cold `?focus=...` deep link, where the query params are consumed before `route.params` emits.
    * Dropping there would break the working case while claiming to fix a stale one.
    *
-   * Both one-shots are dropped together here, and that is the ONE rule they share: a focus is a gesture
-   * about one book, and neither a chapter order nor a dashboard surface means anything in another book's
-   * chapter list or another book's dashboard. Their mode rules differ; their book rule does not.
+   * Both focus one-shots are dropped together here, and that is the ONE rule they share: a focus is a
+   * gesture about one book, and neither a chapter order nor a dashboard surface means anything in another
+   * book's chapter list or another book's dashboard. Their mode rules differ; their book rule does not.
+   *
+   * c04: the TWO NAVIGATION one-shots share that same book rule and were not obeying it, so this is now
+   * the book-change trigger for all four. They are dropped unconditionally rather than through the stamp:
+   * the adoption rule above exists for the cold `?focus=...` deep link, which raises a focus before any
+   * book id is known, and neither navigation intent can be armed that early (both need a rendered
+   * in-book surface to click).
    */
   private reconcilePendingFocusWithBook(newBookId: string | null): void {
+    this.clearPendingNavigationIntents();
     if (this.pendingSurfaceFocus === null && this.pendingChapterFocusOrder === null) {
       this.pendingFocusBookId = newBookId;
       return;
@@ -887,14 +1036,131 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
     }
   }
 
+  /**
+   * Tell Syncfusion the WRITING FRAME changed width, when nothing else will.
+   *
+   * c12 - WHY THIS EXISTS AT ALL. Syncfusion's DocumentEditor measures its container ONCE and then
+   * paints into a canvas sized from that measurement; it re-measures only on its own `window.resize`
+   * listener or when `resize()` is called. Widening the ReviewPanel changes the editor column through a
+   * pure CSS grid-track change (`--review-panel-width`), which fires NO window resize event, so the
+   * canvas keeps the width it had before the drag and the document is drawn clipped underneath the
+   * panel. Measured on this tree at 2560px: dragging the panel 380 -> 1280 shrank the container
+   * 1870 -> 970 while `documentHelper.visibleBounds.width` and the canvas backing store both stayed at
+   * 1868, and a bare `resize()` in the console brought them to 968 / 958. `resize()` IS the reflow path.
+   *
+   * WHY DEFERRED, and why coalesced:
+   * - DEFERRED (a macrotask, exactly like {@link toggleFocusMode}'s call into {@link applyFocusFit}),
+   *   because the width is a template binding: at the moment a pointerup or keydown handler returns,
+   *   Angular has not yet applied the new grid track, so a synchronous `resize()` would re-measure the
+   *   OLD width and change nothing.
+   * - COALESCED, because `resize()` relays out the whole document. One per drag END is the contract;
+   *   one per pointermove would stall the editor. A held arrow key auto-repeats dozens of keydowns per
+   *   second and lands here just as often, so the pending-timer guard is what makes the keyboard path
+   *   obey the same "once, at the end" rule the drag path gets for free.
+   * - HUNG OFF `ngZone.onStable`, AND A `setTimeout` HERE IS BROKEN. That is measured, not reasoned.
+   *   This app bootstraps with `provideZoneChangeDetection({ eventCoalescing: true })` (app.config.ts),
+   *   which moves the tick that follows a DOM event into a `requestAnimationFrame` - and a `setTimeout(0)`
+   *   runs BEFORE the next animation frame. A deferred-by-timer `resize()` therefore re-measures the
+   *   width the frame had ONE CHANGE AGO, in or out of the zone; scheduling it outside the zone does not
+   *   help, because the problem is not zone stability, it is that CD has not run yet. Browser evidence at
+   *   2560px, with the timer version and `resize()` instrumented to log what it saw: Home moved the panel
+   *   300 -> 1280 and `resize()` fired against `--review-panel-width: 300px` / a 1950px container, leaving
+   *   Syncfusion laid out 980px too wide against a 970px column - a worse clip than doing nothing. The
+   *   drag path HID this (its pointermoves had already painted the final width before pointerup) and the
+   *   keyboard path exposed it. `onStable` emits after `ApplicationRef.tick()` inside that same frame, so
+   *   the callback measures the frame the author is looking at; it also runs outside the Angular zone, so
+   *   the relayout does not tick change detection again.
+   *
+   * Deliberately does NOT touch `zoomFactor` (unlike {@link applyFocusFit}, which owns the zoom for the
+   * focus toggle): resizing the panel must not throw away a zoom the author chose. Verified in the
+   * browser - a 1.25 zoom survives a 380 -> 1280 drag.
+   */
+  private notifyEditorFrameResize(): void {
+    if (this.editorFrameResizePending) return;
+    this.editorFrameResizePending = true;
+    this.ngZone.onStable.pipe(take(1), takeUntil(this.destroy$)).subscribe(() => {
+      this.editorFrameResizePending = false;
+      const ed = this.docEditor?.documentEditor;
+      if (!ed) return;
+      try {
+        ed.resize();
+      } catch {
+        // Syncfusion not ready (no document open / not created yet) - ignore.
+      }
+    });
+  }
+
   // ── ReviewPanel resize ──────────────────────────────────────────────────────
 
-  /** Clamp a candidate panel width to the allowed [min, max] range. */
+  /**
+   * Clamp a candidate panel width to the allowed range. The max end is the VIEWPORT-DERIVED ceiling
+   * (see {@link REVIEW_PANEL_MAX_WIDTH}), so the same call clamps a drag on a 4K screen and a restore
+   * on a laptop correctly.
+   *
+   * P3-69: the floor wins over the ceiling BY CONSTRUCTION, not by the ceiling always happening to be
+   * >= the floor. `effectiveReviewPanelMaxWidth` is bounded below by MIN before it is ever used as the
+   * inner `Math.min` bound, so `min < max` is an invariant of this function rather than an accident of
+   * today's constants (640 floor > 300 min) - a future change to either constant cannot make this
+   * return a value ABOVE its own ceiling.
+   */
   private clampReviewPanelWidth(px: number): number {
+    const ceiling = Math.max(
+      EditorPageComponent.REVIEW_PANEL_MIN_WIDTH,
+      EditorPageComponent.effectiveReviewPanelMaxWidth()
+    );
     return Math.max(
       EditorPageComponent.REVIEW_PANEL_MIN_WIDTH,
-      Math.min(EditorPageComponent.REVIEW_PANEL_MAX_WIDTH, Math.round(px))
+      Math.min(ceiling, Math.round(px))
     );
+  }
+
+  /**
+   * Re-clamp the panel when the window changes size, because the ceiling moves with the viewport: a
+   * panel dragged to 1200px on a wide monitor would otherwise keep 1200px after the window is shrunk
+   * to 1000px and swallow the whole editor.
+   *
+   * Deliberately does NOT persist. The stored width is the author's CHOICE; a window resize is not,
+   * and overwriting the preference would mean docking once on a small screen permanently lost the
+   * wide layout. The stored value is re-clamped again on the next load anyway.
+   *
+   * P3-70 - WHY THIS IS A HAND-REGISTERED LISTENER AND NOT `@HostListener('window:resize')`.
+   * A host listener is registered by Angular INSIDE the Angular zone, so every single resize event
+   * ticks change detection for the whole application - and this component's per-CD work is not small:
+   * {@link ngDoCheck} and {@link ngAfterViewChecked} both run on every pass. A window drag fires
+   * dozens of resize events per second, and this component had no host listener at all before the
+   * ceiling became viewport-derived, so adding one silently added that cost. Registering the listener
+   * OUTSIDE the zone means the events cost nothing, and the two-step guard below decides what does:
+   *
+   *  1. rAF-COALESCE: at most one clamp per animation frame no matter how many events arrive.
+   *  2. RE-ENTER THE ZONE ONLY ON A REAL CHANGE: the common case (a resize that leaves the width
+   *     alone, i.e. any window still wide enough) never touches change detection at all. Assigning
+   *     `reviewPanelWidth` outside the zone would leave the binding unpainted, so the one write that
+   *     matters is wrapped in `ngZone.run`.
+   *
+   * The width change is a CSS grid-track change, so Syncfusion is told about it here too (c12) for the
+   * same reason the drag path tells it: the editor column just got narrower without a layout event
+   * that Syncfusion's own listener would have seen AFTER the new track was applied.
+   */
+  private readonly onWindowResizeEvent = (): void => {
+    if (this.windowResizeFrame !== null) return;
+    this.windowResizeFrame = requestAnimationFrame(() => {
+      this.windowResizeFrame = null;
+      this.reclampReviewPanelWidthForViewport();
+    });
+  };
+
+  /**
+   * The coalesced body of {@link onWindowResizeEvent}. Split out so a spec can drive the clamp without
+   * having to fake an animation frame, and so the "only re-enter the zone on a real change" rule has
+   * one statement rather than being spread across the listener.
+   */
+  private reclampReviewPanelWidthForViewport(): void {
+    const clamped = this.clampReviewPanelWidth(this.reviewPanelWidth);
+    if (clamped === this.reviewPanelWidth) return;
+    this.ngZone.run(() => {
+      this.reviewPanelWidth = clamped;
+      this.notifyEditorFrameResize();
+    });
   }
 
   /** Restore the persisted panel width from localStorage (clamped); falls back to the default. */
@@ -956,7 +1222,14 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
     this.reviewPanelWidth = this.clampReviewPanelWidth(drag.startWidth + widen);
   }
 
-  /** End the drag and persist the chosen width. */
+  /**
+   * End the drag, persist the chosen width, and tell Syncfusion the writing frame moved.
+   *
+   * c12: the notify belongs HERE and not in {@link onReviewResizeMove}. `resize()` relays out the whole
+   * document, so one per pointermove would stall the editor mid-drag; one at the end is what the author
+   * actually needs, because the CSS grid track has been following the pointer the whole time and only
+   * the final width has to be measured.
+   */
   onReviewResizeEnd(event: PointerEvent): void {
     const drag = this.resizeDrag;
     if (!drag || event.pointerId !== drag.pointerId) return;
@@ -968,12 +1241,18 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
     this.resizeDrag = null;
     this.isResizingReviewPanel = false;
     this.persistReviewPanelWidth();
+    this.notifyEditorFrameResize();
   }
 
   /**
    * Keyboard resize for the separator handle: arrow keys nudge the width by a step, Home/End jump to
    * the min/max. The handle is on the panel's PHYSICAL LEFT edge, so ArrowLeft widens (increase
    * width) and ArrowRight narrows - matching the drag direction, independent of content direction.
+   *
+   * c12: EVERY branch that changes the width notifies Syncfusion, Home (the jump to the viewport-derived
+   * ceiling) most of all - it is the single largest width change the UI can make, 380 -> 1280 in one
+   * keystroke on a 2560px screen, so it is the one that leaves the most document clipped if the editor
+   * is never told. A held arrow key is coalesced by {@link notifyEditorFrameResize} itself.
    */
   onReviewResizeKeydown(event: KeyboardEvent): void {
     const step = 16;
@@ -986,7 +1265,9 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
         next = this.reviewPanelWidth - step;
         break;
       case 'Home':
-        next = EditorPageComponent.REVIEW_PANEL_MAX_WIDTH;
+        // The viewport-derived ceiling, not the 640 floor, so the keyboard reaches the same width a
+        // drag can.
+        next = EditorPageComponent.effectiveReviewPanelMaxWidth();
         break;
       case 'End':
         next = EditorPageComponent.REVIEW_PANEL_MIN_WIDTH;
@@ -997,6 +1278,7 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
     event.preventDefault();
     this.reviewPanelWidth = this.clampReviewPanelWidth(next);
     this.persistReviewPanelWidth();
+    this.notifyEditorFrameResize();
   }
 
   private pendingLoadTarget: { chapterId: string; sceneId?: string } | null = null;
@@ -1048,8 +1330,16 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
      * (app chrome, mounted once for the life of the app) can send it and can name it. See
      * {@link publishAmbientChapter}.
      */
-    private ambientChapter: AmbientChapterService
-  ) {}
+    private ambientChapter: AmbientChapterService,
+    /** P3-70: the window-resize listener is registered outside this zone. See {@link onWindowResizeEvent}. */
+    private ngZone: NgZone
+  ) {
+    // Registered HERE rather than in ngOnInit so it is live from component creation, exactly as the
+    // `@HostListener` it replaces was. `runOutsideAngular` is the whole point: see onWindowResizeEvent.
+    this.ngZone.runOutsideAngular(() => {
+      window.addEventListener('resize', this.onWindowResizeEvent);
+    });
+  }
 
   ngOnInit(): void {
     this.restoreReviewPanelWidth();
@@ -1423,6 +1713,14 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
 
   ngOnDestroy(): void {
     window.removeEventListener('beforeunload', this.handleBeforeUnload);
+    // P3-70 / c12: the resize listener is hand-registered (constructor), so it is hand-removed, and the
+    // queued rAF is cancelled - it would otherwise clamp a width on a destroyed view. The deferred
+    // resize() needs nothing here: it is a `takeUntil(destroy$)` subscription, and destroy$ fires below.
+    window.removeEventListener('resize', this.onWindowResizeEvent);
+    if (this.windowResizeFrame !== null) {
+      cancelAnimationFrame(this.windowResizeFrame);
+      this.windowResizeFrame = null;
+    }
     // a2: this page is the only publisher of the open chapter, so leaving it means nothing is open. It
     // is what makes the import and export pages report no ambient chapter even though they are
     // book-scoped routes where `BookContextService` still names the book.
@@ -1433,6 +1731,9 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
     this.pendingSurfaceFocus = null;
     this.pendingChapterFocusOrder = null;
     this.pendingFocusBookId = null;
+    // c04: the two NAVIGATION one-shots die here too, for the reason stated above - the field docstrings
+    // on both of them already claimed teardown as a drop trigger, and this is what makes that true.
+    this.clearPendingNavigationIntents();
     if (this.bookId) this.syncService.leaveBook(this.bookId);
     if (this._scrollSettleTimer) clearTimeout(this._scrollSettleTimer);
     this.destroyCustomToolbar();
@@ -1601,26 +1902,46 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
   }
 
   private loadChapterContent(chapterId: string): void {
-    if (!this.bookId || !this.docEditor) return;
-    this.chapterService.getById(this.bookId, chapterId).subscribe(dto => {
-      const raw = dto.contentSfdt?.trim();
-      let sfdt = raw && raw !== '{"sections":[{"blocks":[]}]}' ? raw : EditorPageComponent.EMPTY_SFDT;
-      sfdt = this.sfdtService.ensureSfdtRtl(sfdt, this.editorDirection === 'rtl');
-      this.isOpeningDocument = true;
-      setTimeout(() => {
-        try {
-          if (!this.docEditor?.documentEditor || this.selectedChapterId !== chapterId || this.selectedSceneId) return;
-          this.docEditor.documentEditor.open(sfdt);
-          this.hasPendingChanges = false;
-          this.currentDocumentPlainText = this.editorTextService.refreshDocumentPlainText(this.docEditor, this.selectedChapterId);
-          this.documentOwnerChapterId = chapterId;
-          this.documentOwnerSceneId = null;
-          // open() resets the zoom to 100%; re-fit the page to the frame (focus mode only).
-          this.applyFocusFit();
-        } finally {
-          this.isOpeningDocument = false;
-        }
-      }, 0);
+    // c04: this is one of the load's exit paths too, so it settles like the rest of them.
+    if (!this.bookId || !this.docEditor) {
+      this.settlePendingExcerptNavigation(chapterId, false);
+      return;
+    }
+    this.chapterService.getById(this.bookId, chapterId).subscribe({
+      next: dto => {
+        const raw = dto.contentSfdt?.trim();
+        let sfdt = raw && raw !== '{"sections":[{"blocks":[]}]}' ? raw : EditorPageComponent.EMPTY_SFDT;
+        sfdt = this.sfdtService.ensureSfdtRtl(sfdt, this.editorDirection === 'rtl');
+        this.isOpeningDocument = true;
+        setTimeout(() => {
+          try {
+            if (!this.docEditor?.documentEditor || this.selectedChapterId !== chapterId || this.selectedSceneId) {
+              // c04: the document never opened, so the phrase has nothing to search - but this attempt
+              // was still its chance, and a phrase left armed here is the one that jumps the editor the
+              // next time the reader opens this chapter for a reason of their own.
+              this.settlePendingExcerptNavigation(chapterId, false);
+              return;
+            }
+            this.docEditor.documentEditor.open(sfdt);
+            this.hasPendingChanges = false;
+            this.currentDocumentPlainText = this.editorTextService.refreshDocumentPlainText(this.docEditor, this.selectedChapterId);
+            this.documentOwnerChapterId = chapterId;
+            this.documentOwnerSceneId = null;
+            // open() resets the zoom to 100%; re-fit the page to the frame (focus mode only).
+            this.applyFocusFit();
+            // d1: the document this chapter's evidence phrase was aimed at is now the one that is open.
+            // Settled here rather than at the call site because the load is async and the search is a
+            // literal match against the OPEN document; running it any earlier would search the outgoing one.
+            this.settlePendingExcerptNavigation(chapterId, true);
+          } finally {
+            this.isOpeningDocument = false;
+          }
+        }, 0);
+      },
+      // c04: a chapter whose content GET fails renders nothing to search, and this page shows no error
+      // for it today. Settling is the part that must not be skipped: the phrase would otherwise outlive
+      // the only load it was ever aimed at.
+      error: () => this.settlePendingExcerptNavigation(chapterId, false),
     });
   }
 
@@ -1641,6 +1962,13 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
           this.documentOwnerSceneId = sceneId;
           // open() resets the zoom to 100%; re-fit the page to the frame (focus mode only).
           this.applyFocusFit();
+          // c04: a scene of this chapter is now what is open, so a phrase aimed at the CHAPTER document
+          // is released without firing. It is measured against the chapter's prose, and a literal search
+          // inside one scene either misses or lands on a coincidence in a unit the reader did not open
+          // to read it. AFTER the guard, not in a `finally`: a stale scene load returning late must not
+          // disarm a chapter hint that has only just been armed (selecting a chapter nulls
+          // `selectedSceneId`, so that late load takes the guarded return above).
+          this.settlePendingExcerptNavigation(chapterId, false);
         } finally {
           this.isOpeningDocument = false;
         }
@@ -2121,9 +2449,49 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    * existing selectChapter path (which handles save-before-switch and document load). Resolves strictly
    * by chapterId — the order fallback was removed because deleted/reordered chapters can cause the
    * wrong chapter to be opened.
-   * No character-offset navigation: whole-book findings are chapter-level only.
+   * d1 added the two edges that made the click land somewhere the reader could use.
+   *
+   * THE MODE SWITCH APPLIES TO THE FINDINGS-LEDGER CHIP ONLY, and is keyed on `findingId`.
+   * THREE producers share this one seam, not one: the Findings ledger chip, the Story Bible anchor chip
+   * and the stage spine's per-chapter breakdown, all funnelled into a single `@Output() openChapter`
+   * (book-dashboard.component.html bindings at book-dashboard.component.ts:236, 338, 346).
+   *
+   * Only the LEDGER click arms Edit-mode surfaces: it calls `reviseContext.set(...)` and stamps
+   * `findingId` on the payload in the same statement pair (book-review-findings.component.ts,
+   * `onAnchorClick` - cited by method name, not line, because f12/c04 already drifted it once).
+   * For that caller, leaving the panel in Review mode showed the chapter change behind an unchanged
+   * panel, with the two surfaces the click just armed - the ReviseContextService "addressing" chip and
+   * the per-chapter findings checklist - rendering in a mode the reader was not in. THE TWO SURFACES
+   * SIT AT ONE PLACE, not two: both are blocks (A) and (B) of `ChapterFindingsChecklistComponent`, and
+   * the editor mounts that component at exactly one site (editor-page.component.html:231-238). The
+   * `reviewMode === 'edit'` branch that opens at :173 is the MODE GATE around that site, which is why
+   * Review mode showed neither of them.
+   *
+   * THE OTHER TWO ARE EXCLUDED because they arm nothing and switching would COST the reader something.
+   * The Story Bible emits a bare ChapterAnchor (book-story-bible.component.ts, near :259) and the spine
+   * emits `{chapterId, order, title}` (book-dashboard.component.ts, `onSpineOpenChapter`); neither touches
+   * ReviseContextService. And the dashboard is `@if`-mounted behind Review mode
+   * (editor-page.component.html:239), so flipping to Edit would UNMOUNT the Story Bible or the spine the
+   * reader was reading and lose their place, in exchange for two Edit surfaces that have nothing to show.
+   *
+   * `findingId` is the honest discriminator, not an incidental one: it is stamped at exactly ONE site in
+   * the app - the same statement pair that arms the revise context - so "findingId is present" and "this
+   * click armed the Edit surfaces" are the same fact, and no other producer can sweep in behind it.
+   * EVERYTHING ELSE HERE STILL RUNS FOR ALL THREE: the chapterId resolution and its not-found alert, the
+   * excerpt hint, and the selectChapter path.
+   *
+   * THE PASSAGE SCROLL is best-effort and deliberately reuses the EXISTING locate path rather than
+   * adding a second search: the excerpt is held until the chapter's document has actually opened (the
+   * load is async, so selecting before it lands would search the OUTGOING chapter), then handed to
+   * {@link selectRangeInEditor} as `originalText`. "Best-effort" is not a hedge here: on EVERY finding
+   * the seeded corpus holds it misses, because the API's evidence excerpt is a paraphrase rather than a
+   * quotation - 0 of 19 and 0 of 39 pairs verbatim, measured 2026-08-19; {@link excerptSearchPhrase}
+   * carries the numbers, the method and the API-side condition that makes this edge live. A miss, from
+   * that or from the other two ways it can fail (no excerpt on the finding at all, prose the author has
+   * since rewritten), lands the reader at the top of the chapter, which is exactly what shipped before
+   * this and therefore cannot regress.
    */
-  onOpenChapterFromDashboard(anchor: ChapterAnchor): void {
+  onOpenChapterFromDashboard(anchor: FindingNavigationTarget): void {
     if (!this.book) return;
     const ch = this.book.chapters.find(c => c.id === anchor.chapterId) ?? null;
     if (!ch) {
@@ -2133,7 +2501,74 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
         : 'Chapter not found - it may have been deleted.');
       return;
     }
+    if (anchor.findingId) this.onReviewModeChange('edit');
+    const phrase = excerptSearchPhrase(anchor.excerpt);
+    // Set BEFORE selectChapter: the load is queued from inside it, and the chapter id stamped here is
+    // what stops a hint from a previous click landing in whatever chapter is open when it finally runs.
+    this.pendingExcerptNavigation = phrase ? { chapterId: ch.id, phrase } : null;
     this.selectChapter(ch);
+  }
+
+  /**
+   * d1: an evidence phrase waiting for its chapter's document to finish opening. Stamped with the
+   * chapter it belongs to.
+   *
+   * ENDS IN EXACTLY ONE OF FOUR WAYS, and there is no fifth: the next finding click overwrites it
+   * ({@link onOpenChapterFromDashboard} assigns unconditionally, null included); its own chapter's load
+   * settles it ({@link settlePendingExcerptNavigation}, from EVERY outcome of that load - opened,
+   * guarded out, or failed); a scene opening in that chapter settles it, because the reader is no longer
+   * looking at the chapter document the phrase was measured against; or a book change / teardown drops
+   * it ({@link clearPendingNavigationIntents}).
+   *
+   * c04: it used to be consumed only after a SUCCESSFUL `open()`, so the guard return inside
+   * {@link loadChapterContent}, that load's error arm, and the whole scene path all left it armed - and
+   * a phrase stays aimed at a chapter id, so the next time the reader opened that chapter, for their own
+   * reasons, the editor jumped, selected a passage nobody had asked for and took the caret with it.
+   */
+  private pendingExcerptNavigation: { chapterId: string; phrase: string } | null = null;
+
+  /**
+   * Settle the held evidence phrase for one attempt to open `chapterId`, and hand it to the existing
+   * locate path only when that attempt actually put the chapter's document on screen.
+   *
+   * ALWAYS RELEASES A PHRASE STAMPED WITH `chapterId`, `opened` or not. That attempt was its chance:
+   * holding it past a load that did not happen is how it survives to fire at an unrelated later
+   * navigation. A phrase stamped with a DIFFERENT chapter is left alone here, so a stale load landing
+   * late cannot disarm a hint the reader has only just armed for the chapter they are now opening.
+   *
+   * `opened: false` is therefore a release, not a deferral, and it is deliberately silent - the whole
+   * passage scroll is best-effort (every way it can fail lands the reader at the chapter top, which is
+   * what shipped before it existed).
+   */
+  private settlePendingExcerptNavigation(chapterId: string, opened: boolean): void {
+    const pending = this.pendingExcerptNavigation;
+    if (!pending || pending.chapterId !== chapterId) return;
+    this.pendingExcerptNavigation = null;
+    // c05: THE STALENESS CONTRACT HAS TWO OWNERS, AND THIS IS THE UPSTREAM ONE. The check above only
+    // proves the phrase belongs to the chapter whose load is settling NOW; `selectRangeInEditor` then
+    // defers its work by a frame plus 150ms, and a chapter switch inside that window would run the search
+    // against whatever document has since been opened. So it re-checks the document owner itself, at the
+    // moment it actually touches the editor. Neither guard subsumes the other: this one is the only place
+    // that knows which chapter the phrase was written for, and that one is the only place that runs late
+    // enough to see the swap. Keep both.
+    if (opened) this.selectRangeInEditor({ originalText: pending.phrase });
+  }
+
+  /**
+   * c04: THE ONE PLACE BOTH NAVIGATION ONE-SHOTS ARE DROPPED, called from the two events that end their
+   * context outright - a real book-id change ({@link reconcilePendingFocusWithBook}) and teardown
+   * ({@link ngOnDestroy}).
+   *
+   * ONE MECHANISM RATHER THAN TWO FIELD WRITES PER SITE because the two intents share one rule exactly:
+   * each is a gesture about ONE book (a finding id belongs to that book's ledger, an evidence phrase to
+   * that book's chapter text), and neither means anything in another book's. Their landing sites differ
+   * and their mode rules differ; their book rule does not. Stating it once is also what makes the next
+   * intent's author see the list they have to join - the previous two were added beside a lifecycle
+   * that already had three fields in it and joined none of them.
+   */
+  private clearPendingNavigationIntents(): void {
+    this.pendingOpenFindingId = null;
+    this.pendingExcerptNavigation = null;
   }
 
   onRevertToVersion(versionId: string): void {
@@ -2181,6 +2616,12 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    *  1. selectBookmark() -- first-class Syncfusion anchor, survives edits.
    *  2. Offset-based selection via plainOffsetToSfdtPosition (fallback for suggestions without IDs).
    *  3. searchModule.find() (last resort).
+   *
+   * c05: ALL THREE RUN ~150ms AFTER THE REQUEST (a requestAnimationFrame plus a settle timeout), and the
+   * chapter tree is one click away, so the document under the editor can be a different one by the time
+   * they do. The document this navigation was measured against is captured on entry and re-checked inside
+   * `doSelect`; a mismatch returns silently, which is this method's documented best-effort contract (the
+   * reader simply stays where they are, which is what shipped before any of these anchors existed).
    */
   selectRangeInEditor(payload: { suggestionId?: string; startOffset?: number; endOffset?: number; originalText?: string }): void {
     const editor = this.docEditor?.documentEditor;
@@ -2188,7 +2629,36 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
 
     const originalText = payload.originalText?.trim();
 
+    // c05: the identity of the document this navigation is aimed at, taken at REQUEST time. It is the
+    // document OWNER rather than the selection because the bookmark name, the plain-text offsets and the
+    // search phrase were all resolved against the document that is OPEN at this instant, and the owner
+    // pair is the only thing that names it. Reading either field inside `doSelect` instead would compare
+    // the drifted state against itself and pass every time.
+    const intendedChapterId = this.documentOwnerChapterId;
+    const intendedSceneId = this.documentOwnerSceneId;
+
     const doSelect = (): void => {
+      // c05: re-check before ANY of the three navigation paths, not just the search one. Applying a stale
+      // offset range into a newly opened document selects arbitrary prose and hands the caret to it, which
+      // is the same harm as finding a phrase in it (and the panel can act on that selection), and a
+      // bookmark name is only meaningful inside the document it was written into. Both arms are needed and
+      // they catch different halves of the window: the owner arm catches a switch whose load has already
+      // LANDED (the editor now holds another chapter's document), the selection arm catches one still in
+      // flight (`selectedChapterId` moves on click, the owner only when the load completes ~an HTTP round
+      // trip later, so inside 150ms this is the usual shape) - stealing focus into a document that is
+      // about to be replaced is not a navigation the reader asked for either. The shape mirrors the
+      // owner-vs-selection guard `saveCurrentDocument` uses for the same "is the loaded document still
+      // the one we mean" question. Returning here strands nothing: `doSelect` raises, lowers and clears
+      // no flag, timer or one-shot (the excerpt one-shot is already settled by its caller before this
+      // method is entered), so this return skips navigation only.
+      if (
+        this.documentOwnerChapterId !== intendedChapterId ||
+        this.documentOwnerSceneId !== intendedSceneId ||
+        this.selectedChapterId !== intendedChapterId ||
+        this.selectedSceneId !== intendedSceneId
+      ) {
+        return;
+      }
       try {
         // Primary: bookmark-based navigation (precise, survives user edits).
         if (payload.suggestionId && editor.selection?.selectBookmark) {

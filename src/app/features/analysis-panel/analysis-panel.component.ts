@@ -1,14 +1,21 @@
 import { CommonModule } from '@angular/common';
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnInit, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Subscription, forkJoin } from 'rxjs';
+import { Subscription, combineLatest, forkJoin } from 'rxjs';
 import { ANALYSIS_TYPE_LABELS, ANALYSIS_TYPES, STARTABLE_ANALYSIS_TYPES, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
 import { analysisTypeLabelFor, runChromeLang, runString } from '../../core/i18n/run-strings';
 import { AnalysisService } from '../../core/services/analysis.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
-import { JobRegistryService, normalizeLang } from '../../core/services/job-registry.service';
-import { AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent, assertUnhandledRunEvent } from '../../core/services/analysis-run-orchestration.service';
+import {
+  AnalysisJobContext,
+  JobRegistryService,
+  TrackedJob,
+  isTerminal,
+  jobMatchesAnalysisContext,
+  normalizeLang,
+} from '../../core/services/job-registry.service';
+import { ActiveRunContext, AnalysisRunOrchestrationService, AnalysisRunContext, AnalysisRunEvent, assertUnhandledRunEvent } from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService, DocumentVersionDto } from '../../core/services/document-version.service';
 import { LineEditParserService } from '../../core/services/line-edit-parser.service';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
@@ -244,6 +251,22 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   acceptedProofreadHistoryKeys = new Set<string>();
   /** Active run subscription; cancelled on destroy or when starting a new run. */
   private runSubscription: Subscription | null = null;
+  /**
+   * c07: the ONE in-flight history read. `loadHistory` has many issuers for the SAME (chapter, scene) key
+   * - the run terminal, the sub-tab switch, the analysis-type switch, the filter fallback, a Redo's
+   * refresh, and its own retry timer - and its only guard was a context-CHANGE check, which two reads for
+   * the same key both pass. So the SLOWER OLDER response won and overwrote `allAnalyses` with a snapshot
+   * taken before the just-finished run's row was persisted, dropping that run out of History until the
+   * next reload. Holding one slot and unsubscribing it before issuing the next read makes at most one read
+   * live at a time, so the LAST ISSUED read is the only one that can write. See {@link loadHistory} for
+   * why cancelling cannot strand `proofreadFinalizing`.
+   */
+  private historySub: Subscription | null = null;
+  /**
+   * c07: the ONE in-flight versions read, held for the same reason as {@link historySub}. See
+   * {@link loadVersions} for why this one was the worse of the two.
+   */
+  private versionsSub: Subscription | null = null;
   /** Original document text at the time of each Proofread run (key = chapterId-sceneId-createdAt). Used so History diff shows all suggestions including accepted. */
   proofreadOriginalDocumentByRunKey = new Map<string, string>();
   /** True after we've restored proofread suggestions for the current chapter/scene (so we don't re-run diff on every documentText change while user edits). */
@@ -286,13 +309,22 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    */
   private runOriginChapterId: string | null = null;
   private runOriginSceneId: string | null = null;
-  /**
-   * Analysis type the CURRENT run was started against (captured in prepareForRun, same source as the
-   * run context sent to the API). The panel instance is reused across navigation, so the `job-started`
-   * publish must key the tracked job off THIS snapshot - not live panel state - or a mid-run
-   * chapter/scene/type switch would mislabel the job relative to what the API actually ran.
-   */
-  private runOriginAnalysisType: string = 'Proofread';
+  // final-r03: `runOriginBookId` and `runOriginAnalysisType` are BACK, with a reader this time.
+  //
+  // c01 removed a captured `runOriginAnalysisType` on the correct reasoning that its only reader (the
+  // `job-started` registry publish) had moved to `AnalysisRunOrchestrationService`, which takes the same
+  // snapshot in the same tick, and that a captured field with no reader is how live state gets read back
+  // into a decision that must use the snapshot. That reasoning was sound and its premise has since
+  // changed: `recordRunErrorForOrigin` is a new reader, and it needs the run's OWN book and type rather
+  // than whatever is selected when the terminal lands.
+  //
+  // The four fields are captured together in `prepareForRun` and must stay together, because they are one
+  // key: the held-failure claim below has to key on exactly what
+  // `AnalysisRunOrchestrationService.matchesUnheardTerminal` keys on (book, chapter, scene, type). Adding
+  // a fifth dimension there without adding it here silently makes this panel's hold the coarser of the
+  // two again, which is the defect this comment exists to prevent recurring.
+  private runOriginBookId: string | null = null;
+  private runOriginAnalysisType: string | null = null;
   /**
    * Persisted analysis-result ids known BEFORE the current run started (captured in prepareForRun).
    * A streaming run's persisted row is the one whose id is NOT in this set, which is how we tell the
@@ -381,9 +413,327 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     return mapped;
   }
 
+  // ── a1: run state that OUTLIVES this instance ────────────────────────────────────────────────────
+  //
+  // This panel is mounted under `@if (editHelpView === 'analysis')` inside `@else if (reviewMode ===
+  // 'edit')`, so every tab or mode switch destroys it while the run it started keeps going. Everything
+  // below reads that run from the two owners that DO survive an unmount - `JobRegistryService` for an
+  // async job, `AnalysisRunOrchestrationService` for the run it owns - rather than from this instance's
+  // own fields, which are necessarily blank on a fresh mount.
+
+  /** Live subscription to the two run-state owners; torn down with this instance. */
+  private runStateSub: Subscription | null = null;
+  /** True once {@link watchRunState} has subscribed, so its FIRST (synchronous) emission - which lands
+   *  inside the host's change-detection pass, from `ngOnInit` - does not re-enter change detection. */
+  private runStateWatchStarted = false;
+  /** True while the registry holds a non-terminal job matching this panel's exact context. */
+  private registryRunningForContext = false;
+  /** The orchestration service's owned run, when it matches this panel's exact context. */
+  private ownedRunForContext: ActiveRunContext | null = null;
+  /** Registry job ids seen RUNNING for this context, so their terminal can be recognized here. */
+  private readonly observedRunningJobIds = new Set<string>();
+  /**
+   * Run terminals this instance has already reacted to, keyed by job id for an async run and by
+   * `run:<runId>` for a sync one.
+   *
+   * Two things dedupe against it. (1) The instance that STARTED the run marks its own terminal here when
+   * it applies the result inline, so the terminal watcher does not then refetch the same history a second
+   * time. (2) The two watcher halves - "a matched registry job went terminal" and "the owned run ended" -
+   * both fire for one async run, whichever order they land in, and only the first does the work.
+   */
+  private readonly handledRunTerminals = new Set<string>();
+
+  /**
+   * Registry job ids whose in-panel banner THIS instance has already settled - by raising it (either
+   * from the run's own `'job-started'` or from {@link adoptAsyncBannerForJob}) or by the author
+   * dismissing it. See that method for why a one-shot ledger rather than a plain restore.
+   */
+  private readonly bannerSettledJobIds = new Set<string>();
+
   ngOnInit(): void {
     this.loadChunkThresholds();
+    this.watchRunState();
   }
+
+  /**
+   * The (book, chapter, scene, type) unit this panel is currently SHOWING. The same tuple
+   * {@link resultBelongsToRunOrigin} compares, so "a run is in flight here" and "this result belongs
+   * here" cannot answer differently about the same run.
+   */
+  private get currentJobContext(): AnalysisJobContext {
+    return {
+      bookId: this.bookId,
+      chapterId: this.chapterId,
+      sceneId: this.sceneId ?? null,
+      analysisType: this.selectedAnalysisType,
+    };
+  }
+
+  /**
+   * Subscribe to the two owners of run state that survive this panel's unmount.
+   *
+   * `combineLatest` rather than two subscriptions because the two halves have to be read TOGETHER: an
+   * async run is described by both (the registry holds its progress, the service holds the run), and the
+   * dedupe below is what stops one run's terminal being handled twice.
+   */
+  private watchRunState(): void {
+    this.runStateSub = combineLatest([
+      this.jobRegistry.jobs$,
+      this.orchestrationService.activeRun$,
+    ]).subscribe(([jobs, activeRun]) => {
+      this.lastJobsSnapshot = jobs;
+      this.lastOwnedRunSnapshot = activeRun;
+      this.deriveRunState();
+    });
+    this.runStateWatchStarted = true;
+  }
+
+  /** The most recent emission of each owner, so {@link deriveRunState} can be re-run without one. */
+  private lastJobsSnapshot: TrackedJob[] = [];
+  private lastOwnedRunSnapshot: ActiveRunContext | null = null;
+
+  /**
+   * Re-derive run state after THIS PANEL's context changed rather than the owners'.
+   *
+   * `combineLatest` only fires when one of the two owners emits, and a chapter/scene/type switch is
+   * neither: without this the derived flags would keep describing the unit the user just left, and the
+   * analyze button on the NEW unit would stay disabled behind a run that is not its own. The
+   * per-context observation state is dropped first so the recompute cannot read the switch itself as a
+   * run terminal.
+   */
+  private refreshRunStateForContext(): void {
+    this.observedRunningJobIds.clear();
+    this.ownedRunForContext = null;
+    // `notify: false` - every caller is already inside a change-detection pass (`ngOnChanges`) or a DOM
+    // event handler that will be followed by one, so a `detectChanges()` here would only re-enter.
+    this.deriveRunState(false);
+  }
+
+  /**
+   * Fold the latest (jobs, owned run) snapshot into this panel's derived run state, and notice any
+   * terminal that belongs to the context on screen.
+   *
+   * The terminal half is the whole point of the todo's bug 1: a job that finishes while this panel is
+   * unmounted leaves no trace in any field of the instance that eventually mounts, so the ONLY way that
+   * instance can show the result is to notice the transition itself and re-read history.
+   */
+  private deriveRunState(notify = true): void {
+    const jobs = this.lastJobsSnapshot;
+    const activeRun = this.lastOwnedRunSnapshot;
+    const ctx = this.currentJobContext;
+    const matching = jobs.filter(j => jobMatchesAnalysisContext(j, ctx));
+    this.registryRunningForContext = matching.some(j => !isTerminal(j.status));
+
+    for (const job of matching) {
+      if (!isTerminal(job.status)) {
+        this.observedRunningJobIds.add(job.id);
+        this.adoptAsyncBannerForJob(job.id);
+        continue;
+      }
+      // Only a job this panel actually watched RUNNING counts as "just finished here". A registry entry
+      // that was already terminal when this instance mounted is history, not an event.
+      if (!this.observedRunningJobIds.delete(job.id)) continue;
+      this.noteRunTerminal(job.id);
+    }
+
+    const previous = this.ownedRunForContext;
+    this.ownedRunForContext = activeRun && this.ownedRunMatches(activeRun, ctx) ? activeRun : null;
+    if (previous && !this.ownedRunForContext) {
+      // The owned run ended (or moved off this context). Key it by its job id when it had one, so the
+      // registry half above and this half are the same key for the same run.
+      this.noteRunTerminal(previous.jobId ?? `run:${previous.runId}`);
+    }
+
+    this.consumeUnheardRunTerminal(ctx);
+
+    if (notify && this.runStateWatchStarted) this.cdr.detectChanges();
+  }
+
+  /**
+   * Give this instance the in-page indicator for an async run it did not necessarily start.
+   *
+   * `asyncJobInFlight`, `asyncBannerActiveForRun` and `currentRunJobId` are per-instance and start blank
+   * on every mount, and this panel is destroyed by every Edit-help tab or Review/Edit switch. So a panel
+   * remounted over a live async job showed the analyze button as Running - that much survives, because
+   * it is derived from the registry - and NOTHING else: no banner, and no job id for
+   * `app-job-progress-inline` to mirror, which left the surface the author is actually looking at as the
+   * only one of the three with no percent on it. That is the same consolidation a1 did for the button.
+   *
+   * The id is read back OUT of the registry, never polled here, so the in-panel bar, the run dialog and
+   * the Activity Center still read one owner and cannot drift.
+   *
+   * Settled ONCE per job id per instance, which is what stops the restore from fighting the decisions
+   * this instance may already have made about that job: `'job-started'` raised the banner itself, and
+   * {@link dismissAsyncBanner} is sticky FOR THE LIFE OF THIS INSTANCE. Without the ledger the next
+   * registry emission - a progress tick, which lands every couple of seconds - would put a dismissed
+   * banner straight back on screen. Ids are per dispatch, so the ledger cannot suppress the NEXT run's
+   * banner.
+   *
+   * final-r01 NARROWED THAT SENTENCE: it used to read "sticky for the rest of the run", and it is not.
+   * The ledger and both banner flags are per-instance and start blank on every mount, so a dismiss
+   * followed by an Edit-help tab switch and back re-adopts the still-running job and the banner returns.
+   * That is the same lifecycle this method exists for, so the limit is worth naming rather than
+   * discovering. Making the dismiss outlive the mount means moving it to state the panel does not own
+   * (the registry, or the orchestration service) - a bigger change than the nuisance justifies.
+   */
+  private adoptAsyncBannerForJob(jobId: string): void {
+    if (this.bannerSettledJobIds.has(jobId)) return;
+    this.bannerSettledJobIds.add(jobId);
+    // The one id the in-panel progress bar mirrors.
+    this.currentRunJobId = jobId;
+    // Persist that this run is an async job with an active banner, so a later navigation away from and
+    // back to this unit reconstructs it (see the ngOnChanges reconcile).
+    this.asyncBannerActiveForRun = true;
+    this.asyncJobInFlight = true;
+  }
+
+  /**
+   * c06: show a run terminal that reached NO surface when it fired.
+   *
+   * a1 made a run outlive this panel, and this panel is destroyed on every Edit-help tab or Review/Edit
+   * switch, so a run that ends in an error while it is unmounted used to reach nothing: the service's
+   * published description simply went null, this instance's only reaction was
+   * `noteRunTerminal -> loadHistory(true)`, and a failed run has no history row to find. The author was
+   * left with the PREVIOUS result on screen and no banner at all - a regression against the pre-a1
+   * behaviour, where they at least saw "Canceled". The same hole swallowed a run this service cancelled
+   * because the author started another one on a different chapter.
+   *
+   * Read HERE because this method is the one place that runs on both of the occasions the notice is for:
+   * a fresh instance mounting (through `watchRunState`'s first emission) and this instance's context
+   * changing to the unit the terminal belongs to (`refreshRunStateForContext`). The claim is single-shot
+   * and scoped to the unit, so it cannot be re-shown on the next emission and cannot follow the reader to
+   * another chapter. It cannot collide with a live run either: the service clears a unit's pending notice
+   * when a run starts on that unit, and never records one a subscriber already heard.
+   */
+  private consumeUnheardRunTerminal(ctx: AnalysisJobContext): void {
+    // final-r01: THIS INSTANCE'S OWN HELD FAILURE FIRST. The service's slot only holds terminals NOBODY
+    // heard; a terminal this panel heard while it was showing a DIFFERENT unit is not one of those, and
+    // is held here instead by {@link recordRunErrorForOrigin}. Same claim rule as the service's: scoped
+    // to the unit, single-shot, and read at the one place that runs on both a mount and a context change.
+    // final-r03: keyed on all four dimensions, deliberately the SAME key
+    // `AnalysisRunOrchestrationService.matchesUnheardTerminal` uses. The claim below says this hold has
+    // "the same scoping" as the service's slot, and until final-r03 that sentence was false: this side
+    // compared only chapter and scene, so it was the coarser of the two.
+    const held = this.heldRunErrorForOrigin;
+    if (held
+      && held.bookId === (ctx.bookId ?? null)
+      && held.chapterId === (ctx.chapterId ?? null)
+      && held.sceneId === (ctx.sceneId ?? null)
+      && held.analysisType === ctx.analysisType) {
+      this.heldRunErrorForOrigin = null;
+      this.runError = held.message;
+      return;
+    }
+    const terminal = this.orchestrationService.takeUnheardRunTerminal({
+      bookId: ctx.bookId ?? '',
+      chapterId: ctx.chapterId ?? '',
+      sceneId: ctx.sceneId ?? null,
+      analysisType: ctx.analysisType,
+    });
+    if (!terminal) return;
+    // The message only. Nothing here claims the run is still running or has produced anything, so the
+    // spinner flags are left exactly as this instance found them - a fresh mount has them down already,
+    // and a live run for this unit is impossible (see above).
+    this.runError = terminal.message;
+  }
+
+  /**
+   * final-r01: a failure banner for a run whose ORIGIN is not the unit on screen, held until it is.
+   *
+   * ── The cell c06 left open ───────────────────────────────────────────────────────────────────────
+   * c06 built a durable channel for a terminal NO surface heard, and keyed "heard" on the run stream
+   * having an observer. But this panel keeps its `runSubscription` across a chapter switch on purpose
+   * (a1: a run outlives the surface, and the reader may browse while it works), so there is a third
+   * state between "heard" and "unheard": HEARD BY A SURFACE THAT HAS MOVED ON. In that state the
+   * service correctly declines to hold anything (a subscriber existed), and the panel used to write
+   * `runError` unconditionally - so a chapter A failure appeared under chapter B's heading, and c06's
+   * own new `runError = null` on a context change then wiped it, leaving chapter A permanently silent.
+   * Before c06 that banner at least persisted until the reader wandered back. This is that regression.
+   *
+   * ── The rule ─────────────────────────────────────────────────────────────────────────────────────
+   * If the run's captured origin IS the unit on screen, banner it now (the ordinary path, unchanged).
+   * If it is not, hold it against that origin and let {@link consumeUnheardRunTerminal} claim it when
+   * the reader returns - the same trigger, the same scoping and the same single-shot rule the service's
+   * slot uses, so the two cannot both show one failure. Per-instance is the right home: this cell is
+   * reachable only while the instance that heard the terminal is still alive.
+   *
+   * `runOriginChapterId` null means no run of this instance's ever captured an origin (a terminal
+   * driven straight into {@link handleRunEvent}), and that is treated as "on origin" so the ordinary
+   * single-context path is unchanged.
+   */
+  private heldRunErrorForOrigin: {
+    bookId: string | null;
+    chapterId: string | null;
+    sceneId: string | null;
+    analysisType: string | null;
+    message: string;
+  } | null = null;
+
+  private recordRunErrorForOrigin(message: string): void {
+    const originKnown = this.runOriginChapterId !== null;
+    const onOrigin = !originKnown
+      || (this.runOriginChapterId === this.chapterId && this.runOriginSceneId === (this.sceneId ?? null));
+    if (onOrigin) {
+      this.heldRunErrorForOrigin = null;
+      this.runError = message;
+      return;
+    }
+    // final-r03: the WHOLE key, not just the unit. A failure held with only (chapter, scene) is claimed
+    // by the next context that matches those two, whatever run it belongs to - so a Proofread failure
+    // held for chapter 1 banners itself over a Line Edit the reader has just started there, under that
+    // run's own heading. The banner text names the type ("<type>: failed"), so the wrong-type cell is
+    // not cosmetic. Book is in the key for the same reason: this panel can outlive a book switch.
+    this.heldRunErrorForOrigin = {
+      bookId: this.runOriginBookId,
+      chapterId: this.runOriginChapterId,
+      sceneId: this.runOriginSceneId,
+      analysisType: this.runOriginAnalysisType,
+      message,
+    };
+  }
+
+  /** Does the service's owned run belong to the unit on screen? */
+  private ownedRunMatches(run: ActiveRunContext, ctx: AnalysisJobContext): boolean {
+    return run.bookId === ctx.bookId
+      && run.chapterId === ctx.chapterId
+      && run.sceneId === (ctx.sceneId ?? null)
+      && run.analysisType === ctx.analysisType;
+  }
+
+  /**
+   * A run for the context on screen reached its terminal. Refetch history so the finished result is
+   * surfaced, unless this instance already applied it inline.
+   *
+   * Deduped per instance (see {@link handledRunTerminals}), so one panel refreshes ONCE per run however
+   * many of the two owners report the same terminal.
+   */
+  private noteRunTerminal(key: string): void {
+    if (this.handledRunTerminals.has(key)) return;
+    if (!this.bookId || !this.chapterId) return;
+    // Claim the key only once the refetch below is actually going to run: the set records work DONE, so
+    // adding it ahead of the id guard would permanently mark a terminal "handled" for a run whose ids
+    // were momentarily null, and this instance would never refetch for that run again.
+    this.handledRunTerminals.add(key);
+    // Merge rather than replace: an in-session Accepted/Dismissed set on the OTHER analysis types this
+    // context holds is not invalidated by one run finishing.
+    this.loadHistory(true);
+  }
+
+  /**
+   * Mark the run this instance is executing as already handled, so the terminal watcher does not repeat
+   * the history refetch this panel has just done through the run's own result event.
+   */
+  private markOwnRunTerminalHandled(): void {
+    const key = this.currentRunJobId ?? this.startedRunKey;
+    if (key) this.handledRunTerminals.add(key);
+  }
+
+  /**
+   * The key of the run this instance STARTED, captured at start time. Held because the service clears
+   * its owned-run publication the instant the run ends, and the panel's own terminal handler can run
+   * after that - at which point there is nothing left to derive the key from.
+   */
+  private startedRunKey: string | null = null;
 
   /**
    * Fetch the server chunk thresholds for the CURRENT book language and cache them for the async-vs-sync
@@ -400,27 +750,61 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    // c01 remedy B. This panel is mounted under `@if (editHelpView === 'analysis')` inside
+    // c01 remedy B, AS AMENDED BY a1. READ BOTH HALVES BEFORE CHANGING EITHER.
+    //
+    // The original: this panel is mounted under `@if (editHelpView === 'analysis')` inside
     // `@else if (reviewMode === 'edit')`, so switching the Edit-help sub-tab or the Review/Edit control
-    // DESTROYS it - and the unsubscribe below CANCELS the in-flight run. The host's run dialog is not
-    // destroyed with us (it lives outside that `@if`), so without this it keeps a live progress bar up for
-    // a run that no longer exists. On the sync path there is no registry job to resolve off either.
+    // DESTROYS it - and the unsubscribe below CANCELLED the in-flight run. The host's run dialog is not
+    // destroyed with us (it lives outside that `@if`), so without a terminal it kept a live progress bar
+    // up for a run that no longer existed. On the sync path there was no registry job to resolve off
+    // either. `run-finished` said "the run is over with nothing to report", and the dialog reads it as
+    // `canceled` - which was TRUE, because destroying this panel really did cancel the run.
+    //
+    // a1 removed the CAUSE rather than the report. `AnalysisRunOrchestrationService.startRun` now owns
+    // the run's subscription, so unmounting this panel no longer cancels anything: the request stays in
+    // flight, its poll stays alive, and the run resolves whether or not any panel is on screen. Emitting
+    // `run-finished` here would now be a LIE in the other direction - a "Canceled" card over a run that
+    // is still going, and the one this todo's bug 1 is about.
+    //
+    // So the emit is kept for exactly the case it is still true of: a run this panel owns that the
+    // SERVICE does not, i.e. the streaming path (`runStreaming` subscribes `doRunStreaming` directly,
+    // and its subscription really is the only thing holding that run open). If a future call site adds
+    // another panel-owned run, it lands in this branch by default, which is the safe direction.
     //
     // Emitting an @Output from ngOnDestroy DOES reach the host: Angular's destroyViewTree cleans child
     // views first, and cleanUpView runs executeOnDestroys BEFORE processCleanups, so the parent's output
     // subscription is still live here. Proven by the real-template DOM specs, not assumed.
-    //
-    // A registry-TRACKED run is deliberately not special-cased here: that job really does keep running
-    // server-side, and the dialog's own `jobId === null` guard is what keeps its card waiting for the
-    // registry. One guard, in the consumer that owns the state machine.
-    if (this.isRunning) {
+    if (this.isRunning && !this.serviceOwnsCurrentRun()) {
       this.isRunning = false;
       this.emitRunFinished();
     }
     this.runSubscription?.unsubscribe();
-    this.orchestrationService.stopProgressPolling();
+    // a1: NO service-wide poll teardown here. The poll belongs to the RUN, and the run belongs to the
+    // service; reaching across from a dying view to stop it is what made an unmount cancel a live
+    // analysis (and, while the service held one shared stop subject, could stop an unrelated run's poll
+    // instead). c06 then DELETED the `stopProgressPolling()` method this used to name, so there is no
+    // longer anything to call even if a future view wanted to.
+    this.runStateSub?.unsubscribe();
     this.clearProofreadFinalizeRetryTimer();
+    // c07: the history read writes ONLY this instance's fields, so an answer arriving after the view is
+    // gone can reach nothing. Unlike the run (which the service owns and which must survive an unmount),
+    // there is nothing to keep alive here. The latch goes with it: `proofreadFinalizing` is per-instance
+    // and a remount starts it down.
+    this.historySub?.unsubscribe();
+    this.versionsSub?.unsubscribe();
     this.styleBaselineStatusSub?.unsubscribe();
+  }
+
+  /**
+   * Is the run this panel is currently showing OWNED by the orchestration service - i.e. will it survive
+   * this panel being destroyed?
+   *
+   * True for every run started through {@link runAnalysis}. False for a streaming run (which this panel
+   * still subscribes directly) and false once the service's run has ended.
+   */
+  private serviceOwnsCurrentRun(): boolean {
+    const owned = this.orchestrationService.activeRun;
+    return !!owned && !!this.startedRunKey && `run:${owned.runId}` === this.startedRunKey;
   }
 
   // ── The book-wide writing style: STATUS READ ONLY since w5 ────────────────
@@ -529,16 +913,35 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   /**
-   * True only when this panel's own in-flight run belongs to the CURRENTLY displayed context. pf-f01
-   * made long runs non-blocking and the panel instance is REUSED across navigation, so `isRunning`
+   * Is a run in flight for the unit this panel is CURRENTLY showing?
+   *
+   * pf-f01 made long runs non-blocking and the panel instance is REUSED across navigation, so `isRunning`
    * alone is not context-scoped: after a mid-run switch it would keep the Run button disabled/"Running…"
    * on a DIFFERENT chapter that has no live run of its own. Gating the button label/disabled state and
    * the run guards on this getter instead lets a new context start its own run while the origin's
-   * background job keeps running (tracked by the JobRegistry, recovered by loadHistory on return), and
-   * restores the "Running…" state when the user navigates back to the origin. Scene-precise, mirroring
-   * the {@link resultBelongsToRunOrigin} drop-guard.
+   * background job keeps running, and restores the "Running…" state when the user navigates back to the
+   * origin. Scene-precise, mirroring the {@link resultBelongsToRunOrigin} drop-guard.
+   *
+   * a1 fixed what it was BUILT on. Every term used to be an instance field, and this panel is destroyed
+   * on every tab or mode switch, so a FRESH instance answered "no run" while the run was still going and
+   * rendered the analyze button ENABLED mid-run - the todo's bug 2, exactly. The two owners that survive
+   * an unmount answer it now, and the instance's own fields are kept only as the third disjunct:
+   *
+   *  1. {@link registryRunningForContext} - a tracked async job for this exact (book, chapter, scene,
+   *     type), non-terminal. This is the one that survives, because the registry keeps polling a job
+   *     after the panel that started it is gone.
+   *  2. {@link ownedRunForContext} - the run `AnalysisRunOrchestrationService` owns. The only description
+   *     a SYNC run has: it never reaches the registry, because no job id is ever minted for it.
+   *  3. this instance's own live run, UNCHANGED from pf-f01 down to the absent analysis-type term. It is
+   *     redundant with (2) for a run started here and is kept deliberately: it is true from the
+   *     instruction that starts the run rather than from the next emission of a stream, so the button
+   *     cannot flicker enabled for a frame between the click and the publication. Its missing type term
+   *     makes it the STRICTER of the three (an owner that switches type mid-run keeps its button
+   *     disabled), which is the safe direction for a disjunction to be wrong in.
    */
   get isRunningForCurrentContext(): boolean {
+    if (this.registryRunningForContext) return true;
+    if (this.ownedRunForContext) return true;
     return this.isRunning
       && this.runOriginChapterId === this.chapterId
       && this.runOriginSceneId === (this.sceneId ?? null);
@@ -546,6 +949,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   onSelectAnalysisType(type: string): void {
     this.selectedAnalysisType = type;
+    // a1: the analysis TYPE is part of the unit a run belongs to, so re-derive the run state for it -
+    // otherwise switching from a type with a run in flight to one without would leave the analyze button
+    // disabled (and switching the other way would leave it enabled over a live run).
+    this.refreshRunStateForContext();
+    // a1 (the todo's "refetch on switch"): the cached arrays below are whatever the last load returned,
+    // and this panel is destroyed and rebuilt on every tab switch while runs keep finishing behind it -
+    // so the cache can be arbitrarily old for the type just selected. Show the cache INSTANTLY (the
+    // block below is unchanged) and reconcile in the background; `loadHistory` re-checks (chapter, scene)
+    // on its answer, so a switch made while it is in flight discards it rather than repainting.
+    this.reconcileHistoryInBackground();
 
     if (!this.allAnalyses || this.allAnalyses.length === 0) {
       this.activeSubTab = 'run';
@@ -583,6 +996,39 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.activeSubTab = 'run';
   }
 
+  /**
+   * Switch the panel's sub-tab.
+   *
+   * a1: the sub-tab buttons used to assign `activeSubTab` inline in the template, which meant History
+   * rendered whatever `allAnalyses` happened to hold from the last load - and a run that finished while
+   * the panel was unmounted is exactly what that list is missing. Versions already reloaded on its
+   * switch; this gives History the same treatment (in the background, behind the cached list) and gives
+   * all three ONE call site.
+   */
+  selectSubTab(tab: 'run' | 'history' | 'versions'): void {
+    this.activeSubTab = tab;
+    if (tab === 'versions') {
+      this.loadVersions();
+      return;
+    }
+    if (tab === 'history') this.reconcileHistoryInBackground();
+  }
+
+  /**
+   * Re-read this context's analyses without blanking what is on screen.
+   *
+   * `loadHistory(true)` MERGES: it replaces `allAnalyses` from the server answer but keeps this session's
+   * Accepted/Dismissed/Reverted key sets, so a background reconcile cannot silently un-dismiss a
+   * suggestion the user has just dealt with. Two guards are `loadHistory`'s own: the response is dropped
+   * unless (chapter, scene) still match, so a switch made while it is in flight cannot repaint; and the
+   * read supersedes whatever read is still in flight (c07), so this reconcile - which shares its key with
+   * every other issuer - cannot be overwritten by an older answer for the same chapter.
+   */
+  private reconcileHistoryInBackground(): void {
+    if (!this.bookId || !this.chapterId) return;
+    this.loadHistory(true);
+  }
+
   setHistoryFilter(type: string | null): void {
     this.historyFilterType = type;
     // When we already have a full history snapshot, just rebuild client-side
@@ -612,10 +1058,36 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.loadVersions();
   }
 
+  /**
+   * Read this context's document versions.
+   *
+   * c07 - the same treatment as {@link loadHistory}, and this one needed it MORE, not less.
+   *
+   * `loadVersions` had neither supersession NOR a stale guard, so it was one class worse: `loadHistory`
+   * at least dropped an answer for a chapter the reader had left, and this one wrote the previous
+   * chapter's list straight into `versions`. That list is not display-only - `onRevert` emits the id the
+   * reader clicks straight to the host, which reverts the document - so a stale list is a Revert button
+   * pointed at another chapter's snapshot. Same key issuers as History (`ngOnChanges`, `selectSubTab`,
+   * `refreshVersions`, the Redo PATCH's success and error arms), so the same two answers can race.
+   *
+   * No latch to settle here: this read raises no flag, and the only state it writes is `versions` (both
+   * arms). So the cancel path has nothing to strand. The error arm's `versions = []` is now guarded too,
+   * which is the same correction: a late failure for a chapter the reader has left must not blank the
+   * chapter they are on.
+   */
   loadVersions(): void {
     if (!this.bookId || !this.chapterId) return;
-    this.documentVersionService.list(this.bookId, this.chapterId, this.sceneId ?? undefined).subscribe({
+    const loadingChapterId = this.chapterId;
+    const loadingSceneId = this.sceneId ?? undefined;
+    const isStale = () =>
+      this.chapterId !== loadingChapterId || (this.sceneId ?? undefined) !== loadingSceneId;
+    // Cancel the read this one replaces BEFORE issuing, so two answers for the same key can never race.
+    this.versionsSub?.unsubscribe();
+    this.versionsSub = this.documentVersionService.list(this.bookId, this.chapterId, this.sceneId ?? undefined).subscribe({
       next: (list) => {
+        // The stale check runs FIRST, before anything is written (the ordering rule this workspace
+        // has paid for): a late answer from a prior navigation reaches nothing.
+        if (isStale()) return;
         const raw = list ?? [];
         // Sort newest → oldest so we keep the latest snapshot per suggestion when de-duping.
         raw.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -651,6 +1123,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.cdr.detectChanges();
       },
       error: () => {
+        // Stale check first here too, for the same reason: a late failure must not blank the list of the
+        // chapter the reader has moved to.
+        if (isStale()) return;
         this.versions = [];
         this.cdr.detectChanges();
       }
@@ -1163,6 +1638,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       // it (asyncBannerActiveForRun persists across the switch, unless the run terminated or the user
       // dismissed it). When the user returns to the original chapter, the guarded loadHistory below also
       // re-surfaces the persisted row.
+      // a1: re-derive the registry/owned-run view of "is a run in flight?" for the unit we have just
+      // moved TO, before anything below reads `isRunningForCurrentContext`. The two owners do not emit on
+      // an @Input change, so without this the banner reconstruct on the next line (and the analyze
+      // button) would be answered about the unit the user just left.
+      // c06: and the failure banner belongs to the unit it was raised on, exactly like the suggestions
+      // and the history below it. Cleared BEFORE the re-derive, so the notice `refreshRunStateForContext`
+      // may claim for the unit we are moving TO survives this reset rather than being wiped by it.
+      this.runError = null;
+      this.refreshRunStateForContext();
       this.asyncJobInFlight = this.asyncBannerActiveForRun && this.isRunningForCurrentContext;
       this.proofreadSuggestions = [];
       this.lineEditRunSuggestions = [];
@@ -1426,11 +1910,50 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   // Wave 3 / w7: `loadTemplates()` LIVED HERE, GETting `/api/templates` into the `templates` field.
   // Removed with the save-as-template button, which was the only thing that ever wrote a template.
 
+  /**
+   * Read this context's analyses.
+   *
+   * c07 - SUPERSESSION, and the invariant it has to keep.
+   *
+   * Every read is issued into ONE slot ({@link historySub}) and cancels whatever is still in flight there
+   * first, so the LAST ISSUED read is the only one that can write `allAnalyses`. The stale guard below is
+   * kept and still runs FIRST in both handlers: it answers the other question (this read is the newest,
+   * but the user has moved to a different chapter since it left).
+   *
+   * Supersession is by RECENCY, not by key: a read for a different key is cancelled too, which is the same
+   * outcome the stale guard would have produced, one round-trip cheaper. And `mergeWithExisting` is a
+   * property of the SURVIVING read, not of the cancelled one - the newest caller is the one whose intent is
+   * current, so a background merge that supersedes a full reload keeps this session's Accepted/Dismissed
+   * sets, and a full reload that supersedes a merge clears them. Both directions are correct because the
+   * surviving read fetches the same server state either way; only the session-key treatment differs, and it
+   * follows the caller that spoke last.
+   *
+   * THE LATCH. The flag this read raises and lowers is `proofreadFinalizing` (raised in
+   * {@link onRunResultReceived}, lowered here at the resolve and in the error handler). An unsubscribe
+   * destroys the handlers that lower it, so state the invariant in the direction that holds:
+   *
+   *   a cancel is only ever performed by a read being issued in the same statement, and that read lowers
+   *   the latch in BOTH its next and its error handler - so a cancel never ends the chain, it hands it on.
+   *
+   * The chain's other exits already lower the latch themselves: `ngOnChanges` on a context change
+   * (which also clears the retry timer), `prepareForRun` on a new run, and the error handler. So every
+   * raise reaches a lower on every path.
+   *
+   * THE RETRY TIMER. The retry branch below re-issues `loadHistory(true)` from a timer rather than holding
+   * a request open, so a cancelled read can never orphan it: the timer's own read is issued fresh, and it
+   * re-enters this same retry logic with the decremented budget, so superseding a read mid-chain continues
+   * the chain rather than killing it (the superseding read is a read of the same rows). The timer is
+   * therefore deliberately NOT cleared at the cancel point - clearing it there would be the way to kill a
+   * retry chain that is doing its job. It is cleared where the window it belongs to actually ends: this
+   * method's resolve and error handlers, `ngOnChanges`, `prepareForRun` and `ngOnDestroy`.
+   */
   private loadHistory(mergeWithExisting = false): void {
     if (!this.bookId || !this.chapterId) return;
     const loadingChapterId = this.chapterId;
     const loadingSceneId = this.sceneId ?? undefined;
-    this.analysisService
+    // Cancel the read this one replaces BEFORE issuing, so two answers for the same key can never race.
+    this.historySub?.unsubscribe();
+    this.historySub = this.analysisService
       // Always load the full unfiltered history for this chapter/scene; historyFilterType
       // is applied client-side so allAnalyses remains a complete dataset for other logic.
       .getHistory(this.bookId, this.chapterId, undefined, this.sceneId ?? undefined)
@@ -1643,13 +2166,18 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.prepareForRun();
     const ctx = this.buildRunContext();
     this.runSubscription?.unsubscribe();
-    this.runSubscription = this.orchestrationService
-      .runAnalysisAfterSave(ctx, this.saveBeforeRun)
-      .subscribe({
-        next: (event) => this.handleRunEvent(event),
-        error: () => this.onRunFinished(),
-        complete: () => this.onRunFinished()
-      });
+    // a1: `startRun`, not `runAnalysisAfterSave`. The service subscribes the run and hands back a
+    // multicast view of it, so unsubscribing below (a new run, or this panel being destroyed by a tab
+    // switch) detaches this view and does NOT cancel the analysis. That is the whole fix behind bug 1.
+    const events$ = this.orchestrationService.startRun(ctx, this.saveBeforeRun);
+    this.startedRunKey = this.orchestrationService.activeRun
+      ? `run:${this.orchestrationService.activeRun.runId}`
+      : null;
+    this.runSubscription = events$.subscribe({
+      next: (event) => this.handleRunEvent(event),
+      error: () => this.onRunFinished(),
+      complete: () => this.onRunFinished()
+    });
   }
 
   /**
@@ -1705,6 +2233,9 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     // loadHistory pattern of capturing loadingChapterId/loadingSceneId from the request.
     this.runOriginChapterId = this.chapterId;
     this.runOriginSceneId = this.sceneId ?? null;
+    // final-r03: the other two thirds of the held-failure key, snapshotted in the SAME tick. See the
+    // field declarations for why the four move together.
+    this.runOriginBookId = this.bookId ?? null;
     this.runOriginAnalysisType = this.selectedAnalysisType;
     this.runError = null;
     this.streamingText = '';
@@ -1730,6 +2261,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     this.lastRunDurationLabel = null;
     // Drop the previous run's job id so the in-panel bar can never mirror a stale job.
     this.currentRunJobId = null;
+    // a1: and the previous run's identity, so `serviceOwnsCurrentRun()` (which decides whether
+    // ngOnDestroy still owes the host a terminal) cannot answer about a run that is over. `runAnalysis`
+    // re-stamps it from the service the moment the new run is owned; the streaming path never does,
+    // which is precisely why it keeps the destroy-time terminal.
+    this.startedRunKey = null;
   }
 
   private buildRunContext(): AnalysisRunContext {
@@ -1797,48 +2333,25 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.onRunResultReceived(event.result);
         break;
       case 'job-started':
-        // rf-c01: publish this freshly-started chapter analysis job to the registry so the Activity
-        // Center and anyRunningForBook$ pick it up for THIS run - not only after a reload reattaches to
-        // it. The async-job path now covers every single-shot whole-chapter analysis type (Proofread,
-        // LineEdit, Linguistic, Literary, Summarization, Custom), all of which share the one `proofread`
-        // JobKind; analysisType carries the distinction so the row titles correctly (via
-        // ANALYSIS_TYPE_LABELS). track() is idempotent per jobId, so a later reattach that re-discovers
-        // this job cannot double-track it.
-        // scopeLabel 'פרק' matches defaultScopeLabel('proofread') in the registry so live-tracked and
-        // reattached jobs render identically. DRAFT he - needs native review.
-        // Key the tracked job off the run's CAPTURED origin (prepareForRun), NOT live panel state: this
-        // panel instance is reused across navigation, and the async start response can land after the
-        // user switched chapter/scene/type. Using live state here would mislabel the job (e.g. a
-        // scene-scoped run shown as a chapter) even though the API ran against the original scope.
+        // c01 (registry-write-survives-unmount): the registry PUBLISH for this job is NOT here any more.
+        // It lives in `AnalysisRunOrchestrationService.publishJobToRegistry`, called from the same
+        // `startRun` subscription that owns the run, keyed off the run context that run was started
+        // with. This panel is `@if`-mounted and `ngOnDestroy` unsubscribes `runSubscription`, so a
+        // dispatch POST that answered after an Edit-help tab switch reached this case on a destroyed
+        // component and the job was never published to anything. a1 made the registry the single OWNER
+        // of async run state; this is its one WRITE finally following it off the unmountable surface.
+        //
+        // What remains here is PANEL state only, and it is deliberately still gated on `bookId`: the
+        // service declines to publish on exactly the same missing value, so raising the banner would
+        // point the in-page indicator (`jobById$` on this id) at a row that does not exist. The service
+        // owns the observability warn for that decline; a second one here would only be noise.
         if (this.bookId) {
-          this.jobRegistry.track('proofread', this.bookId, event.jobId, {
-            analysisType: this.runOriginAnalysisType,
-            chapterId: this.runOriginChapterId ?? undefined,
-            scopeLabel: this.runOriginSceneId ? 'סצנה' : 'פרק', // DRAFT he - needs native review
-          });
-          // The one id the in-panel progress bar mirrors, read back out of the registry (never polled here).
-          this.currentRunJobId = event.jobId;
-          // The compact in-panel banner takes over as the in-page indicator for this run.
-          this.asyncJobInFlight = true;
-          // Persist that this run is an async job with an active banner so returning to the origin
-          // context after a mid-run navigation reconstructs the banner (see ngOnChanges reconcile).
-          this.asyncBannerActiveForRun = true;
-        } else {
-          // c03 OBSERVABILITY. This is the ONE branch on which the server has started a real job and NO
-          // client surface picks it up: no registry row, so no Activity Center entry, no in-page banner,
-          // and (before c03's fence change in the run dialog) a card the run's own stream could no longer
-          // resolve. The run itself is unaffected and the async start already succeeded, so nothing here
-          // throws and no HTTP error exists to correlate against - which is exactly why a decline must
-          // not be silent. Bracketed-tag console.warn is the convention the c01 budget expiry and the c02
-          // dismissal seam already use; no ids and no document text.
-          //
-          // It is not reachable today: `bookId` is an @Input fed only by `EditorPageComponent.bookId`,
-          // which is written only from the `books/:bookId` route params, and `runAnalysis()` refuses to
-          // start without it. It is logged rather than asserted because the guard's whole purpose is to
-          // survive a future call site that CAN decline.
-          console.warn('[AnalysisRun] job-started with no bookId: the job was not published to the registry', {
-            analysisType: this.runOriginAnalysisType,
-          });
+          // ONE owner for the three banner fields (54): the same call a REMOUNTED instance makes when it
+          // finds this job still running in the registry. c01's publish reaches the registry BEFORE this
+          // event is fanned out, so on the ordinary path the adopt has usually already happened here and
+          // this call is the no-op its ledger makes it - which is the point: the two entry points can no
+          // longer set the three fields to different things.
+          this.adoptAsyncBannerForJob(event.jobId);
         }
         break;
       case 'streaming-token':
@@ -1848,10 +2361,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
         this.onStreamingCompleted(event.latestResult);
         break;
       case 'error':
+        // a1: same reason as the result case - this instance has this run's outcome, so the terminal
+        // watcher must not treat the run's disappearance as news and refetch history behind the banner.
+        this.markOwnRunTerminalHandled();
         this.isRunning = false;
         this.asyncJobInFlight = false;
         this.asyncBannerActiveForRun = false;
-        this.runError = event.message;
+        // final-r01: routed through the ORIGIN check, exactly as the success case already is
+        // ({@link resultBelongsToRunOrigin}). See {@link recordRunErrorForOrigin} for the cell this
+        // closes; writing `runError` straight from here banners a chapter A failure on chapter B.
+        this.recordRunErrorForOrigin(event.message);
         this.lastRunDurationLabel = this.orchestrationService.formatRunDuration(this.runStartedAt, this.language);
         break;
       case 'run-finished':
@@ -1900,6 +2419,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   }
 
   private onRunResultReceived(result: AnalysisResultDto): void {
+    // a1: this instance has the run's result in hand, so the terminal watcher must not refetch history
+    // for the same run a moment later when the registry (or the service's owned-run publication) reports
+    // the same terminal. Marked even for a result we are about to DROP: the drop is this panel's
+    // considered answer for this run, and a refetch would not change it.
+    this.markOwnRunTerminalHandled();
     // Always clear the transient run flags so nothing sticks on the current chapter, even for a result we
     // are about to drop. The background job itself keeps its persisted result server-side.
     this.isRunning = false;

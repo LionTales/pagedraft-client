@@ -12,9 +12,9 @@ import {
   PlotStructure,
   ConflictEntry
 } from '../../core/models/book';
-import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
+import { BookReviewStatusDto, FindingNavigationTarget } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
-import { CHAPTER_SCOPED_KINDS, JobRegistryService } from '../../core/services/job-registry.service';
+import { CHAPTER_SCOPED_KINDS, JobRegistryService, isTerminal } from '../../core/services/job-registry.service';
 import { BookSummaryStatusRowComponent } from './book-summary-status-row.component';
 import { BookStyleBaselineStatusRowComponent } from './book-style-baseline-status-row.component';
 import { BookReviewState, BookReviewStatusRowComponent } from './book-review-status-row.component';
@@ -931,8 +931,12 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    * wb3-f01 navigation output: bubbles a chapter-anchor click up to the host (editor-page) so it can
    * call the existing selectChapter path. The host (editor-page) owns the chapter list and the
    * selectChapter logic; the dashboard only emits the anchor.
+   *
+   * d1: the payload is a FindingNavigationTarget - the same ChapterAnchor plus the optional excerpt /
+   * finding-id hints the Findings ledger attaches. The Story Bible and the stage spine keep emitting a
+   * bare anchor, which is assignable, so only the ledger's clicks carry hints.
    */
-  @Output() openChapter = new EventEmitter<ChapterAnchor>();
+  @Output() openChapter = new EventEmitter<FindingNavigationTarget>();
 
   /**
    * Emitted when a spine stage's action needs the review surfaces in view. The host (editor-page)
@@ -994,6 +998,13 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
 
   /** rf-f04: anchor element just above the findings/bible tabs; scrolled to when the Revise CTA is clicked. */
   @ViewChild('findingsAnchor') findingsAnchor?: ElementRef<HTMLElement>;
+
+  /**
+   * d1: the Findings ledger, when the Findings tab is selected. `@if`-mounted, so this is undefined
+   * whenever the Story Bible tab is showing - {@link drainPendingOpenFinding} waits for it rather than
+   * assuming it.
+   */
+  @ViewChild(BookReviewFindingsComponent) findingsPanel?: BookReviewFindingsComponent;
 
   /**
    * Chatbot phase B: the two sections a citation chip can deep-link to that are not already anchored.
@@ -1066,6 +1077,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
   ngOnInit(): void {
     this.loadProfile();
     this.watchRunningChapters();
+    this.watchReviewBuild();
     this.rebuildSpineSignals();
     this.focusSub = this.surfaceFocus.focus$.subscribe(req => this.onSurfaceFocus(req));
   }
@@ -1073,6 +1085,8 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
   ngOnDestroy(): void {
     this.runningChaptersSub?.unsubscribe();
     this.runningChaptersSub = null;
+    this.reviewJobSub?.unsubscribe();
+    this.reviewJobSub = null;
     this.focusSub?.unsubscribe();
     this.focusSub = null;
     // c01: a held scroll owns a pending timer and a closure over this view. Both die with the component.
@@ -1229,6 +1243,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    * loading hint. `scrollIntoView` is idempotent, so a repeat that finds nothing moved costs nothing.
    */
   ngAfterViewChecked(): void {
+    this.drainPendingOpenFinding();
     const hold = this.focusHold;
     if (!hold) return;
     const height = this.focusContentHeight();
@@ -1236,6 +1251,28 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
     hold.asserted = true;
     hold.contentHeight = height;
     hold.scroll();
+  }
+
+  /**
+   * d1: hand a held open-finding request to the ledger as soon as it has mounted.
+   *
+   * Published on a timer rather than inline, for the reason the host's equivalent drain records: honouring
+   * it mutates the LEDGER's own view state (its expanded set) and doing that inside the change-detection
+   * pass that just checked it is the classic ExpressionChangedAfterItHasBeenChecked. The tab is re-checked
+   * here rather than trusted, so a reader who switched to the Story Bible before the ledger mounted does
+   * not get yanked back.
+   */
+  private drainPendingOpenFinding(): void {
+    const id = this.pendingOpenFindingId;
+    if (!id) return;
+    if (this.reviewTab !== 'findings') {
+      this.pendingOpenFindingId = null;
+      return;
+    }
+    const panel = this.findingsPanel;
+    if (!panel) return;
+    this.pendingOpenFindingId = null;
+    setTimeout(() => panel.openFinding(id));
   }
 
   /**
@@ -1287,6 +1324,8 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
       // The registry watch is filtered by the CURRENT bookId, so a book switch must re-scope it or the
       // previous book's in-flight chapter runs would keep marking rows in the new book's stage 4.
       this.watchRunningChapters();
+      // a1: same reason - the review watch below is scoped to the CURRENT bookId.
+      this.watchReviewBuild();
     }
     // The chapter list drives stages 1 and 4 directly, so any rebinding of it (including the host's
     // in-place mutations after a create/delete/reorder, which arrive as a new array) refreshes the spine.
@@ -1329,6 +1368,8 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    */
   private resetOwnState(): void {
     this.reviewTab = 'findings';
+    // d1: a held open-finding request is about the PREVIOUS book's ledger. Drop it with the rest.
+    this.pendingOpenFindingId = null;
     this.synopsisExpanded = false;
     this.expandedPlotNode = null;
     this.reviewState = 'unknown';
@@ -1561,6 +1602,68 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
       }
       this.runningChapterIds = next;
       this.rebuildSpineSignals();
+    });
+  }
+
+  // ── a1: the review build's terminal, observed where it cannot be unmounted ───────────────────────
+  //
+  // The developmental review's terminal used to be observed ONLY by `BookReviewStatusRowComponent`'s own
+  // progress poll (`pollBookReviewBuild`'s terminal handlers), which its `ngOnDestroy` tears down. Before
+  // this ADD, that poll was the only thing that reacted to THE REVIEW BUILD'S OWN terminal by re-reading
+  // the status and moving `reviewState` into ready/stale, which is what {@link onReviewStateChange} bumps
+  // {@link findingsRefreshToken} off. So a build that finished while that row was not on screen left the
+  // ledger showing the PREVIOUS review with nothing to correct it.
+  //
+  // f13 (2026-08-19): `loadBookReviewStatus()` has other callers too, none of which react to the review
+  // build's OWN terminal (so none of them would have caught the bug above) - the row's own `ngOnChanges`
+  // on a book/language switch, {@link onSummaryTerminal} (a DIFFERENT build - the summary/briefs one -
+  // finishing) and {@link onTierChanged} (a tier commit). Scope any "only thing that re-reads the review
+  // status" claim to the review build's terminal specifically, never generally.
+  //
+  // `JobRegistryService` polls the same job to terminal regardless of who is mounted (the row already
+  // publishes every build to it via `track()`), so the observation moves here, one level up. This is an
+  // ADD, not a replacement: the row keeps its own detailed BUILDING/READY/STALE machine and its own
+  // outcome banner, both of which need the poll's payload, which the registry does not carry. The review
+  // build's terminal now has TWO observers - the row's own poll (when mounted) and this watch (always) -
+  // deduped on the job id below so a mounted row's own re-read is not repeated by this one.
+
+  /** The registry subscription following this book's review build. */
+  private reviewJobSub: Subscription | null = null;
+  /** The review job id last seen RUNNING here, so its terminal can be told from a stale entry. */
+  private observedReviewJobId: string | null = null;
+
+  /**
+   * Watch this book's review build in the registry and, when it finishes, re-read the status and bump
+   * the findings token.
+   *
+   * DEDUPED AGAINST THE ROW: when the row is mounted its own poll has already done both by the time this
+   * fires, and it records which job id that was ({@link BookReviewStatusRowComponent.handledTerminalJobId}).
+   * Repeating the work would issue a second status GET and force the ledger to re-read findings it has
+   * just read. The dedupe is on the JOB ID rather than on "is the row mounted", so a row that is present
+   * but was mounted after the build finished (and therefore handled nothing) still gets the refresh.
+   */
+  private watchReviewBuild(): void {
+    this.reviewJobSub?.unsubscribe();
+    this.reviewJobSub = null;
+    this.observedReviewJobId = null;
+    if (!this.bookId) return;
+    this.reviewJobSub = this.jobRegistry.jobByKindForBook$(this.bookId, 'review').subscribe(job => {
+      if (!job || job.bookId !== this.bookId) return;
+      if (!isTerminal(job.status)) {
+        this.observedReviewJobId = job.id;
+        return;
+      }
+      // Only a build this dashboard actually saw RUNNING is news: a job that was already terminal when
+      // this watch started is the state the page loaded with, not a transition.
+      if (this.observedReviewJobId !== job.id) return;
+      this.observedReviewJobId = null;
+      if (this.reviewRow?.handledTerminalJobId === job.id) return;
+      // The row (if any) re-reads its own status through its own loader, which cancels its previous
+      // in-flight GET and re-checks (book, language) on the answer - the same seam `onSummaryTerminal`
+      // uses. The token bump covers the case the status read cannot: the ledger is already mounted on a
+      // ready/stale review, so `onReviewStateChange` sees no transition and would bump nothing.
+      this.reviewRow?.loadBookReviewStatus();
+      this.findingsRefreshToken++;
     });
   }
 
@@ -1799,9 +1902,28 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    * host (editor-page) via @Output() openChapter so the host can call its existing selectChapter path.
    * The dashboard does NOT know about the chapter list or the editor — the host owns both.
    */
-  onOpenChapterFromFinding(anchor: ChapterAnchor): void {
+  onOpenChapterFromFinding(anchor: FindingNavigationTarget): void {
     this.openChapter.emit(anchor);
   }
+
+  /**
+   * d1: open one named finding in the ledger, on behalf of the editor host (the per-chapter checklist's
+   * "הצג" button). Selects the Findings tab and forwards to the ledger.
+   *
+   * HELD RATHER THAN CALLED INLINE, for the reason the host records at its own hold site: the ledger is
+   * `@if`-mounted behind the tab this method is in the middle of selecting, so at the moment of the call
+   * the ViewChild is very often still undefined. {@link ngAfterViewChecked} publishes it once the ledger
+   * is actually there, which is a fact rather than a guess about ordering. The ledger then does its own
+   * holding for the case where its rows have not been fetched yet.
+   */
+  openFinding(findingId: string): void {
+    if (!findingId) return;
+    this.reviewTab = 'findings';
+    this.pendingOpenFindingId = findingId;
+  }
+
+  /** A finding waiting for the ledger to exist. Null when nothing is waiting. */
+  private pendingOpenFindingId: string | null = null;
 
   /**
    * The effective book language for BOTH the server calls and the chrome, matching the contract the sibling

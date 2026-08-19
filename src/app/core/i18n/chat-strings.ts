@@ -6,15 +6,35 @@
  * by `roleAssistant` on every one of its turns and by `inFlight` while it is working, so the name
  * follows the assistant everywhere it speaks rather than sitting only on the tab. Its face (resized
  * from the 1.5 MB source at `.cursor/designs/show.png` into two assets: `show-tab.png` at the dock's
- * assistant tab, `show-header.png` at the closed dock's launcher and at the chat's empty state) never
- * renders twice on one screen. f1 also put a copy at `ProductChatComponent`'s own in-pane header;
- * f02's live-browser pass found that one stacked about 60px below the tab, the same face and the same
- * name rendered twice on the one screen that shows either of them, so the header copy was removed
- * rather than kept. The tab is the one that survives a scroll and reads as the assistant's persistent
- * identity; the empty state (which wears the face itself, f03) and `roleAssistant` still name Show
- * before and after the first turn, so nothing is lost by dropping the header. This is IDENTITY only: no
- * prompt text and no server behavior changed here (see the chatbot-phase-a2-show plan, f1's scope
- * fence).
+ * assistant tab, `show-header.png` at the closed dock's launcher, at the chat's empty state and, since
+ * f2/8c, beside `roleAssistant` on every assistant turn) is placed under a ONE-PER-CHROME-SURFACE rule.
+ * f1 also put a copy at `ProductChatComponent`'s own in-pane header; f02's live-browser pass found that
+ * one stacked about 60px below the tab, the same face and the same name rendered twice on the one
+ * screen that shows either of them, so the header copy was removed rather than kept. The tab is the one
+ * that survives a scroll and reads as the assistant's persistent identity; the empty state (which wears
+ * the face itself, f03) and `roleAssistant` still name Show before and after the first turn, so nothing
+ * is lost by dropping the header. This is IDENTITY only: no prompt text and no server behavior changed
+ * here (see the chatbot-phase-a2-show plan, f1's scope fence).
+ *
+ * ── The turn avatar, a DELIBERATE override of the rule above (f2, 8c) ──────────────────────────────
+ * The transcript is the one place his face is allowed to repeat, and it now repeats once per assistant
+ * turn: `product-chat.component.html` renders a 20px `show-header.png` inside `.pc-role` on both the
+ * answered turn and the pending one. That is knowingly the duplication f02 deleted, and it is worth it
+ * here for a reason the in-pane header did not have. The header was a SECOND STATEMENT OF THE SAME
+ * FACT: the tab already said, permanently and in one fixed place, whose surface this is, so a face
+ * 60px under it added nothing a reader did not already have. A turn avatar is not a statement about
+ * the surface at all, it is SPEAKER ATTRIBUTION inside a multi-turn document - the one job the tab
+ * cannot do, because a scrolled transcript puts many alternating speakers on screen at once and the
+ * tab is a single mark at its edge. Position and colour already separate the two speakers
+ * (`.pc-turn--user` vs `.pc-turn--assistant`); the face is what names one of them at a glance without
+ * reading the label.
+ *
+ * So the rule is not repealed, it is scoped: his face renders ONCE PER CHROME SURFACE (tab, launcher,
+ * empty state - never two of those on one screen), and once per assistant TURN inside the transcript.
+ * Anything that wants a fourth chrome mount is still the thing f02 removed. The turn avatar carries
+ * `alt=""` + `aria-hidden="true"` on purpose: `roleAssistant` beside it already names him, and an
+ * accessible name on the image would announce him twice on every turn to a screen reader, which is the
+ * duplication that actually costs a user something.
  *
  * ── Voice (chatbot phase A.2, c2) ──────────────────────────────────────────────────────────────────
  * The chrome speaks in the FIRST PERSON, as Show, everywhere it speaks at all: the grounding note, the

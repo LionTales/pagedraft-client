@@ -7,6 +7,8 @@ import { JobRegistryService } from '../../core/services/job-registry.service';
 import { BookDto } from '../../core/models/book';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { guidesString } from '../../core/i18n/guides-strings';
+import { feedbackString } from '../../core/i18n/feedback-strings';
+import { FeedbackAvailabilityService } from '../../core/services/feedback-availability.service';
 import { StageSpineComponent } from '../../shared/stage-spine/stage-spine.component';
 import { EXPORT_SURFACE_AVAILABLE, StageSpineSignals, emptyStageSpineSignals } from '../../shared/stage-spine/stage-spine.model';
 import { clearCollapseState } from '../../shared/collapsible-section/collapse-store';
@@ -43,6 +45,13 @@ function collectChangedIds(previous: ReadonlySet<string>, next: ReadonlySet<stri
                app lands on - says so out loud rather than leaving them to be discovered through the
                assistant's citations. The dock carries the same link on every other route. -->
           <a class="dash-help-link" routerLink="/help" [queryParams]="{ lang: langKey }" [attr.aria-label]="helpAria">{{ helpLabel }}</a>
+          <!-- e2: the OWNER's triage view. Rendered only when the deployment actually serves it, because
+               the route is gated by the same flag and an ungated link would fall through the wildcard
+               back to this very page - a link that silently does nothing. No lang query parameter,
+               unlike the guides link beside it: the triage view has no language toggle to carry. -->
+          @if (feedbackAvailable) {
+            <a class="dash-help-link dash-feedback-link" routerLink="/feedback" [attr.aria-label]="feedbackAria">{{ feedbackLabel }}</a>
+          }
           @if (!showCreateForm) {
             <button class="pd-btn pd-btn-primary" (click)="showCreateForm = true">{{ label('newBook') }}</button>
           }
@@ -102,8 +111,16 @@ function collectChangedIds(previous: ReadonlySet<string>, next: ReadonlySet<stri
       max-inline-size: 800px;
       margin-inline: auto;
     }
+    /* c09: the SAME header idiom the guides index already uses (help-index.component.ts) - wrap plus a
+       gap, and at the narrow breakpoint the wrapped lines align to the start rather than being centred
+       against each other. e2 made this a three-item row (guides + feedback + the create button) beside
+       the title, and with no wrap the row simply ran off the edge: at 300px the Hebrew button sat at
+       x=-46 clipped to "ספר ח", and the English row overflowed its header box by 96px. Wrapping is what
+       every other header on this app does; nothing here is invented for this page. */
     .dash-header {
       display: flex;
+      flex-wrap: wrap;
+      gap: var(--pd-space-4);
       justify-content: space-between;
       align-items: center;
       margin-block-end: var(--pd-space-7);
@@ -113,8 +130,11 @@ function collectChangedIds(previous: ReadonlySet<string>, next: ReadonlySet<stri
       font-size: var(--pd-text-h3);
       color: var(--pd-neutral-900);
     }
+    /* The actions row wraps on its own too: once the header has wrapped, this group is alone on its line
+       and must still be able to break when three items no longer fit that line. */
     .dash-header-actions {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: var(--pd-space-5);
     }
@@ -210,6 +230,13 @@ function collectChangedIds(previous: ReadonlySet<string>, next: ReadonlySet<stri
       gap: var(--pd-space-3);
       margin-block-start: var(--pd-space-5);
     }
+    /* Narrow: once the header has wrapped, the actions belong UNDER the title, aligned to the same edge
+       it starts from, rather than centred against a line they no longer share. Same breakpoint and same
+       rule as the guides index header (help-index.component.ts). */
+    @media (max-width: 520px) {
+      .dashboard { padding: var(--pd-space-5); }
+      .dash-header { align-items: flex-start; }
+    }
   `]
 })
 export class DashboardComponent implements OnInit, OnDestroy {
@@ -298,15 +325,41 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return guidesString(this.langKey, 'helpLinkAria');
   }
 
+  // ── The feedback entry (e2) ─────────────────────────────────────────────────────────────────────
+  //
+  // Show C2 shipped the triage view reachable by TYPED URL ALONE: nothing in this client linked to
+  // `/feedback`. This is that link, and the reason it is guarded rather than always drawn is the route
+  // table itself - `/feedback` is a `canMatch` route, so with the flag off it does not match and the URL
+  // falls through the wildcard to `/books`. An unconditional link would therefore be a link that
+  // reloads the page the owner is already on. Both this flag and the guard's come from
+  // `FeedbackAvailabilityService`, so they can never disagree about what the flag MEANS - see that
+  // service for why this one is the CACHED read and the guard's is live, and for the FRESHNESS gap that
+  // difference deliberately opens: this flag can trail the guard by one stale read, so its accepted cost
+  // is a wasted click (a stale "on" here draws a link the guard then re-checks and bounces through the
+  // wildcard), never a genuine disagreement on the flag's meaning.
+
+  /** Whether this deployment serves the triage view. False until the read lands, so nothing flashes. */
+  feedbackAvailable = false;
+
+  /** Named by the surface it opens, from the feedback strings rather than this component's label map. */
+  get feedbackLabel(): string {
+    return feedbackString(this.langKey, 'entryLink');
+  }
+
+  get feedbackAria(): string {
+    return feedbackString(this.langKey, 'entryLinkAria');
+  }
+
   // ── Wave 3 / w3: the compact stage spine, one per book row ────────────────────────────────────
   //
-  // WHAT COMPACT SHOWS HERE, AND WHY IT IS NOT MORE. The books list makes exactly ONE request
-  // (`GET /api/books`) and this todo did not add a second. That payload carries `chapterCount` and
-  // `chaptersWithTextCount` (Wave 3 / M1), which is the whole of stage 1 and, when a book has no
-  // chapters, the honest `blocked` on the three stages that need one. It carries nothing about the
-  // briefs or the review, and asking would cost one status request PER ROW - so those stages render a
-  // hollow pip that says "not known here". Showing less is the rule; guessing and fetching are both
-  // ruled out.
+  // WHAT COMPACT SHOWS HERE, AND WHY IT IS NOT MORE. The page makes exactly TWO requests: `GET
+  // /api/books` and the `GET /api/feedback/availability` probe (e2), the latter a page-level read done
+  // once per session and shared with every later mount rather than a per-row cost. This todo did not
+  // add a per-row request. The books payload carries `chapterCount` and `chaptersWithTextCount`
+  // (Wave 3 / M1), which is the whole of stage 1 and, when a book has no chapters, the honest `blocked`
+  // on the three stages that need one. It carries nothing about the briefs or the review, and asking
+  // would cost one status request PER ROW - so those stages render a hollow pip that says "not known
+  // here". Showing less is the rule; guessing and fetching are both ruled out.
   //
   // The one thing that legitimately upgrades a row past that is the JOB REGISTRY, which is an in-memory
   // view-model of builds this client already knows about and costs no request at all. It can only ever
@@ -324,14 +377,29 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private runningBriefs = new Set<string>();
   private runningReview = new Set<string>();
   private jobsSub: Subscription | null = null;
+  private availabilitySub: Subscription | null = null;
 
   constructor(
     private bookService: BookService,
     private router: Router,
     private jobRegistry: JobRegistryService,
+    private feedbackAvailability: FeedbackAvailabilityService,
   ) {}
 
   ngOnInit(): void {
+    // One read per session, shared with every later mount of this page (e2). That is a claim about THIS
+    // component, not just about the service, so it is pinned from here: the "probes availability ONCE
+    // across a destroy-and-remount" spec in dashboard.component.spec.ts mounts this component, destroys
+    // it, mounts it again against the same root service instance and allows exactly one probe across
+    // both. The service's own suite proves only that the mechanism exists; calling `read()` here instead
+    // would leave that suite green and this line false. It cannot fail open: the
+    // service answers false for a failed read, so a link the deployment does not serve is never drawn.
+    // No error arm below: `once()` guarantees a failure never reaches this subscriber as an error
+    // notification, only as the fail-closed `false` next value (its own `catchError` converts it before
+    // replaying) - see `FeedbackAvailabilityService.probe` for why that is a contract, not an omission.
+    this.availabilitySub = this.feedbackAvailability.once().subscribe(available => {
+      this.feedbackAvailable = available;
+    });
     this.bookService.getAll().subscribe(list => {
       this.books = list;
       // The list itself changed (rows added/removed/reordered): every row's signals are candidates.
@@ -361,6 +429,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.jobsSub?.unsubscribe();
     this.jobsSub = null;
+    // Unsubscribing does NOT cancel the availability request: the cache holds it with `refCount: false`
+    // precisely so a page destroyed mid-read does not make the next mount ask again.
+    this.availabilitySub?.unsubscribe();
+    this.availabilitySub = null;
   }
 
   /**

@@ -23,7 +23,26 @@ export interface LanguageEngineResult {
 export interface IssuesResponse {
   issues: LanguageIssue[];
   languageToolUnavailable?: boolean | null;
+  /**
+   * The server's own English sentence. STILL SENT, DELIBERATELY NOT RENDERED: it is English on a
+   * Hebrew-default UI, which is what bug 3 was. Kept on the wire (and on this type) UNTIL the fifth
+   * ServiceUnavailable path is assigned a code (see the `languageToolCode` doc below) - not for a fixed
+   * number of releases. PAGEDRAFT_DESIGN.md's "KNOWN GAP" paragraph for this endpoint states the
+   * prerequisite: "a code should be assigned before the message field is removed." Dropping this field
+   * first would silently blind that path (it sends a message but no code today).
+   */
   languageToolMessage?: string | null;
+  /**
+   * Stable, localizable reason the checker produced nothing: `hebrew-unsupported`, `disabled`,
+   * `unavailable` or `timeout` (LanguageToolEngine's four NAMED `ServiceUnavailableCode` values). These
+   * are not the API's whole vocabulary: `LanguageToolEngine.cs` has a FIFTH `ServiceUnavailable = true`
+   * path (the `he` auto-retry-SUCCESS branch), and it carries no code AND a non-empty issue list - so
+   * "the reason the checker produced nothing" is wrong for it twice over: it has no code, and it did
+   * produce issues. See PAGEDRAFT_DESIGN.md's "KNOWN GAP" paragraph (language-engine issues endpoint),
+   * which records this path correctly. ABSENT on a legacy API build that predates the code, or on that
+   * fifth path - both are exactly the case the client's unknown-code fallback covers.
+   */
+  languageToolCode?: string | null;
 }
 
 export interface LanguageIssue {

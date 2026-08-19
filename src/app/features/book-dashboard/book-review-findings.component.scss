@@ -33,6 +33,12 @@
   color: var(--pd-cut);
 }
 
+// P3-67: the "filters were cleared" notice beside the verdict chips.
+.filters-cleared-notice {
+  margin: 0 0 var(--pd-space-3) 0;
+  font-size: var(--pd-text-caption);
+}
+
 .link-btn {
   background: none;
   border: none;

@@ -216,7 +216,15 @@
                  CHROME, in the app language, and inheriting the answer's direction laid an English
                  citation out right-to-left under a Hebrew answer. -->
             <div class="pc-turn pc-turn--assistant">
-              <span class="pc-role">{{ label('roleAssistant') }}</span>
+              <!-- SPEAKER ATTRIBUTION (f2, 8c). The face rides the role label on every assistant turn,
+                   which deliberately overrides the "his face never renders twice on one screen" rule
+                   recorded in core/i18n/chat-strings.ts - see that comment block for why the exception
+                   is worth it here and was not worth it for the in-pane header f02 removed. `alt=""` +
+                   `aria-hidden="true"` because the span beside it already says his name, and an
+                   accessible name here would announce him twice per turn. -->
+              <span class="pc-role"
+                ><img class="pc-role-icon" src="/assistant/show-header.png" alt="" aria-hidden="true" />{{ label('roleAssistant') }}</span
+              >
               <div class="pc-bubble pc-bubble--assistant">
                 <!-- MIXED DIRECTION (phase B). The answer runs in the server's answer language, and
                      `blockDirBase` tells the renderer what that is so any BLOCK inside it written mostly
@@ -397,7 +405,12 @@
                f01 (review finding #5): a book-scoped question also sends book artifacts, so the row must
                say so - same book/no-book split as the grounding note and the empty-state greeting. -->
           <div class="pc-turn pc-turn--assistant pc-pending">
-            <span class="pc-role">{{ label('roleAssistant') }}</span>
+            <!-- Same avatar as a finished assistant turn (f2, 8c): the pending row IS an assistant turn
+                 in the transcript, so leaving the face off it would make his name jump sideways the
+                 moment the answer lands. -->
+            <span class="pc-role"
+              ><img class="pc-role-icon" src="/assistant/show-header.png" alt="" aria-hidden="true" />{{ label('roleAssistant') }}</span
+            >
             <div class="pc-bubble pc-bubble--assistant pc-bubble--pending">
               <span class="pc-dots" aria-hidden="true"><i></i><i></i><i></i></span>
               <span class="pc-pending-text">{{ label(book ? 'inFlightBook' : 'inFlight') }}</span>

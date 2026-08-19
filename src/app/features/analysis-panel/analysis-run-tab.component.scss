@@ -1,6 +1,20 @@
+// ── c1: ONE SCROLLER, and it is not in this file ─────────────────────────────
+// This surface used to own two of the review panel's THREE nested scrollers: `.run-tab-content`
+// (overflow:auto) inside the editor's `.review-body` (overflow-y:auto), with `article.result-view`
+// (overflow:auto) inside that again. Each one capped itself with `flex: 1; min-height: 0`, so every
+// box was pinned to the panel's height and split what was left between its own children. Measured on
+// a real chapter at a 1440x900 laptop viewport: `.run-tab-content` was 31px tall holding 10,507px of
+// proofread cards, and a Line Edit result rendered as a 16px sliver over 1,592px of content. Nothing
+// truncated a card - the cards were simply scrolled out of a pane the height of one line of text.
+//
+// The whole panel now scrolls ONCE, at `.review-body`. Every box between there and a suggestion card
+// sizes to its content: `min-height: 0` is gone (so the flex automatic minimum size applies again and
+// an item may be as tall as what is inside it) and `overflow` is `visible` (so nothing clips, and so
+// the automatic minimum size is not suppressed - `min-height: auto` only takes effect on an item whose
+// overflow is visible). `flex: 1` STAYS: with a content-sized minimum it means "fill the panel when
+// the result is short, grow past it when the result is long", which is what both states want.
 :host {
   flex: 1;
-  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -11,13 +25,11 @@
   flex-direction: column;
   gap: 0.5rem;
   flex: 1;
-  min-height: 0;
-  overflow: auto;
+  overflow: visible;
 }
 .result-view {
   flex: 1;
-  min-height: 0;
-  overflow: auto;
+  overflow: visible;
   border-radius: 4px;
   border: 1px solid #eee;
   padding: 0.5rem;

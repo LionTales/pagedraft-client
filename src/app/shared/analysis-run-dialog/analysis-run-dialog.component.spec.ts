@@ -571,12 +571,14 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
   // ── c03: a captured jobId the registry never resolves ─────────────────────
   //
   // "An id was captured" and "the registry owns this run" are two DIFFERENT facts, and the code used to
-  // fence every (a) -> (c) arm on the first one. AnalysisPanelComponent.handleRunEvent fans 'job-started'
-  // out to the host - which is what makes this dialog capture the id - and only AFTERWARDS calls
-  // jobRegistry.track(...), behind a guard. By then the c01 start budget is already spent, because
-  // provesServerAnswered returns true for 'job-started' and that tap runs upstream of the panel's
-  // subscriber. A guard that declines therefore left the card modal, indeterminate, with no timer left and
-  // every terminal latch switched off: nothing that could still happen would resolve it.
+  // fence every (a) -> (c) arm on the first one. 'job-started' is fanned out to the host - which is what
+  // makes this dialog capture the id - whether or not the run reached the registry, because the
+  // jobRegistry.track(...) publish sits behind a guard. (c01 moved that publish into
+  // AnalysisRunOrchestrationService, ahead of the fan-out, so the ORDER no longer opens the gap; the
+  // guard still can.) By then the c01 start budget is already spent, because provesServerAnswered
+  // returns true for 'job-started' and that tap runs upstream of every subscriber. A guard that declines
+  // therefore left the card modal, indeterminate, with no timer left and every terminal latch switched
+  // off: nothing that could still happen would resolve it.
   //
   // The fence is now `registryOwnsRun` (jobId AND a tracked job, i.e. state (b) itself), so the run's own
   // stream resolves the card exactly as it does before any id is captured. No clock was added here.
@@ -1545,6 +1547,10 @@ describe('AnalysisRunDialogComponent (Wave 1d)', () => {
       return new AnalysisRunOrchestrationService(
         { run: () => NEVER, startAsync: () => NEVER, getByJob: () => NEVER, ...overrides } as unknown as AnalysisService,
         { pollProgress: () => NEVER } as unknown as AnalysisProgressService,
+        // c01: the service writes the registry on `job-started`. This describe drives `runAnalysisAfterSave`
+        // (not `startRun`), so nothing here ever reaches that write; the stub is what makes the
+        // constructor satisfiable without dragging the real root registry and its five HTTP deps in.
+        { track: () => { /* no run here ever dispatches */ } } as unknown as JobRegistryService,
       );
     }
 

@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import {
-  Observable, Subject, EMPTY,
+  Observable, Subject, ReplaySubject, BehaviorSubject, Subscription, EMPTY,
   of, from, concat, defer, merge, timer, throwError,
   switchMap, catchError, finalize, map, retry, takeUntil, tap
 } from 'rxjs';
@@ -12,6 +12,7 @@ import {
 } from '../models/analysis';
 import { AnalysisService } from './analysis.service';
 import { AnalysisProgressService } from './analysis-progress.service';
+import { JobRegistryService } from './job-registry.service';
 import {
   analysisTypeLabelFor,
   formatRunDurationLabel,
@@ -70,9 +71,14 @@ export type AnalysisRunEvent =
    *
    * Emitted when the run ends WITHOUT any of the terminal events above having been produced - the run
    * subscription completed or errored with nothing to report, the save that had to precede a streaming
-   * run rejected, or the panel was destroyed mid-run (which cancels the run). Carries no payload on
-   * purpose: it says only "there is no longer a run behind this surface". A percent must still come from
-   * `JobRegistryService`, and a registry-tracked run must still resolve off the registry alone.
+   * run rejected, or a PANEL-OWNED run was destroyed mid-run (which cancels that run). Carries no payload
+   * on purpose: it says only "there is no longer a run behind this surface". A percent must still come
+   * from `JobRegistryService`, and a registry-tracked run must still resolve off the registry alone.
+   *
+   * a1 NARROWED the destroy case to a panel-owned run, i.e. the streaming path. A run started through
+   * {@link AnalysisRunOrchestrationService.startRun} is owned HERE and survives the panel's unmount, so
+   * the panel no longer reports a terminal for it - there is none, and claiming one put a "Canceled"
+   * card over a run the server was still working on.
    *
    * On a normal run this arrives AFTER a real terminal event, so every consumer must be single-resolve.
    */
@@ -204,13 +210,143 @@ interface ProgressUpdateResult {
  */
 export const RUN_START_BUDGET_MS = 180_000;
 
+/**
+ * a1: the run this service currently OWNS, described in the vocabulary every surface asks about it in.
+ *
+ * `AnalysisPanelComponent` is mounted under an `@if` and is destroyed on every tab or mode switch, so
+ * until a1 the panel's own subscription was the only thing holding a run open: destroying it CANCELLED
+ * an in-flight `/analyze`. The service now subscribes the run itself ({@link
+ * AnalysisRunOrchestrationService.startRun}) and publishes this description of it, so a panel that
+ * remounts mid-run can answer "is a run in flight for what I am showing?" without having started it.
+ *
+ * For an ASYNC run this is the belt to the registry's braces: `jobId` fills in the moment the dispatch
+ * answers, and from then on `JobRegistryService` is the authority on the run's progress and terminal.
+ * For a SYNC run there is no registry row at all, and this is the only description that exists.
+ */
+export interface ActiveRunContext {
+  /** Opaque per-run identity, so a consumer can dedupe "this run's terminal" without a jobId. */
+  runId: string;
+  bookId: string;
+  chapterId: string;
+  sceneId: string | null;
+  analysisType: string;
+  /** The registry job id once the run dispatched async; null while it is sync or not yet dispatched. */
+  jobId: string | null;
+}
+
+/**
+ * c06: a run terminal that NOBODY WAS THERE TO HEAR, held until a surface for that unit asks for it.
+ *
+ * ── The hole it fills ────────────────────────────────────────────────────────────────────────────
+ * a1 made this service the owner of a run, and an owned run outlives every surface. But the only thing
+ * it PUBLISHED about that run was {@link ActiveRunContext} - a description of a run in flight, cleared
+ * the instant the run ends - while every terminal travelled on the run's own event stream, which is
+ * completed and dropped at the same moment and was never handed out by any method. So a terminal was
+ * delivered to whoever happened to be subscribed at that instant and was otherwise discarded, and there
+ * are two ordinary ways for nobody to be subscribed:
+ *
+ *  - the author started another run, which detaches the panel and supersedes this one (finding 7);
+ *  - the panel was destroyed by an Edit-help tab or Review/Edit switch, which is what a1 made survivable
+ *    for the RUN but not for its report (finding 8). Before a1 the author at least saw "Canceled".
+ *
+ * In both, an `{ kind: 'error' }` - a 500, the 180s start-budget expiry, or the supersession itself -
+ * reached no surface at all: no banner, and the previous result left on screen as though it were current.
+ *
+ * ── The contract ─────────────────────────────────────────────────────────────────────────────────
+ * ONE slot, not a ledger. At most one run is owned at a time, so at most one producer exists; a second
+ * unheard terminal supersedes the first exactly as the run does. It is a NOTICE, not a record: the
+ * analysis itself is owned by the server and re-surfaced through History and the registry, and nothing
+ * here is load-bearing for the result. It is recorded ONLY when the run's event stream had no observer
+ * (a terminal a live surface already rendered is never re-shown), and it is cleared for a context the
+ * moment a new run starts on that context, so it can never appear over a run that has just begun.
+ */
+export interface UnheardRunTerminal {
+  /** The run that produced it, so a consumer can dedupe against its own handling of the same run. */
+  runId: string;
+  bookId: string;
+  chapterId: string;
+  sceneId: string | null;
+  analysisType: string;
+  /** Ready to render: composed in the RUN's language, like every other string this service emits. */
+  message: string;
+}
+
+/** The unit a {@link UnheardRunTerminal} is claimed for: the tuple every run surface keys on. */
+export interface RunTerminalScope {
+  bookId: string;
+  chapterId: string;
+  sceneId: string | null;
+  analysisType: string;
+}
+
+/**
+ * How many of a run's events are replayed to a subscriber of {@link
+ * AnalysisRunOrchestrationService.startRun}.
+ *
+ * Needed because the service subscribes the run FIRST (that is what makes the run outlive the panel) and
+ * the caller subscribes to the returned stream immediately afterwards, by which time the opening
+ * `'status'` - and, for a stub or a fail-fast path, the whole run - has already been emitted. The buffer
+ * only has to survive that one call stack; the editor's own `RUN_EVENT_REPLAY` is sized the same way and
+ * for the same reason.
+ */
+const RUN_EVENT_REPLAY = 64;
+
 @Injectable({ providedIn: 'root' })
 export class AnalysisRunOrchestrationService {
+  // c06: an `activePolls: Set<Subject<void>>` field and a public `stopProgressPolling()` LIVED HERE.
+  //
+  // a1 introduced them to replace a single shared stop subject, so that "stop the poll" could no longer
+  // mean "stop whichever run registered last". That fix was right and it is unchanged - a run's poll is
+  // scoped to that run's own subscription. What went with the set is the SECOND owner it added on top:
+  //
+  //  - the set existed for concurrent SERVICE-OWNED runs, and {@link startRun} discards the previous
+  //    owned run before starting a new one, so there is never more than one;
+  //  - `stopProgressPolling()` had no production caller at all, and could not usefully acquire one: an
+  //    actually-subscribed poll has already removed itself through its `finalize` by the time the run's
+  //    unsubscribe returns, so a "drain everything" call from the supersession path would iterate an
+  //    empty set;
+  //  - `startProgressPollingForJob` is also called directly (outside any owned run) by the service spec,
+  //    so a service-wide teardown fired from one run would have been reaching into state that is none of
+  //    that run's business - the very mistake a1 removed.
+  //
+  // Each poll's stop subject is now owned solely by the pipeline it belongs to: {@link
+  // createProgressStop} mints it, {@link releaseProgressStop} ends it, and `finalize` guarantees that
+  // runs on every ending including the owner discarding the run. Nothing else holds a reference, so a
+  // stop subject composed for a poll that is never subscribed is unreferenced garbage rather than a
+  // permanent entry in a service-lifetime collection.
+
+  /** The run this service owns, or null. See {@link ActiveRunContext}. */
+  private readonly activeRunSubject = new BehaviorSubject<ActiveRunContext | null>(null);
+
+  /** The owned run, as a stream. Emits null when no run is in flight. */
+  readonly activeRun$: Observable<ActiveRunContext | null> = this.activeRunSubject.asObservable();
+
+  /** The owned run's current description, or null. Synchronous read of {@link activeRun$}. */
+  get activeRun(): ActiveRunContext | null {
+    return this.activeRunSubject.value;
+  }
+
+  /** The owned run's subscription: what keeps the HTTP request alive across a panel unmount. */
+  private activeRunSub: Subscription | null = null;
+
+  /** The owned run's event stream, multicast so a caller's unsubscribe does not cancel the run. */
+  private activeRunEvents: ReplaySubject<AnalysisRunEvent> | null = null;
+
   /**
-   * Shared handle to the most recent polling stop subject.
-   * Each polling run gets its own Subject instance so concurrent runs don't interfere.
+   * The context the owned run was STARTED with, held for the whole run.
+   *
+   * c06 needs two things off it that {@link ActiveRunContext} does not carry: the run's `language`, to
+   * compose a supersession terminal in the language the run's own surfaces render in, and the same
+   * captured-origin snapshot {@link publishJobToRegistry} already insists on, so a terminal is keyed to
+   * the unit the API actually ran rather than to whatever is on screen when it fires.
    */
-  private progressStop$ : Subject<void> | null = null;
+  private activeRunCtx: AnalysisRunContext | null = null;
+
+  /** The last run terminal nobody was listening to. See {@link takeUnheardRunTerminal}. */
+  private unheardTerminal: UnheardRunTerminal | null = null;
+
+  /** Monotonic source of {@link ActiveRunContext.runId}. */
+  private runSeq = 0;
 
   /**
    * Bounded read-after-write budget for {@link loadFinalResultForJob}. Deliberately the SAME numbers as
@@ -227,23 +363,319 @@ export class AnalysisRunOrchestrationService {
 
   constructor(
     private analysisService: AnalysisService,
-    private analysisProgressService: AnalysisProgressService
+    private analysisProgressService: AnalysisProgressService,
+    /**
+     * c01 (registry-write-survives-unmount): the registry is written from HERE, not from the panel.
+     * See {@link publishJobToRegistry} for why the one WRITE had to follow the run's ownership.
+     */
+    private jobRegistry: JobRegistryService
   ) {}
 
-  /** Cancel any active progress polling. Call from component ngOnDestroy. */
-  stopProgressPolling(): void {
-    if (this.progressStop$) {
-      this.progressStop$.next();
+  /**
+   * Mint the stop subject for ONE poll. It belongs to that poll's pipeline and to nothing else.
+   *
+   * It deliberately does NOT cancel any previous poll: that was the shared-field behaviour a1 removed,
+   * where the second poll's stop subject silently ended the first one's. It is also no longer registered
+   * anywhere (c06): a poll ends with the pipeline that composed it, and nothing outside that pipeline has
+   * a reason to reach it. See the block comment above {@link activeRunSubject} for what was removed.
+   */
+  private createProgressStop(): Subject<void> {
+    return new Subject<void>();
+  }
+
+  /**
+   * End one poll. Safe to call more than once for the same subject: `next` after `complete` is a no-op,
+   * which is what lets the terminal-status branches release eagerly and `finalize` release again.
+   */
+  private releaseProgressStop(stop$: Subject<void>): void {
+    stop$.next();
+    stop$.complete();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Run OWNERSHIP (a1)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Start a run and OWN it: subscribe it here, so the request survives the caller going away.
+   *
+   * ── Why the service and not the panel ────────────────────────────────────────────────────────────
+   * `AnalysisPanelComponent` is mounted under `@if (editHelpView === 'analysis')` inside
+   * `@else if (reviewMode === 'edit')`, so switching the Edit-help sub-tab or the Review/Edit control
+   * DESTROYS it. When the panel held the only subscription, that destruction cancelled the in-flight
+   * `/analyze` - the run the user had just started simply stopped, silently, on the sync route - and the
+   * panel had to tell the run dialog so ("run-finished", which the dialog reads as `canceled`). The run
+   * is not a property of the surface that started it, so it lives here now.
+   *
+   * ── What the caller gets ─────────────────────────────────────────────────────────────────────────
+   * A MULTICAST view of the run's events. Unsubscribing from it detaches that consumer and nothing more;
+   * the run keeps going. It replays (see {@link RUN_EVENT_REPLAY}) because this method subscribes the
+   * run before returning, so a caller that subscribes on the next line would otherwise miss the opening
+   * `'status'`.
+   *
+   * ── Supersession ─────────────────────────────────────────────────────────────────────────────────
+   * Starting a run DISCARDS the previously owned one, exactly as the panel's `runSubscription?.
+   * unsubscribe()` did before it: one run at a time, and the newest is the one the user asked for.
+   *
+   * c06 kept that and gave it a VOICE. The panel's own guard (`isRunningForCurrentContext`) is
+   * context-scoped on purpose - a run on chapter B may legitimately start while chapter A's run is in
+   * flight, which is the capability pf-f01 and a1 exist to provide - so the second run passes the guard
+   * and this discard cancels the first. Refusing it would strand the author behind a run they cannot
+   * cancel; the defect was never the supersession, it was that the abandoned run reported NOTHING to
+   * anyone. {@link discardActiveRun} now ends it with a real terminal, which reaches any surface still
+   * attached and is otherwise kept as an {@link UnheardRunTerminal} for the surface that comes back.
+   */
+  startRun(ctx: AnalysisRunContext, saveBeforeRun?: () => Promise<void>): Observable<AnalysisRunEvent> {
+    this.discardActiveRun();
+    // AFTER the discard, so it drops a notice that discard may just have recorded as well as any older
+    // one: a pending failure for the unit that is STARTING a run is moot the instant that run starts,
+    // and leaving one would let a previous failure paint a banner over a run that has only just begun.
+    // A notice for another unit - the ordinary case, chapter A superseded by a start on chapter B - is
+    // untouched, which is the whole point of keying it.
+    this.clearUnheardTerminalFor(ctx);
+
+    const events = new ReplaySubject<AnalysisRunEvent>(RUN_EVENT_REPLAY);
+    this.activeRunEvents = events;
+    this.activeRunCtx = ctx;
+    const runId = `run-${++this.runSeq}`;
+    this.activeRunSubject.next({
+      runId,
+      bookId: ctx.bookId,
+      chapterId: ctx.chapterId,
+      sceneId: ctx.sceneId ?? null,
+      analysisType: ctx.selectedAnalysisType,
+      jobId: null,
+    });
+
+    let ended = false;
+    const end = () => {
+      if (ended) return;
+      ended = true;
+      // Only clear if THIS run is still the owned one: a superseding startRun has already replaced both
+      // fields and must not have them nulled out from under it by the run it superseded.
+      if (this.activeRunEvents === events) {
+        this.activeRunEvents = null;
+        this.activeRunSub = null;
+        this.activeRunCtx = null;
+        this.activeRunSubject.next(null);
+      }
+      events.complete();
+    };
+
+    const sub = this.runAnalysisAfterSave(ctx, saveBeforeRun).subscribe({
+      next: event => {
+        // The dispatch answered: from here the REGISTRY owns this run's progress and terminal, and the
+        // id is published so a consumer can tell "the sync run I was watching ended" from "the async job
+        // I was watching ended" without guessing.
+        if (event.kind === 'job-started') {
+          const current = this.activeRunSubject.value;
+          if (current && this.activeRunEvents === events) {
+            this.activeRunSubject.next({ ...current, jobId: event.jobId });
+          }
+          // BEFORE the event is fanned out, so every surface that answers it (the panel's in-page
+          // banner reads `jobById$` for exactly this id) finds the row already there.
+          this.publishJobToRegistry(ctx, event.jobId);
+        }
+        events.next(event);
+        // AFTER the fan-out, so "did anyone hear it?" is asked of the delivery that just happened rather
+        // than of the moment before it. Covers every error this union can carry - a 500, the start-budget
+        // expiry, a final-result read that ran out of patience - because from the author's side they are
+        // one fact: the run they started is over and there is nothing on screen that says so.
+        if (event.kind === 'error') this.recordUnheardTerminal(ctx, runId, event.message, events);
+      },
+      error: () => end(),
+      complete: () => end(),
+    });
+    // A run that finishes synchronously (a fail-fast path, or an `of()`-backed stub) has already run
+    // `end()` by the time `subscribe` returns, so only record the subscription when it is still live.
+    if (!ended) this.activeRunSub = sub;
+
+    return events.asObservable();
+  }
+
+  /**
+   * Drop the owned run: unsubscribe it (which cancels its request and tears down its poll), TELL anyone
+   * who can still be told, and clear the published description. Called when a new run supersedes it.
+   *
+   * ── Why the run ends with an event and not just a `complete()` ───────────────────────────────────
+   * A bare completion is indistinguishable from a run that finished normally, and the abandoned run did
+   * not finish: on the sync route the `POST /analyze` was aborted by the unsubscribe above and there is
+   * no registry row, no job id and no other description of that run anywhere, so without this the
+   * author's analysis disappeared with no message at all (finding 7). The terminal is an ordinary
+   * `{ kind: 'error' }` on the channel every surface already listens to, so no consumer needs a new
+   * notion of "over" - the same reasoning {@link withStartTimeout} used for the start budget.
+   *
+   * ── Why ONLY when the run has no jobId ───────────────────────────────────────────────────────────
+   * A dispatched async job is NOT stopped by this. `JobRegistryService.track()` started its own poll for
+   * it, which is not this subscription's child, so the server keeps running it, the Activity Center keeps
+   * showing it, the origin chapter's Run button stays disabled, and its terminal still reaches the panel
+   * through the registry. All this discard costs it is the orchestration-side poll. Reporting it as
+   * stopped would put a false ending on a run the server is still working on - which is precisely the lie
+   * a1 removed when it stopped emitting `run-finished` from the panel's `ngOnDestroy`.
+   */
+  private discardActiveRun(): void {
+    const superseded = this.activeRunSubject.value;
+    const ctx = this.activeRunCtx;
+    const events = this.activeRunEvents;
+    this.activeRunSub?.unsubscribe();
+    this.activeRunSub = null;
+    this.activeRunEvents = null;
+    this.activeRunCtx = null;
+    if (superseded && ctx && !superseded.jobId) {
+      const lang = runChromeLang(ctx.language);
+      const message = runString(lang, 'runSuperseded', {
+        type: analysisTypeLabelFor(lang, ctx.selectedAnalysisType),
+      });
+      // Live first, for a surface that is still attached to THIS run's stream. final-r01 CORRECTED the
+      // example this used to give ("the run dialog's transport is exactly such a subscriber"): it is
+      // not. The dialog reads `runEvents$` on the EDITOR, fed from `AnalysisPanelComponent`'s
+      // `@Output() runEvent`, so it is downstream of the panel rather than a second subscriber here.
+      // `startRun` has exactly ONE production caller and therefore exactly one subscriber - the panel -
+      // and that panel detaches before calling `startRun`, so on the supersession path `observed` is
+      // ALWAYS false today and this emit reaches nothing outside the service's own spec. It is kept
+      // because it is the correct shape (a run must end with a terminal on its own stream, for whoever
+      // is there) and because the `observed` test below is what decides between the two halves; but the
+      // DURABLE half is the one that does the work, and a reader should not expect this line to.
+      events?.next({ kind: 'error', message });
+      this.recordUnheardTerminal(ctx, superseded.runId, message, events);
+    }
+    events?.complete();
+    if (this.activeRunSubject.value !== null) this.activeRunSubject.next(null);
+  }
+
+  /**
+   * Keep a terminal NO SURFACE HEARD, so the next surface for that unit can say what happened.
+   *
+   * The `observed` test is the whole rule: if the run's event stream still had a subscriber when the
+   * terminal was delivered, a live surface has already rendered it and re-showing it later would be a
+   * second report of one failure. If it had none, the terminal reached nothing at all, and the author is
+   * owed it the moment a surface for that unit exists again. See {@link UnheardRunTerminal}.
+   *
+   * The scope comes from the run's CAPTURED ORIGIN (`ctx`), never from live state, for the same reason
+   * {@link publishJobToRegistry} insists on it: a terminal can land long after the author moved on, and
+   * keying it off wherever they are now would offer chapter A's failure to chapter B.
+   */
+  private recordUnheardTerminal(
+    ctx: AnalysisRunContext,
+    runId: string,
+    message: string,
+    events: ReplaySubject<AnalysisRunEvent> | null
+  ): void {
+    if (events?.observed) return;
+    this.unheardTerminal = {
+      runId,
+      bookId: ctx.bookId,
+      chapterId: ctx.chapterId,
+      sceneId: ctx.sceneId ?? null,
+      analysisType: ctx.selectedAnalysisType,
+      message,
+    };
+  }
+
+  /** Drop a pending notice for one unit, because that unit is about to have a run of its own. */
+  private clearUnheardTerminalFor(scope: AnalysisRunContext): void {
+    if (this.matchesUnheardTerminal({
+      bookId: scope.bookId,
+      chapterId: scope.chapterId,
+      sceneId: scope.sceneId ?? null,
+      analysisType: scope.selectedAnalysisType,
+    })) {
+      this.unheardTerminal = null;
     }
   }
 
-  /** Create a new stop subject for a polling run, cancelling any previous run first. */
-  private createProgressStop(): Subject<void> {
-    if (this.progressStop$) {
-      this.progressStop$.next();
+  /**
+   * Claim the pending terminal for this unit, if there is one. SINGLE-SHOT: it is cleared by the read.
+   *
+   * A surface calls this whenever it re-derives its run state - on mount, and on a context change - which
+   * is what makes it answer both halves of the hole: the panel that mounts after a run failed while it was
+   * unmounted (finding 8), and the panel that comes back to the chapter whose run was superseded (finding
+   * 7). A terminal for another unit is left alone, so returning to chapter A still finds A's notice.
+   */
+  takeUnheardRunTerminal(scope: RunTerminalScope): UnheardRunTerminal | null {
+    if (!this.matchesUnheardTerminal(scope)) return null;
+    const terminal = this.unheardTerminal;
+    this.unheardTerminal = null;
+    return terminal;
+  }
+
+  private matchesUnheardTerminal(scope: RunTerminalScope): boolean {
+    const pending = this.unheardTerminal;
+    return !!pending
+      && pending.bookId === scope.bookId
+      && pending.chapterId === scope.chapterId
+      && pending.sceneId === (scope.sceneId ?? null)
+      && pending.analysisType === scope.analysisType;
+  }
+
+  /**
+   * c01: publish a freshly dispatched async job to {@link JobRegistryService}. The registry's ONE write
+   * for this kind of job, and the reason it lives here.
+   *
+   * ── Why it moved off the panel ───────────────────────────────────────────────────────────────────
+   * a1 made this service the OWNER of an async run's state and the registry its single authority, but
+   * left the write itself inside `AnalysisPanelComponent.handleRunEvent`'s `'job-started'` case - on a
+   * surface that is mounted under `@if (editHelpView === 'analysis')` and whose `ngOnDestroy`
+   * unsubscribes the run view. So a run whose dispatch POST answered AFTER an Edit-help tab switch was
+   * never published at all: no Activity Center row, no per-chapter running mark on the dashboard or the
+   * editor spine, no in-panel progress bar, and nothing for a remounted panel to derive "a run is in
+   * flight here" from. The server was executing a job no client surface knew about, and only a page
+   * reload's `reattach` recovered it. The run outlives the panel; its one write has to as well.
+   *
+   * ── The captured origin, which is load-bearing ───────────────────────────────────────────────────
+   * The scope published here comes from the {@link AnalysisRunContext} this run was STARTED with - the
+   * snapshot `startRun` closed over - and never from anything read at dispatch time. `ctx` is built by
+   * the panel in the same tick as its own `runOrigin*` capture, and the dispatch answer can land after
+   * the user has switched chapter, scene or analysis type, so live state would label a scene run as a
+   * chapter run of the wrong chapter while the API ran the original scope. That is a defect this
+   * codebase has already recorded once (the panel's own `keys the tracked job off the run ORIGIN` case,
+   * migrated here with the write).
+   *
+   * ── Idempotent merge ─────────────────────────────────────────────────────────────────────────────
+   * `sceneId` is passed as `undefined` rather than `null` when the run is chapter-scoped, because
+   * `pickMeta` writes a property only when it is `!== undefined`. A later `reattach` that re-discovers
+   * this job and reports no scene therefore cannot DEMOTE a live scene job to a chapter job.
+   *
+   * ── The no-bookId branch ─────────────────────────────────────────────────────────────────────────
+   * Unreachable today (`runAnalysis()` refuses to start without a bookId, and `ctx.bookId` is that same
+   * value), but it is the one branch on which the server has started a real job that reaches NO client
+   * surface, nothing throws, and no HTTP error exists to correlate a "my analysis vanished" report
+   * against. So the decline is logged rather than silent, on the bracketed-tag `console.warn` seam the
+   * c01 start-budget expiry already uses. No ids and no document text.
+   */
+  private publishJobToRegistry(ctx: AnalysisRunContext, jobId: string): void {
+    if (!ctx.bookId) {
+      console.warn('[AnalysisRun] job-started with no bookId: the job was not published to the registry', {
+        analysisType: ctx.selectedAnalysisType,
+      });
+      return;
     }
-    this.progressStop$ = new Subject<void>();
-    return this.progressStop$;
+    // The async-job path covers every single-shot whole-chapter analysis type (Proofread, LineEdit,
+    // Linguistic, Literary, Summarization), all of which share the one `proofread` JobKind;
+    // `analysisType` carries the distinction so the row titles correctly (via ANALYSIS_TYPE_LABELS).
+    // `track()` is idempotent per jobId, so a later reattach that re-discovers this job cannot
+    // double-track it.
+    //
+    // scopeLabel 'פרק' matches `defaultScopeLabel('proofread')` in the registry so live-tracked and
+    // reattached jobs render identically ON A HEBREW BOOK. DRAFT he - needs native review.
+    // The language is the RUN's (`ctx.language` is the panel's normalized `bookLanguage`, the same
+    // value `panelLang` normalizes), so an English book's live-tracked job does not carry a Hebrew
+    // scope label. NOTE this covers the LIVE path only: `defaultScopeLabel` (the RE-ATTACH path, read
+    // on reload) still returns Hebrew unconditionally, so on an English book a freshly-started job
+    // reads "Chapter"/"Scene" while the same job re-attached after a reload still reads "פרק"/"סצנה".
+    // Left as a follow-up: fixing it means threading a language into `defaultScopeLabel`.
+    const scopeHe = runChromeLang(ctx.language) === 'he';
+    this.jobRegistry.track('proofread', ctx.bookId, jobId, {
+      analysisType: ctx.selectedAnalysisType,
+      chapterId: ctx.chapterId || undefined,
+      // The SCENE half of the same captured origin. Without it the registry cannot tell this job apart
+      // from a chapter-scoped run of the same type in the same chapter, so a remounted panel showing
+      // the CHAPTER would read a scene run as its own and disable its button.
+      sceneId: ctx.sceneId ?? undefined,
+      scopeLabel: ctx.sceneId
+        ? (scopeHe ? 'סצנה' : 'Scene') // DRAFT he - needs native review
+        : (scopeHe ? 'פרק' : 'Chapter'), // DRAFT he - needs native review
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -418,7 +850,11 @@ export class AnalysisRunOrchestrationService {
     ctx: AnalysisRunContext,
     saveBeforeRun?: () => Promise<void>
   ): Observable<AnalysisRunEvent> {
-    this.stopProgressPolling();
+    // a1: this used to open with a service-wide `stopProgressPolling()`, which - with the single shared
+    // stop subject it was written against - meant "cancel whatever poll ran last". Supersession is now
+    // the OWNER's job ({@link startRun} discards the previous run, taking its poll with its
+    // subscription), so composing a run no longer reaches across into another run's state. c06 removed
+    // that method entirely; see the block comment at the top of this class.
     const initialStatus = this.emitInitialStatusForRun(ctx);
     const run$: Observable<AnalysisRunEvent> = concat(
       of<AnalysisRunEvent>({ kind: 'status', message: initialStatus }),
@@ -543,7 +979,11 @@ export class AnalysisRunOrchestrationService {
           return of(resultEvent);
         }),
         catchError((err): Observable<AnalysisRunEvent> => {
-          this.stopProgressPolling();
+          // a1: no service-wide poll teardown here. This error ENDS this run's stream, and ending the
+          // stream already tears down the only poll this run could have opened (the `concat`ed
+          // `startProgressPollingIfNeeded` above, whose stop subject is released on its own teardown).
+          // Reaching across from inside one run is how a second, unrelated run's poll used to be killed
+          // by the first run's failure; c06 removed the method that made that reachable.
           return of<AnalysisRunEvent>({ kind: 'error', message: this.runFailureMessage(err, ctx.language) });
         })
       );
@@ -629,7 +1069,7 @@ export class AnalysisRunOrchestrationService {
         map((p): AnalysisRunEvent => {
           const update = this.handleProgressUpdate(p, language);
           if (update.status === 'succeeded' || update.status === 'failed' || update.status === 'canceled') {
-            stop$.next();
+            this.releaseProgressStop(stop$);
           }
           return {
             kind: 'progress',
@@ -639,13 +1079,17 @@ export class AnalysisRunOrchestrationService {
           };
         }),
         catchError((): Observable<AnalysisRunEvent> => {
-          stop$.next();
+          this.releaseProgressStop(stop$);
           const lang = runChromeLang(language);
           return of<AnalysisRunEvent>({
             kind: 'status',
             message: runString(lang, 'runStarting', { type: analysisTypeLabelFor(lang, type) }),
           });
-        })
+        }),
+        // a1: whichever way this stream ends - terminal, error, or the OWNER discarding the run - the
+        // poll stops. c06: this `finalize` is now the ONLY thing that ends it, which is why it covers
+        // every ending rather than the terminal statuses the branches above release eagerly on.
+        finalize(() => this.releaseProgressStop(stop$)),
       );
   }
 
@@ -677,14 +1121,14 @@ export class AnalysisRunOrchestrationService {
           };
 
           if (update.status === 'succeeded') {
-            stop$.next();
+            this.releaseProgressStop(stop$);
             return concat(
               of(progressEvent),
               this.loadFinalResultForJob(bookId, chapterId, jobId, language)
             );
           }
           if (update.status === 'failed' || update.status === 'canceled') {
-            stop$.next();
+            this.releaseProgressStop(stop$);
             if (update.status === 'failed') {
               const errorEvent: AnalysisRunEvent = {
                 kind: 'error',
@@ -697,12 +1141,14 @@ export class AnalysisRunOrchestrationService {
           return of(progressEvent);
         }),
         catchError((): Observable<AnalysisRunEvent> => {
-          stop$.next();
+          this.releaseProgressStop(stop$);
           return of<AnalysisRunEvent>({
             kind: 'status',
             message: runString(lang, 'runStarting', { type: typeLabel }),
           });
-        })
+        }),
+        // a1: see the twin in `startProgressPollingIfNeeded`.
+        finalize(() => this.releaseProgressStop(stop$)),
       );
   }
 

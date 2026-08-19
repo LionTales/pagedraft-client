@@ -137,6 +137,7 @@ export class JobRegistryService {
       startedAt,
       updatedAt: startedAt,
       chapterId: meta.chapterId,
+      sceneId: meta.sceneId,
       resultRoute: meta.resultRoute,
       analysisType: meta.analysisType,
     };
@@ -177,6 +178,11 @@ export class JobRegistryService {
           initialPercent: s.percent,
           analysisType: s.analysisType,
           chapterId: s.chapterId,
+          // a1: the scene half of the job's SCOPE. Without it a reattached scene job is
+          // indistinguishable from a chapter job of the same type in the same chapter, and the analysis
+          // panel's "is a run in flight for what I am showing?" question (which is scene-precise, exactly
+          // like `resultBelongsToRunOrigin`) would answer yes for the wrong unit.
+          sceneId: s.sceneId,
           // c04: this job was already running before the client knew about it, so it gets no
           // client-side start time and therefore no ETA until it has been observed for a while.
           reattached: true,
@@ -463,7 +469,16 @@ const WHOLE_BOOK_BUILD_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['summary'
  * breakdown (the spine's stage 4, hosted by both `book-dashboard.component.ts` and
  * `editor-page.component.ts`). `proofread` is the only chapter/scene-scoped async analysis path today
  * (Proofread, LineEdit and the single-shot whole-chapter types all share it, distinguished by
- * `analysisType`) - see {@link analysisJobToSource}, the one place a `TrackedJob.chapterId` is ever set.
+ * `analysisType`) - `chapterId` (and, since a1, `sceneId`) reaches a `TrackedJob` through exactly TWO
+ * routes, both of which end up as `meta.chapterId`/`meta.sceneId` on a `track()` call, whose own object
+ * literal (or its `pickMeta` merge, for a re-track) is the actual WRITE onto the `TrackedJob` - not
+ * {@link analysisJobToSource}, which only builds the metadata for one of the two routes: a REATTACHED
+ * job sources it from {@link analysisJobToSource} (`getActiveAnalysisJobs`'s mapping - the only
+ * `ReattachSource` producer that carries either field; the book-level kinds' sources never do), and a
+ * LIVE-dispatched job has it passed directly by whichever caller started the run - today
+ * `AnalysisRunOrchestrationService.publishJobToRegistry` (moved there from the analysis panel by c01).
+ * f13 (2026-08-19): corrected from "the one place a TrackedJob.chapterId is ever set", already false
+ * before c01 (the live caller passed it directly too, just from a different file) and doubly so after.
  *
  * Mirrors {@link WHOLE_BOOK_BUILD_KINDS}: an explicit allowlist, not "any job that happens to carry a
  * chapterId". Both hosts used to read the per-chapter breakdown off that absence rather than off this
@@ -527,6 +542,41 @@ export function showsChunkCounts(job: Pick<TrackedJob, 'kind' | 'totalChunks'> |
   return CHUNK_COUNT_KINDS.has(job.kind);
 }
 
+/**
+ * a1: the (book, chapter, scene, analysis type) unit a chapter-scoped analysis run belongs to.
+ *
+ * This is the SAME tuple `AnalysisPanelComponent.resultBelongsToRunOrigin` compares, stated once so the
+ * "is a run in flight for what I am showing?" question and the "does this result belong here?" question
+ * cannot drift apart.
+ */
+export interface AnalysisJobContext {
+  bookId: string | null;
+  chapterId: string | null;
+  sceneId: string | null;
+  analysisType: string;
+}
+
+/**
+ * Does this tracked job belong to the given analysis context?
+ *
+ * Exported and pure because it is the ONE definition of that match: the analysis panel derives its
+ * "running" state from it (a1), and a spec can exercise it without a registry. `null`/`undefined` are
+ * normalized to `null` on both sides so a chapter-scoped job (no `sceneId`) matches a chapter-scoped
+ * panel (no `sceneId`) and never a scene-scoped one.
+ *
+ * Deliberately says nothing about the job's STATUS: callers ask that separately with {@link isTerminal},
+ * because both questions ("is one running?" and "did the one I saw just finish?") are asked of the same
+ * matched set.
+ */
+export function jobMatchesAnalysisContext(job: TrackedJob, ctx: AnalysisJobContext): boolean {
+  if (!CHAPTER_SCOPED_KINDS.has(job.kind)) return false;
+  if (!ctx.bookId || !ctx.chapterId) return false;
+  return job.bookId === ctx.bookId
+    && (job.chapterId ?? null) === ctx.chapterId
+    && (job.sceneId ?? null) === (ctx.sceneId ?? null)
+    && (job.analysisType ?? null) === ctx.analysisType;
+}
+
 /** The registry's lowercase status vocabulary (backend PascalCase enums normalize down to these). */
 export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled';
 export type TerminalStatus = 'succeeded' | 'failed' | 'canceled';
@@ -582,6 +632,16 @@ export interface TrackedJob {
   updatedAt: string;
   /** Chapter this job belongs to (chapter analysis kinds); undefined for book-level builds. */
   chapterId?: string;
+  /**
+   * a1: the SCENE this job was started against, when the run was scene-scoped; undefined for a
+   * chapter-scoped run and for every book-level build.
+   *
+   * It is carried for the same reason {@link chapterId} is: a job's identity for a UI question is its
+   * SCOPE, and the analysis panel's scope is (chapter, scene) - `resultBelongsToRunOrigin` has always
+   * compared both. Before this field the registry could only answer "a Proofread is running in this
+   * chapter", so a scene run and a chapter run in the same chapter were the same job to every consumer.
+   */
+  sceneId?: string;
   /** Where "view" navigates when done. Best-effort; the Activity Center (rf-f01) consumes it. */
   resultRoute?: string;
   /**
@@ -601,6 +661,8 @@ export interface TrackMeta {
   message?: string;
   initialPercent?: number | null;
   chapterId?: string;
+  /** a1: the scene the run was started against; see {@link TrackedJob.sceneId}. */
+  sceneId?: string;
   resultRoute?: string;
   analysisType?: string;
   /**
@@ -629,6 +691,7 @@ interface ReattachSource {
   message: string;
   analysisType?: string;
   chapterId?: string;
+  sceneId?: string;
 }
 
 // ── Pure helpers (exported where the spec needs them) ─────────────────────────────────────────────
@@ -737,7 +800,9 @@ function analysisJobToSource(j: ActiveAnalysisJobDto): ReattachSource {
     // async path, distinguished by `analysisType`.
     kind: 'proofread',
     jobId: j.jobId,
-    // Scope label must match what the live `job-started` path sets in AnalysisPanelComponent: a
+    // Scope label must match what the live `job-started` path sets in
+    // AnalysisRunOrchestrationService.publishJobToRegistry (it lived in AnalysisPanelComponent until
+    // c01 moved the write off that unmountable surface): a
     // scene-scoped job reattaches as 'סצנה', not the chapter default 'פרק'. Otherwise `track`'s
     // idempotent metadata merge overwrites a live scene job's label with the chapter default after a
     // refresh or book reload (and a freshly reattached scene job would render as a chapter). Any
@@ -752,6 +817,9 @@ function analysisJobToSource(j: ActiveAnalysisJobDto): ReattachSource {
     message: j.message ?? '',
     analysisType: j.analysisType,
     chapterId: j.chapterId ?? undefined,
+    // a1: the DTO has always carried this (the scope label above is derived from it); it was simply
+    // dropped on the floor here, so a reattached scene job reached the registry as a chapter job.
+    sceneId: j.sceneId ?? undefined,
   };
 }
 
@@ -764,6 +832,7 @@ function pickMeta(meta: TrackMeta): Partial<TrackedJob> {
   if (meta.resultRoute !== undefined) out.resultRoute = meta.resultRoute;
   if (meta.analysisType !== undefined) out.analysisType = meta.analysisType;
   if (meta.chapterId !== undefined) out.chapterId = meta.chapterId;
+  if (meta.sceneId !== undefined) out.sceneId = meta.sceneId;
   return out;
 }
 

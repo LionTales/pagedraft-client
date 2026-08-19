@@ -886,6 +886,95 @@ describe('BookReviewStatusRowComponent (wb3-c01)', () => {
     });
   });
 
+  // ── a1: `handledTerminalJobId`, the dashboard's dedupe key ───────────────────────────────────────
+  //
+  // finding 58. The dashboard watches the SAME review build in the job registry (so a build that
+  // finishes while this row is unmounted still refreshes the findings ledger) and skips its own refresh
+  // when this row's poll already handled that job's terminal. That makes this getter a CONTRACT with
+  // another component, and it shipped with no spec of its own: the dashboard's cases asserted against a
+  // literal `{ handledTerminalJobId, loadBookReviewStatus }` stand-in, which would keep passing if the
+  // getter stopped tracking the guard, started returning a boolean, or was never reset.
+  describe('a1: handledTerminalJobId is the dashboard\'s dedupe key', () => {
+    /** Start a build for `jobId` and, unless `status` is null, drive its poll to that terminal. */
+    function buildTo(jobId: string, status: string | null): void {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      (reviewSvc.buildReview as jasmine.Spy).and.returnValue(of({ jobId, noOp: false } as any));
+      const poll$ = new Subject<any>();
+      (reviewSvc.getReviewProgress as jasmine.Spy).and.returnValue(poll$.asObservable());
+      component.onBuildBookReview();
+      if (status) poll$.next({ status, message: '', estimatedCompletionPercent: 100 });
+    }
+
+    beforeEach(() => {
+      const reviewSvc = TestBed.inject(BookReviewService);
+      spyOn(reviewSvc, 'buildReview');
+      spyOn(reviewSvc, 'getReviewProgress');
+      spyOn(reviewSvc, 'getReviewStatus').and.returnValue(NEVER);
+      component.bookLanguage = 'he';
+    });
+
+    it('is null before any build, and while one is still in flight', () => {
+      expect(component.handledTerminalJobId).toBeNull();
+
+      buildTo('job-1', 'running');
+
+      expect(component.handledTerminalJobId)
+        .withContext('a build in progress has handled nothing, so the dashboard must not skip on it')
+        .toBeNull();
+    });
+
+    it('holds the ID of the build this row drove to terminal - not a boolean', () => {
+      buildTo('job-1', 'succeeded');
+
+      expect(component.handledTerminalJobId)
+        .withContext('"this row has handled A build" would suppress the dashboard refresh for every '
+          + 'later build too')
+        .toBe('job-1');
+    });
+
+    it('reports the NEXT build\'s id once that one terminates', () => {
+      buildTo('job-1', 'succeeded');
+      expect(component.handledTerminalJobId).toBe('job-1');
+
+      buildTo('job-2', 'succeeded');
+
+      expect(component.handledTerminalJobId).toBe('job-2');
+    });
+
+    it('goes back to null at the START of a new build, before it has handled anything', () => {
+      buildTo('job-1', 'succeeded');
+      expect(component.handledTerminalJobId).toBe('job-1');
+
+      buildTo('job-2', null);
+
+      expect(component.handledTerminalJobId)
+        .withContext('the dashboard would otherwise skip the new build on the PREVIOUS build\'s id')
+        .toBeNull();
+    });
+
+    it('holds it for a FAILED terminal too: the row handled it either way', () => {
+      // The dashboard's skip is about "has this row already re-read the status for this job", which a
+      // failed build does exactly as much as a successful one.
+      buildTo('job-1', 'failed');
+
+      expect(component.handledTerminalJobId).toBe('job-1');
+    });
+
+    it('is cleared on a context switch and on destroy, so it cannot leak across books', () => {
+      buildTo('job-1', 'succeeded');
+      expect(component.handledTerminalJobId).toBe('job-1');
+
+      component.bookId = 'book-2';
+      component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
+      expect(component.handledTerminalJobId).toBeNull();
+
+      buildTo('job-3', 'succeeded');
+      expect(component.handledTerminalJobId).toBe('job-3');
+      component.ngOnDestroy();
+      expect(component.handledTerminalJobId).toBeNull();
+    });
+  });
+
   // ── rf-c02: the row PUBLISHES its build job to the registry on start (track), so the editor's single
   //    "review running" affordance can be derived from jobRegistry.anyRunningForBook$. ─────────────────
   describe('rf-c02: publishes review build to the job registry', () => {

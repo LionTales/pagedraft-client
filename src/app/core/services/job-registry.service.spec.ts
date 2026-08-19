@@ -8,6 +8,7 @@ import {
   JobKind,
   JobRegistryService,
   TrackedJob,
+  jobMatchesAnalysisContext,
   normalizeProgress,
   showsChunkCounts,
   progressPercent,
@@ -424,6 +425,24 @@ describe('JobRegistryService', () => {
       expect(jobById('scene-1')?.scopeLabel).toBe('סצנה');
     });
 
+    it('a1: carries the sceneId onto the reattached job, not just into its label', () => {
+      // The DTO has always carried it and `analysisJobToSource` dropped it, so a reattached scene job
+      // reached the registry as a chapter job. The analysis panel's "is a run in flight for what I am
+      // showing?" is scene-precise, so that made a scene run disable a chapter panel's analyze button.
+      configure({
+        analysis: makeAnalysisStub([
+          activeJob({ jobId: 'scene-scope', scope: 'Scene', chapterId: 'ch-1', sceneId: 'sc-1' }),
+          activeJob({ jobId: 'chap-scope', scope: 'Chapter', chapterId: 'ch-1', sceneId: null }),
+        ]),
+      });
+      service.reattach('book-A', 'he');
+
+      expect(jobById('scene-scope')?.sceneId).toBe('sc-1');
+      expect(jobById('chap-scope')?.sceneId)
+        .withContext('a chapter-scoped job carries no scene, so it can never match a scene-scoped panel')
+        .toBeUndefined();
+    });
+
     it('reattaches a chapter-scoped job with the chapter label', () => {
       configure({ analysis: makeAnalysisStub([activeJob({ jobId: 'chap-lbl', sceneId: null })]) });
       service.reattach('book-A', 'he');
@@ -787,6 +806,51 @@ describe('JobRegistryService', () => {
     it('withholds the pair for a job that is not tracked at all', () => {
       expect(showsChunkCounts(null)).toBeFalse();
       expect(showsChunkCounts(undefined)).toBeFalse();
+    });
+  });
+
+  /**
+   * a1: the ONE definition of "this job belongs to the analysis unit on screen".
+   *
+   * The analysis panel derives its whole "a run is in flight here" state from this, for an instance that
+   * did not start the run and holds no field describing it, so every term is load-bearing: drop the scene
+   * term and a scene run disables the chapter panel's analyze button; drop the type term and a Line Edit
+   * disables Proofread. Pure and exported so this table can exercise it without a registry.
+   */
+  describe('jobMatchesAnalysisContext - the (book, chapter, scene, type) unit a run belongs to', () => {
+    const ctx = { bookId: 'book-A', chapterId: 'ch-1', sceneId: null, analysisType: 'Proofread' };
+    const job = (o: Partial<TrackedJob> = {}) => ({
+      kind: 'proofread', bookId: 'book-A', chapterId: 'ch-1', analysisType: 'Proofread', ...o,
+    } as unknown as TrackedJob);
+
+    it('matches the same book, chapter, scene and type', () => {
+      expect(jobMatchesAnalysisContext(job(), ctx)).toBeTrue();
+    });
+
+    it('rejects a different book, chapter or analysis type', () => {
+      expect(jobMatchesAnalysisContext(job({ bookId: 'book-B' }), ctx)).toBeFalse();
+      expect(jobMatchesAnalysisContext(job({ chapterId: 'ch-2' }), ctx)).toBeFalse();
+      expect(jobMatchesAnalysisContext(job({ analysisType: 'LineEdit' }), ctx)).toBeFalse();
+    });
+
+    it('is SCENE-PRECISE in both directions, which is why the registry had to start carrying sceneId', () => {
+      expect(jobMatchesAnalysisContext(job({ sceneId: 'sc-1' }), ctx))
+        .withContext('a scene run must not answer for the chapter-scoped panel')
+        .toBeFalse();
+      expect(jobMatchesAnalysisContext(job(), { ...ctx, sceneId: 'sc-1' }))
+        .withContext('nor the chapter run for the scene-scoped one')
+        .toBeFalse();
+      expect(jobMatchesAnalysisContext(job({ sceneId: 'sc-1' }), { ...ctx, sceneId: 'sc-1' })).toBeTrue();
+    });
+
+    it('rejects a whole-book build, whatever its ids say', () => {
+      expect(jobMatchesAnalysisContext(job({ kind: 'review' }), ctx)).toBeFalse();
+      expect(jobMatchesAnalysisContext(job({ kind: 'summary' }), ctx)).toBeFalse();
+    });
+
+    it('refuses to match on a context with no book or no chapter, rather than matching everything', () => {
+      expect(jobMatchesAnalysisContext(job(), { ...ctx, bookId: null })).toBeFalse();
+      expect(jobMatchesAnalysisContext(job(), { ...ctx, chapterId: null })).toBeFalse();
     });
   });
 

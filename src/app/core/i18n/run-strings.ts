@@ -70,6 +70,14 @@ export type RunStringKey =
   | 'runSucceeded'
   | 'runFailed'
   | 'runCanceled'
+  // c06: the run was STOPPED because the author started another one, and nobody was there to be told.
+  // Deliberately not `runCanceled`: "canceled" says nothing about why, and the why is the whole content
+  // here (the author's own next click ended it). It is also NOT `runFailed` - nothing failed. The second
+  // sentence is load-bearing: the client aborted the request, but the server may well have finished and
+  // persisted the analysis, so the honest statement is where to look rather than "it is gone". Only ever
+  // shown for a run with NO job id; a dispatched async job keeps running and keeps its registry row, and
+  // saying it was stopped would be false.
+  | 'runSuperseded'
   | 'analysisFailed'
   | 'loadFinalResultFailed'
   // The START-BUDGET expiry (run-dialog-starting-state-escape c01). Deliberately NOT a synonym of
@@ -140,6 +148,8 @@ export const RUN_STRINGS_HE: Record<RunStringKey, string> = {
   runSucceeded:          '{type}: הסתיים.',
   runFailed:             '{type}: נכשל. ראו את פרטי השגיאה.',
   runCanceled:           '{type}: בוטל.',
+  // DRAFT he - needs native review.
+  runSuperseded:         '{type}: ההרצה הופסקה מפני שהתחלתם ניתוח חדש. תוצאה שנשמרה בשרת תופיע בהיסטוריה.',
   analysisFailed:        'הניתוח נכשל.',
   loadFinalResultFailed: 'לא ניתן לטעון את התוצאה הסופית. טוען מחדש את ההיסטוריה.',
   runStartTimedOut:      '{type}: ההרצה לא התחילה. השרת לא הגיב בזמן. סגרו את החלון ונסו שוב.',
@@ -181,6 +191,7 @@ export const RUN_STRINGS_EN: Record<RunStringKey, string> = {
   runSucceeded:          '{type}: finished.',
   runFailed:             '{type}: failed. See the error details.',
   runCanceled:           '{type}: canceled.',
+  runSuperseded:         '{type}: this run was stopped because you started a new analysis. A result the server saved will appear in History.',
   analysisFailed:        'Analysis failed.',
   loadFinalResultFailed: 'Could not load the final result. Reloading history.',
   runStartTimedOut:      '{type}: the run did not start. The server did not respond in time. Close this and try again.',

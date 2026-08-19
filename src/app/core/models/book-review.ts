@@ -46,6 +46,23 @@ export interface ChapterAnchor {
 }
 
 /**
+ * d1: CLIENT-ONLY, NOT A WIRE DTO. A ChapterAnchor carrying the best-effort intra-chapter
+ * navigation hints the findings ledger can supply when the reader clicks an anchor chip.
+ *
+ * It EXTENDS ChapterAnchor deliberately, so every surface that still emits a bare anchor (the
+ * Story Bible, the stage spine, the dashboard's own chapter chips) stays assignable and needs no
+ * change. Both extra fields are optional and everything downstream treats them as hints: a missing,
+ * stale or unmatched excerpt silently lands the reader at the top of the chapter, which is the
+ * behavior that shipped before this type existed and therefore cannot regress.
+ */
+export interface FindingNavigationTarget extends ChapterAnchor {
+  /** The finding's own evidence excerpt for THIS chapter, when it carries one. */
+  excerpt?: string;
+  /** The finding whose anchor was clicked, so the host can keep the ledger row in sync. */
+  findingId?: string;
+}
+
+/**
  * A single persisted whole-book finding as returned by GET .../review/findings.
  * Mirrors BookFindingDto (camelCase): id, dimension, verdict, severity, rationale,
  * evidence, chapterAnchors, suggestedAction, status, createdAt, updatedAt.

@@ -18,7 +18,7 @@ import { BehaviorSubject } from 'rxjs';
 
 import { HelpIndexComponent, groupByStage } from './help-index.component';
 import { GuideSummaryDto } from '../../core/models/guide';
-import { GUIDES_STRINGS_EN, GUIDES_STRINGS_HE, stageLabel } from '../../core/i18n/guides-strings';
+import { stageLabel } from '../../core/i18n/guides-strings';
 
 function guide(over: Partial<GuideSummaryDto> = {}): GuideSummaryDto {
   return {
@@ -121,7 +121,12 @@ describe('HelpIndexComponent (chatbot phase A.2, c1)', () => {
       expect(meta.length).toBe(3);
       // Not the raw ISO string from the frontmatter.
       expect(meta[0].nativeElement.textContent).not.toContain('2026-08-02');
-      expect(meta[0].nativeElement.textContent).toContain(GUIDES_STRINGS_HE['updatedPrefix']);
+      // f10: every GUIDES_STRINGS_HE/EN literal below is transcribed independently from
+      // guides-strings.ts (DRAFT he) rather than read back through the constant itself - comparing the
+      // constant to itself catches a MISSING string but never a WRONG one, and Hebrew here is draft
+      // copy that is exactly the case a typo can slip through unreviewed. Update each literal in
+      // lockstep with a deliberate copy change to the matching key in guides-strings.ts.
+      expect(meta[0].nativeElement.textContent).toContain('עודכן');
     });
 
     it('does NOT list the corpus\'s own index document: this page IS that index', () => {
@@ -137,7 +142,33 @@ describe('HelpIndexComponent (chatbot phase A.2, c1)', () => {
 
       expect(fixture.debugElement.queryAll(By.css('.help-item-link')).length).toBe(0);
       expect(fixture.debugElement.query(By.css('.help-status')).nativeElement.textContent.trim())
-        .toBe(GUIDES_STRINGS_HE['indexEmpty']);
+        .toBe('אין מדריכים להצגה.'); // f10: transcribed, see comment above
+    });
+  });
+
+  // ── Navigation back to the app (e1) ─────────────────────────────────────────────────────────────
+  //
+  // Guides is an orphan surface off the flat route table: there is no shared chrome to fall back on,
+  // so the page must carry its own way back to the books list.
+
+  describe('navigation', () => {
+    it('links back to the books list, in Hebrew', () => {
+      flushIndex(corpus());
+
+      const back = fixture.debugElement.query(By.css('.help-back-books')).nativeElement as HTMLAnchorElement;
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain('חזרה לרשימת הספרים'); // f10: transcribed, see comment above
+    });
+
+    it('links back to the books list, in English', () => {
+      flushIndex(corpus());
+      setLang('en');
+      fixture.detectChanges();
+      flushIndex(corpus('en'), 'en');
+
+      const back = fixture.debugElement.query(By.css('.help-back-books')).nativeElement as HTMLAnchorElement;
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain('Back to the books'); // f10: transcribed, see comment above
     });
   });
 
@@ -150,7 +181,7 @@ describe('HelpIndexComponent (chatbot phase A.2, c1)', () => {
       expect(component.lang).toBe('he');
       expect(fixture.debugElement.query(By.css('.help')).nativeElement.getAttribute('dir')).toBe('rtl');
       expect(fixture.debugElement.query(By.css('.help-title')).nativeElement.textContent.trim())
-        .toBe(GUIDES_STRINGS_HE['indexTitle']);
+        .toBe('מדריכי המערכת'); // f10: transcribed, see comment above
     });
 
     it('follows the lang query parameter: English chrome, LTR, and the English side of the corpus', () => {
@@ -162,7 +193,7 @@ describe('HelpIndexComponent (chatbot phase A.2, c1)', () => {
       expect(component.lang).toBe('en');
       expect(fixture.debugElement.query(By.css('.help')).nativeElement.getAttribute('dir')).toBe('ltr');
       expect(fixture.debugElement.query(By.css('.help-title')).nativeElement.textContent.trim())
-        .toBe(GUIDES_STRINGS_EN['indexTitle']);
+        .toBe('Product guides'); // f10: transcribed, see comment above
       expect(fixture.debugElement.queryAll(By.css('.help-group-title'))[0].nativeElement.textContent.trim())
         .toBe(stageLabel('en', 'overview'));
     });
@@ -251,9 +282,9 @@ describe('HelpIndexComponent (chatbot phase A.2, c1)', () => {
 
       expect(component.failure).toBe('corpus');
       expect(fixture.debugElement.query(By.css('.help-failure-body')).nativeElement.textContent.trim())
-        .toBe(GUIDES_STRINGS_HE['corpusUnavailable']);
+        .toBe('המדריכים לא נמצאו בשרת הזה. זו תקלה בהתקנה, לא חוסר בתוכן.'); // f10: transcribed, see comment above
       // Emphatically NOT the empty-corpus sentence: those are different problems.
-      expect(fixture.nativeElement.textContent).not.toContain(GUIDES_STRINGS_HE['indexEmpty']);
+      expect(fixture.nativeElement.textContent).not.toContain('אין מדריכים להצגה.'); // f10: transcribed
     });
 
     it('a transport failure says so separately, and retry asks again', () => {
@@ -262,7 +293,7 @@ describe('HelpIndexComponent (chatbot phase A.2, c1)', () => {
 
       expect(component.failure).toBe('network');
       expect(fixture.debugElement.query(By.css('.help-failure-body')).nativeElement.textContent.trim())
-        .toBe(GUIDES_STRINGS_HE['loadFailedBody']);
+        .toBe('לא הצלחתי להגיע לשרת. בדקו את החיבור ונסו שוב.'); // f10: transcribed, see comment above
 
       fixture.debugElement.query(By.css('.help-failure button')).nativeElement.click();
       flushIndex(corpus());

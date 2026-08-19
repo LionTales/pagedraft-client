@@ -78,9 +78,22 @@ interface GuideReadResult {
   template: `
     <div class="reader" [attr.dir]="dir">
       <nav class="reader-bar">
-        <a class="reader-back" [routerLink]="['/help']" [queryParams]="{ lang: lang }">
-          <span class="reader-back-icon" aria-hidden="true">←</span>{{ label('backToIndex') }}
-        </a>
+        <div class="reader-back-group">
+          <!-- P3-47: reader-back-books and reader-back used to carry two byte-identical style blocks
+               (color/underline/focus-ring + the RTL icon mirror). One shared class now owns the style;
+               the two names survive as pure MARKER classes (the additive pattern this branch's own
+               dashboard link already uses for dash-help-link + dash-feedback-link), so the existing
+               .reader-back / .reader-back-books spec selectors keep matching exactly one element each.
+               help-index.component.ts's .help-back-books is a separate file and is left as the
+               remaining two-copy population (not built into a shared layout component; the plan
+               deliberately declined that). -->
+          <a class="reader-back-link reader-back-books" [routerLink]="['/books']">
+            <span class="reader-back-icon" aria-hidden="true">←</span>{{ label('backToBooks') }}
+          </a>
+          <a class="reader-back-link reader-back" [routerLink]="['/help']" [queryParams]="{ lang: lang }">
+            <span class="reader-back-icon" aria-hidden="true">←</span>{{ label('backToIndex') }}
+          </a>
+        </div>
 
         <div class="reader-lang" role="group" [attr.aria-label]="label('languageToggleLabel')">
           <button
@@ -156,7 +169,16 @@ interface GuideReadResult {
       padding-block-end: var(--pd-space-4);
       border-block-end: 1px solid var(--pd-divider);
     }
-    .reader-back {
+    .reader-back-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--pd-space-4);
+    }
+    /* P3-47: was two byte-identical blocks (.reader-back + .reader-back-books, plus a duplicated icon
+       mirror rule). .reader-back and .reader-back-books are now pure marker classes stacked onto
+       this one; see the template comment on the back-group for why the markers stay. */
+    .reader-back-link {
       color: var(--pd-text-link);
       text-decoration: none;
       font-size: var(--pd-text-body-sm);
@@ -164,8 +186,8 @@ interface GuideReadResult {
       align-items: center;
       gap: var(--pd-space-2);
     }
-    .reader-back:hover { text-decoration: underline; }
-    .reader-back:focus-visible { outline: none; box-shadow: var(--pd-ring); border-radius: var(--pd-radius-sm); }
+    .reader-back-link:hover { text-decoration: underline; }
+    .reader-back-link:focus-visible { outline: none; box-shadow: var(--pd-ring); border-radius: var(--pd-radius-sm); }
     /* The arrow is a PHYSICAL glyph, so it is mirrored by layout direction rather than by content. */
     :host-context([dir='rtl']) .reader-back-icon,
     .reader[dir='rtl'] .reader-back-icon { transform: scaleX(-1); }
