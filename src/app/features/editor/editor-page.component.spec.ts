@@ -1,4 +1,4 @@
-import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
+import { ComponentFixture, TestBed, fakeAsync, tick, flush } from '@angular/core/testing';
 import { Component, EventEmitter, Input, NO_ERRORS_SCHEMA, OnDestroy, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { By } from '@angular/platform-browser';
@@ -9,7 +9,7 @@ import {
   ChapterUpdatedEvent,
   SceneUpdatedEvent,
 } from '../../core/models/book';
-import { of, EMPTY, NEVER, throwError, Subject, BehaviorSubject, Observable, map } from 'rxjs';
+import { of, EMPTY, NEVER, throwError, Subject, BehaviorSubject, Observable, map, firstValueFrom } from 'rxjs';
 import { EditorPageComponent, excerptSearchPhrase } from './editor-page.component';
 import { BookService } from '../../core/services/book.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
@@ -20,7 +20,7 @@ import { SceneService } from '../../core/services/scene.service';
 import { SyncService } from '../../core/services/sync.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisService } from '../../core/services/analysis.service';
-import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { JobRegistryService, TrackedJob, isTerminal } from '../../core/services/job-registry.service';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { SfdtManipulationService, SCROLL_TARGET_BOOKMARK } from '../../core/services/sfdt-manipulation.service';
 import { EditorTextService } from '../../core/services/editor-text.service';
@@ -734,13 +734,33 @@ describe('EditorPageComponent (focused logic)', () => {
 
     // ── d1: the two edges added on top of the resolution ─────────────────────
 
-    it('d1: lands in EDIT mode, because the same click armed two Edit-mode surfaces', () => {
+    it('d1/c02: the LEDGER chip (findingId present) lands in EDIT mode, because that click armed two Edit-mode surfaces', () => {
       component.reviewMode = 'review';
       component.hasPendingChanges = false;
 
-      component.onOpenChapterFromDashboard({ chapterId: 'chap-b', order: 1, title: 'Chapter B' });
+      component.onOpenChapterFromDashboard({ chapterId: 'chap-b', order: 1, title: 'Chapter B', findingId: 'f-1' });
 
       expect(component.reviewMode).toBe('edit');
+    });
+
+    it('c02: the narrowing gates ONLY the mode switch - an anchor with no findingId still opens the chapter AND still holds its excerpt', () => {
+      component.reviewMode = 'review';
+      component.hasPendingChanges = false;
+
+      component.onOpenChapterFromDashboard({
+        chapterId: 'chap-b',
+        order: 1,
+        title: 'Chapter B',
+        excerpt: 'She turned, and everything changed for good and forever and then some more words here.',
+      });
+
+      // Everything except the mode switch still runs for a producer that armed nothing.
+      expect(component.selectedChapterId).toBe('chap-b');
+      expect((component as any).pendingExcerptNavigation).toEqual({
+        chapterId: 'chap-b',
+        phrase: 'She turned, and everything changed for good and forever and then some',
+      });
+      expect(component.reviewMode).toBe('review');
     });
 
     it('d1: a chapter that cannot be resolved leaves the mode alone (no half-navigation)', () => {
@@ -781,14 +801,22 @@ describe('EditorPageComponent (focused logic)', () => {
       expect((component as any).pendingExcerptNavigation).toBeNull();
     });
 
-    it('d1: a held phrase aimed at chapter A is DROPPED when chapter B is what opened', () => {
+    it('d1/c04: a held phrase aimed at chapter A does NOT fire when chapter B is what opened', () => {
       const selectRangeSpy = spyOn(component, 'selectRangeInEditor');
       (component as any).pendingExcerptNavigation = { chapterId: 'chap-a', phrase: 'some words' };
 
-      (component as any).consumePendingExcerptNavigation('chap-b');
+      (component as any).settlePendingExcerptNavigation('chap-b', true);
 
       expect(selectRangeSpy).not.toHaveBeenCalled();
-      // Consumed either way: a hint the reader has navigated past must not fire later.
+      // c04: chapter B's load LEAVES a phrase stamped for chapter A alone - it is A's own load that
+      // releases it (the spec below). The old rule released whatever was held on any load, which meant a
+      // stale load for the OUTGOING chapter landing late disarmed a hint the reader had only just armed
+      // for the chapter they were opening. Scoping the release to the stamp is what removes that race.
+      expect((component as any).pendingExcerptNavigation).toEqual({ chapterId: 'chap-a', phrase: 'some words' });
+
+      // ...and A's own load, which by then takes its guarded return, is what ends it.
+      (component as any).settlePendingExcerptNavigation('chap-a', false);
+      expect(selectRangeSpy).not.toHaveBeenCalled();
       expect((component as any).pendingExcerptNavigation).toBeNull();
     });
 
@@ -796,19 +824,277 @@ describe('EditorPageComponent (focused logic)', () => {
       const selectRangeSpy = spyOn(component, 'selectRangeInEditor');
       (component as any).pendingExcerptNavigation = { chapterId: 'chap-b', phrase: 'She turned' };
 
-      (component as any).consumePendingExcerptNavigation('chap-b');
+      (component as any).settlePendingExcerptNavigation('chap-b', true);
 
       expect(selectRangeSpy).toHaveBeenCalledOnceWith({ originalText: 'She turned' });
       expect((component as any).pendingExcerptNavigation).toBeNull();
     });
 
-    it('d1: a phrase that matches nothing in the document is a silent no-op (today\'s fallback)', () => {
-      // selectRangeInEditor's own contract: no editor, or no match, returns without throwing.
-      (component as any).docEditor = undefined;
-      expect(() =>
-        component.selectRangeInEditor({ originalText: 'a sentence the author has since rewritten' }),
-      ).not.toThrow();
+    it('d1: a phrase that matches nothing in the document is a silent no-op (today\'s fallback)', fakeAsync(() => {
+      // f10: `docEditor = undefined` (the old setup here) hits `if (!editor) return` at
+      // editor-page.component.ts:2350 - the NO-EDITOR early return - and never reaches the search
+      // fallback at all, so the name's claim ("matches nothing") could not fail for the reason it
+      // states. Drive the real miss: a present editor whose searchModule.find returns null (no
+      // bookmark id, no start/endOffset, so the earlier fallbacks fall through on their own).
+      const findSpy = jasmine.createSpy('find').and.returnValue(null);
+      const navigateSpy = jasmine.createSpy('navigate');
+      (component as any).docEditor = {
+        documentEditor: {
+          ...mockDocEditor.documentEditor,
+          searchModule: { find: findSpy, navigate: navigateSpy },
+        },
+      };
+      // selectRangeInEditor defers doSelect through a real requestAnimationFrame before the
+      // setTimeout(150) fakeAsync's clock can advance; run its callback synchronously so tick/flush
+      // only has to cover the setTimeout.
+      spyOn(window, 'requestAnimationFrame').and.callFake((cb: FrameRequestCallback) => {
+        cb(0);
+        return 0;
+      });
+
+      expect(() => {
+        component.selectRangeInEditor({ originalText: 'a sentence the author has since rewritten' });
+        flush();
+      }).not.toThrow();
+
+      expect(findSpy).toHaveBeenCalledWith('a sentence the author has since rewritten');
+      expect(navigateSpy).not.toHaveBeenCalled();
+    }));
+  });
+
+  // ─── c04: the excerpt one-shot ends on EVERY exit path, not only a successful open() ───
+  //
+  // P2 finding 13. `consumePendingExcerptNavigation` ran only after a successful `open()`, so the
+  // guarded return inside `loadChapterContent`, that load's (previously absent) error arm and the whole
+  // scene path all left the phrase armed - and a phrase is stamped with a chapter id, so it waits for
+  // that chapter and fires at whoever opens it next, jumping the view, selecting a passage nobody asked
+  // for and taking the caret. Each spec below drives one of those exit paths.
+
+  describe('c04: pendingExcerptNavigation lifecycle', () => {
+    let selectRangeSpy: jasmine.Spy;
+
+    beforeEach(() => {
+      selectRangeSpy = spyOn(component, 'selectRangeInEditor');
     });
+
+    it('c04: a chapter load whose document never opened RELEASES the phrase, so re-opening that chapter later does not jump', fakeAsync(() => {
+      const chapterSvc = TestBed.inject(ChapterService) as any;
+      chapterSvc.getById = jasmine.createSpy('getById').and.returnValue(of({ contentSfdt: SAMPLE_SFDT }));
+      (component as any).pendingExcerptNavigation = { chapterId: 'chap-b', phrase: 'She turned' };
+
+      // The reader moved on before the response landed, so loadChapterContent's inner guard takes the
+      // early return and open() never runs. Under the old code the phrase survived this untouched.
+      component.selectedChapterId = 'chap-a';
+      (component as any).loadChapterContent('chap-b');
+      tick();
+
+      expect(selectRangeSpy).not.toHaveBeenCalled();
+      expect((component as any).pendingExcerptNavigation).toBeNull();
+
+      // Minutes later the reader opens chapter B for a reason of their own. Nothing may jump.
+      component.selectedChapterId = 'chap-b';
+      (component as any).loadChapterContent('chap-b');
+      tick();
+
+      expect(selectRangeSpy).not.toHaveBeenCalled();
+    }));
+
+    it('c04: a chapter content GET that FAILS releases the phrase rather than leaving it armed forever', fakeAsync(() => {
+      const chapterSvc = TestBed.inject(ChapterService) as any;
+      chapterSvc.getById = jasmine.createSpy('getById').and.returnValue(throwError(() => new Error('boom')));
+      (component as any).pendingExcerptNavigation = { chapterId: 'chap-b', phrase: 'She turned' };
+
+      component.selectedChapterId = 'chap-b';
+      (component as any).loadChapterContent('chap-b');
+      tick();
+
+      // The load this phrase was aimed at is over and rendered nothing to search. It has no second try.
+      expect(selectRangeSpy).not.toHaveBeenCalled();
+      expect((component as any).pendingExcerptNavigation).toBeNull();
+    }));
+
+    it('c04: the SCENE path clears a held chapter-level phrase without firing it', fakeAsync(() => {
+      const sceneSvc = TestBed.inject(SceneService) as any;
+      sceneSvc.getById = jasmine.createSpy('getById').and.returnValue(of({ contentSfdt: SAMPLE_SFDT }));
+      (component as any).pendingExcerptNavigation = { chapterId: 'chap-b', phrase: 'She turned' };
+
+      component.selectedChapterId = 'chap-b';
+      component.selectedSceneId = 'scene-1';
+      (component as any).loadSceneContent('chap-b', 'scene-1');
+      tick();
+
+      // A scene is what is open, and the phrase was measured against the whole chapter's prose. Released
+      // rather than fired: a literal search inside one scene either misses or lands on a coincidence in a
+      // unit the reader did not open to read it.
+      expect(selectRangeSpy).not.toHaveBeenCalled();
+      expect((component as any).pendingExcerptNavigation).toBeNull();
+    }));
+
+    it('c04: a STALE scene load that never opened does NOT disarm a phrase armed after it', fakeAsync(() => {
+      const sceneSvc = TestBed.inject(SceneService) as any;
+      sceneSvc.getById = jasmine.createSpy('getById').and.returnValue(of({ contentSfdt: SAMPLE_SFDT }));
+
+      // A scene load is in flight when the reader clicks a finding in that same chapter: selecting the
+      // chapter nulls selectedSceneId, so the scene response takes loadSceneContent's guarded return.
+      // The release must sit AFTER that guard, or this late arrival kills a brand-new hint.
+      component.selectedChapterId = 'chap-b';
+      component.selectedSceneId = null;
+      (component as any).pendingExcerptNavigation = { chapterId: 'chap-b', phrase: 'She turned' };
+
+      (component as any).loadSceneContent('chap-b', 'scene-1');
+      tick();
+
+      expect((component as any).pendingExcerptNavigation).toEqual({ chapterId: 'chap-b', phrase: 'She turned' });
+    }));
+
+    it('c16: the REAL call site fires the phrase - loadChapterContent hands it over after open() succeeds', fakeAsync(() => {
+      // P3 finding 64. Every other spec for the settle helper calls it DIRECTLY, and the c04 specs
+      // above drive loadChapterContent only through its exits that must NOT fire (guarded, GET error,
+      // scene). So nothing pinned the one call site that DOES fire: the
+      // `settlePendingExcerptNavigation(chapterId, true)` line under `open()` inside loadChapterContent.
+      // Deleting that line left the whole d1 + c04 suite green with the search edge dead. This spec
+      // drives the real path end to end; comment that line out and it is the only thing that goes red.
+      const chapterSvc = TestBed.inject(ChapterService) as any;
+      chapterSvc.getById = jasmine.createSpy('getById').and.returnValue(of({ contentSfdt: SAMPLE_SFDT }));
+      sfdtSpy.ensureSfdtRtl.and.callFake((s: string) => s);
+      (component as any).pendingExcerptNavigation = { chapterId: 'chap-b', phrase: 'She turned' };
+
+      // Every condition the inner guard checks is satisfied, so the document really opens.
+      component.selectedChapterId = 'chap-b';
+      component.selectedSceneId = null;
+      (component as any).loadChapterContent('chap-b');
+      tick();
+
+      expect(mockDocEditor.documentEditor.open).toHaveBeenCalled();
+      expect(selectRangeSpy).toHaveBeenCalledOnceWith({ originalText: 'She turned' });
+      expect((component as any).pendingExcerptNavigation).toBeNull();
+    }));
+
+    it('c04: teardown drops BOTH navigation one-shots, which is what their docstrings had been claiming', () => {
+      (component as any).pendingOpenFindingId = 'f-7';
+      (component as any).pendingExcerptNavigation = { chapterId: 'chap-b', phrase: 'She turned' };
+
+      component.ngOnDestroy();
+
+      expect((component as any).pendingOpenFindingId).toBeNull();
+      expect((component as any).pendingExcerptNavigation).toBeNull();
+    });
+  });
+
+  // ─── c05: selectRangeInEditor re-checks the document under its own deferral ───
+  //
+  // P2 finding 15. `selectRangeInEditor` captures the editor once and defers the whole navigation by a
+  // requestAnimationFrame plus setTimeout(150), with no re-check of the document in between - and since
+  // d1 this fires automatically at the end of every finding click, with the chapter tree one click away.
+  // A switch inside that window made the search run against the newly opened document and then navigate
+  // + focusIn on an arbitrary match in the chapter the reader had just moved to. Every spec below holds
+  // that window open and moves the document inside it; a synchronous test cannot express any of them.
+
+  describe('c05: the deferred selection re-checks the document it was aimed at', () => {
+    let findSpy: jasmine.Spy;
+    let navigateSpy: jasmine.Spy;
+    let selectSpy: jasmine.Spy;
+    let focusInSpy: jasmine.Spy;
+
+    beforeEach(() => {
+      findSpy = jasmine.createSpy('find').and.returnValue({ startOffset: '0;0;0', endOffset: '0;0;5' });
+      navigateSpy = jasmine.createSpy('navigate');
+      selectSpy = jasmine.createSpy('select');
+      focusInSpy = jasmine.createSpy('focusIn');
+      (component as any).docEditor = {
+        documentEditor: {
+          ...mockDocEditor.documentEditor,
+          focusIn: focusInSpy,
+          selection: { select: selectSpy, text: 'Hello' },
+          searchModule: { find: findSpy, navigate: navigateSpy },
+        },
+      };
+      // The editor holds chapter 1's document and the reader is on it (the global beforeEach state),
+      // which is the state every one of these navigations is requested in.
+      component.selectedChapterId = 'chap-1';
+      component.selectedSceneId = null;
+      component.documentOwnerChapterId = 'chap-1';
+      component.documentOwnerSceneId = null;
+      // Same reason as f10's spec above: the real requestAnimationFrame fires outside fakeAsync's clock,
+      // so run its callback inline and let tick() own the 150ms - that timeout IS the window under test.
+      spyOn(window, 'requestAnimationFrame').and.callFake((cb: FrameRequestCallback) => {
+        cb(0);
+        return 0;
+      });
+    });
+
+    it('c05: a chapter switch INSIDE the window stops the search - find() is never called and focus is not stolen', fakeAsync(() => {
+      component.selectRangeInEditor({ originalText: 'She turned' });
+
+      // Mid-window the reader clicks another chapter in the tree. The selection moves on the click; the
+      // document owner only moves when that load lands an HTTP round trip later, so this is what the
+      // window usually looks like.
+      tick(100);
+      component.selectedChapterId = 'chap-2';
+
+      tick(100);
+
+      expect(findSpy).not.toHaveBeenCalled();
+      expect(navigateSpy).not.toHaveBeenCalled();
+      expect(focusInSpy).not.toHaveBeenCalled();
+    }));
+
+    it('c05: a document REPLACED inside the window blocks the search even when the selection has come back to it', fakeAsync(() => {
+      component.selectRangeInEditor({ originalText: 'She turned' });
+
+      // The reader clicks chapter 2, its load lands (the editor now holds chapter 2's document), and they
+      // click straight back to chapter 1. The selection reads as it did at request time; the document
+      // under the editor does not, and it is the document the phrase was measured against that matters.
+      tick(100);
+      component.selectedChapterId = 'chap-2';
+      component.documentOwnerChapterId = 'chap-2';
+      component.selectedChapterId = 'chap-1';
+
+      tick(100);
+
+      expect(findSpy).not.toHaveBeenCalled();
+      expect(focusInSpy).not.toHaveBeenCalled();
+    }));
+
+    it('c05: the OFFSET path is guarded too - a stale range is never applied to a scene that opened inside the window', fakeAsync(() => {
+      sfdtSpy.plainOffsetToSfdtPosition.and.returnValue('0;0;0');
+
+      component.selectRangeInEditor({ startOffset: 6, endOffset: 11 });
+
+      // A scene of the SAME chapter opens mid-window. Offsets measured against the whole chapter's plain
+      // text address arbitrary prose inside one scene, and selecting it hands the caret (and the panel's
+      // next action) to text nobody asked for - the same class of harm as finding a phrase in it.
+      tick(100);
+      component.selectedSceneId = 'scene-1';
+
+      tick(100);
+
+      expect(selectSpy).not.toHaveBeenCalled();
+      expect(focusInSpy).not.toHaveBeenCalled();
+      // ...and it did not silently fall through to the search fallback either.
+      expect(findSpy).not.toHaveBeenCalled();
+    }));
+
+    it('c05: an undisturbed window still selects - the guard costs the happy path nothing', fakeAsync(() => {
+      component.selectRangeInEditor({ originalText: 'She turned' });
+
+      tick(200);
+
+      expect(findSpy).toHaveBeenCalledOnceWith('She turned');
+      expect(navigateSpy).toHaveBeenCalledTimes(1);
+      expect(focusInSpy).toHaveBeenCalledTimes(1);
+    }));
+
+    it('c05: an undisturbed window still applies an offset range', fakeAsync(() => {
+      sfdtSpy.plainOffsetToSfdtPosition.and.returnValue('0;0;0');
+
+      component.selectRangeInEditor({ startOffset: 6, endOffset: 11 });
+
+      tick(200);
+
+      expect(selectSpy).toHaveBeenCalledTimes(1);
+      expect(focusInSpy).toHaveBeenCalledTimes(1);
+    }));
   });
 
   // ─── d1: the excerpt is trimmed before it reaches the literal search ────────
@@ -828,9 +1114,22 @@ describe('EditorPageComponent (focused logic)', () => {
       );
     });
 
-    it('strips the review\'s own leading framing (quote marks, ellipsis)', () => {
-      expect(excerptSearchPhrase('"She turned"')).toBe('She turned"');
+    it('strips the review\'s own framing (quote marks, ellipsis) from BOTH edges', () => {
+      // Was 'She turned"' - only the leading regexes were anchored, so the closing quote (also
+      // framing, per the function's own doc comment) survived and would break the literal
+      // searchModule.find match this function exists to protect. Both edges strip now.
+      expect(excerptSearchPhrase('"She turned"')).toBe('She turned');
       expect(excerptSearchPhrase('...she turned')).toBe('she turned');
+      expect(excerptSearchPhrase('She turned...')).toBe('She turned');
+      // A single strip pass is order-dependent: the leading quote regex doesn't match while an
+      // outer ellipsis still sits in front of it, so this needs a second pass to see the quote.
+      expect(excerptSearchPhrase('..."she turned')).toBe('she turned');
+    });
+
+    it('leaves the author\'s own trailing punctuation alone (not framing)', () => {
+      expect(excerptSearchPhrase('She turned.')).toBe('She turned.');
+      expect(excerptSearchPhrase('She turned!')).toBe('She turned!');
+      expect(excerptSearchPhrase('She turned?')).toBe('She turned?');
     });
 
     it('returns empty for nothing usable, which callers read as "land at the chapter top"', () => {
@@ -933,8 +1232,31 @@ describe('EditorPageComponent (focused logic)', () => {
   describe('ReviewPanel resize', () => {
     const KEY = 'pd.reviewPanelWidth';
 
+    // `window.innerWidth` is redefined rather than spied on because the karma host window is whatever
+    // size the runner gives it, which is not a number a spec may assume. Hoisted to THIS describe (it
+    // used to live only in the nested `width ceiling (c1)` block) so the restore-path specs above can
+    // pin a literal ceiling too.
+    let originalInnerWidth: PropertyDescriptor | undefined;
+
+    const setViewportWidth = (px: number) => {
+      Object.defineProperty(window, 'innerWidth', { value: px, configurable: true });
+    };
+
+    beforeEach(() => {
+      originalInnerWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+    });
+
     afterEach(() => {
       localStorage.removeItem(KEY);
+      // P3-72: `delete window.innerWidth` used to be the fallback here, but that deletes the
+      // BROWSER'S OWN property, not just this spec's override - if `getOwnPropertyDescriptor` ever
+      // came back undefined (it should not, in a real browser host), every later spec in the same
+      // karma run would then read `window.innerWidth` as `undefined`. Restoring the saved descriptor
+      // is only safe when one was actually captured; when none was, leave the property as this spec
+      // left it rather than deleting it out from under the rest of the run.
+      if (originalInnerWidth) {
+        Object.defineProperty(window, 'innerWidth', originalInnerWidth);
+      }
     });
 
     it('defaults to 380px when no width is persisted', () => {
@@ -955,12 +1277,20 @@ describe('EditorPageComponent (focused logic)', () => {
       fx.destroy();
     });
 
-    it('clamps an out-of-range persisted width to the max on restore', () => {
+    it('clamps an out-of-range persisted width to the viewport ceiling on restore', () => {
+      // P2-20: this used to assert `cmp.reviewPanelWidth === cmp.reviewPanelMaxWidth`, which compares
+      // the clamp's OUTPUT to the same getter the clamp READS. That is f(x) == f(x): true for any
+      // ceiling whatsoever, including 0 or an NaN-derived one, so no implementation could fail it.
+      // The expectation is now an EXTERNAL literal, derived here by hand rather than read back off
+      // the component:
+      //   ceiling = max(640, round(innerWidth / 2)) = max(640, round(2560 / 2)) = max(640, 1280) = 1280
+      // 9999 is above that ceiling, so the restore must land on exactly 1280.
+      setViewportWidth(2560);
       localStorage.setItem(KEY, '9999');
       const fx = TestBed.createComponent(EditorPageComponent);
       const cmp = fx.componentInstance;
       cmp.ngOnInit();
-      expect(cmp.reviewPanelWidth).toBe(cmp.reviewPanelMaxWidth);
+      expect(cmp.reviewPanelWidth).toBe(1280);
       fx.destroy();
     });
 
@@ -1023,27 +1353,9 @@ describe('EditorPageComponent (focused logic)', () => {
     // 640 stopped being the ceiling and became its FLOOR: the panel may now reach half the viewport,
     // so a large screen can show a suggestion card at a readable width. These specs pin both ends of
     // `max(640, round(50vw))` and the re-clamp that keeps a wide panel from surviving into a small
-    // window. `window.innerWidth` is redefined rather than spied on because the karma host window is
-    // whatever size the runner gives it, which is not a number a spec may assume.
+    // window. The `window.innerWidth` override and its P3-72 restore live one level up, in the
+    // `ReviewPanel resize` describe, so the restore-path specs share them.
     describe('width ceiling (c1)', () => {
-      let originalInnerWidth: PropertyDescriptor | undefined;
-
-      const setViewportWidth = (px: number) => {
-        Object.defineProperty(window, 'innerWidth', { value: px, configurable: true });
-      };
-
-      beforeEach(() => {
-        originalInnerWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth');
-      });
-
-      afterEach(() => {
-        if (originalInnerWidth) {
-          Object.defineProperty(window, 'innerWidth', originalInnerWidth);
-        } else {
-          delete (window as unknown as Record<string, unknown>)['innerWidth'];
-        }
-      });
-
       it('keeps the 640 floor on a laptop-sized viewport (50vw is smaller)', () => {
         setViewportWidth(1000);
         expect(component.reviewPanelMaxWidth).toBe(640);
@@ -1077,37 +1389,293 @@ describe('EditorPageComponent (focused logic)', () => {
         expect(component.reviewPanelWidth).toBe(1280);
       });
 
-      it('re-clamps the panel when the window shrinks below the current width', () => {
+      // P3-70: the re-clamp is rAF-coalesced now, so the assertion comes after an animation frame
+      // rather than straight after the event. `tick(20)` flushes it (zone.js schedules a patched
+      // requestAnimationFrame as a ~16ms macrotask under fakeAsync).
+      it('re-clamps the panel when the window shrinks below the current width', fakeAsync(() => {
         setViewportWidth(2560);
         component.onReviewResizeKeydown({ key: 'Home', preventDefault: () => {} } as KeyboardEvent);
         expect(component.reviewPanelWidth).toBe(1280);
 
         setViewportWidth(1000);
         window.dispatchEvent(new Event('resize'));
+        tick(20);
 
         expect(component.reviewPanelWidth).toBe(640);
-      });
+      }));
 
-      it('does not overwrite the persisted preference when a resize re-clamps', () => {
+      it('does not overwrite the persisted preference when a resize re-clamps', fakeAsync(() => {
         setViewportWidth(2560);
         component.onReviewResizeKeydown({ key: 'Home', preventDefault: () => {} } as KeyboardEvent);
         expect(localStorage.getItem(KEY)).toBe('1280');
 
         setViewportWidth(1000);
         window.dispatchEvent(new Event('resize'));
+        tick(20);
 
         expect(component.reviewPanelWidth).toBe(640);
         expect(localStorage.getItem(KEY))
           .withContext('a window resize is not a user choice, so the stored width must survive it')
           .toBe('1280');
-      });
+      }));
 
-      it('leaves a width that still fits alone on resize', () => {
+      it('leaves a width that still fits alone on resize', fakeAsync(() => {
         setViewportWidth(2560);
         component.reviewPanelWidth = 500;
         window.dispatchEvent(new Event('resize'));
+        tick(20);
         expect(component.reviewPanelWidth).toBe(500);
+      }));
+
+      // ── the restore path (P2-20) ────────────────────────────────────────────
+      //
+      // ngOnInit -> restoreReviewPanelWidth -> clampReviewPanelWidth is the ONE path a width persisted
+      // from a WIDER previous session takes, and none of the specs above reaches it: every one of them
+      // drives an ALREADY-CONSTRUCTED component through a drag, a key or a resize event, so the width
+      // they clamp was never read out of localStorage. A fresh component over a seeded key is the only
+      // way in. Every expectation below is a literal transcribed from the arithmetic written beside it,
+      // never `cmp.reviewPanelMaxWidth` - reading the ceiling back off the component is the f(x) == f(x)
+      // shape this block exists to replace.
+      describe('restoring a width persisted by a previous session', () => {
+        it('clamps a width persisted on a big screen down to 640 on a 1280px laptop', () => {
+          // ceiling = max(640, round(1280 / 2)) = max(640, 640) = 640; 1800 is above it, so 640.
+          setViewportWidth(1280);
+          localStorage.setItem(KEY, '1800');
+          const fx = TestBed.createComponent(EditorPageComponent);
+          const cmp = fx.componentInstance;
+          cmp.ngOnInit();
+          expect(cmp.reviewPanelWidth).toBe(640);
+          fx.destroy();
+        });
+
+        it('leaves a persisted width that fits, on a small viewport and a large one alike', () => {
+          // 400 is under BOTH ceilings: max(640, round(1280 / 2)) = 640 and
+          // max(640, round(2560 / 2)) = 1280. A clamp that moved it at all moved something it must not.
+          for (const viewportWidth of [1280, 2560]) {
+            setViewportWidth(viewportWidth);
+            localStorage.setItem(KEY, '400');
+            const fx = TestBed.createComponent(EditorPageComponent);
+            const cmp = fx.componentInstance;
+            cmp.ngOnInit();
+            expect(cmp.reviewPanelWidth)
+              .withContext(`persisted 400 restored at innerWidth ${viewportWidth}`)
+              .toBe(400);
+            fx.destroy();
+          }
+        });
+
+        it('re-clamps a restored wide panel when the window then shrinks', fakeAsync(() => {
+          // Restored at innerWidth 2560: ceiling = max(640, round(2560 / 2)) = 1280, so 1200 survives.
+          setViewportWidth(2560);
+          localStorage.setItem(KEY, '1200');
+          const fx = TestBed.createComponent(EditorPageComponent);
+          const cmp = fx.componentInstance;
+          cmp.ngOnInit();
+          expect(cmp.reviewPanelWidth).toBe(1200);
+
+          // Window shrinks to 1400: ceiling = max(640, round(1400 / 2)) = max(640, 700) = 700, which
+          // is neither the floor nor half of the original viewport, so a stale or hard-coded ceiling
+          // cannot land on it by accident.
+          setViewportWidth(1400);
+          window.dispatchEvent(new Event('resize'));
+          tick(20);
+          expect(cmp.reviewPanelWidth).toBe(700);
+
+          fx.destroy();
+        }));
+
+        it('applies the 640 FLOOR, not half the viewport, below 1280px', () => {
+          // ceiling = max(640, round(900 / 2)) = max(640, 450) = 640: half the viewport is BELOW the
+          // floor here, so the floor wins and a restored 1800 lands on 640, not on 450.
+          setViewportWidth(900);
+          localStorage.setItem(KEY, '1800');
+          const fx = TestBed.createComponent(EditorPageComponent);
+          const cmp = fx.componentInstance;
+          cmp.ngOnInit();
+          expect(cmp.reviewPanelWidth).toBe(640);
+          fx.destroy();
+        });
       });
+    });
+
+    // ─── c12 + P3-70: telling Syncfusion, and not tanking the frame rate ──────
+    //
+    // Widening the panel shrinks the editor column through a CSS grid-track change, which fires NO
+    // window resize event, so Syncfusion keeps the layout it measured before the drag and paints the
+    // document clipped. `documentEditor.resize()` is what reflows it (confirmed in a real browser at
+    // 2560px: a 380 -> 1280 drag took the container 1870 -> 970 while visibleBounds stayed at 1868, and
+    // one resize() brought it to 968).
+    //
+    // WHAT THESE PIN, and why each is a separate spec: that the resize happens ONCE and at the END
+    // (a resize() per pointermove relays out the whole document and stalls the editor), that it is
+    // DEFERRED rather than synchronous (the width it has to measure is a template binding the handler
+    // has not painted yet), that the keyboard paths get the same treatment as the drag, and that a
+    // window-resize burst collapses to one re-clamp.
+    //
+    // WHY `fixture.ngZone.run(...)` WRAPS EVERY CALL: the deferral hangs off `NgZone.onStable`, which
+    // is the only hook that runs AFTER change detection has applied the new grid track. A handler
+    // invoked outside the zone never makes the zone unstable, so nothing would ever stabilize and the
+    // deferred work would not run - in the app these handlers are always DOM events, which are always
+    // in the zone.
+    describe('c12: notifying Syncfusion that the writing frame moved', () => {
+      let resizeSpy: jasmine.Spy;
+
+      const makeHandle = () => {
+        const handle = document.createElement('div');
+        spyOn(handle, 'setPointerCapture');
+        spyOn(handle, 'releasePointerCapture');
+        return handle;
+      };
+
+      const inZone = (fn: () => void) => fixture.ngZone!.run(fn);
+
+      beforeEach(() => {
+        resizeSpy = mockDocEditor.documentEditor.resize;
+        resizeSpy.calls.reset();
+      });
+
+      it('resizes the editor once at the END of a drag and never per pointermove', () => {
+        const handle = makeHandle();
+        inZone(() => {
+          component.onReviewResizeStart({
+            pointerId: 1, clientX: 1000, currentTarget: handle, preventDefault: () => {},
+          } as unknown as PointerEvent);
+          component.onReviewResizeMove({ pointerId: 1, clientX: 940 } as PointerEvent);
+          component.onReviewResizeMove({ pointerId: 1, clientX: 880 } as PointerEvent);
+          component.onReviewResizeMove({ pointerId: 1, clientX: 820 } as PointerEvent);
+        });
+
+        expect(resizeSpy)
+          .withContext('resize() relays out the whole document; one per pointermove stalls the editor')
+          .not.toHaveBeenCalled();
+
+        inZone(() => component.onReviewResizeEnd({ pointerId: 1 } as PointerEvent));
+
+        expect(resizeSpy).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not resize SYNCHRONOUSLY inside the handler, because the new width is not painted yet', () => {
+        // The width is a template binding: at the instant the handler returns, Angular has not applied
+        // the new grid track, so a synchronous resize() would re-measure the OLD width. Measured in the
+        // browser: with a plain setTimeout(0) (which this app's `eventCoalescing: true` tick runs
+        // BEFORE), a Home jump from 300 to 1280 resized against the 300px frame and left the document
+        // 980px too wide for its column.
+        let resizedBeforeTheHandlerReturned = false;
+        inZone(() => {
+          component.onReviewResizeKeydown({ key: 'Home', preventDefault: () => {} } as KeyboardEvent);
+          resizedBeforeTheHandlerReturned = resizeSpy.calls.count() > 0;
+        });
+
+        expect(resizedBeforeTheHandlerReturned)
+          .withContext('the resize must wait for change detection to apply the new grid track')
+          .toBe(false);
+        expect(resizeSpy).toHaveBeenCalledTimes(1);
+      });
+
+      it('resizes the editor after a Home jump, the largest width change the UI can make', () => {
+        setViewportWidth(2560);
+        inZone(() => component.onReviewResizeKeydown({ key: 'Home', preventDefault: () => {} } as KeyboardEvent));
+
+        expect(component.reviewPanelWidth).toBe(1280);
+        expect(resizeSpy).toHaveBeenCalledTimes(1);
+      });
+
+      it('resizes the editor after an End jump', () => {
+        component.reviewPanelWidth = 900;
+        inZone(() => component.onReviewResizeKeydown({ key: 'End', preventDefault: () => {} } as KeyboardEvent));
+
+        expect(component.reviewPanelWidth).toBe(300);
+        expect(resizeSpy).toHaveBeenCalledTimes(1);
+      });
+
+      it('coalesces a held arrow key into a single resize', () => {
+        // 12 auto-repeat keydowns in one turn: the width moves 12 steps, the editor relays out once.
+        inZone(() => {
+          for (let i = 0; i < 12; i++) {
+            component.onReviewResizeKeydown({ key: 'ArrowLeft', preventDefault: () => {} } as KeyboardEvent);
+          }
+        });
+
+        expect(component.reviewPanelWidth).toBe(380 + 12 * 16);
+        expect(resizeSpy)
+          .withContext('a held arrow key must not queue one full relayout per keystroke')
+          .toHaveBeenCalledTimes(1);
+      });
+
+      it('does not resize on a key that changes nothing', () => {
+        inZone(() => component.onReviewResizeKeydown({ key: 'PageUp', preventDefault: () => {} } as KeyboardEvent));
+
+        expect(component.reviewPanelWidth).toBe(380);
+        expect(resizeSpy).not.toHaveBeenCalled();
+      });
+
+      // ── P3-70: the window listener ─────────────────────────────────────────
+      //
+      // This component had no host listener at all before the ceiling became viewport-derived, so the
+      // one c1 added made every resize event tick change detection through `ngDoCheck` and
+      // `ngAfterViewChecked`. A window drag fires dozens per second.
+      it('coalesces a burst of window resize events into a single re-clamp', fakeAsync(() => {
+        setViewportWidth(2560);
+        component.reviewPanelWidth = 1280;
+        const clamp = spyOn<any>(component, 'reclampReviewPanelWidthForViewport').and.callThrough();
+
+        setViewportWidth(1000);
+        for (let i = 0; i < 20; i++) window.dispatchEvent(new Event('resize'));
+
+        expect(clamp)
+          .withContext('nothing may run per event; the whole point is that the frame owns the work')
+          .not.toHaveBeenCalled();
+
+        tick(20);
+
+        expect(clamp).toHaveBeenCalledTimes(1);
+        expect(component.reviewPanelWidth).toBe(640);
+      }));
+
+      it('does no work at all when a window resize leaves the width alone', fakeAsync(() => {
+        setViewportWidth(2560);
+        component.reviewPanelWidth = 500;
+
+        window.dispatchEvent(new Event('resize'));
+        tick(20);
+
+        expect(component.reviewPanelWidth).toBe(500);
+        expect(resizeSpy)
+          .withContext('the common case (a window still wide enough) must not relayout the document')
+          .not.toHaveBeenCalled();
+      }));
+
+      it('tells Syncfusion when a window resize actually re-clamps the panel', fakeAsync(() => {
+        setViewportWidth(2560);
+        component.reviewPanelWidth = 1280;
+
+        setViewportWidth(1000);
+        window.dispatchEvent(new Event('resize'));
+        tick(20);
+
+        expect(component.reviewPanelWidth).toBe(640);
+        expect(resizeSpy)
+          .withContext('a re-clamp narrows the editor column by a grid-track change, same as a drag')
+          .toHaveBeenCalledTimes(1);
+      }));
+
+      it('stops listening to the window once the component is destroyed', fakeAsync(() => {
+        setViewportWidth(2560);
+        localStorage.setItem(KEY, '1200');
+        const fx = TestBed.createComponent(EditorPageComponent);
+        const cmp = fx.componentInstance;
+        cmp.ngOnInit();
+        expect(cmp.reviewPanelWidth).toBe(1200);
+
+        fx.destroy();
+        setViewportWidth(1000);
+        window.dispatchEvent(new Event('resize'));
+        tick(20);
+
+        expect(cmp.reviewPanelWidth)
+          .withContext('a hand-registered listener has to be hand-removed')
+          .toBe(1200);
+      }));
     });
   });
 
@@ -1386,36 +1954,68 @@ class RegistryStub {
   private readonly jobs = new Map<string, BehaviorSubject<TrackedJob | null>>();
   reattach = jasmine.createSpy('reattach');
   /**
-   * Wave 3: the ONE stream the editor and the hosted book dashboard both read. Held open for the life of
-   * the test so a running build can start and finish inside one spec.
+   * EVERY tracked job, terminal ones included - the shape the REAL registry's `jobs$` has, and the one
+   * the three streams below are derived from. Held open for the life of the test so a running build can
+   * start and finish inside one spec.
+   *
+   * finding 57: this used to be an `active` list that "only ever holds non-terminal jobs", with `jobs$`
+   * and `jobByKindForBook$` both aliased straight onto it - so `setRunning(book, false)` published a
+   * REMOVAL (and, through `jobByKindForBook$`, a `null`) and this stub could not emit a terminal job at
+   * all. Both a1 consumers hosted on this page key on exactly that event: the analysis panel refetches
+   * history when a job it saw running goes terminal, and the dashboard's `watchReviewBuild` bumps the
+   * findings token on the same transition. Neither could be reached from here, and a harness that cannot
+   * deliver the event under test reads exactly like one that does. The real registry RETAINS a terminal
+   * job on `jobs$` (capped) and filters it out of `activeJobs$`; so does this now.
    */
-  private readonly active = new BehaviorSubject<TrackedJob[]>([]);
-  readonly activeJobs$: Observable<TrackedJob[]> = this.active.asObservable();
+  private readonly all = new BehaviorSubject<TrackedJob[]>([]);
+  /** Wave 3: non-terminal jobs only. The editor's spine signals read this one. */
+  readonly activeJobs$: Observable<TrackedJob[]> =
+    this.all.pipe(map(jobs => jobs.filter(j => !isTerminal(j.status))));
   /**
    * a1: the hosted ANALYSIS PANEL derives "is a run in flight for the chapter I am showing?" from the
-   * full job list. This stub only ever holds non-terminal jobs, so the two streams are the same list;
-   * they are separate fields so a future test can push a terminal job through one and not the other.
+   * full job list - and notices a run FINISHING by seeing a job it saw running turn terminal on this
+   * same stream. So this one carries terminals; see {@link finish}.
    */
-  readonly jobs$: Observable<TrackedJob[]> = this.active.asObservable();
+  readonly jobs$: Observable<TrackedJob[]> = this.all.asObservable();
 
   /**
    * a1: the hosted DASHBOARD watches this book's review build here, so a build that finishes while the
    * status row is unmounted still refreshes the findings ledger. Derived from the same list the rest of
-   * this stub publishes, so `setRunning` drives it too.
+   * this stub publishes, so `setRunning` and `finish` both drive it - and it prefers the ACTIVE job of a
+   * kind, falling back to the last one, exactly as the real `jobByKindForBook$` does.
    */
   jobByKindForBook$(bookId: string, kind: 'summary' | 'review' | 'proofread' | 'style-baseline'): Observable<TrackedJob | null> {
-    return this.active.pipe(map(jobs => jobs.find(j => j.bookId === bookId && j.kind === kind) ?? null));
+    return this.all.pipe(map(jobs => {
+      const matches = jobs.filter(j => j.bookId === bookId && j.kind === kind);
+      if (matches.length === 0) return null;
+      return matches.find(j => !isTerminal(j.status)) ?? matches[matches.length - 1];
+    }));
   }
 
   /** Push (or clear) a whole-book REVIEW build for one book, leaving every other book's jobs alone. */
   setRunning(bookId: string, running: boolean, kind: 'summary' | 'review' = 'review'): void {
-    const others = this.active.value.filter(j => !(j.bookId === bookId && j.kind === kind));
-    this.active.next(running ? [...others, makeTrackedJob(bookId, kind)] : others);
+    const others = this.all.value.filter(j => !(j.bookId === bookId && j.kind === kind));
+    this.all.next(running ? [...others, makeTrackedJob(bookId, kind)] : others);
   }
 
-  /** finding 19: push an arbitrary set of active jobs verbatim, for tests that need a specific kind. */
+  /**
+   * finding 57: drive a tracked job to its TERMINAL, which is the event both a1 consumers key on.
+   *
+   * Deliberately NOT `setRunning(book, false)`. That removes the row, and a removal is not a terminal:
+   * the panel's watcher looks for a job it saw running whose STATUS became terminal, and the dashboard's
+   * `watchReviewBuild` ignores a `null` outright. A build that ends really does leave a terminal row
+   * behind in the registry, which is why the real service retains one.
+   */
+  finish(bookId: string, kind: 'summary' | 'review' = 'review', status: TrackedJob['status'] = 'succeeded'): void {
+    this.all.next(this.all.value.map(j =>
+      j.bookId === bookId && j.kind === kind
+        ? { ...j, status, percent: status === 'succeeded' ? 100 : j.percent }
+        : j));
+  }
+
+  /** finding 19: push an arbitrary set of jobs verbatim, for tests that need a specific kind. */
   pushActive(jobs: TrackedJob[]): void {
-    this.active.next(jobs);
+    this.all.next(jobs);
   }
 
   /**
@@ -1680,6 +2280,79 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
     expect(has('app-book-dashboard')).toBe(false);
   });
 
+  // ── 2b. c02: the mode switch on the openChapter seam is narrowed to the LEDGER chip ─────────────
+  //
+  // ONE `@Output() openChapter` on the dashboard is fed by THREE producers (book-dashboard.component.ts:236
+  // the stage spine's per-chapter breakdown, :338 the findings ledger, :346 the Story Bible). Only the
+  // ledger arms the Edit-mode surfaces, and it is the only producer in the app that stamps `findingId`
+  // (book-review-findings.component.ts:352-359). These three specs drive the REAL template's
+  // `(openChapter)` binding and assert what the READER would see - whether the Book review body they were
+  // reading survived the click - not just the `reviewMode` field.
+
+  const DASH_CHAPTER: import('../../core/models/book').ChapterSummaryDto = {
+    id: 'chap-a', title: 'Chapter A', partName: null, order: 0, wordCount: 100, updatedAt: '',
+  };
+
+  /**
+   * Mount the Book review body with one resolvable chapter, and stop the seam at `selectChapter`: the
+   * chapter-open path is asserted through the spy, and letting it run would mount the Syncfusion editor
+   * branch this suite deliberately keeps out of the DOM.
+   */
+  const mountReviewBodyWithChapter = (): jasmine.Spy => {
+    component.bookId = 'book-1';
+    component.book = { ...BOOK, chapters: [DASH_CHAPTER] };
+    component.reviewMode = 'review';
+    component.editHelpView = 'analysis';
+    fixture.detectChanges();
+    expect(has('app-book-dashboard')).toBe(true); // precondition: the reader IS in Book review
+    return spyOn(component, 'selectChapter');
+  };
+
+  /** Fire the dashboard's openChapter output exactly as the real template binds it. */
+  const emitOpenChapter = (payload: unknown): void => {
+    const dash = fixture.debugElement.query(By.directive(StubBookDashboardComponent));
+    (dash.componentInstance as StubBookDashboardComponent).openChapter.emit(payload);
+    fixture.detectChanges();
+  };
+
+  it('c02: the FINDINGS LEDGER chip (findingId present) switches to Edit help - the Book review body unmounts', () => {
+    const selectSpy = mountReviewBodyWithChapter();
+
+    // book-review-findings.component.ts:355-359 stamps findingId (and sets the revise context).
+    emitOpenChapter({ chapterId: 'chap-a', order: 0, title: 'Chapter A', findingId: 'f-1' });
+
+    expect(has('app-book-dashboard')).toBe(false);
+    expect(has('app-analysis-panel')).toBe(true);
+    expect(component.reviewMode).toBe('edit');
+    expect(selectSpy).toHaveBeenCalledOnceWith(DASH_CHAPTER);
+  });
+
+  it('c02: the STORY BIBLE anchor chip (bare anchor) does NOT switch modes - the Book review body stays mounted', () => {
+    const selectSpy = mountReviewBodyWithChapter();
+
+    // book-story-bible.component.ts:258-259 emits a bare ChapterAnchor: no findingId, no revise context.
+    emitOpenChapter({ chapterId: 'chap-a', order: 0, title: 'Chapter A' });
+
+    // The surface the reader was reading is still on screen, and Edit help never took over.
+    expect(has('app-book-dashboard')).toBe(true);
+    expect(has('app-analysis-panel')).toBe(false);
+    expect(component.reviewMode).toBe('review');
+    // The chapter still opens: only the mode switch narrowed.
+    expect(selectSpy).toHaveBeenCalledOnceWith(DASH_CHAPTER);
+  });
+
+  it('c02: the STAGE SPINE per-chapter breakdown does NOT switch modes - the Book review body stays mounted', () => {
+    const selectSpy = mountReviewBodyWithChapter();
+
+    // book-dashboard.component.ts:1731-1732 rebuilds the payload as {chapterId, order, title} only.
+    emitOpenChapter({ chapterId: 'chap-a', order: 0, title: 'Chapter A' });
+
+    expect(has('app-book-dashboard')).toBe(true);
+    expect(has('app-analysis-panel')).toBe(false);
+    expect(component.reviewMode).toBe('review');
+    expect(selectSpy).toHaveBeenCalledOnceWith(DASH_CHAPTER);
+  });
+
   // ── Phase 4d-10c: a book switch clears the revise-context (root singleton) ────────
   it('clears the revise-context (Addressing chip) when the route bookId changes to a different book', () => {
     const reviseCtx = TestBed.inject(ReviseContextService);
@@ -1744,6 +2417,42 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
     expect(component.importedChapters).toBe(7);
   });
 
+  // ── c04: a book switch drops BOTH held navigation one-shots ────────
+  //
+  // P2 finding 14. This page SURVIVES a book switch (the route params change in place, the component is
+  // not recreated), and neither one-shot was dropped when they did. A held finding id then published
+  // into the NEXT book's ledger, where openFinding cleared that book's filters for an id it does not
+  // carry; a held phrase waited for a chapter id that means nothing in the new book's chapter list.
+  it('c04: drops a held open-finding request AND a held excerpt phrase when the route bookId changes', () => {
+    fixture.detectChanges(); // ngOnInit subscribes to route params
+
+    routeParams$.next({ bookId: 'book-1' });
+    // Both intents armed while reading book-1: one waiting for the ledger to mount, one waiting for a
+    // chapter document to open.
+    (component as any).pendingOpenFindingId = 'f-7';
+    (component as any).pendingExcerptNavigation = { chapterId: 'c-3', phrase: 'She turned' };
+
+    routeParams$.next({ bookId: 'book-2' });
+
+    expect((component as any).pendingOpenFindingId).toBeNull();
+    expect((component as any).pendingExcerptNavigation).toBeNull();
+  });
+
+  it('c04: a SAME-book route params re-emit does NOT drop either navigation one-shot', () => {
+    fixture.detectChanges();
+
+    routeParams$.next({ bookId: 'book-1' });
+    (component as any).pendingOpenFindingId = 'f-7';
+    (component as any).pendingExcerptNavigation = { chapterId: 'c-3', phrase: 'She turned' };
+
+    // A benign params refresh is not the reader changing books; an intent still waiting for its own
+    // book's surfaces must survive it, exactly as the revise-context and handoff one-shots do above.
+    routeParams$.next({ bookId: 'book-1' });
+
+    expect((component as any).pendingOpenFindingId).toBe('f-7');
+    expect((component as any).pendingExcerptNavigation).toEqual({ chapterId: 'c-3', phrase: 'She turned' });
+  });
+
   // ── 3. editHelpView toggles the edit-mode body between analysis and issue panels ──────
 
   it('editHelpView toggles the edit-mode body between app-analysis-panel and app-issue-panel', () => {
@@ -1797,8 +2506,19 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       fixture.debugElement.query(By.directive(StubIssuePanelComponent)).componentInstance.bookLanguage
     ).toBe('he');
 
-    // No book yet: the template's own `?? 'he'` keeps the Hebrew default rather than sending null.
+    // A loaded book with a falsy language: the template's trailing `?? 'he'` keeps the Hebrew default
+    // rather than sending null/undefined through. This exercises the RIGHT side of
+    // `book?.language ?? 'he'`, not the `book?.` guard - `component.book` is still a real object here.
     component.book = { ...BOOK, language: null as unknown as string };
+    fixture.detectChanges();
+    expect(
+      fixture.debugElement.query(By.directive(StubIssuePanelComponent)).componentInstance.bookLanguage
+    ).toBe('he');
+
+    // No book yet: `book?.language` is what actually guards this case (the `?.` short-circuits on
+    // `book` itself being null, not merely its `language` field), so drive that directly - `book` is
+    // typed `BookDetailDto | null` on the component, and null is its real "not loaded yet" value.
+    component.book = null;
     fixture.detectChanges();
     expect(
       fixture.debugElement.query(By.directive(StubIssuePanelComponent)).componentInstance.bookLanguage
@@ -1953,6 +2673,38 @@ describe('EditorPageComponent ReviewPanel IA (real-template DOM, c04 / P2-5)', (
       registryStub.setRunning('book-1', false);
       fixture.detectChanges();
       expect(compactReviewState()).not.toBe('running');
+    });
+
+    // finding 57: a build ENDING is not a build DISAPPEARING, and until now this harness could only
+    // express the second. Both a1 consumers this page hosts key on the terminal STATUS - the analysis
+    // panel refetches history for a job it saw running that turned terminal, and the dashboard's
+    // `watchReviewBuild` bumps the findings token on the same transition, ignoring a `null` outright - so
+    // a stub whose only ending was a removal could not deliver the event either of them exists for.
+    it('a build that goes TERMINAL clears the spine and is still on the two a1 channels', async () => {
+      loadBook('book-1');
+      component.selectedChapterId = 'chap-1';
+      component.reviewPanelOpen = false;
+      registryStub.setRunning('book-1', true);
+      fixture.detectChanges();
+      expect(compactReviewState()).withContext('precondition: the build is in flight').toBe('running');
+
+      registryStub.finish('book-1', 'review');
+      fixture.detectChanges();
+
+      // The editor reads `activeJobs$`, which drops a terminal job exactly as the real registry does.
+      expect(compactReviewState()).not.toBe('running');
+
+      // ...and the row the two a1 consumers read is still there, carrying the terminal. This is the
+      // emission a removal cannot produce: `jobByKindForBook$` would have answered `null`.
+      const seen = await firstValueFrom(registryStub.jobs$);
+      const terminal = seen.find(j => j.bookId === 'book-1' && j.kind === 'review');
+      expect(terminal?.status)
+        .withContext('the panel notices a run finishing by seeing a job it saw RUNNING turn terminal')
+        .toBe('succeeded');
+      const byKind = await firstValueFrom(registryStub.jobByKindForBook$('book-1', 'review'));
+      expect(byKind?.status)
+        .withContext('watchReviewBuild returns early on a null, so a removal reaches nothing at all')
+        .toBe('succeeded');
     });
 
     it('carries a running build while in FOCUS MODE (panel + dashboard unmounted), and the focus button still works', () => {
