@@ -607,13 +607,25 @@ describe('IssuePanelComponent (f01: the empty-state cross product)', () => {
     { lang: 'he', detect: 'not-yet-detected',    banner: 'no-banner',             expect: ['unsupported-note'] },
     { lang: 'he', detect: 'detected-clean',      banner: 'no-banner',             expect: ['unsupported-note'] },
     { lang: 'he', detect: 'detected-with-issues', banner: 'no-banner',            expect: ['issue-list'] },
-    // Reachable through the flow since c13 (a real outage on a Hebrew book); driven end to end below.
-    { lang: 'he', detect: 'not-yet-detected',    banner: 'unavailable-banner',    expect: ['unavailable-banner', 'unsupported-note'] },
-    { lang: 'he', detect: 'detected-clean',      banner: 'unavailable-banner',    expect: ['unavailable-banner', 'unsupported-note'] },
+    // final-r03: THESE FOUR EXPECTATIONS MOVED, because they pinned the defect as correct. Each used to
+    // expect a banner AND the capability note in one cell - two statements, which is the exact thing
+    // `emptyStateLine`'s docblock says it exists to make impossible, written into the table as intent.
+    // That is why the suite was green over it and why the browser pass did not catch it either: c13 made
+    // these cells reachable and the table was extended to describe what they DID rather than what the
+    // rule says they should. A banner is the only statement in its cell, so the note gives way to it.
+    //
+    // THE COST, NAMED RATHER THAN DISCOVERED: a Hebrew reader who first opens the panel during an outage
+    // now sees only the outage, and does not learn on that turn that Hebrew is unsupported at all. That
+    // is the right way round - the outage is the actionable, transient fact and the note is standing, so
+    // it returns as soon as the banner clears - but it IS a real loss and it is the pole to watch if this
+    // is ever revisited. Both poles are pinned: the two cells below with no banner still expect the note.
+    { lang: 'he', detect: 'not-yet-detected',    banner: 'unavailable-banner',    expect: ['unavailable-banner'] },
+    { lang: 'he', detect: 'detected-clean',      banner: 'unavailable-banner',    expect: ['unavailable-banner'] },
     { lang: 'he', detect: 'detected-with-issues', banner: 'unavailable-banner',   expect: ['unavailable-banner', 'issue-list'] },
-    // KNOWN GAP (reported, owned by f12/c13): "you can try again" with no button to press.
-    { lang: 'he', detect: 'not-yet-detected',    banner: 'request-error-banner',  expect: ['request-error-banner', 'unsupported-note'] },
-    { lang: 'he', detect: 'detected-clean',      banner: 'request-error-banner',  expect: ['request-error-banner', 'unsupported-note'] },
+    // The former "KNOWN GAP" row ("you can try again" with no button to press): the note is gone for the
+    // same reason, and the gap itself is unchanged and still owned by f12/c13.
+    { lang: 'he', detect: 'not-yet-detected',    banner: 'request-error-banner',  expect: ['request-error-banner'] },
+    { lang: 'he', detect: 'detected-clean',      banner: 'request-error-banner',  expect: ['request-error-banner'] },
     { lang: 'he', detect: 'detected-with-issues', banner: 'request-error-banner', expect: ['request-error-banner', 'issue-list'] },
 
     // ── English: the ordinary three empty states, and a banner silences all of them. ───────────────
@@ -674,6 +686,33 @@ describe('IssuePanelComponent (f01: the empty-state cross product)', () => {
     }
     // All four outcomes are actually reachable, so none of the four is dead code.
     expect(Array.from(seen).sort()).toEqual(['clean', 'none', 'prompt', 'unsupported']);
+  });
+
+  // final-r03: the two poles of the banner-vs-note precedence, named. Both must hold; a fix that only
+  // satisfies one of them has moved the boundary rather than placed it. Each fails in the reverted state
+  // of the other, which is what makes the pair worth having over either half alone.
+  describe('a banner outranks the Hebrew capability note, and only while it is speaking', () => {
+    it('POLE A: a real outage on a Hebrew book states the outage and NOT "does not support Hebrew"', () => {
+      // The cell Bugbot found. `canDetect` is false for Hebrew, and before final-r03 that arm was tested
+      // FIRST, so the standing note printed under the outage banner and told the reader the failure was
+      // expected and not worth retrying. Reverting the getter's two lines turns this red.
+      renderCell('he', 'not-yet-detected', 'unavailable-banner');
+
+      expect(component.emptyStateLine).toBe('none');
+      expect(el().querySelector('.service-unavailable-banner')).not.toBeNull();
+      expect(el().querySelector('.detect-unsupported-note')).toBeNull();
+    });
+
+    it('POLE B: with no banner speaking, a Hebrew book still gets the capability note', () => {
+      // The opposite failure, and the one a careless fix ships: suppressing the note whenever the book is
+      // Hebrew, rather than only while a banner is on screen. c13 leaves the EXPECTED absence
+      // (`hebrew-unsupported`) with no banner at all, so this is the cell that carries the note.
+      renderCell('he', 'not-yet-detected', 'no-banner');
+
+      expect(component.emptyStateLine).toBe('unsupported');
+      expect(el().querySelector('.detect-unsupported-note')).not.toBeNull();
+      expect(el().querySelector('.service-unavailable-banner')).toBeNull();
+    });
   });
 });
 
@@ -1252,8 +1291,18 @@ describe('IssuePanelComponent (c13: suppression scoped to the EXPECTED absence)'
     it(`he + ${c.code} renders ${c.banner ? 'the Hebrew banner' : 'no banner'} (${c.why})`, () => {
       loadWith('he', { languageToolUnavailable: true, languageToolCode: c.code });
       expect(bannerText()).toBe(c.banner);
-      // The capability note stands in every one of these cells: the book still has no Detect button.
-      expect(el().querySelector('.detect-unsupported-note')?.textContent?.trim()).toBe(HE.note);
+
+      // final-r03: THIS USED TO ASSERT THE NOTE IN EVERY CELL, which is the defect written as intent.
+      // The reasoning ("the book still has no Detect button") is true and is not the question: the
+      // question is what the cell SAYS, and a banner plus the standing note says two things, the second
+      // of which ("does not support Hebrew") tells the reader the outage is expected and not worth
+      // retrying. c13 is what made these three cells reachable, and the assertion was written to
+      // describe what they did rather than what `emptyStateLine`'s one-statement rule requires.
+      // The note now stands exactly where no banner is speaking, which is the `hebrew-unsupported` cell -
+      // so this pair discriminates per code instead of asserting the same thing four times.
+      const note = el().querySelector('.detect-unsupported-note')?.textContent?.trim() ?? null;
+      expect(note).toBe(c.banner === null ? HE.note : null);
+
       // And nothing English ever reaches a Hebrew reader.
       expect(el().textContent).not.toContain('language checker');
     });

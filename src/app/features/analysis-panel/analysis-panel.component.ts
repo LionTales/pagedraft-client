@@ -309,13 +309,22 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    */
   private runOriginChapterId: string | null = null;
   private runOriginSceneId: string | null = null;
-  // c01: a third captured-origin field, `runOriginAnalysisType`, USED to live here. Its only reader was
-  // the `job-started` registry publish, which has moved to `AnalysisRunOrchestrationService` - and the
-  // service does not need it, because the `AnalysisRunContext` handed to `startRun` is the SAME snapshot
-  // taken in the same tick as this capture. Keeping a captured field with no reader is how live state
-  // gets read back into a decision that must use the snapshot, so it went with its consumer.
-  // (final-r01: a `//` block, not a `/** */` one. A JSDoc with no declaration under it binds to the NEXT
-  // declaration, so as a docblock this tombstone read as documentation of the field below it.)
+  // final-r03: `runOriginBookId` and `runOriginAnalysisType` are BACK, with a reader this time.
+  //
+  // c01 removed a captured `runOriginAnalysisType` on the correct reasoning that its only reader (the
+  // `job-started` registry publish) had moved to `AnalysisRunOrchestrationService`, which takes the same
+  // snapshot in the same tick, and that a captured field with no reader is how live state gets read back
+  // into a decision that must use the snapshot. That reasoning was sound and its premise has since
+  // changed: `recordRunErrorForOrigin` is a new reader, and it needs the run's OWN book and type rather
+  // than whatever is selected when the terminal lands.
+  //
+  // The four fields are captured together in `prepareForRun` and must stay together, because they are one
+  // key: the held-failure claim below has to key on exactly what
+  // `AnalysisRunOrchestrationService.matchesUnheardTerminal` keys on (book, chapter, scene, type). Adding
+  // a fifth dimension there without adding it here silently makes this panel's hold the coarser of the
+  // two again, which is the defect this comment exists to prevent recurring.
+  private runOriginBookId: string | null = null;
+  private runOriginAnalysisType: string | null = null;
   /**
    * Persisted analysis-result ids known BEFORE the current run started (captured in prepareForRun).
    * A streaming run's persisted row is the one whose id is NOT in this set, which is how we tell the
@@ -601,8 +610,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     // heard; a terminal this panel heard while it was showing a DIFFERENT unit is not one of those, and
     // is held here instead by {@link recordRunErrorForOrigin}. Same claim rule as the service's: scoped
     // to the unit, single-shot, and read at the one place that runs on both a mount and a context change.
+    // final-r03: keyed on all four dimensions, deliberately the SAME key
+    // `AnalysisRunOrchestrationService.matchesUnheardTerminal` uses. The claim below says this hold has
+    // "the same scoping" as the service's slot, and until final-r03 that sentence was false: this side
+    // compared only chapter and scene, so it was the coarser of the two.
     const held = this.heldRunErrorForOrigin;
-    if (held && held.chapterId === (ctx.chapterId ?? null) && held.sceneId === (ctx.sceneId ?? null)) {
+    if (held
+      && held.bookId === (ctx.bookId ?? null)
+      && held.chapterId === (ctx.chapterId ?? null)
+      && held.sceneId === (ctx.sceneId ?? null)
+      && held.analysisType === ctx.analysisType) {
       this.heldRunErrorForOrigin = null;
       this.runError = held.message;
       return;
@@ -644,7 +661,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    * driven straight into {@link handleRunEvent}), and that is treated as "on origin" so the ordinary
    * single-context path is unchanged.
    */
-  private heldRunErrorForOrigin: { chapterId: string | null; sceneId: string | null; message: string } | null = null;
+  private heldRunErrorForOrigin: {
+    bookId: string | null;
+    chapterId: string | null;
+    sceneId: string | null;
+    analysisType: string | null;
+    message: string;
+  } | null = null;
 
   private recordRunErrorForOrigin(message: string): void {
     const originKnown = this.runOriginChapterId !== null;
@@ -655,9 +678,16 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       this.runError = message;
       return;
     }
+    // final-r03: the WHOLE key, not just the unit. A failure held with only (chapter, scene) is claimed
+    // by the next context that matches those two, whatever run it belongs to - so a Proofread failure
+    // held for chapter 1 banners itself over a Line Edit the reader has just started there, under that
+    // run's own heading. The banner text names the type ("<type>: failed"), so the wrong-type cell is
+    // not cosmetic. Book is in the key for the same reason: this panel can outlive a book switch.
     this.heldRunErrorForOrigin = {
+      bookId: this.runOriginBookId,
       chapterId: this.runOriginChapterId,
       sceneId: this.runOriginSceneId,
+      analysisType: this.runOriginAnalysisType,
       message,
     };
   }
@@ -2203,6 +2233,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     // loadHistory pattern of capturing loadingChapterId/loadingSceneId from the request.
     this.runOriginChapterId = this.chapterId;
     this.runOriginSceneId = this.sceneId ?? null;
+    // final-r03: the other two thirds of the held-failure key, snapshotted in the SAME tick. See the
+    // field declarations for why the four move together.
+    this.runOriginBookId = this.bookId ?? null;
+    this.runOriginAnalysisType = this.selectedAnalysisType;
     this.runError = null;
     this.streamingText = '';
     this.proofreadSuggestions = [];

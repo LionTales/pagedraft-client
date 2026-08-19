@@ -583,22 +583,34 @@ export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
    * here makes "exactly one line, or none" a property of the code instead of an invariant three
    * separate conjunctions have to agree on. The order below IS the rule:
    *
-   *  1. `unsupported` - the checker cannot work on this book at all, so the capability note stands in
-   *     for the button that is not there. This outranks everything else because it is a fact about the
-   *     deployment, not a claim about the text or about one request.
-   *  2. `none` - A BANNER IS SPEAKING, and a banner is the only statement in its cell. Both banners say
+   *  1. `none` - A BANNER IS SPEAKING, and a banner is the only statement in its cell. Both banners say
    *     the text was NOT checked (the checker was unavailable, or the request never answered), so no
    *     line about the text may sit under either one - neither the clean claim ("No issues detected")
-   *     nor the prompt, which would invite a second press while the failure is still on screen.
+   *     nor the prompt, which would invite a second press while the failure is still on screen, nor the
+   *     capability note.
+   *  2. `unsupported` - the checker cannot work on this book at all, so the capability note stands in
+   *     for the button that is not there.
    *  3. `clean` / `prompt` - the ordinary two states: the checker ran and found nothing, or it has not
    *     run yet.
+   *
+   * final-r03: 1 AND 2 WERE THE OTHER WAY ROUND, AND c13 IS WHAT MADE THAT WRONG. The `unsupported` arm
+   * outranked the banners on the stated ground that it "is a fact about the deployment, not a claim
+   * about one request" - true while `!canDetect` meant the checker had nothing to say about this book,
+   * which is what it meant before c13. c13 scoped the Hebrew suppression to the EXPECTED absence so a
+   * genuine outage (`timeout` / `disabled` / `unavailable`) now reaches a Hebrew book as a banner, and
+   * `!canDetect` is still true for that book - so the standing "does not support Hebrew" note printed
+   * underneath the outage banner and told the reader the failure was expected and not worth retrying.
+   * Two statements in one cell, which is the exact defect this getter was written to make impossible,
+   * arriving through c13's own fix. The banner outranks the note: an outage is a fact about THIS request
+   * and it is the one the reader can act on. The `hebrew-unsupported` cell is unaffected, because c13
+   * leaves it with no banner at all, so it still falls through to the note.
    *
    * `detected-with-issues` never reaches here at all: the template renders the issue list instead of
    * this block whenever `issues.length > 0`.
    */
   get emptyStateLine(): 'unsupported' | 'prompt' | 'clean' | 'none' {
-    if (!this.canDetect) return 'unsupported';
     if (this.requestErrorMessage || this.serviceUnavailableMessage) return 'none';
+    if (!this.canDetect) return 'unsupported';
     return this.hasDetected ? 'clean' : 'prompt';
   }
 

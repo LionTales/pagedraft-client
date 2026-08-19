@@ -1982,6 +1982,60 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(banner).withContext('the common case must not have been deferred by the fix').not.toBeNull();
       expect(banner!.textContent!.trim()).toBe('הניתוח נכשל.');
     });
+
+    // final-r03: THE HELD FAILURE'S KEY, both poles. The hold's own docblock claimed it used "the same
+    // scoping" as `AnalysisRunOrchestrationService`'s slot, and that sentence was false: the service keys
+    // on (book, chapter, scene, type) and this side compared only chapter and scene, so it was the
+    // coarser of the two and a Proofread failure held for chapter 1 was claimed by whatever ran there
+    // next. The banner names the type ("<type>: failed"), so the wrong-type cell is not cosmetic.
+    it('does NOT claim a held failure under a DIFFERENT analysis type on the same unit', () => {
+      component.selectedAnalysisType = 'Proofread';
+      component.runAnalysis();
+      component.chapterId = 'chap-2';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
+      (component as any).handleRunEvent({ kind: 'error', message: 'Proofread: נכשל.' });
+      fixture.detectChanges();
+
+      // The reader comes back to chapter 1, but is now looking at Line Edit.
+      component.selectedAnalysisType = 'LineEdit';
+      component.chapterId = 'chap-1';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-2', 'chap-1', false) });
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.run-error'))
+        .withContext('a Proofread failure announced over Line Edit misattributes it exactly as the '
+          + 'cross-chapter case did, and can land over a Line Edit run that has just started here')
+        .toBeNull();
+    });
+
+    it('claims it as soon as that same analysis type is the one on screen', () => {
+      // The opposite pole, and the one a too-narrow key breaks: hold forever and chapter 1 is left
+      // permanently silent about its own run, which is the regression the whole held-failure channel
+      // exists to fix. Reverting either half of the key turns exactly one of this pair red.
+      component.selectedAnalysisType = 'Proofread';
+      component.runAnalysis();
+      component.chapterId = 'chap-2';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
+      (component as any).handleRunEvent({ kind: 'error', message: 'Proofread: נכשל.' });
+      fixture.detectChanges();
+
+      component.selectedAnalysisType = 'LineEdit';
+      component.chapterId = 'chap-1';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-2', 'chap-1', false) });
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('.run-error'))
+        .withContext('precondition: still held, not dropped')
+        .toBeNull();
+
+      component.onSelectAnalysisType('Proofread');
+      fixture.detectChanges();
+
+      const banner = fixture.nativeElement.querySelector('.run-error') as HTMLElement | null;
+      expect(banner)
+        .withContext('the hold is narrower, not a black hole: the failure is still owed to the reader')
+        .not.toBeNull();
+      expect(banner!.textContent!.trim()).toBe('Proofread: נכשל.');
+    });
   });
 
   // Bug 1 (rf-c01): starting an async chapter Proofread/Line Edit run must publish the job to the
