@@ -150,8 +150,10 @@
  * for it is hidden. Accepted knowingly over the alternative - drawing both layers at 0.5 each, which
  * composites to 0.75 and turns every flip into a brightness pulse, i.e. a visible blink on an
  * animation whose whole point is to be quiet. The button, its ring, its badge and its accessible name
- * are unaffected either way, so the failure degrades the launcher rather than breaking it, and both
- * assets are static files from the same directory: if one 404s, so has the other since f1.
+ * are unaffected either way, so the failure degrades the launcher rather than breaking it. The two
+ * assets do NOT share deployment history - `show-flip-sprite.png` is new on this branch, `show-header.png`
+ * has been there since f1 - so they can 404 independently, and the accepted cost is a faceless-but-
+ * functional launcher: button, ring, badge and accessible name all unaffected.
  *
  * The hit-test contract survives by construction: a pseudo-element is never returned by
  * `elementFromPoint` (it resolves to its originating element), and `pointer-events: none` says so
@@ -224,6 +226,15 @@
 @media (prefers-reduced-motion: reduce) {
   .dock-launcher:hover {
     transform: none;
+  }
+
+  /* The flip ANIMATION is already gated behind `no-preference` above and never runs here, but the
+     opacity TRANSITION on each face layer is declared unconditionally on `.dock-launcher-icon` and
+     `.dock-launcher::after`, so it still fades under `reduce` unless killed here too - same idiom as
+     `.dock-drawer` below. */
+  .dock-launcher-icon,
+  .dock-launcher::after {
+    transition: none;
   }
 }
 
