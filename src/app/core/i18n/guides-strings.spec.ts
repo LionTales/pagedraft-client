@@ -17,6 +17,9 @@ describe('guides-strings (chatbot phase A.2)', () => {
   describe('he/en parity', () => {
     it('both maps carry the SAME key set', () => {
       expect(Object.keys(GUIDES_STRINGS_HE).sort()).toEqual(Object.keys(GUIDES_STRINGS_EN).sort());
+      // P3-75: non-vacuity floor, on the same idiom as feedback-strings.spec.ts - without it an empty
+      // pair of maps would satisfy every claim in this describe.
+      expect(Object.keys(GUIDES_STRINGS_HE).length).toBeGreaterThan(10);
     });
 
     it('no value is empty in either language', () => {

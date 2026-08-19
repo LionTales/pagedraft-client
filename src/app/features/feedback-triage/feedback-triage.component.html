@@ -11,6 +11,26 @@
 -->
 <section class="ft">
 
+  <!-- ── THE WAY OUT (c08, P2 finding 23) ─────────────────────────────────────────────────────────
+       Outside the `@if (!selected)` below on purpose: the detail pane is reached FROM this page, so if
+       the exit lived in the list header alone the deepest state on the surface would be the one with no
+       way home. `.ft-back` beside the detail goes back to the LIST; this one leaves the surface.
+
+       THIS IS THE FOURTH ORPHAN SURFACE CARRYING A HAND-COPIED BACK LINK, after `/help`,
+       `/help/:guideId` and the guide reader's own pair. `fixes-and-adjustments-2026-08-17`'s
+       "The navigation decision" declined a shared layout component "when only three orphan surfaces
+       exist" and named the revisit condition explicitly: "Revisit when a fourth destination appears."
+       It has appeared. This todo still hand-copies the idiom rather than building that component
+       (the refactor touches every route, the dock's overlay stacking and a long tail of specs, and is
+       not a fix belonging to a review pass), but the condition is now MET and is recorded in the plan's
+       deferred section as well as here, so the next reader inherits a due decision rather than a fifth
+       copy. -->
+  <nav class="ft-bar">
+    <a class="ft-back-books" [routerLink]="['/books']">
+      <span class="ft-back-books-icon" aria-hidden="true">←</span>{{ label('backToBooks') }}
+    </a>
+  </nav>
+
   @if (!selected) {
     <header class="ft-head">
       <h1 class="ft-title">{{ label('triageTitle') }}</h1>

@@ -670,6 +670,60 @@ describe('FeedbackTriageComponent (Show C2)', () => {
     });
   });
 
+  // ── The way out (c08, P2 finding 23) ─────────────────────────────────────────────────────────────
+  //
+  // This is an ORPHAN surface off a flat route table: no shared chrome, no menu, and until c08 not one
+  // anchor or Router call anywhere in the component or its template. e2 gave it an entry from the books
+  // list, which turned "a page you have to type a URL to reach" into a one-click destination with no way
+  // home but browser-back - the same defect e2 was written to fix, one step further in.
+  //
+  // The expected text is TRANSCRIBED here rather than read out of FEEDBACK_STRINGS_*, per f10(e): these
+  // are DRAFT Hebrew strings, so an assertion sourced from the production constant would catch a MISSING
+  // string and never a wrong one, which is exactly the failure worth catching while the wording is draft.
+
+  describe('the way back to the books list', () => {
+    function backLink(): HTMLAnchorElement | null {
+      return fixture.debugElement.query(By.css('.ft-back-books'))?.nativeElement ?? null;
+    }
+
+    it('links back to /books, in Hebrew', () => {
+      start();
+      const back = backLink()!;
+      expect(back).toBeTruthy();
+      expect(back.tagName.toLowerCase()).toBe('a');
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain('חזרה לרשימת הספרים');
+    });
+
+    it('links back to /books, in English', () => {
+      start();
+      (component as unknown as { appLang: 'he' | 'en' }).appLang = 'en';
+      // OnPush, same reason as the language case below: the component's own view has to be marked.
+      fixture.debugElement.injector.get(ChangeDetectorRef).markForCheck();
+      fixture.detectChanges();
+
+      const back = backLink()!;
+      expect(back.getAttribute('href')).toBe('/books');
+      expect(back.textContent).toContain('Back to the books');
+    });
+
+    it('is present in the DETAIL state too, so the deeper state is not the one with no exit', () => {
+      start();
+      all('[data-testid="ft-row-open"]')[0].click();
+      fixture.detectChanges();
+      http.expectOne(r => r.url === '/api/feedback/fb-down-new-a' && r.method === 'GET').flush(detail());
+      fixture.detectChanges();
+
+      // Non-vacuity: the list header really is gone, so this asserts the link survives the switch rather
+      // than that the page never changed.
+      expect(el('ft-detail')).toBeTruthy();
+      expect(el('ft-count')).toBeNull();
+      expect(backLink()?.getAttribute('href')).toBe('/books');
+      // `.ft-back` is a different control with a different job: back to the LIST, not out of the surface.
+      expect(el('ft-back')).toBeTruthy();
+    });
+  });
+
   // ── Chrome ───────────────────────────────────────────────────────────────────────────────────────
 
   describe('chrome', () => {

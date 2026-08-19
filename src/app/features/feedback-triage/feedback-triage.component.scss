@@ -24,6 +24,42 @@
   color: var(--pd-text);
 }
 
+/* ── The way out (c08) ───────────────────────────────────────────────────────────────────────────
+   The e1 back-link idiom, copied from `help-index.component.ts` / `guide-reader.component.ts`: link
+   colour, no underline until hover, the focus ring, and a PHYSICAL arrow glyph that is mirrored by
+   LAYOUT direction rather than by content. Every directional property here is logical, like the rest of
+   this file, so only the glyph needs a direction rule at all.
+
+   The `dir` attribute is bound on the HOST of this component (`@HostBinding('attr.dir')`), so
+   `:host([dir='rtl'])` is the selector that actually matches; `:host-context` is kept beside it for a
+   host mounted under an already-RTL ancestor without its own attribute. */
+.ft-bar {
+  display: flex;
+  margin-block-end: var(--pd-space-4);
+  padding-block-end: var(--pd-space-4);
+  border-block-end: 1px solid var(--pd-divider);
+}
+
+.ft-back-books {
+  color: var(--pd-text-link);
+  text-decoration: none;
+  font-size: var(--pd-text-body-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--pd-space-2);
+}
+
+.ft-back-books:hover { text-decoration: underline; }
+
+.ft-back-books:focus-visible {
+  outline: none;
+  box-shadow: var(--pd-ring);
+  border-radius: var(--pd-radius-sm);
+}
+
+:host([dir='rtl']) .ft-back-books-icon,
+:host-context([dir='rtl']) .ft-back-books-icon { transform: scaleX(-1); }
+
 .ft-title {
   margin: 0 0 var(--pd-space-2);
   font-size: var(--pd-text-h3);

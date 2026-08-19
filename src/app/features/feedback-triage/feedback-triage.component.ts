@@ -8,6 +8,7 @@ import {
   inject,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { RouterLink } from '@angular/router';
 import { Subject, Subscription, takeUntil } from 'rxjs';
 
 import { MarkdownTextComponent } from '../analysis-panel/markdown-text.component';
@@ -64,6 +65,20 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
  * put four buttons on screen of which three answer `400`), and when the two ever disagree this surface
  * renders the server's refusal verbatim rather than hiding it.
  *
+ * ── IT HAS A WAY OUT, and that is a property, not a decoration (c08) ─────────────────────────────
+ * `e2` gave this page an entry from the books-list header and left it with no exit: the surface carried
+ * zero anchors and no `Router` navigation of any kind, so a page that used to be typed-URL-only became a
+ * one-click destination whose only way home was browser-back. That is the same defect `e2` existed to
+ * fix, one step further in. The back link in the template's `.ft-bar` follows the idiom `e1` established
+ * on `/help` and the guide reader verbatim (an absolute `routerLink`, logical properties, he/en parity,
+ * the physical arrow mirrored under `[dir='rtl']`), and it is rendered OUTSIDE the list/detail switch so
+ * the deeper of the two states is not the one without an exit.
+ *
+ * It is also the FOURTH hand-copied instance of that idiom, which is the exact condition
+ * `fixes-and-adjustments-2026-08-17`'s "The navigation decision" named for revisiting the shared layout
+ * component it declined ("Revisit when a fourth destination appears"). Not built here; recorded in that
+ * plan's successor's deferred section and in the template, so the decision is due rather than lost.
+ *
  * App-level chrome, so Hebrew-default and RTL-first, following the same convention as the drawer and the
  * Activity Center: this route is reachable with no book open, so there is no book language to follow.
  */
@@ -71,7 +86,7 @@ import { formatRelativeTime } from '../../core/utils/relative-time';
   selector: 'app-feedback-triage',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [FormsModule, MarkdownTextComponent],
+  imports: [FormsModule, RouterLink, MarkdownTextComponent],
   templateUrl: './feedback-triage.component.html',
   styleUrl: './feedback-triage.component.scss',
 })

@@ -35,6 +35,12 @@ export type FeedbackStringKey =
   // end up calling the same page something else.
   | 'entryLink'
   | 'entryLinkAria'
+  // ── the way BACK OUT of the triage view (c08) ──
+  // e2 made this page a one-click destination and left it with no exit, which is the same bug e2 was
+  // written to fix, one step further in. The label is deliberately the SAME sentence
+  // `guides-strings.ts` uses for its own back link, because the two are the same affordance pointing at
+  // the same page and an app with two names for `/books` teaches the reader nothing.
+  | 'backToBooks'
   // ── the widget ──
   // The pair of thumbs. `Aria` variants exist because the buttons are ICON-ONLY: a glyph has no
   // computed name, so unlike the history trigger (whose visible label names it) these genuinely need
@@ -136,6 +142,7 @@ export type FeedbackStringKey =
 export const FEEDBACK_STRINGS_HE: Record<FeedbackStringKey, string> = {
   entryLink:         'משוב',
   entryLinkAria:     'פתיחת רשימת המשוב',
+  backToBooks:       'חזרה לרשימת הספרים',   // DRAFT he - needs native review; same wording as guides-strings
 
   voteUpAria:        'התשובה עזרה',
   voteDownAria:      'התשובה לא עזרה',
@@ -226,6 +233,7 @@ export const FEEDBACK_STRINGS_HE: Record<FeedbackStringKey, string> = {
 export const FEEDBACK_STRINGS_EN: Record<FeedbackStringKey, string> = {
   entryLink:         'Feedback',
   entryLinkAria:     'Open the feedback list',
+  backToBooks:       'Back to the books',
 
   voteUpAria:        'This answer helped',
   voteDownAria:      'This answer did not help',

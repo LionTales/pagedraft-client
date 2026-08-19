@@ -11,8 +11,6 @@ import { JobRegistryService, TrackedJob } from '../../core/services/job-registry
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { STAGE_NAMES } from '../../shared/stage-spine/stage-spine.copy';
 import { collapseStorageKey } from '../../shared/collapsible-section/collapse-store';
-import { GUIDES_STRINGS_HE } from '../../core/i18n/guides-strings';
-import { FEEDBACK_STRINGS_HE } from '../../core/i18n/feedback-strings';
 
 /**
  * Wave 3 / w3 - the BOOKS LIST as the first place a user is oriented.
@@ -22,9 +20,11 @@ import { FEEDBACK_STRINGS_HE } from '../../core/i18n/feedback-strings';
  * was standing on. It now renders the COMPACT stage spine per row.
  *
  * THE COST CONTRACT IS THE POINT OF THIS SUITE. A per-book indicator is only worth having if it does not
- * turn one list request into 1 + 4N. `describe('the request budget')` pins that: exactly one HTTP request
- * for the whole page, whatever the row count, and no status request is ever issued for a row. Where a
- * stage cannot be computed from that single payload the row says so ("not known here") rather than
+ * turn one list request into 1 + 4N. `describe('the request budget')` pins that: exactly two HTTP
+ * requests for the whole page - `GET /api/books` and the `GET /api/feedback/availability` probe -
+ * whatever the row count, and no status request is ever issued for a row. The availability probe is
+ * page-level, not per-row: it is read once per session and shared with every later mount. Where a
+ * stage cannot be computed from the books payload the row says so ("not known here") rather than
  * fetching, which is the standing rule - show less, never guess and never fan out.
  */
 
@@ -368,8 +368,12 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
       // is the same affordance and must agree, or the two land on different pages once Hebrew stops
       // being the reader's only default.
       expect(el.getAttribute('href')).toBe('/help?lang=he');
-      expect(el.textContent?.trim()).toBe(GUIDES_STRINGS_HE['helpLink']);
-      expect(el.getAttribute('aria-label')).toBe(GUIDES_STRINGS_HE['helpLinkAria']);
+      // f10: transcribed independently from guides-strings.ts (DRAFT he) rather than compared against
+      // GUIDES_STRINGS_HE itself - a typo introduced into that constant must turn this spec red, and
+      // comparing the constant to itself could never detect that. Keep this literal in lockstep with a
+      // deliberate copy change to helpLink/helpLinkAria.
+      expect(el.textContent?.trim()).toBe('מדריכים');
+      expect(el.getAttribute('aria-label')).toBe('פתיחת מדריכי המערכת');
     });
 
     it('stays on the page while the create form is open', () => {
@@ -394,6 +398,28 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
       return found ? (found.nativeElement as HTMLAnchorElement) : null;
     }
 
+    /**
+     * The paired positive claim for the two NEGATIVE cells (finding 26).
+     *
+     * Both of the other two things this header draws are named: the guides link (matched WITHOUT the
+     * feedback class, so it can never be satisfied by the very node the negative cell says is absent) and
+     * the create-book button, by its rendered Hebrew text rather than by class alone. If the header, the
+     * actions group, or the whole template stopped rendering, this fails - which is precisely the
+     * alternative explanation an unpaired `toBeNull()` cannot rule out.
+     */
+    function expectHeaderStillRendered(): void {
+      const actions = fixture.nativeElement.querySelector('.dash-header-actions') as HTMLElement | null;
+      expect(actions)
+        .withContext('the header actions group itself did not render, so "the link is absent" proves nothing')
+        .not.toBeNull();
+      expect(actions!.querySelector('.dash-help-link:not(.dash-feedback-link)'))
+        .withContext('the guides link, which no flag gates, must still be beside the missing entry')
+        .not.toBeNull();
+      const newBook = actions!.querySelector('.pd-btn-primary') as HTMLElement | null;
+      expect(newBook).not.toBeNull();
+      expect(newBook!.textContent?.trim()).toBe('ספר חדש');
+    }
+
     it('renders beside the guides link, pointing at /feedback, when the deployment serves triage', () => {
       load([book({ id: 'a' })], true);
 
@@ -402,8 +428,11 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
         .withContext('the triage view was reachable only by typed URL before this entry existed')
         .not.toBeNull();
       expect(link!.getAttribute('href')).toBe('/feedback');
-      expect(link!.textContent?.trim()).toBe(FEEDBACK_STRINGS_HE['entryLink']);
-      expect(link!.getAttribute('aria-label')).toBe(FEEDBACK_STRINGS_HE['entryLinkAria']);
+      // f10: transcribed independently from feedback-strings.ts (DRAFT he), not compared against
+      // FEEDBACK_STRINGS_HE itself - see the guides-link case above for why. Update in lockstep with a
+      // deliberate copy change to entryLink/entryLinkAria.
+      expect(link!.textContent?.trim()).toBe('משוב');
+      expect(link!.getAttribute('aria-label')).toBe('פתיחת רשימת המשוב');
       // Beside the guides link, in the same header actions group, not in place of it.
       const actions = fixture.nativeElement.querySelector('.dash-header-actions') as HTMLElement;
       expect(actions.contains(link)).toBeTrue();
@@ -413,8 +442,13 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
     it('is ABSENT when the deployment does not serve triage, so it can never point into the wildcard', () => {
       load([book({ id: 'a' })], false);
       expect(feedbackLink()).toBeNull();
-      // The rest of the header is untouched by the flag.
-      expect(fixture.debugElement.query(By.css('.dash-help-link'))).not.toBeNull();
+      // PAIRED POSITIVE CLAIM (finding 26). "Absent" only means something if the rest of the header is
+      // PRESENT: a template that failed to render at all, or a header whose actions group was renamed,
+      // would satisfy the null above for the wrong reason. Both siblings of the gated link are named
+      // here, so this cell reads "absent while the rest is present" rather than "absent because nothing
+      // rendered". The link's own selector could not be proven red before e2 existed (it had no node to
+      // match); this is what makes the cell discriminate GOING FORWARD.
+      expectHeaderStillRendered();
     });
 
     it('is absent when the availability read FAILS, which is the fail-closed direction', () => {
@@ -427,6 +461,140 @@ describe('DashboardComponent (books list, Wave 3 / w3)', () => {
 
       // A failed read must not draw a link into a surface this deployment may not be serving.
       expect(feedbackLink()).toBeNull();
+      // PAIRED POSITIVE CLAIM (finding 26) - and this cell needs it more than the flag-off one, because a
+      // FAILED page-level read is exactly the condition under which "the whole header stopped rendering"
+      // is a plausible alternative explanation for the null above. It did not: the header is intact and
+      // only the gated link is missing.
+      expectHeaderStillRendered();
+    });
+
+    /**
+     * P3 48: `dashboard.component.ts` ngOnInit claims "One read per session, shared with every later mount
+     * of this page". That claim was pinned only at SERVICE level (`feedback-availability.service.spec.ts`,
+     * `refCount: false` keeps an abandoned in-flight read alive), which proves the mechanism EXISTS but not
+     * that this component is wired to it - a component that called `read()` instead of `once()`, or that
+     * injected a component-scoped provider, would leave every service spec green and this claim false.
+     *
+     * So this mounts the dashboard, destroys it the way leaving the books list does, and mounts it again
+     * inside the SAME TestBed, where the root-provided `FeedbackAvailabilityService` is one shared
+     * instance. Exactly one probe may be issued across both mounts, and the second mount must still draw
+     * the link from the replayed answer - a cache that suppressed the request but lost the answer would be
+     * a different bug with the same request count.
+     */
+    it('probes availability ONCE across a destroy-and-remount, and still draws the link on the second mount', () => {
+      // ── Mount 1 ──
+      fixture.detectChanges();
+      const firstMountProbes = httpMock.match(r => r.url.endsWith('/api/feedback/availability'));
+      expect(firstMountProbes.length)
+        .withContext('the first mount is the one read the session is allowed')
+        .toBe(1);
+      firstMountProbes[0].flush({ triageEnabled: true });
+      httpMock.expectOne(r => r.url.endsWith('/api/books')).flush([book({ id: 'a' })]);
+      fixture.detectChanges();
+      expect(feedbackLink()).not.toBeNull();
+
+      // Leaving the books list destroys the component; returning to it constructs a NEW one.
+      fixture.destroy();
+
+      // ── Mount 2, same TestBed, therefore the same root service instance ──
+      const remount = TestBed.createComponent(DashboardComponent);
+      remount.detectChanges();
+
+      const secondMountProbes = httpMock.match(r => r.url.endsWith('/api/feedback/availability'));
+      expect(secondMountProbes.length)
+        .withContext('the remount re-probed, so "one read per session, shared with every later mount of '
+          + 'this page" is false: this page pays a request per mount')
+        .toBe(0);
+
+      // The books list is NOT cached and is expected to be re-read - naming it here keeps the claim about
+      // the availability probe specifically, rather than about mounting being free.
+      httpMock.expectOne(r => r.url.endsWith('/api/books')).flush([book({ id: 'a' })]);
+      remount.detectChanges();
+
+      // ...and the second mount got the ANSWER, not just the silence: the link is drawn from the replay.
+      const remountedLink = remount.debugElement.query(By.css('.dash-feedback-link'));
+      expect(remountedLink)
+        .withContext('the remount suppressed the request but lost the answer, so the entry vanished')
+        .not.toBeNull();
+      expect((remountedLink.nativeElement as HTMLAnchorElement).getAttribute('href')).toBe('/feedback');
+
+      remount.destroy();
+    });
+  });
+
+  // ── THE HEADER AT NARROW WIDTHS (c09 / finding 24) ──────────────────────────────────────────────
+  //
+  // e2 made this header a THREE-item row beside the title (guides + feedback + the create button), and
+  // the row had no wrap and no breakpoint of its own. Measured in the browser at 300px before the fix:
+  // Hebrew ran the header 70px past its box and put the create button at x=-46, clipped to "ספר ח" with
+  // no way to scroll to it; English ran 96px past. The rule below is the one the guides index header
+  // already uses (help-index.component.ts), so both headers restack the same way.
+  //
+  // These assert the COMPUTED value on the rendered node rather than the presence of a declaration in a
+  // string: a component style that never reaches its node is the standing trap here, and only the
+  // computed read distinguishes a live rule from a dead one.
+
+  describe('the header at narrow widths', () => {
+    function headerNodes(): { header: HTMLElement; actions: HTMLElement } {
+      load([book({ id: 'a' })], true);
+      return {
+        header: fixture.nativeElement.querySelector('.dash-header') as HTMLElement,
+        actions: fixture.nativeElement.querySelector('.dash-header-actions') as HTMLElement,
+      };
+    }
+
+    it('lets the header row WRAP, so a third action can never push the create button off the edge', () => {
+      const { header } = headerNodes();
+
+      expect(getComputedStyle(header).flexWrap)
+        .withContext('with nowrap, at 300px the create button rendered at x=-46, clipped and unreachable')
+        .toBe('wrap');
+    });
+
+    it('lets the actions group itself wrap, since on a wrapped header it is alone on its line', () => {
+      const { actions } = headerNodes();
+
+      expect(getComputedStyle(actions).flexWrap).toBe('wrap');
+    });
+
+    it('keeps a real gap between the title and the actions, so they can never sit flush', () => {
+      const { header } = headerNodes();
+
+      // Measured before the fix at 380px: the guides link's right edge and the title's left edge were the
+      // same pixel. A gap is what stops space-between from being the only thing holding them apart.
+      const gap = parseFloat(getComputedStyle(header).columnGap || '0');
+      expect(gap).toBeGreaterThan(0);
+    });
+
+    it('carries a narrow breakpoint that starts-aligns the wrapped lines, at the app\'s own 520px', () => {
+      const { header } = headerNodes();
+
+      // The media rule cannot be exercised by width from inside the Karma frame, so this reads the
+      // component's own compiled stylesheet: the rule must exist, be scoped to THIS header, and use the
+      // same breakpoint the guides index header uses rather than a new one invented for this page.
+      const mediaRules: CSSMediaRule[] = [];
+      for (const sheet of Array.from(document.styleSheets)) {
+        let rules: CSSRuleList;
+        try {
+          rules = sheet.cssRules;
+        } catch {
+          continue; // a cross-origin sheet: not ours
+        }
+        for (const rule of Array.from(rules)) {
+          if (rule instanceof CSSMediaRule && rule.cssText.includes('.dash-header')) {
+            mediaRules.push(rule);
+          }
+        }
+      }
+
+      const narrow = mediaRules.find(r => r.conditionText.replace(/\s/g, '').includes('max-width:520px'));
+      expect(narrow)
+        .withContext('the header restack must use the 520px breakpoint help-index.component.ts already uses')
+        .toBeDefined();
+      expect(narrow!.cssText.replace(/\s/g, '')).toContain('align-items:flex-start');
+
+      // And the header the rule names is the one this component actually rendered.
+      expect(header.classList.contains('dash-header')).toBeTrue();
     });
   });
 });
