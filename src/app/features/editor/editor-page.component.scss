@@ -296,12 +296,34 @@
    `.review-body` that must be allowed to outgrow the panel. `min-height: 0` on a flex item switches
    off the automatic minimum size, which is exactly what capped the analysis column at the panel's
    height and forced a long result to scroll inside a 31px pane. Without it the host is at least as
-   tall as its content, `.review-body` (the single `overflow-y: auto` box) scrolls once, and `flex: 1`
-   still stretches the host to fill the panel when the content is short.
+   tall as its content, `.review-body` scrolls once, and `flex: 1` still stretches the host to fill
+   the panel when the content is short.
 
-   The other two hosts KEEP the cap: their own internals were not part of this fix and their inner
-   scroll boxes still expect a height-bounded host. Releasing them is a separate change with its own
-   browser gate. */
+   That "scrolls once" is scoped to THIS branch only - Edit mode -> Analysis -> the run tab
+   (`app-analysis-panel` -> `app-analysis-run-tab`) - not a universal property of `.review-body`.
+   f05 (2026-08-18) enumerated SEVEN other `overflow` boxes inside the review-panel subtree as
+   "unrelated inner scrollers that this fix did not touch"; c10 (2026-08-19) MEASURED that two of
+   those seven no longer scroll, as a side effect of THIS split. `app-analysis-panel`'s own History
+   and Versions sub-tabs (`.history-tab-content` + `.result-view` in
+   analysis-history-tab.component.scss, `.versions-tab-content` in
+   analysis-versions-tab.component.scss) sit inside `app-analysis-panel`, so making that host
+   content-sized also made ITS `flex: 1; min-height: 0; overflow: auto` descendants content-sized -
+   they grow to content instead of collapsing to their `0%` flex-basis, and the ONE scroller left in
+   the whole review-panel subtree on that path is `.review-body` itself (measured: a 7583px-tall
+   history list does not scroll its own box). Left in place, not deleted - see the note in each of
+   those two files for the measurement.
+
+   Still genuinely independent scrollers, unaffected because they never sat inside
+   `app-analysis-panel`: `app-issue-panel`'s `.issues-list` and `.rewrite-preview`
+   (issue-panel.component.ts, Edit mode -> Language view), and, in Book review mode (where
+   `app-analysis-panel` is not even in the DOM), `app-book-dashboard`'s own `.book-dashboard`
+   (`overflow-y: auto; max-height: 100%`, keyed off in tier-toggle.component.scss) plus the
+   `.chapter-list` its mounted `app-stage-spine` carries (stage-spine.component.ts). Re-grep before
+   relying on either list again.
+
+   The other two hosts (issue-panel, book-dashboard's tree) KEEP the cap: their own internals were
+   not part of this fix and their inner scroll boxes still expect a height-bounded host. Releasing
+   them is a separate change with its own browser gate. */
 .review-body app-analysis-panel {
   flex: 1;
   display: flex;

@@ -1,8 +1,25 @@
 // c1: `min-height`, NOT `height`. A fixed `height: 100%` pinned this column to the review panel's
 // height, which is the constraint every box below it inherited - the run tab could never be taller
 // than the panel, so a long result had to scroll inside a pane instead of scrolling the panel. As a
-// minimum it still fills the panel when the result is short (an empty state should not float in a
-// half-height column) and simply grows when the result is long, letting `.review-body` scroll once.
+// minimum it simply grows when the result is long, letting `.review-body` scroll once.
+//
+// c10, measured in Chrome 2026-08-19 across 12 cells: the percentage is against the HOST
+// (`app-analysis-panel`, `flex: 1` in `.review-body`), NOT against the review panel, so read it as
+// "fill the height flex gave the host", not "fill the panel". Those differ: when `.review-body` is
+// already overflowing there is no free space, the host is content-sized and this line is a measured
+// no-op (long result 7378.9px both ways; short result at a 900px viewport 523.6px both ways). It bites
+// only when the panel has spare room - short result at a 1300px viewport 855.4px vs 523.6px content,
+// empty state 575.4px vs 391.6px, empty book 655.0px vs 482.8px, LTR short 575.4px vs 564.6px.
+//
+// It is a CYCLIC percentage (the host's automatic minimum is content-derived, and the content is this
+// box) and it does NOT resolve to 0 here: the host's `flex-basis` is `0%`, so its base size never reads
+// this declaration, and Chrome treats the post-flex used height as definite for the percentage. Even
+// where an engine did resolve it to 0 the cost is cosmetic and the c1 defect cannot return through it -
+// nothing below this box carries `min-height: 0` or a non-visible `overflow` any more, so nothing can
+// collapse into a sliver; the only visible loser is `.result-view`, the `flex: 1` child that absorbs
+// the slack, which would sit at its content height instead of reaching the bottom of the column.
+// That is also why the height must NOT come back from a definite ancestor: a definite ancestor height
+// is exactly the constraint c1 removed.
 .analysis-panel {
   display: flex;
   flex-direction: column;

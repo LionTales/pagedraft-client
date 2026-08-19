@@ -1,3 +1,8 @@
+// c10 (2026-08-19): same as the history tab. Since c1 made `.analysis-panel` content-sized, this
+// `min-height: 0` + `overflow: auto` box no longer scrolls; it sizes to content and the review panel
+// scrolls once at the editor's `.review-body`. Measured on a long versions list in a 1440x900 panel:
+// `.versions-tab-content` 1526.9px inside a 1793.7px panel, not scrolling, single scroller 1945/727.
+// Kept rather than deleted, for the reason spelled out in analysis-history-tab.component.scss.
 :host {
   flex: 1;
   min-height: 0;

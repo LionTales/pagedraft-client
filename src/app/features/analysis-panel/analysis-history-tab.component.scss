@@ -1,3 +1,13 @@
+// c10 (2026-08-19): these `min-height: 0` + `overflow: auto` boxes are INERT as scrollers, and that is
+// the state they were measured in, not an oversight. c1 made the parent `.analysis-panel` content-sized
+// (`min-height: 100%` instead of `height: 100%`), and a column flex container with an indefinite main
+// size sizes its items from their content contributions - so `flex: 1` + `min-height: 0` + `auto` grows
+// to content here instead of collapsing to its `0%` flex-basis. Measured on a long history in a 1440x900
+// review panel: `.history-tab-content` 7164.2px tall holding 7163px, `.result-view` 7034.5px holding
+// 7032px, neither scrolling, and the ONE scroller in the whole review-panel subtree is the editor's
+// `.review-body` (7583/727). Two nested scrollers became one and nothing is clipped. Left as written
+// because the declarations cost nothing where they are; re-bounding this tab to the panel height again
+// is a separate change and needs its own browser gate.
 :host {
   flex: 1;
   min-height: 0;
