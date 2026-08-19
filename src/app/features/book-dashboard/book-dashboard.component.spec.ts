@@ -19,6 +19,7 @@ import {
   DASHBOARD_LABELS_HE,
   DashboardLabelKey,
 } from './book-dashboard.component';
+import { BookReviewStatusRowComponent } from './book-review-status-row.component';
 import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { BookService } from '../../core/services/book.service';
@@ -377,6 +378,27 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       };
     }
 
+    // finding 58: the spy answers `reviewJob$` for ANY (bookId, kind), so every assertion below is blind
+    // to WHICH job this dashboard asked for. A regression that watched the book SUMMARY build - or
+    // another book's review - would drive the ledger off the wrong job and pass all three cases. The
+    // arguments are the only place that distinction exists in this suite.
+    it('watches THIS book\'s REVIEW build, and asks for nothing else', () => {
+      expect(jobRegistrySpy.jobByKindForBook$.calls.allArgs())
+        .withContext('a summary build finishing must not bump the review findings ledger')
+        .toEqual([['book-1', 'review']]);
+    });
+
+    it('re-points the watch at the NEW book when the dashboard switches books', () => {
+      // The paired positive for the argument check: the watch is re-established per book, so a stale
+      // subscription on the previous book cannot bump the new book's ledger.
+      jobRegistrySpy.jobByKindForBook$.calls.reset();
+
+      component.bookId = 'book-2';
+      component.ngOnChanges({ bookId: new SimpleChange('book-1', 'book-2', false) });
+
+      expect(jobRegistrySpy.jobByKindForBook$.calls.allArgs()).toEqual([['book-2', 'review']]);
+    });
+
     it('bumps the findings token when a build finishes WITH THE STATUS ROW UNMOUNTED', () => {
       // The ledger is already on screen over the previous review, so `onReviewStateChange` sees no
       // transition and would bump nothing: the token is the only thing that makes it re-read.
@@ -391,16 +413,43 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       expect(component.findingsRefreshToken).toBe(before + 1);
     });
 
+    // finding 58: the dedupe is keyed on the JOB ID, and this pair is what says so. The negative alone
+    // is satisfied by "a mounted row suppresses the bump", which would silently swallow the refresh for
+    // every build after the first one the row ever handled.
+    //
+    // The stand-in is the REAL row's shape, not a literal: `handledTerminalJobId` is a getter over the
+    // row's private loop guard, and a literal object here would keep passing after that getter was
+    // renamed or stopped tracking the guard. Its own contract is pinned in
+    // `book-review-status-row.component.spec.ts` ("a1: handledTerminalJobId is the dashboard's dedupe key").
+    function rowHandling(jobId: string | null): Pick<BookReviewStatusRowComponent, 'handledTerminalJobId'> & {
+      loadBookReviewStatus: () => void;
+    } {
+      return { handledTerminalJobId: jobId, loadBookReviewStatus: () => { /* the row's own re-read */ } };
+    }
+
     it('does NOT bump for a terminal the MOUNTED row has already handled (no duplicate re-read)', () => {
       component.onReviewStateChange('ready');
       // The row is present and its own poll drove this very job to terminal a moment ago.
-      (component as any).reviewRow = { handledTerminalJobId: 'review-job-1', loadBookReviewStatus: () => {} };
+      (component as any).reviewRow = rowHandling('review-job-1');
       const before = component.findingsRefreshToken;
 
       reviewJob$.next(reviewJob('running'));
       reviewJob$.next(reviewJob('succeeded'));
 
       expect(component.findingsRefreshToken).toBe(before);
+    });
+
+    it('DOES bump for the NEXT build, even though the row handled the previous one', () => {
+      // The pair to the case above: the dedupe key is the id, so a row that handled build 1 must not
+      // suppress build 2. "This row has handled A build" would leave the ledger stale from then on.
+      component.onReviewStateChange('ready');
+      (component as any).reviewRow = rowHandling('review-job-1');
+      const before = component.findingsRefreshToken;
+
+      reviewJob$.next(reviewJob('running', 'review-job-2'));
+      reviewJob$.next(reviewJob('succeeded', 'review-job-2'));
+
+      expect(component.findingsRefreshToken).toBe(before + 1);
     });
 
     it('does NOT bump for a build that was already terminal when this dashboard mounted', () => {
@@ -412,6 +461,24 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
       reviewJob$.next(reviewJob('succeeded'));
 
       expect(component.findingsRefreshToken).toBe(before);
+    });
+
+    it('DOES bump once that same job is seen RUNNING and then finishes (it is the TRANSITION)', () => {
+      // The pair to the case above. Without it, "never bumps for a succeeded job" passes too - and that
+      // is the whole feature switched off. The discriminator is the running emission in between.
+      component.onReviewStateChange('ready');
+      (component as any).reviewRow = undefined;
+      const before = component.findingsRefreshToken;
+
+      reviewJob$.next(reviewJob('succeeded'));
+      expect(component.findingsRefreshToken)
+        .withContext('precondition: the page loaded on a finished build, which is not an event')
+        .toBe(before);
+
+      reviewJob$.next(reviewJob('running'));
+      reviewJob$.next(reviewJob('succeeded'));
+
+      expect(component.findingsRefreshToken).toBe(before + 1);
     });
   });
 

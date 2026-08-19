@@ -1608,15 +1608,24 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
   // ── a1: the review build's terminal, observed where it cannot be unmounted ───────────────────────
   //
   // The developmental review's terminal used to be observed ONLY by `BookReviewStatusRowComponent`'s own
-  // progress poll, which its `ngOnDestroy` tears down. That poll is the only thing that re-reads the
-  // review status and therefore the only thing that moves `reviewState` into ready/stale, which is what
-  // {@link onReviewStateChange} bumps {@link findingsRefreshToken} off. So a build that finished while
-  // that row was not on screen left the ledger showing the PREVIOUS review with nothing to correct it.
+  // progress poll (`pollBookReviewBuild`'s terminal handlers), which its `ngOnDestroy` tears down. Before
+  // this ADD, that poll was the only thing that reacted to THE REVIEW BUILD'S OWN terminal by re-reading
+  // the status and moving `reviewState` into ready/stale, which is what {@link onReviewStateChange} bumps
+  // {@link findingsRefreshToken} off. So a build that finished while that row was not on screen left the
+  // ledger showing the PREVIOUS review with nothing to correct it.
+  //
+  // f13 (2026-08-19): `loadBookReviewStatus()` has other callers too, none of which react to the review
+  // build's OWN terminal (so none of them would have caught the bug above) - the row's own `ngOnChanges`
+  // on a book/language switch, {@link onSummaryTerminal} (a DIFFERENT build - the summary/briefs one -
+  // finishing) and {@link onTierChanged} (a tier commit). Scope any "only thing that re-reads the review
+  // status" claim to the review build's terminal specifically, never generally.
   //
   // `JobRegistryService` polls the same job to terminal regardless of who is mounted (the row already
   // publishes every build to it via `track()`), so the observation moves here, one level up. This is an
   // ADD, not a replacement: the row keeps its own detailed BUILDING/READY/STALE machine and its own
-  // outcome banner, both of which need the poll's payload, which the registry does not carry.
+  // outcome banner, both of which need the poll's payload, which the registry does not carry. The review
+  // build's terminal now has TWO observers - the row's own poll (when mounted) and this watch (always) -
+  // deduped on the job id below so a mounted row's own re-read is not repeated by this one.
 
   /** The registry subscription following this book's review build. */
   private reviewJobSub: Subscription | null = null;

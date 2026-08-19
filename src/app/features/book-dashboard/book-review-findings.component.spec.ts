@@ -684,6 +684,194 @@ describe('BookReviewFindingsComponent (wb3-c02)', () => {
 
     expect(() => component.openFinding('f-does-not-exist')).not.toThrow();
     expect(query('[data-testid="findings-ledger"]')).not.toBeNull();
+    // f10: not.toThrow() alone is satisfied even if the request stayed HELD forever - it only proves
+    // openFinding didn't crash, never that the unmatched id was actually dropped. Assert the drop
+    // itself: settlePendingOpenFinding nulls it out once the fetch has ended and no row appeared.
+    expect((component as any).pendingOpenFindingId).toBeNull();
+  });
+
+  // ── c04: the hold lasts exactly as long as the fetch, not as long as the ledger is unhelpful ──
+  //
+  // P2 finding 12. The drop condition used to be `!loading && findings.length > 0`, which mixed the
+  // ledger's CONTENT into a question that is only about the fetch's LIFETIME. Two ordinary outcomes -
+  // a ledger that came back empty, and one that failed to come back - therefore held the id
+  // indefinitely, and a refreshToken bump re-runs loadFindings WITHOUT resetView, so a review build
+  // finishing minutes later fired the held id at a reader who had long moved on. Each spec below drives
+  // the fetch through a Subject so the in-flight window is a real one: a synchronous of()/throwError()
+  // collapses it and passes against the unfixed code.
+
+  it('c04: an id that misses on an EMPTY ledger is DROPPED, not held', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    const findings$ = new Subject<BookReviewFindingsDto>();
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(findings$.asObservable());
+    triggerInit();
+    fixture.detectChanges();
+
+    // Arrives DURING the fetch, which is the whole reason the hold exists.
+    component.openFinding('f-does-not-exist');
+    expect((component as any).pendingOpenFindingId).toBe('f-does-not-exist');
+
+    findings$.next(makeFindingsDto({ findings: [], scores: [] }));
+    fixture.detectChanges();
+
+    // "This review has no findings" is a complete answer to "is that row here": no. Holding on past it
+    // is how the id survived to be fired by a later, unrelated refresh.
+    expect((component as any).pendingOpenFindingId).toBeNull();
+    expect(component.isEmpty).toBeTrue();
+  });
+
+  it('c04: a ledger fetch that ERRORS drops the held id (the error terminal settles it too)', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    const findings$ = new Subject<BookReviewFindingsDto>();
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(findings$.asObservable());
+    triggerInit();
+    fixture.detectChanges();
+
+    component.openFinding('f-1');
+    expect((component as any).pendingOpenFindingId).toBe('f-1');
+
+    findings$.error(new Error('boom'));
+    fixture.detectChanges();
+
+    // The error handler used to set the banner and return, touching neither the id nor the settle - the
+    // one terminal of the two that left the request alive.
+    expect(component.loadError).toBeTrue();
+    expect((component as any).pendingOpenFindingId).toBeNull();
+  });
+
+  it('c04: a refreshToken bump does NOT resurrect a request the previous fetch already settled', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    const first$ = new Subject<BookReviewFindingsDto>();
+    const second$ = new Subject<BookReviewFindingsDto>();
+    const getSpy = spyOn(reviewSvc, 'getReviewFindings').and.returnValue(first$.asObservable());
+    triggerInit();
+    fixture.detectChanges();
+
+    // The reader presses "הצג" on a finding; the ledger's fetch then fails.
+    component.openFinding('f-1');
+    first$.error(new Error('boom'));
+    fixture.detectChanges();
+
+    // Minutes later a review build finishes and the host bumps refreshToken. That path deliberately runs
+    // loadFindings WITHOUT resetView, so anything still held would land on THIS fetch's rows.
+    const scrollSpy = spyOn(Element.prototype, 'scrollIntoView');
+    getSpy.and.returnValue(second$.asObservable());
+    component.refreshToken = 1;
+    component.ngOnChanges({ refreshToken: new SimpleChange(0, 1, false) });
+    second$.next(makeFindingsDto({ findings: [makeFinding({ id: 'f-1' })] }));
+    fixture.detectChanges();
+
+    // final-r01: the POSITIVE half, in this same cell. Every other assertion here is a negative, and all
+    // three of them pass just as well if the bump never re-read at all - which would ALSO be a defect,
+    // and one this spec is named for ("a review build finishing bumps the token"). Assert the premise the
+    // negatives depend on: the second fetch really was issued, and its row really is in the ledger, so
+    // "not expanded" means "the id was dropped" rather than "there was nothing to expand".
+    expect(getSpy).toHaveBeenCalledTimes(2);
+    expect(component.findings.map(f => f.id))
+      .withContext('the row IS in this ledger, so an id that survived would have expanded it')
+      .toContain('f-1');
+
+    // The row IS in this ledger, so an id that survived would expand it and smooth-scroll to it.
+    expect(component.isExpanded('f-1')).toBeFalse();
+    expect(scrollSpy).not.toHaveBeenCalled();
+    expect((component as any).pendingOpenFindingId).toBeNull();
+  });
+
+  it('c04: a request that arrives DURING a refreshToken fetch still lands on it (the hold is not over-narrowed)', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    const first$ = new Subject<BookReviewFindingsDto>();
+    const second$ = new Subject<BookReviewFindingsDto>();
+    const getSpy = spyOn(reviewSvc, 'getReviewFindings').and.returnValue(first$.asObservable());
+    triggerInit();
+    fixture.detectChanges();
+    first$.next(makeFindingsDto({ findings: [makeFinding({ id: 'f-1' })] }));
+    fixture.detectChanges();
+
+    // A bump is in flight when the request arrives: this one has a fetch that can still produce its row,
+    // so it must be HELD. The narrowing above must not have cost the case the hold exists for.
+    getSpy.and.returnValue(second$.asObservable());
+    component.refreshToken = 1;
+    component.ngOnChanges({ refreshToken: new SimpleChange(0, 1, false) });
+    component.openFinding('f-2');
+    expect((component as any).pendingOpenFindingId).toBe('f-2');
+
+    second$.next(makeFindingsDto({ findings: [makeFinding({ id: 'f-1' }), makeFinding({ id: 'f-2' })] }));
+    fixture.detectChanges();
+
+    expect(component.isExpanded('f-2')).toBeTrue();
+    expect((component as any).pendingOpenFindingId).toBeNull();
+  });
+
+  // ── P3-67 / c08: the filter clear is TOLD, not silent ────────────────────────
+  //
+  // `f12` shipped `filtersClearedNotice` (component + template + a new he/en string pair) with NO spec at
+  // all, so nothing pinned either half of its condition: a notice that never rendered and a notice that
+  // rendered on every open would both have passed a green suite. The two cases below are the condition
+  // itself - it fires exactly when `openFinding` actually took a filter away from the reader.
+  //
+  // The expected Hebrew is TRANSCRIBED rather than read back from the component's own label map (f10(e)):
+  // it is DRAFT copy, and an assertion sourced from the production constant proves only that a string
+  // exists, never that it is the right one.
+
+  it('P3-67: openFinding that CLEARS an active filter tells the reader it did', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(
+      of(
+        makeFindingsDto({
+          findings: [
+            makeFinding({ id: 'f-1', dimension: 'plot' }),
+            makeFinding({ id: 'f-2', dimension: 'pacing', verdict: 'cut' }),
+          ],
+        }),
+      ),
+    );
+    triggerInit();
+    fixture.detectChanges();
+
+    // NON-VACUITY: the notice is genuinely absent while the reader's own filter is untouched, so its
+    // appearance below is the clear firing rather than a line that is always on screen.
+    component.dimensionFilter = 'plot';
+    fixture.detectChanges();
+    expect(query('[data-testid="filters-cleared-notice"]')).toBeNull();
+
+    component.openFinding('f-2');
+    fixture.detectChanges();
+
+    expect(component.dimensionFilter).toBeNull();
+    const notice = query('[data-testid="filters-cleared-notice"]');
+    expect(notice).not.toBeNull();
+    expect((notice.nativeElement.textContent as string).trim())
+      .toBe('הסינון אופס כדי להציג את הממצא המבוקש.');
+    // A status region, so a screen reader hears it: the ledger changed under the reader without them
+    // asking, which is the whole reason the line exists.
+    expect(notice.nativeElement.getAttribute('role')).toBe('status');
+  });
+
+  it('P3-67: openFinding with NO filter active says nothing, because nothing changed under the reader', () => {
+    const reviewSvc = TestBed.inject(BookReviewService);
+    spyOn(reviewSvc, 'getReviewFindings').and.returnValue(
+      of(
+        makeFindingsDto({
+          findings: [
+            makeFinding({ id: 'f-1', dimension: 'plot' }),
+            makeFinding({ id: 'f-2', dimension: 'pacing', verdict: 'cut' }),
+          ],
+        }),
+      ),
+    );
+    triggerInit();
+    fixture.detectChanges();
+
+    expect(component.dimensionFilter).toBeNull();
+    expect(component.verdictFilter).toBeNull();
+
+    component.openFinding('f-2');
+    fixture.detectChanges();
+
+    // The open WORKED - so this is not the vacuous "nothing happened, so no notice" pass.
+    expect(component.isExpanded('f-2')).toBeTrue();
+    expect(component.filtersClearedNotice).toBeFalse();
+    expect(query('[data-testid="filters-cleared-notice"]')).toBeNull();
   });
 
   // ── he/en parity ─────────────────────────────────────────────────────────────

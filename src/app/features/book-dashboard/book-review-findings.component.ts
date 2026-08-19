@@ -114,6 +114,12 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
   verdictFilter: Verdict | null = null;
   /** Ids of findings whose evidence/suggested-action detail is expanded. */
   expandedIds = new Set<string>();
+  /**
+   * P3-67: true for one render after {@link openFinding} cleared an active filter to reach the
+   * requested finding. Told to the reader (rather than the filter silently vanishing) via a line
+   * beside the filter chips; cleared on the next manual filter interaction or context reset.
+   */
+  filtersClearedNotice = false;
 
   /** The dimensions rendered in the scorecard + as ledger group order. */
   readonly dimensions: Dimension[] = ['plot', 'character', 'pacing', 'tone', 'theme', 'continuity'];
@@ -139,8 +145,19 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
 
   /**
    * d1: a finding the host asked to open (see {@link openFinding}) whose row did not exist yet -
-   * typically because the request arrived while the first findings fetch was still in flight. Held
-   * here and re-applied at the end of {@link loadFindings}; dropped outright on a context change.
+   * typically because the request arrived while the first findings fetch was still in flight.
+   *
+   * c04 - THE HOLD LASTS EXACTLY AS LONG AS A FETCH THAT COULD STILL PRODUCE THE ROW. It is settled by
+   * {@link settlePendingOpenFinding}, which every terminal of {@link loadFindings} calls (success AND
+   * error), and which drops the id the moment `loading` is false and the row is still absent - whether
+   * the ledger came back full, empty, or not at all. It is also dropped outright by {@link resetView}
+   * on a book/language change.
+   *
+   * The old rule held the id whenever the ledger was empty or the fetch had failed, so it survived until
+   * the NEXT fetch - and a `refreshToken` bump re-runs {@link loadFindings} WITHOUT {@link resetView},
+   * which meant a review build finishing minutes later expanded and smooth-scrolled to a finding the
+   * reader had clicked and moved on from. A request the reader can no longer connect to a click of
+   * theirs is not a request; it is an ambush.
    */
   private pendingOpenFindingId: string | null = null;
 
@@ -163,6 +180,11 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
       this.resetView();
       this.loadFindings();
     } else if (changes['refreshToken'] && !changes['refreshToken'].firstChange) {
+      // c04: deliberately NOT a reset. A bump is the same context re-read, so filters and expansion are
+      // the reader's and survive it - and a held open-finding request cannot be resurrected here anyway,
+      // because {@link settlePendingOpenFinding} has already settled it against the fetch that was in
+      // flight when it arrived. If one IS still held, a fetch is genuinely still running and this bump
+      // supersedes it, which is exactly the fetch that should land it.
       this.loadFindings();
     }
   }
@@ -196,13 +218,17 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
         this.loadError = false;
         this.cdr.detectChanges();
         // d1: the rows now exist, so a request held while this fetch was in flight can land.
-        this.applyPendingOpenFinding();
+        this.settlePendingOpenFinding();
       },
       error: () => {
         if (this.bookId !== bookId || this.language !== lang) return;
         this.loading = false;
         this.loadError = true;
         this.cdr.detectChanges();
+        // c04: the SAME settle the success path runs, for the same reason - this fetch is over, so the
+        // row it was going to produce is never coming. Without this the id outlived its own fetch and
+        // the next refreshToken bump fired it at a ledger the reader never asked about.
+        this.settlePendingOpenFinding();
       },
     });
   }
@@ -211,6 +237,7 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
     this.dimensionFilter = null;
     this.verdictFilter = null;
     this.expandedIds.clear();
+    this.filtersClearedNotice = false;
     // d1: a held open-finding request is about ONE book's ledger; a book/language switch discards it
     // rather than letting it re-aim at whatever the next ledger happens to contain.
     this.pendingOpenFindingId = null;
@@ -265,16 +292,20 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
 
   /** Toggle the dimension filter from a scorecard row click (clears on re-click of the active row). */
   onDimensionClick(dimension: Dimension): void {
+    // P3-67: a manual filter action is the reader's own choice, not the notice's business.
+    this.filtersClearedNotice = false;
     this.dimensionFilter = this.dimensionFilter === dimension ? null : dimension;
   }
 
   /** Toggle the verdict filter from a ledger verdict chip (clears on re-click of the active chip). */
   onVerdictClick(verdict: Verdict): void {
+    this.filtersClearedNotice = false;
     this.verdictFilter = this.verdictFilter === verdict ? null : verdict;
   }
 
   /** Clear both filters (the "all" reset affordance). */
   clearFilters(): void {
+    this.filtersClearedNotice = false;
     this.dimensionFilter = null;
     this.verdictFilter = null;
   }
@@ -372,24 +403,45 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
    *
    * Everything here is best-effort, matching the rest of this navigation path: filters are cleared
    * first (a finding hidden behind an active filter would otherwise be "opened" onto nothing), the
-   * request is HELD when the ledger has not fetched its rows yet and re-applied by {@link loadFindings},
-   * and a finding id that is not in this book's ledger at all is simply dropped once the fetch lands.
+   * request is HELD only while a fetch that could still produce the row is in flight, and a finding id
+   * that this ledger does not carry is dropped the moment that fetch ends - full, empty or errored. See
+   * {@link settlePendingOpenFinding} for the whole rule; this method is one of its three triggers.
+   *
+   * P3-67: clearing an active filter here is silent to the reader unless one actually was set, in which
+   * case {@link filtersClearedNotice} is raised so a reader who had narrowed the ledger is told why it
+   * changed under them, rather than just finding it changed.
    */
   openFinding(findingId: string): void {
     if (!findingId) return;
+    this.filtersClearedNotice = this.dimensionFilter !== null || this.verdictFilter !== null;
     this.dimensionFilter = null;
     this.verdictFilter = null;
-    this.expandedIds.add(findingId);
     this.pendingOpenFindingId = findingId;
     this.cdr.detectChanges();
-    this.applyPendingOpenFinding();
+    this.settlePendingOpenFinding();
   }
 
   /**
-   * Scroll the held finding's row into view if it is rendered. Leaves the request held when the row is
-   * not there yet, so the next successful fetch can land it; clears it as soon as it is honoured.
+   * c04: THE ONE PLACE A HELD OPEN-FINDING REQUEST ENDS. Scroll the held finding's row into view if it
+   * is rendered; otherwise decide, right here, whether the request can still be honoured later. It is
+   * called from all three of its triggers - {@link openFinding} (the request arrives), and BOTH
+   * terminals of {@link loadFindings} (the fetch that could produce the row is over, either way).
+   *
+   * THE HOLD CONDITION IS `loading`, AND ONLY `loading`. A held id is waiting for a fetch, so the fetch
+   * ending is what settles it - not what the fetch happened to return. The old condition
+   * (`!loading && findings.length > 0`) added the ledger's CONTENT to a question that is only about the
+   * fetch's LIFETIME, which quietly turned two ordinary outcomes into an indefinite hold: a ledger that
+   * came back empty, and a ledger that failed to come back at all. Those ids then sat until the next
+   * {@link loadFindings}, which a `refreshToken` bump runs WITHOUT {@link resetView} - so a review build
+   * finishing minutes later expanded and smooth-scrolled to a finding the reader had long moved past.
+   * An empty ledger and an errored ledger are both complete answers to "is this row here": no.
+   *
+   * P3-61: {@link expandedIds} is populated ONLY here, once the row is confirmed to exist in the
+   * rendered ledger - not up front in {@link openFinding}. Adding it eagerly there left a phantom entry
+   * for any id that never matched a row (a stale id, or one from a book/language the reader has since
+   * left), which lingered in the set until the next {@link resetView} rather than never existing at all.
    */
-  private applyPendingOpenFinding(): void {
+  private settlePendingOpenFinding(): void {
     const id = this.pendingOpenFindingId;
     if (!id) return;
     let row: Element | null = null;
@@ -401,12 +453,13 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
       return;
     }
     if (!row) {
-      // Not rendered (still loading, or genuinely absent). Drop it once the ledger HAS loaded, so a
-      // stale id cannot ambush the next refresh; keep holding while a fetch is still in flight.
-      if (!this.loading && this.findings.length > 0) this.pendingOpenFindingId = null;
+      // Not rendered. Keep holding ONLY while a fetch is still in flight; once it has ended the row is
+      // not coming, so the request is dropped rather than left to ambush a later refresh.
+      if (!this.loading) this.pendingOpenFindingId = null;
       return;
     }
     this.pendingOpenFindingId = null;
+    this.expandedIds.add(id);
     row.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
@@ -615,6 +668,8 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
       patchError: 'עדכון הסטטוס נכשל. נסו שוב.',
       more: 'עוד',
       less: 'פחות',
+      // P3-67: told rather than silently changed - see openFinding.
+      filtersClearedNotice: 'הסינון אופס כדי להציג את הממצא המבוקש.', // DRAFT he - needs native review
     };
     const en: Record<string, string> = {
       scorecardTitle2: 'Developmental health',
@@ -637,6 +692,7 @@ export class BookReviewFindingsComponent implements OnChanges, OnDestroy {
       patchError: 'Status update failed. Try again.',
       more: 'More',
       less: 'Less',
+      filtersClearedNotice: 'Filters were cleared to show the requested finding.',
     };
     const map = this.langKey === 'he' ? he : en;
     return map[key] ?? key;

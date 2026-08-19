@@ -109,6 +109,15 @@
         </div>
       </div>
 
+      <!-- P3-67: openFinding cleared an active filter to reach a requested finding; told, not silent. -->
+      <p
+        *ngIf="filtersClearedNotice"
+        class="filters-cleared-notice muted"
+        role="status"
+        data-testid="filters-cleared-notice">
+        {{ label('filtersClearedNotice') }}
+      </p>
+
       <!-- FILTERED-EMPTY (filters hide all rows, but findings exist) -->
       <p
         *ngIf="isFilteredEmpty"
