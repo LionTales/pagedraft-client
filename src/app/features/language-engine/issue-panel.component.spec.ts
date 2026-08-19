@@ -221,8 +221,10 @@ describe('IssuePanelComponent (c06 he/en parity)', () => {
  *  - a LEGACY payload (message only, no code - i.e. an API that predates the code field) falls back to
  *    the localized fallback and never renders the server's English;
  *  - an HTTP failure raises its own banner instead of a console line;
- *  - the unavailable banner is suppressed entirely for a Hebrew book, because the expected absence is
- *    already stated once by the note.
+ *  - the unavailable banner is suppressed for the EXPECTED absence on a Hebrew book, because that one
+ *    reason is already stated once by the note. c13 narrowed this from "suppressed entirely for a
+ *    Hebrew book", which swallowed every other reason too; the c13 block at the bottom of this file
+ *    owns the rest of that cross product.
  */
 describe('IssuePanelComponent (b2: Hebrew gate + localized reasons)', () => {
   let component: IssuePanelComponent;
@@ -305,8 +307,8 @@ describe('IssuePanelComponent (b2: Hebrew gate + localized reasons)', () => {
       expect(component.isDetecting).toBe(false);
     });
 
-    // ── The unavailable banner is suppressed entirely for Hebrew ──────────────
-    it('suppresses the unavailable banner even when the server reports the checker unavailable', () => {
+    // ── The unavailable banner is suppressed for the EXPECTED absence (c13 narrowed this) ─────
+    it('suppresses the unavailable banner for the expected Hebrew-unsupported absence', () => {
       const load$ = new Subject<IssuesResponse>();
       serviceStub.getIssues.and.returnValue(load$);
       component.bookId = 'book-1';
@@ -537,6 +539,12 @@ describe('IssuePanelComponent (b2: Hebrew gate + localized reasons)', () => {
  *    available". That is the API's fifth ServiceUnavailable path (the auto-retry-success branch, which
  *    sets the flag WITH a non-empty issue list and no code); the client cannot tell it apart from a
  *    genuine outage until the API assigns it a code (be-c02).
+ *
+ * THE `he` + unavailable-banner ROWS ARE NO LONGER HYPOTHETICAL. They were pinned here at field level
+ * while `applyUnavailable` suppressed on `!canDetect`, i.e. while no response could reach them; c13
+ * rescoped that suppression to the expected absence, so a Hebrew book with a switched-off, unreachable
+ * or timing-out checker now reaches them THROUGH THE FLOW. The rows below did not change - the c13 block
+ * at the bottom of this file drives the same cells from a real response instead.
  */
 describe('IssuePanelComponent (f01: the empty-state cross product)', () => {
   let component: IssuePanelComponent;
@@ -599,7 +607,7 @@ describe('IssuePanelComponent (f01: the empty-state cross product)', () => {
     { lang: 'he', detect: 'not-yet-detected',    banner: 'no-banner',             expect: ['unsupported-note'] },
     { lang: 'he', detect: 'detected-clean',      banner: 'no-banner',             expect: ['unsupported-note'] },
     { lang: 'he', detect: 'detected-with-issues', banner: 'no-banner',            expect: ['issue-list'] },
-    // Not reachable through the flow today (applyUnavailable suppresses on !canDetect - c13's scope).
+    // Reachable through the flow since c13 (a real outage on a Hebrew book); driven end to end below.
     { lang: 'he', detect: 'not-yet-detected',    banner: 'unavailable-banner',    expect: ['unavailable-banner', 'unsupported-note'] },
     { lang: 'he', detect: 'detected-clean',      banner: 'unavailable-banner',    expect: ['unavailable-banner', 'unsupported-note'] },
     { lang: 'he', detect: 'detected-with-issues', banner: 'unavailable-banner',   expect: ['unavailable-banner', 'issue-list'] },
@@ -1130,5 +1138,225 @@ describe('IssuePanelComponent (c03: request-key stale guards)', () => {
 
     expect(component.rewrittenText).toBeUndefined();
     expect(el().textContent).not.toContain('chapter A rewritten');
+  });
+});
+
+/**
+ * c13: WHICH ABSENCE A HEBREW BOOK IS ALLOWED TO HIDE - findings 29 and 30, which are one defect.
+ *
+ * b2 keyed the unavailable-banner suppression on `!canDetect`, i.e. on the BOOK'S LANGUAGE, so a Hebrew
+ * book swallowed ALL FOUR `languageToolCode` values and the code-less legacy payload alike. A Hebrew
+ * author whose checker was switched off in settings, unreachable, or timing out was told only "the
+ * automatic language checker does not support Hebrew" - a confident, WRONG explanation of a real outage,
+ * with the outage itself invisible. The asymmetry was the tell and it was measured in the browser before
+ * this block was written: the SAME response (`languageToolUnavailable: true`, `languageToolCode:
+ * "unavailable"`, LanguageTool genuinely down) put a banner on the English book and nothing at all on the
+ * Hebrew one.
+ *
+ * The second half is the same defect seen from the strings: because the banner was set only when
+ * `canDetect` was true, and `canDetect` is true only when `langKey === 'en'`, `entry[this.langKey]` could
+ * never resolve its `he` arm. Every Hebrew sentence in `UNAVAILABLE_COPY`, and the Hebrew
+ * `serviceUnavailableFallback`, was UNRENDERABLE - shipped, reviewed as DRAFT, assigned "the running app,
+ * the שפה sub-tab" as its native-reading instrument, and unreachable by that instrument. The specs
+ * "proved" them by calling `unavailableCopyFor` directly, which is exactly the proxy that cannot see this.
+ * So every case below asserts THE RENDERED BANNER TEXT, not the getter.
+ *
+ * THE RULE, and it is a rule about the REASON rather than about the language: suppress only the expected
+ * absence - the `hebrew-unsupported` code, or (on a code-less legacy build) a message that says the
+ * checker does not support Hebrew. Everything else banners.
+ *
+ * ONE HEBREW STRING IS STILL UNREACHABLE ON PURPOSE and is pinned as such below:
+ * `UNAVAILABLE_COPY['hebrew-unsupported'].he`. On a Hebrew book that code IS the expected absence and is
+ * suppressed by design (the standing note says it once already); on an English book whose chapter holds
+ * Hebrew text the same code banners, but in that book `langKey` is `en`. So its Hebrew arm renders in no
+ * cell that exists today. That is a finding about the record, not a bug to fix here - see
+ * HEBREW_NATIVE_REVIEW.md's language-issues group, which now says so instead of promising a screen.
+ */
+describe('IssuePanelComponent (c13: suppression scoped to the EXPECTED absence)', () => {
+  let component: IssuePanelComponent;
+  let fixture: ComponentFixture<IssuePanelComponent>;
+  let serviceStub: { getIssues: jasmine.Spy; detectIssues: jasmine.Spy; rewriteText: jasmine.Spy };
+
+  beforeEach(async () => {
+    serviceStub = {
+      getIssues: jasmine.createSpy('getIssues').and.returnValue(NEVER),
+      detectIssues: jasmine.createSpy('detectIssues').and.returnValue(NEVER),
+      rewriteText: jasmine.createSpy('rewriteText').and.returnValue(NEVER),
+    };
+    await TestBed.configureTestingModule({
+      imports: [IssuePanelComponent],
+      providers: [{ provide: LanguageEngineService, useValue: serviceStub }],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(IssuePanelComponent);
+    component = fixture.componentInstance;
+  });
+
+  const el = () => fixture.nativeElement as HTMLElement;
+  const bannerText = () =>
+    el().querySelector('.service-unavailable-banner .banner-text')?.textContent?.trim() ?? null;
+
+  /** The exact rendered sentences, spelled out here rather than read back off the component. */
+  const HE = {
+    hebrewUnsupported: 'בודק השפה אינו תומך בעברית, ולכן הטקסט הזה לא נבדק.',
+    disabled: 'בודק השפה כבוי בהגדרות השרת.',
+    unavailable: 'בודק השפה אינו זמין כרגע. אפשר לנסות שוב מאוחר יותר.',
+    timeout: 'בודק השפה לא הגיב בזמן. אפשר לנסות שוב.',
+    fallback: 'בודק השפה אינו זמין.',
+    note: 'בודק השפה האוטומטי אינו תומך בעברית, ולכן איתור בעיות אינו זמין בספר הזה. להגהה בעברית אפשר להריץ את מעבר "הגהה" בלשונית "ניתוח".',
+  };
+
+  /** The API's own English sentences, verbatim from LanguageToolEngine.cs - the legacy, code-less wire. */
+  const SERVER_EN = {
+    hebrewUnsupported:
+      "The language checker doesn't support Hebrew. Use a LanguageTool server with Hebrew support (e.g. a community Docker image), or rely on other checks.",
+    unavailable:
+      "The language checker (LanguageTool) isn't available right now. Make sure the LanguageTool server is running, or try again later.",
+    disabled: 'The language checker is turned off in settings.',
+    timeout: 'The language checker took too long to respond. Try again in a moment.',
+    /** The API's FIFTH ServiceUnavailable path: no code, and the check actually ran (be-c02 owns it). */
+    autoRetrySucceeded:
+      "Checked using auto-detected language (requested language isn't supported by this server).",
+  };
+
+  /**
+   * Drive THE ONLY REQUEST A HEBREW BOOK EVER ISSUES: the auto GET.
+   *
+   * `detectIssues` early-returns on `!canDetect`, so there is no second path to drive here and driving
+   * this one is not a convenience - it is the whole reachable surface. Held open with a Subject rather
+   * than `of()`, per this file's standing rule.
+   */
+  function loadWith(lang: 'he' | 'en', payload: Omit<IssuesResponse, 'issues'> & { issues?: LanguageIssue[] }): void {
+    const load$ = new Subject<IssuesResponse>();
+    serviceStub.getIssues.and.returnValue(load$);
+    component.bookLanguage = lang;
+    component.bookId = 'book-1';
+    component.chapterId = 'chap-1';
+    fixture.detectChanges();
+    component.loadIssues();
+    load$.next({ issues: [], ...payload });
+    load$.complete();
+    fixture.detectChanges();
+  }
+
+  // ── 1. Every code, on a HEBREW book, through the real GET ──────────────────────────────────────
+
+  const CODE_CASES: { code: string; banner: string | null; why: string }[] = [
+    { code: 'hebrew-unsupported', banner: null, why: 'the EXPECTED absence: the standing note already says it' },
+    { code: 'disabled', banner: HE.disabled, why: 'an operator switched it off - an event, and news' },
+    { code: 'unavailable', banner: HE.unavailable, why: 'the server is down - an event, and news' },
+    { code: 'timeout', banner: HE.timeout, why: 'it did not answer in time - an event, and news' },
+  ];
+
+  for (const c of CODE_CASES) {
+    it(`he + ${c.code} renders ${c.banner ? 'the Hebrew banner' : 'no banner'} (${c.why})`, () => {
+      loadWith('he', { languageToolUnavailable: true, languageToolCode: c.code });
+      expect(bannerText()).toBe(c.banner);
+      // The capability note stands in every one of these cells: the book still has no Detect button.
+      expect(el().querySelector('.detect-unsupported-note')?.textContent?.trim()).toBe(HE.note);
+      // And nothing English ever reaches a Hebrew reader.
+      expect(el().textContent).not.toContain('language checker');
+    });
+  }
+
+  it('the suppressed cell says the not-supported fact ONCE, not twice', () => {
+    loadWith('he', { languageToolUnavailable: true, languageToolCode: 'hebrew-unsupported' });
+    expect(component.serviceUnavailableMessage).toBeNull();
+    expect(el().querySelector('.service-unavailable-banner')).toBeNull();
+    expect(el().textContent).not.toContain(HE.hebrewUnsupported);
+  });
+
+  // ── 2. FINDING 30: the Hebrew copy is reachable in the RENDERED UI, not only from a getter ─────
+
+  it('the three outage sentences reach the DOM on a Hebrew book (finding 30)', () => {
+    const reached: string[] = [];
+    for (const code of ['disabled', 'unavailable', 'timeout']) {
+      loadWith('he', { languageToolUnavailable: true, languageToolCode: code });
+      const rendered = bannerText();
+      expect(rendered).withContext(`code=${code} rendered no banner`).not.toBeNull();
+      // Rendered, not merely returned: the sentence is in the page text.
+      expect(el().textContent).withContext(`code=${code}`).toContain(rendered!);
+      reached.push(rendered!);
+    }
+    expect(reached).toEqual([HE.disabled, HE.unavailable, HE.timeout]);
+  });
+
+  it('the Hebrew serviceUnavailableFallback reaches the DOM too, via an unknown code (finding 30)', () => {
+    loadWith('he', { languageToolUnavailable: true, languageToolCode: 'something-be-c02-added' });
+    expect(bannerText()).toBe(HE.fallback);
+    expect(component.serviceUnavailableFallback).toBe(HE.fallback);
+  });
+
+  /**
+   * The one Hebrew string finding 30 does NOT close, pinned so the next reader does not have to
+   * re-derive it. Suppressing `hebrew-unsupported` on a Hebrew book is the intent, and an English book
+   * renders the same code's `en` arm, so no cell renders this sentence. It stays in the map for the day
+   * `be-c02` changes which axis `canDetect` reads.
+   */
+  it('UNAVAILABLE_COPY[hebrew-unsupported].he stays deliberately unrendered, and still exists', () => {
+    component.bookLanguage = 'he';
+    expect(component.unavailableCopyFor('hebrew-unsupported')).toBe(HE.hebrewUnsupported);
+    loadWith('he', { languageToolUnavailable: true, languageToolCode: 'hebrew-unsupported' });
+    expect(el().textContent).not.toContain(HE.hebrewUnsupported);
+    // On an English book the same code DOES banner - in English, because that book's chrome is English.
+    loadWith('en', { languageToolUnavailable: true, languageToolCode: 'hebrew-unsupported' });
+    expect(bannerText()).toBe('The language checker does not support Hebrew, so this text was not checked.');
+  });
+
+  // ── 3. The code-less legacy payload: the MESSAGE decides, and only for the expected absence ────
+
+  it('a legacy Hebrew-unsupported message on a Hebrew book is suppressed like the code', () => {
+    loadWith('he', { languageToolUnavailable: true, languageToolMessage: SERVER_EN.hebrewUnsupported });
+    expect(component.serviceUnavailableMessage).toBeNull();
+    expect(el().querySelector('.service-unavailable-banner')).toBeNull();
+    expect(el().textContent).not.toContain('Docker');
+  });
+
+  it('a legacy OUTAGE message on a Hebrew book banners in the Hebrew fallback', () => {
+    loadWith('he', { languageToolUnavailable: true, languageToolMessage: SERVER_EN.unavailable });
+    expect(bannerText()).toBe(HE.fallback);
+    // The server's English is read, never rendered.
+    expect(el().textContent).not.toContain('LanguageTool');
+  });
+
+  it('the other two legacy sentences, and a code-less payload with no message at all, also banner', () => {
+    for (const message of [SERVER_EN.disabled, SERVER_EN.timeout, SERVER_EN.autoRetrySucceeded]) {
+      loadWith('he', { languageToolUnavailable: true, languageToolMessage: message });
+      expect(bannerText()).withContext(message).toBe(HE.fallback);
+    }
+    // No code AND no message: unexplained, therefore not the expected absence, therefore news.
+    loadWith('he', { languageToolUnavailable: true });
+    expect(bannerText()).toBe(HE.fallback);
+  });
+
+  it('a message that merely mentions Hebrew is not enough - the negation is what is matched', () => {
+    loadWith('he', {
+      languageToolUnavailable: true,
+      languageToolMessage: 'Hebrew rules were reloaded and the server restarted; try again.',
+    });
+    expect(bannerText()).toBe(HE.fallback);
+  });
+
+  // ── 4. Nothing about the ordinary cells moved ─────────────────────────────────────────────────
+
+  it('a clean answer clears the banner on a Hebrew book', () => {
+    loadWith('he', { languageToolUnavailable: true, languageToolCode: 'timeout' });
+    expect(bannerText()).toBe(HE.timeout);
+    loadWith('he', { languageToolUnavailable: false, languageToolCode: 'timeout' });
+    expect(component.serviceUnavailableMessage).toBeNull();
+    expect(el().querySelector('.service-unavailable-banner')).toBeNull();
+  });
+
+  it('an English book is untouched by the scoping: every code still banners in English', () => {
+    const EN: Record<string, string> = {
+      'hebrew-unsupported': 'The language checker does not support Hebrew, so this text was not checked.',
+      disabled: 'The language checker is turned off in the server settings.',
+      unavailable: 'The language checker is not available right now. Please try again later.',
+      timeout: 'The language checker did not respond in time. Please try again.',
+    };
+    for (const [code, sentence] of Object.entries(EN)) {
+      loadWith('en', { languageToolUnavailable: true, languageToolCode: code });
+      expect(bannerText()).withContext(code).toBe(sentence);
+    }
   });
 });

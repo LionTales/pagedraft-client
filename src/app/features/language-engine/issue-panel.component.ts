@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 import { LanguageEngineService } from '../../core/services/language-engine.service';
 import { LanguageIssue } from '../../core/models/language-engine';
+import { resolveCardLang } from '../analysis-panel/card-lang';
 
 /** Emitted when user applies a suggestion (range) or full rewrite. Editor uses this to replace content. */
 export interface ApplyCorrectionEvent {
@@ -28,9 +29,12 @@ export interface ApplyCorrectionEvent {
       <header class="panel-header">
         <h3>{{ titleLabel }}</h3>
         <div class="header-actions">
-          <!-- b2: the checker cannot work on Hebrew (LanguageToolEngine returns Issues=[] on its Hebrew
-               branch by design), so a Hebrew book gets the note below instead of a button that does
-               nothing and then explains itself. -->
+          <!-- b2: on the deployment that exists, the checker cannot work on Hebrew, so a Hebrew book
+               gets the note below instead of a button that does nothing and then explains itself.
+               be-c02 CORRECTED THE REASON: this used to say "LanguageToolEngine returns Issues=[] on its
+               Hebrew branch by design", which the engine does not do. It has FOUR Hebrew outcomes, and
+               only two are empty - see {@link canDetect} for the list and for why the hidden button
+               stays keyed on the book's language anyway. -->
           <button
             *ngIf="canDetect"
             type="button"
@@ -342,18 +346,46 @@ export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
   @Output() issueHighlighted = new EventEmitter<LanguageIssue>();
   @Output() rewriteApplied = new EventEmitter<ApplyCorrectionEvent>();
 
-  /** Chrome language: 'he' default, 'en' only for an English book (mirrors analysis-panel/history idiom). */
+  /**
+   * Chrome language: 'he' default, 'en' only for an English book.
+   *
+   * P3-36: routed through the shared `resolveCardLang` (card-lang.ts) instead of a local
+   * re-implementation of the same startsWith('en') rule, so this panel cannot drift from every other
+   * card-lang consumer (analysis-panel's suggestion cards). No result DTO exists at this call site, so
+   * only the book language is passed. `resolveCardLang` itself was missing the `.trim()` this local
+   * getter had (only `.toLowerCase()`), so a padded tag like ' En-US ' would have landed in the Hebrew
+   * branch with no hint anything was wrong - exactly the failure mode this nit was written to close.
+   * Fixed at the shared function (card-lang.ts) rather than worked around here, so every consumer gets
+   * the fix, not just this one; caught by this file's own existing padded-tag spec.
+   */
   get langKey(): 'he' | 'en' {
-    return (this.bookLanguage?.trim().toLowerCase() || 'he').startsWith('en') ? 'en' : 'he';
+    return resolveCardLang(null, this.bookLanguage);
   }
 
   /**
    * b2: whether the "Detect issues" affordance is offered at all.
    *
-   * FALSE for a Hebrew book, because the feature cannot work there: `LanguageToolEngine`'s Hebrew branch
-   * returns `Issues = []` with a service-unavailable reason BY DESIGN (no Hebrew LanguageTool server is
-   * deployed), so the button ran, found nothing, and then explained itself in the server's English. The
-   * note that replaces it says the same thing once, in the reader's language.
+   * FALSE for a Hebrew book, because the feature cannot work on THE DEPLOYMENT THAT EXISTS: the button
+   * ran, found nothing, and then explained itself in the server's English. The note that replaces it says
+   * the same thing once, in the reader's language.
+   *
+   * be-c02 CORRECTED THE REASON THIS GIVES. It used to say `LanguageToolEngine`'s Hebrew branch "returns
+   * `Issues = []` with a service-unavailable reason BY DESIGN", and the engine does no such thing. A
+   * Hebrew chapter has FOUR outcomes and only two are empty: a server that ACCEPTS `language=he` returns
+   * real issues with no unavailability at all; a `400` whose `language=auto` retry SUCCEEDS returns that
+   * run's real matches WITH `unavailable: true` and no code; a `400` whose retry fails returns `[]` with
+   * `hebrew-unsupported`; and the checker being off / unreachable / timed out returns `[]` with its own
+   * code. So "cannot work on Hebrew" is a fact about which LanguageTool server is deployed, not about the
+   * language.
+   *
+   * IT IS STILL KEYED ON THE BOOK LANGUAGE ON PURPOSE, and be-c02 is where that was decided rather than
+   * assumed (investigation in `.cursor/plans/post-chatbot-fixes-fixes-2026-08-18.plan.md`): upstream
+   * LanguageTool ships no Hebrew module, no image or compose file in either repo starts one, and
+   * `appsettings.Production.json` carries no `LanguageEngine` section at all, so no Hebrew-capable server
+   * exists to be detected. Keying this on the server's own answer instead (the `languageToolCode` the GET
+   * already returns) is cheap and needs NO new endpoint or config key - it is the change to make in the
+   * same commit that first stands such a server up, and it was deliberately not made before then, because
+   * until then it is neither observable nor verifiable.
    *
    * NOTE THE AXIS: this is the BOOK's language (the `bookLanguage` @Input the editor binds from
    * `book.language`), not the chapter's detected text language. An English book whose chapter happens to
@@ -368,11 +400,22 @@ export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
   // DRAFT Hebrew - flag for native-speaker review before sign-off.
   get titleLabel(): string { return this.langKey === 'he' ? 'בעיות שפה' : 'Language Issues'; }
   /**
-   * b2 KEPT DELIBERATELY, THOUGH THE HEBREW HALF IS CURRENTLY UNREACHABLE. `canDetect` is false for a
-   * Hebrew book, so `detectLabel` / `detectingLabel` / `emptyPromptLabel` / `emptyCleanLabel` only ever
-   * render their `en` arm today. The gate is a fact about the deployed checker, not about the product:
-   * the day a Hebrew LanguageTool server exists, `canDetect` flips and these strings render again.
-   * Deleting the Hebrew arms now would turn that flip into a silent English regression.
+   * b2 KEPT DELIBERATELY, AND NOTHING IN THE DEPLOYMENT WILL EVER MAKE THEM RENDER.
+   *
+   * `canDetect` is false for a Hebrew book, so `detectLabel` / `detectingLabel` / `emptyPromptLabel` /
+   * `emptyCleanLabel` only ever render their `en` arm today.
+   *
+   * c13 CORRECTED THE REASON GIVEN HERE. This note used to say "the day a Hebrew LanguageTool server
+   * exists, `canDetect` flips and these strings render again". IT DOES NOT AND CANNOT: {@link canDetect}
+   * is `langKey !== 'he'` and nothing else, and `langKey` reads the BOOK's language. No server
+   * capability, no config flag and no response field reaches this getter, so standing a Hebrew
+   * LanguageTool server up would change nothing here - the strings would stay dark and this note would
+   * go on reading as a plan that was already true. What WOULD make them render is a CODE change to
+   * {@link canDetect}: keying it on a capability the server reports (a `hebrew-unsupported` code
+   * arriving, or its absence) instead of on the book's language. `be-c02` is the todo that owns that
+   * decision, because it may replace this whole `canDetect`-off-`langKey` design outright. Deleting the
+   * Hebrew arms before then would turn that change into a silent English regression, which is why they
+   * stay - but they stay as CODE FOR A FUTURE DESIGN, not as strings waiting on an ops task.
    */
   get detectLabel(): string { return this.langKey === 'he' ? 'אתר בעיות' : 'Detect Issues'; }
   get detectingLabel(): string { return this.langKey === 'he' ? 'מאתר...' : 'Detecting...'; }
@@ -437,11 +480,13 @@ export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
   /**
    * b2: code -> localized sentence, keyed on `LanguageToolEngine.ServiceUnavailableCode`.
    *
-   * The four keys are the API's whole vocabulary (`hebrew-unsupported`, `disabled`, `unavailable`,
-   * `timeout`). ANY other value - and a legacy payload that carries only the English
-   * `languageToolMessage` and no code at all - falls back to {@link serviceUnavailableFallback}, which is
-   * why this ships whether or not the API half is deployed. The server's own sentence is never rendered:
-   * it is English, and this panel is Hebrew by default.
+   * These four keys (`hebrew-unsupported`, `disabled`, `unavailable`, `timeout`) are NOT the API's whole
+   * vocabulary, the same correction f08 made to `languageToolCode`'s doc in `core/models/language-engine.ts`:
+   * `LanguageToolEngine.cs` has a FIFTH `ServiceUnavailable = true` path (the `he` auto-retry-SUCCESS
+   * branch) that carries no code at all. ANY other value - that fifth path included, and a legacy payload
+   * that carries only the English `languageToolMessage` and no code at all - falls back to
+   * {@link serviceUnavailableFallback}, which is why this ships whether or not the API half is deployed.
+   * The server's own sentence is never rendered: it is English, and this panel is Hebrew by default.
    * DRAFT he on all four - needs native review.
    */
   private static readonly UNAVAILABLE_COPY: Readonly<Record<string, { he: string; en: string }>> = {
@@ -467,6 +512,56 @@ export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
   unavailableCopyFor(code: string | null | undefined): string {
     const entry = code ? IssuePanelComponent.UNAVAILABLE_COPY[code] : undefined;
     return entry ? entry[this.langKey] : this.serviceUnavailableFallback;
+  }
+
+  /** The one code that names the EXPECTED absence on a Hebrew book. Mirrors `LanguageToolEngine.Codes.HebrewUnsupported`. */
+  private static readonly HEBREW_UNSUPPORTED_CODE = 'hebrew-unsupported';
+
+  /**
+   * c13: the LEGACY (code-less) spelling of that same expected absence.
+   *
+   * An API build that predates `languageToolCode` sends only the English `languageToolMessage`, and on
+   * the Hebrew branch that sentence is "The language checker doesn't support Hebrew. Use a LanguageTool
+   * server with Hebrew support ...". This matches a NEGATED "support Hebrew" and nothing else, because
+   * the whole point of the scoping is that a message which does not say that is a REAL outage and must
+   * banner. Deliberately narrow: the three other legacy sentences ("is turned off in settings", "isn't
+   * available right now", "took too long to respond") must all fall through to the banner, and so must
+   * the API's fifth ServiceUnavailable path ("Checked using auto-detected language (requested language
+   * isn't supported by this server).") - that one names no language, the check actually RAN, and telling
+   * it apart from an outage is `be-c02`'s job, not a substring's.
+   */
+  private static readonly LEGACY_HEBREW_UNSUPPORTED_MESSAGE =
+    /(?:does\s+not|doesn.?t|cannot|can\s*not|can.?t|no)\s+support\s+hebrew/i;
+
+  /**
+   * c13: is this absence the EXPECTED one on this book, i.e. the one {@link detectUnsupportedNote}
+   * already states permanently?
+   *
+   * THIS IS THE WHOLE SCOPING RULE, and it replaces a bare `!canDetect`. Keying suppression on the book
+   * language alone swallowed all four codes and the code-less case, so a Hebrew book whose checker was
+   * switched off, unreachable or timing out said only "the automatic language checker does not support
+   * Hebrew" - a confident, WRONG explanation of a real outage, with the outage itself invisible. The
+   * asymmetry was the tell: the identical response put a banner on an English book and nothing at all on
+   * a Hebrew one.
+   *
+   * Three clauses, in order:
+   *  1. `canDetect` true (an English book) - NOTHING is expected there. That book carries no standing
+   *     note, so every reason it gets, including `hebrew-unsupported` for an English book whose chapter
+   *     holds Hebrew text, is news and banners.
+   *  2. A code that is present and is NOT `hebrew-unsupported` - a real, named reason. Banner it, in the
+   *     reader's language.
+   *  3. No code at all - fall back to the message, and ONLY the legacy Hebrew-unsupported sentence
+   *     counts. Anything else (including a message that is absent entirely) is treated as an outage,
+   *     which is the safe direction: an over-reported outage is visible and correctable, a swallowed one
+   *     is not.
+   */
+  private isExpectedAbsence(code: unknown, message: unknown): boolean {
+    if (this.canDetect) return false;
+    if (typeof code === 'string' && code.length > 0) {
+      return code === IssuePanelComponent.HEBREW_UNSUPPORTED_CODE;
+    }
+    return typeof message === 'string'
+      && IssuePanelComponent.LEGACY_HEBREW_UNSUPPORTED_MESSAGE.test(message);
   }
 
   issues: LanguageIssue[] = [];
@@ -606,12 +701,18 @@ export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
   /**
    * Set (or clear) the checker-unavailable banner from a response.
    *
-   * SUPPRESSED ENTIRELY FOR A HEBREW BOOK: there, "the checker produced nothing" is the expected,
-   * permanent state that {@link detectUnsupportedNote} already states once, and an expected absence is
-   * not an outage to banner about.
+   * SUPPRESSED FOR THE EXPECTED ABSENCE, NOT FOR A WHOLE LANGUAGE. On a Hebrew book "the checker does
+   * not support Hebrew" is the permanent state {@link detectUnsupportedNote} already states once, so
+   * repeating it in a banner would be the panel saying one thing twice. Every OTHER reason - switched
+   * off, unreachable, timed out, or a reason this build does not recognize - is an event, it is news to
+   * the reader, and it banners in the reader's language. {@link isExpectedAbsence} is the rule.
+   *
+   * The `message` argument exists only for the code-less legacy payload; it is never rendered (it is the
+   * server's English, which is what bug 3 was), it is only READ, to tell the legacy spelling of the
+   * expected absence apart from the legacy spelling of an outage.
    */
-  private applyUnavailable(unavailable: unknown, code: unknown): void {
-    if (!unavailable || !this.canDetect) {
+  private applyUnavailable(unavailable: unknown, code: unknown, message: unknown): void {
+    if (!unavailable || this.isExpectedAbsence(code, message)) {
       this.serviceUnavailableMessage = null;
       return;
     }
@@ -644,6 +745,26 @@ export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
     this.requestErrorMessage = this.requestFailedLabel;
   }
 
+  /**
+   * P3-37 (deliberately LEFT UNGATED - do not gate without re-reading this note): unlike
+   * {@link detectIssues}, this GET runs on every mount/chapter switch regardless of {@link canDetect},
+   * so a Hebrew book (canDetect false) still asks the server to normalize+detect for a feature the UI
+   * hides. Gating it on `canDetect` looks like the obvious follow-up to b2, but it would strand the ONE
+   * path that can put a real Hebrew {@link requestFailedLabel} on screen at all: `detectIssues` already
+   * refuses to run when `!canDetect`, and `emptyStateLine` forces the 'unsupported' note over any
+   * `hasDetected`/prompt line, but NEITHER banner in the template is gated by `canDetect` - so this GET
+   * is the only request a Hebrew book ever issues, and therefore the only way a Hebrew reader learns
+   * that anything is wrong with the checker at all. Gating it would silence that, trading a real outage
+   * signal for the pipeline savings.
+   *
+   * c13 LANDED AND MADE THAT SIGNAL WORTH KEEPING. Its rescoping of {@link isExpectedAbsence} means this
+   * GET now carries TWO kinds of news to a Hebrew reader, not one: the `requestErrorMessage` banner when
+   * the request itself fails, and the `serviceUnavailableMessage` banner when the request succeeds and
+   * the server reports the checker off / unreachable / timed out. Before c13 the second was swallowed
+   * whole, so gating this GET would have cost only the first. It now costs both. `be-c02` may still
+   * replace the whole `canDetect`-off-`langKey` design; gate this only after it lands and re-confirms
+   * where the outage signal should live.
+   */
   loadIssues(): void {
     if (!this.bookId || !this.chapterId) return;
 
@@ -657,7 +778,7 @@ export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
         if (key !== this.currentRequestKey) return;
         this.issues = res.issues;
         this.hasDetected = true;
-        this.applyUnavailable(res.languageToolUnavailable, res.languageToolCode);
+        this.applyUnavailable(res.languageToolUnavailable, res.languageToolCode, res.languageToolMessage);
       },
       error: () => {
         // c03: guard first here TOO - a stale failure must not banner over the current chapter, which
@@ -687,7 +808,8 @@ export class IssuePanelComponent implements OnInit, OnChanges, OnDestroy {
         this.isDetecting = false;
         this.applyUnavailable(
           result.metadata?.['languageToolUnavailable'],
-          result.metadata?.['languageToolCode']
+          result.metadata?.['languageToolCode'],
+          result.metadata?.['languageToolMessage']
         );
       },
       error: () => {
