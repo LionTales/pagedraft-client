@@ -399,7 +399,8 @@ describe('a SYNC run is on none of the three surfaces (c02)', () => {
     fixture = TestBed.createComponent(ThreeSurfaceHostComponent);
     host = fixture.componentInstance;
 
-    // A SYNC run: NO registry.track() call (the panel makes that call only from `job-started`), no jobId
+    // A SYNC run: NO registry.track() call (the orchestration service makes that call only on a
+    // `job-started` dispatch answer - c01 moved it there off the panel), no jobId
     // for the in-page indicator to point at, and one client-composed status event before the blocking
     // request returns.
     host.jobId = null;

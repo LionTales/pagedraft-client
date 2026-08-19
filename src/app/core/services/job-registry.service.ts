@@ -469,7 +469,16 @@ const WHOLE_BOOK_BUILD_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['summary'
  * breakdown (the spine's stage 4, hosted by both `book-dashboard.component.ts` and
  * `editor-page.component.ts`). `proofread` is the only chapter/scene-scoped async analysis path today
  * (Proofread, LineEdit and the single-shot whole-chapter types all share it, distinguished by
- * `analysisType`) - see {@link analysisJobToSource}, the one place a `TrackedJob.chapterId` is ever set.
+ * `analysisType`) - `chapterId` (and, since a1, `sceneId`) reaches a `TrackedJob` through exactly TWO
+ * routes, both of which end up as `meta.chapterId`/`meta.sceneId` on a `track()` call, whose own object
+ * literal (or its `pickMeta` merge, for a re-track) is the actual WRITE onto the `TrackedJob` - not
+ * {@link analysisJobToSource}, which only builds the metadata for one of the two routes: a REATTACHED
+ * job sources it from {@link analysisJobToSource} (`getActiveAnalysisJobs`'s mapping - the only
+ * `ReattachSource` producer that carries either field; the book-level kinds' sources never do), and a
+ * LIVE-dispatched job has it passed directly by whichever caller started the run - today
+ * `AnalysisRunOrchestrationService.publishJobToRegistry` (moved there from the analysis panel by c01).
+ * f13 (2026-08-19): corrected from "the one place a TrackedJob.chapterId is ever set", already false
+ * before c01 (the live caller passed it directly too, just from a different file) and doubly so after.
  *
  * Mirrors {@link WHOLE_BOOK_BUILD_KINDS}: an explicit allowlist, not "any job that happens to carry a
  * chapterId". Both hosts used to read the per-chapter breakdown off that absence rather than off this
@@ -791,7 +800,9 @@ function analysisJobToSource(j: ActiveAnalysisJobDto): ReattachSource {
     // async path, distinguished by `analysisType`.
     kind: 'proofread',
     jobId: j.jobId,
-    // Scope label must match what the live `job-started` path sets in AnalysisPanelComponent: a
+    // Scope label must match what the live `job-started` path sets in
+    // AnalysisRunOrchestrationService.publishJobToRegistry (it lived in AnalysisPanelComponent until
+    // c01 moved the write off that unmountable surface): a
     // scene-scoped job reattaches as 'סצנה', not the chapter default 'פרק'. Otherwise `track`'s
     // idempotent metadata merge overwrites a live scene job's label with the chapter default after a
     // refresh or book reload (and a freshly reattached scene job would render as a chapter). Any

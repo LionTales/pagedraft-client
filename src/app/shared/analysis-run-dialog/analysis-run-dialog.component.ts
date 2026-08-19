@@ -581,10 +581,12 @@ export class AnalysisRunDialogComponent implements OnChanges, AfterViewChecked, 
    * {@link state} above, and the fence on every `(a) -> (c)` terminal arm in {@link onRunEvent}. Those
    * arms used to read `jobId === null`, which is a WEAKER test - it says "no id was captured", not "the
    * registry owns this run" - and the gap between the two is a state the dialog can actually reach:
-   * `AnalysisPanelComponent.handleRunEvent` emits `'job-started'` to the host (which captures the id
-   * HERE, synchronously) BEFORE it calls `jobRegistry.track(...)`, and that call sits behind a guard.
-   * If the guard ever declines - today it is `if (this.bookId)`, tomorrow it is whatever a new call site
-   * adds - this dialog is left holding `jobId !== null` with `trackedJob === null`, which is state (a):
+   * `'job-started'` reaches this host (which captures the id HERE, synchronously) whether or not the
+   * run was published to the registry, because the publish sits behind a guard. c01 moved that publish
+   * from `AnalysisPanelComponent` into `AnalysisRunOrchestrationService.publishJobToRegistry`, which
+   * runs BEFORE the event is fanned out - so the ORDER no longer opens the gap, but the GUARD still
+   * can: today it is `if (!ctx.bookId) return`, tomorrow it is whatever a new call site adds. If it
+   * declines, this dialog is left holding `jobId !== null` with `trackedJob === null`, which is state (a):
    * MODAL, indeterminate, with the c01 start budget ALREADY cancelled (`provesServerAnswered` returns
    * true for `'job-started'`) and, under the old fence, every terminal latch switched off. Nothing that
    * could still happen would resolve it.

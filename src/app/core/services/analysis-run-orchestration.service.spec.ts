@@ -6,9 +6,11 @@ import {
   AnalysisRunContext,
   AnalysisRunEvent,
   RUN_START_BUDGET_MS,
+  RunTerminalScope,
 } from './analysis-run-orchestration.service';
 import { AnalysisService } from './analysis.service';
 import { AnalysisProgressService } from './analysis-progress.service';
+import { JobRegistryService } from './job-registry.service';
 import { AnalysisProgressDto, AnalysisResultDto } from '../models/analysis';
 import { RunStringKey, runString } from '../i18n/run-strings';
 
@@ -22,6 +24,16 @@ function ctx(overrides: Partial<AnalysisRunContext>): AnalysisRunContext {
     documentText: '',
     ...overrides,
   };
+}
+
+/**
+ * c01: the service now WRITES the registry on `job-started` (it owns the run, so it owns the one write
+ * that has to outlive the panel). The real {@link JobRegistryService} is a root singleton that injects
+ * five HTTP-backed services, so every describe here stubs it - a `TestBed.inject` without it fails with
+ * a NullInjector error naming HttpClient rather than the dependency that introduced it.
+ */
+function registryStub(): jasmine.SpyObj<JobRegistryService> {
+  return jasmine.createSpyObj<JobRegistryService>('JobRegistryService', ['track']);
 }
 
 describe('AnalysisRunOrchestrationService', () => {
@@ -45,6 +57,7 @@ describe('AnalysisRunOrchestrationService', () => {
             pollProgress: () => of(),
           },
         },
+        { provide: JobRegistryService, useValue: registryStub() },
       ],
     });
     service = TestBed.inject(AnalysisRunOrchestrationService);
@@ -313,6 +326,7 @@ describe('AnalysisRunOrchestrationService final-result read-after-write retry (c
           },
         },
         { provide: AnalysisProgressService, useValue: { pollProgress: () => NEVER } },
+        { provide: JobRegistryService, useValue: registryStub() },
       ],
     });
     service = TestBed.inject(AnalysisRunOrchestrationService);
@@ -506,6 +520,7 @@ describe('AnalysisRunOrchestrationService run-string localization (c02)', () => 
           },
         },
         { provide: AnalysisProgressService, useValue: { pollProgress: () => progressSubject.asObservable() } },
+        { provide: JobRegistryService, useValue: registryStub() },
       ],
     });
     service = TestBed.inject(AnalysisRunOrchestrationService);
@@ -727,6 +742,8 @@ describe('AnalysisRunOrchestrationService bounded start budget (c01)', () => {
   let runSubject: Subject<AnalysisResultDto>;
   /** The async dispatch. Answering it is what proves the server accepted the run. */
   let startAsyncSubject: Subject<{ jobId: string }>;
+  /** c01: the registry this service now writes on `job-started`. */
+  let registry: jasmine.SpyObj<JobRegistryService>;
 
   /**
    * Constructed directly rather than through the TestBed: this describe re-builds the service INSIDE a
@@ -742,6 +759,7 @@ describe('AnalysisRunOrchestrationService bounded start budget (c01)', () => {
         runStream: () => NEVER,
       } as unknown as AnalysisService,
       { pollProgress: () => NEVER } as unknown as AnalysisProgressService,
+      registry,
     );
   }
 
@@ -764,6 +782,7 @@ describe('AnalysisRunOrchestrationService bounded start budget (c01)', () => {
   beforeEach(() => {
     runSubject = new Subject<AnalysisResultDto>();
     startAsyncSubject = new Subject<{ jobId: string }>();
+    registry = registryStub();
     service = build();
   });
 
@@ -898,6 +917,7 @@ describe('AnalysisRunOrchestrationService bounded start budget (c01)', () => {
     const service = new AnalysisRunOrchestrationService(
       { run: () => EMPTY, startAsync: () => NEVER, getByJob: () => NEVER } as unknown as AnalysisService,
       { pollProgress: () => NEVER } as unknown as AnalysisProgressService,
+      registryStub(),
     );
     const events: AnalysisRunEvent[] = [];
     let completed = false;
@@ -995,18 +1015,330 @@ describe('AnalysisRunOrchestrationService bounded start budget (c01)', () => {
       sub.unsubscribe();
     });
 
-    it('SUPERSEDES the previous owned run rather than accumulating them', () => {
+    // finding 59: `fakeAsync` is the ENFORCEMENT, not a convenience. Every run this service owns carries
+    // `withStartTimeout`'s `timer(180_000)`, and a spec that starts a run it never ends leaves that timer
+    // pending past its own teardown - a real one, on a real clock, in a suite whose order is randomized.
+    // The one it can land in is `logs the expiry once`, which asserts `toHaveBeenCalledTimes(1)` on a
+    // `console.warn` spy that a zombie expiry from another spec would make 2. Inside `fakeAsync` a
+    // leftover timer FAILS the spec that leaked it, so the ending below is checked rather than remembered.
+    it('SUPERSEDES the previous owned run rather than accumulating them', fakeAsync(() => {
+      // c06 (finding 11): this used to assert only that `activeRun.runId` had CHANGED and was truthy,
+      // which `++this.runSeq` satisfies whether or not the previous run was discarded - and it then threw
+      // away the one instrument that could tell the difference by reassigning `runSubject` before looking
+      // at it. The first request is held here instead: `observed` going false IS the supersession.
+      const firstRequest = runSubject;
       const first = service.startRun(syncCtx()).subscribe();
       const firstRunId = service.activeRun?.runId;
-      expect(runSubject.observed).toBeTrue();
+      expect(firstRequest.observed).withContext('precondition: run 1 is in flight').toBeTrue();
+
+      // A start on ANOTHER chapter, which is the start the panel's context-scoped guard allows through
+      // while run 1 is still going.
+      runSubject = new Subject<AnalysisResultDto>();
+      const second = service.startRun(syncCtx({ chapterId: 'c2' })).subscribe();
+
+      expect(firstRequest.observed)
+        .withContext('the previous run\'s request must be CANCELLED, not left running beside the new one. '
+          + 'A fresh runId proves nothing about that: the counter increments either way')
+        .toBeFalse();
+      expect(service.activeRun?.runId).not.toBe(firstRunId);
+      expect(service.activeRun?.chapterId)
+        .withContext('and the published description is the NEW run\'s, not a stale one')
+        .toBe('c2');
+
+      first.unsubscribe();
+      second.unsubscribe();
+      // Unsubscribing the CALLER is a1's whole point: it leaves run 2 owned, in flight, and holding its
+      // start budget. End the run itself.
+      runSubject.complete();
+    }));
+  });
+
+  // ── c06: the abandoned run says SOMETHING ───────────────────────────────────────────────────────
+  //
+  // Two ordinary things leave an owned run with no subscriber at the moment it ends: the author starts
+  // another run (which detaches the panel and supersedes this one), and the Edit-help tab switch that
+  // destroys the panel. a1 made the RUN survive both and left its REPORT behind: every terminal travelled
+  // on a stream that is completed and dropped when the run ends, so it reached whoever happened to be
+  // attached and was otherwise discarded. On the sync route that meant a chapter's analysis disappearing
+  // with no message of any kind, and on any route it meant a 500 or a start-budget expiry leaving the
+  // PREVIOUS result on screen with no banner.
+  describe('c06 the abandoned run reports something', () => {
+    /** The tuple every run surface keys on, and the one a surface claims a pending terminal with. */
+    function scope(overrides: Partial<RunTerminalScope> = {}): RunTerminalScope {
+      return { bookId: 'b', chapterId: 'c', sceneId: null, analysisType: 'Proofread', ...overrides };
+    }
+
+    // finding 59: `fakeAsync` for the reason given on `SUPERSEDES the previous owned run` above - the
+    // superseding run 2 is left owned and holding its 180s start budget unless the run itself is ended.
+    it('ends the SUPERSEDED run with an explicit terminal on its own stream, not a bare completion', fakeAsync(() => {
+      const abandoned: AnalysisRunEvent[] = [];
+      let completed = false;
+      // A surface still attached to run A's stream: this is the position the run dialog's transport is in.
+      service.startRun(syncCtx({ language: 'en' })).subscribe({
+        next: e => abandoned.push(e),
+        complete: () => { completed = true; },
+      });
+
+      runSubject = new Subject<AnalysisResultDto>();
+      const second = service.startRun(syncCtx({ chapterId: 'c2' })).subscribe();
+
+      const terminal = abandoned[abandoned.length - 1];
+      expect(terminal.kind)
+        .withContext('a bare complete() is indistinguishable from a run that finished normally, so the '
+          + 'author\'s chapter A analysis vanished with nothing said about it')
+        .toBe('error');
+      expect((terminal as { message: string }).message)
+        .toBe(runString('en', 'runSuperseded', { type: 'Proofread' }));
+      expect(completed).withContext('and the run still ENDS: a terminal is not a second live run').toBeTrue();
+
+      second.unsubscribe();
+      runSubject.complete();
+    }));
+
+    // finding 59: same enforcement. Here it is the ASYNC dispatch of run 2 that is never answered, so
+    // nothing ever proves the server replied and the start budget runs to full term after the spec.
+    it('does NOT report a DISPATCHED async job as stopped: the server is still running it', fakeAsync(() => {
+      // The registry started its own poll for this job, so supersession costs it only the
+      // orchestration-side poll. Saying it was stopped would be the same false ending a1 removed when it
+      // stopped emitting `run-finished` from the panel's ngOnDestroy.
+      const abandoned: AnalysisRunEvent[] = [];
+      service.startRun(asyncCtx()).subscribe(e => abandoned.push(e));
+      startAsyncSubject.next({ jobId: 'job-77' });
+      expect(service.activeRun?.jobId).withContext('precondition: the dispatch answered').toBe('job-77');
+
+      startAsyncSubject = new Subject<{ jobId: string }>();
+      const second = service.startRun(asyncCtx({ chapterId: 'c2' })).subscribe();
+
+      expect(abandoned.filter(e => e.kind === 'error'))
+        .withContext('the job is still executing and still tracked; an error here would be a lie')
+        .toEqual([]);
+      expect(service.takeUnheardRunTerminal(scope({ analysisType: 'LinguisticAnalysis' })))
+        .withContext('and nothing is held for the surface that comes back either')
+        .toBeNull();
+
+      second.unsubscribe();
+      startAsyncSubject.complete();
+    }));
+
+    it('KEEPS a terminal nobody heard, scoped to the unit, for the surface that comes back', () => {
+      const sub = service.startRun(syncCtx({ language: 'en' })).subscribe();
+      // The Edit-help tab switch: the only subscriber detaches and the run keeps going, which is a1's
+      // whole point - and is exactly how the terminal below came to reach nothing.
+      sub.unsubscribe();
+      expect(runSubject.observed).withContext('precondition: the run itself is still in flight').toBeTrue();
+
+      runSubject.error(new HttpErrorResponse({ status: 500 }));
+
+      expect(service.takeUnheardRunTerminal(scope({ chapterId: 'other' })))
+        .withContext('chapter A\'s failure must not be claimable by the chapter on screen')
+        .toBeNull();
+      expect(service.takeUnheardRunTerminal(scope())?.message)
+        .withContext('with no banner and no history row, a failed run left the PREVIOUS result on screen '
+          + 'as though it were current')
+        .toBe(runString('en', 'analysisFailed'));
+      expect(service.takeUnheardRunTerminal(scope()))
+        .withContext('single-shot: the surface that showed it consumed it')
+        .toBeNull();
+    });
+
+    it('keeps the START-BUDGET expiry too, the one terminal with no server error behind it', fakeAsync(() => {
+      const sub = service.startRun(syncCtx({ language: 'en' })).subscribe();
+      sub.unsubscribe();
+
+      tick(RUN_START_BUDGET_MS);
+
+      expect(service.takeUnheardRunTerminal(scope())?.message)
+        .toBe(runString('en', 'runStartTimedOut', { type: 'Proofread' }));
+
+      // The expiry does not cancel the run (there is no cancel endpoint), so end it here rather than
+      // leaving a live request and a live subscription behind this spec.
+      runSubject.complete();
+    }));
+
+    it('does NOT keep a terminal a live surface already rendered', () => {
+      const seen: AnalysisRunEvent[] = [];
+      const sub = service.startRun(syncCtx({ language: 'en' })).subscribe(e => seen.push(e));
+
+      runSubject.error(new HttpErrorResponse({ status: 500 }));
+
+      expect(seen.filter(e => e.kind === 'error').length)
+        .withContext('precondition: the attached surface got it live').toBe(1);
+      expect(service.takeUnheardRunTerminal(scope()))
+        .withContext('re-showing it on the next mount would report one failure as two')
+        .toBeNull();
+      sub.unsubscribe();
+    });
+
+    // finding 59: same enforcement again - the run that CLEARS the notice is itself left in flight.
+    it('drops a pending notice for the unit that is starting a run of its own', fakeAsync(() => {
+      const sub = service.startRun(syncCtx({ language: 'en' })).subscribe();
+      sub.unsubscribe();
+      runSubject.error(new HttpErrorResponse({ status: 500 }));
 
       runSubject = new Subject<AnalysisResultDto>();
       const second = service.startRun(syncCtx()).subscribe();
 
-      expect(service.activeRun?.runId).not.toBe(firstRunId);
-      expect(service.activeRun?.runId).toBeTruthy();
-      first.unsubscribe();
+      expect(service.takeUnheardRunTerminal(scope()))
+        .withContext('a stale failure banner painted over a run that has only just begun')
+        .toBeNull();
       second.unsubscribe();
+      runSubject.complete();
+    }));
+  });
+
+  // ── c01 (registry-write-survives-unmount): the run's ONE registry write ─────────────────────────
+  //
+  // a1 made this service the OWNER of an async run and the registry the single authority on its state,
+  // but the WRITE that creates the registry row stayed inside `AnalysisPanelComponent.handleRunEvent`.
+  // The panel is `@if`-mounted and its `ngOnDestroy` unsubscribes the run view, so a dispatch POST that
+  // answered after an Edit-help tab switch was published NOWHERE: no Activity Center row, no
+  // per-chapter running mark, no in-panel bar, nothing for a remounted panel to derive its state from,
+  // and only a page reload's `reattach` to recover it.
+  //
+  // This describe is where that write's CONTRACT now lives; it moved here from
+  // `analysis-panel.component.spec.ts` with the code. The end-to-end proof that the write survives the
+  // panel's destruction (a dispatch held open ACROSS an unmount) needs the real panel and lives in that
+  // component's spec.
+  describe('c01 publishing a dispatched job to the registry', () => {
+    /** Always-async (LinguisticAnalysis needs no document to take the job route), Hebrew book. */
+    function publishCtx(overrides: Partial<AnalysisRunContext> = {}): AnalysisRunContext {
+      return ctx({
+        bookId: 'book-1',
+        chapterId: 'chap-1',
+        selectedAnalysisType: 'LinguisticAnalysis',
+        documentText: '',
+        language: 'he',
+        ...overrides,
+      });
+    }
+
+    /** Start a run through the OWNING entry point and answer its dispatch. */
+    function dispatch(runCtx: AnalysisRunContext, jobId: string): void {
+      const sub = service.startRun(runCtx).subscribe();
+      startAsyncSubject.next({ jobId });
+      sub.unsubscribe();
+    }
+
+    it('publishes a fresh Proofread job with kind proofread + analysisType + chapterId + scopeLabel', () => {
+      dispatch(publishCtx({
+        selectedAnalysisType: 'Proofread',
+        // Over the 500-word default threshold, so this really is the async route.
+        documentText: Array(600).fill('word').join(' '),
+      }), 'async-1');
+
+      expect(registry.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-1', {
+        analysisType: 'Proofread',
+        chapterId: 'chap-1',
+        sceneId: undefined,
+        scopeLabel: 'פרק',
+      });
+    });
+
+    it('carries analysisType LineEdit so an in-flight Line Edit does not title as proofreading', () => {
+      dispatch(publishCtx({
+        selectedAnalysisType: 'LineEdit',
+        documentText: Array(1600).fill('word').join(' '),
+      }), 'async-le');
+
+      expect(registry.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-le', {
+        analysisType: 'LineEdit',
+        chapterId: 'chap-1',
+        sceneId: undefined,
+        scopeLabel: 'פרק',
+      });
+    });
+
+    it('carries analysisType LinguisticAnalysis so an in-flight linguistic run does not title as proofreading', () => {
+      dispatch(publishCtx(), 'async-la');
+
+      expect(registry.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-la', {
+        analysisType: 'LinguisticAnalysis',
+        chapterId: 'chap-1',
+        sceneId: undefined,
+        scopeLabel: 'פרק',
+      });
+    });
+
+    it('carries the SCENE half of the scope, and its label, when the run was scene-scoped', () => {
+      dispatch(publishCtx({ sceneId: 'scene-1' }), 'async-scene');
+
+      expect(registry.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-scene', {
+        analysisType: 'LinguisticAnalysis',
+        chapterId: 'chap-1',
+        // a1: the scene half of the scope is CARRIED, not merely encoded in the label - so a panel
+        // showing the CHAPTER can tell this job apart from a chapter-scoped run of the same type.
+        sceneId: 'scene-1',
+        scopeLabel: 'סצנה',
+      });
+    });
+
+    it('passes an absent scene as undefined, NOT null, so a later reattach cannot demote a live scene job', () => {
+      // `pickMeta` merges a property only when it is `!== undefined`. A chapter-scoped run that sent
+      // `sceneId: null` would still be a write, and the registry's idempotent merge would then let any
+      // later report of "no scene" overwrite a live scene job's scope with a chapter's.
+      dispatch(publishCtx(), 'async-undef');
+
+      const meta = registry.track.calls.mostRecent().args[3]!;
+      expect(meta.sceneId)
+        .withContext('null here would be a WRITE; only undefined is the no-op pickMeta relies on')
+        .toBeUndefined();
+    });
+
+    it('labels the scope in the RUN language, so an English book gets no Hebrew label', () => {
+      dispatch(publishCtx({ language: 'en' }), 'async-en-chapter');
+      expect(registry.track.calls.mostRecent().args[3]).toEqual(
+        jasmine.objectContaining({ scopeLabel: 'Chapter' }));
+
+      dispatch(publishCtx({ language: 'en', sceneId: 'scene-1' }), 'async-en-scene');
+      expect(registry.track.calls.mostRecent().args[3]).toEqual(
+        jasmine.objectContaining({ scopeLabel: 'Scene' }));
+    });
+
+    it('publishes exactly ONCE per dispatch: the poll is reused, never forked', () => {
+      dispatch(publishCtx(), 'async-once');
+      expect(registry.track).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT publish when the run context carries no bookId, and SAYS SO', () => {
+      // The one branch on which the server has started a real job that reaches NO client surface:
+      // nothing throws and no HTTP error exists to correlate a "my analysis vanished" report against.
+      // Unreachable today (`runAnalysis()` refuses to start without a bookId), which is exactly why it
+      // is logged rather than asserted - the guard exists to survive a future call site that CAN decline.
+      const warn = spyOn(console, 'warn');
+
+      dispatch(publishCtx({ bookId: '' }), 'async-x');
+
+      expect(registry.track).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalled();
+      const args = warn.calls.mostRecent().args;
+      expect(args[0] as string).toContain('[AnalysisRun]');
+      expect(JSON.stringify(args))
+        .withContext('the job id is deliberately NOT logged')
+        .not.toContain('async-x');
+    });
+
+    it('logs nothing on the ordinary path, so the warn stays a signal', () => {
+      const warn = spyOn(console, 'warn');
+
+      dispatch(publishCtx(), 'async-ok');
+
+      expect(registry.track).toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('c02: a SYNC run is NEVER published, so the bell gets no row it cannot honor', () => {
+      // A sync run persists with a NULL JobId, cannot be reattached, and has no id to track at start.
+      // `three-surface-parity.spec.ts` pins the RENDERED consequence; this is the production-source
+      // guard, asserted at the one place a registry write for a run can now be made.
+      const sub = service.startRun(syncCtx()).subscribe();
+      runSubject.next({
+        id: 'r-1', chapterId: 'c', type: 'Proofread', analysisType: 'Proofread',
+        resultText: 'ok', createdAt: new Date().toISOString(),
+      });
+      runSubject.complete();
+
+      expect(registry.track).not.toHaveBeenCalled();
+      sub.unsubscribe();
     });
   });
 

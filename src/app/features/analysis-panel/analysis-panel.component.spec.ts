@@ -2,17 +2,25 @@ import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testin
 import { Component, SimpleChange } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { By } from '@angular/platform-browser';
-import { BehaviorSubject, EMPTY, NEVER, Observable, ReplaySubject, Subject, of, throwError, takeUntil } from 'rxjs';
+import { BehaviorSubject, EMPTY, NEVER, Observable, ReplaySubject, Subject, firstValueFrom, of, throwError, takeUntil } from 'rxjs';
 import { AnalysisPanelComponent } from './analysis-panel.component';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
 import { AnalysisService } from '../../core/services/analysis.service';
-import { ActiveRunContext, AnalysisRunOrchestrationService, AnalysisRunEvent } from '../../core/services/analysis-run-orchestration.service';
+import {
+  ActiveRunContext,
+  AnalysisRunOrchestrationService,
+  AnalysisRunEvent,
+  RunTerminalScope,
+  UnheardRunTerminal,
+} from '../../core/services/analysis-run-orchestration.service';
 import { DocumentVersionService } from '../../core/services/document-version.service';
 import { AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto } from '../../core/models/analysis';
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
 import { AnalysisProgressService } from '../../core/services/analysis-progress.service';
-import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { CHAPTER_SCOPED_KINDS, JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { BookSummaryService } from '../../core/services/book-summary.service';
+import { BookReviewService } from '../../core/services/book-review.service';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
@@ -65,6 +73,29 @@ interface OrchestrationStub {
 /** Monotonic run ids for the stub, so two runs in one spec are distinguishable. */
 let stubRunSeq = 0;
 
+/**
+ * c06: the terminal the orchestration service is holding because NO surface heard it.
+ *
+ * The service records one when an owned run ends in an error with nobody subscribed - a run superseded by
+ * a start on another chapter, a 500, the start-budget expiry - and hands it to the next surface for that
+ * unit. A spec sets this and mounts a panel to stand in the position of the instance that comes back.
+ * The stub below models the real contract: SCOPED to the unit, and SINGLE-SHOT (the read clears it).
+ */
+let pendingUnheardTerminal: UnheardRunTerminal | null = null;
+
+function takeUnheardStub(scope: RunTerminalScope): UnheardRunTerminal | null {
+  const pending = pendingUnheardTerminal;
+  if (!pending
+    || pending.bookId !== scope.bookId
+    || pending.chapterId !== scope.chapterId
+    || pending.sceneId !== (scope.sceneId ?? null)
+    || pending.analysisType !== scope.analysisType) {
+    return null;
+  }
+  pendingUnheardTerminal = null;
+  return pending;
+}
+
 describe('AnalysisPanelComponent (focused logic)', () => {
   let component: AnalysisPanelComponent;
   let fixture: ComponentFixture<AnalysisPanelComponent>;
@@ -84,6 +115,8 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     // spec pushes through to drive that derivation.
     registryJobs = new BehaviorSubject<TrackedJob[]>([]);
     ownedRun = new BehaviorSubject<ActiveRunContext | null>(null);
+    // c06: module-level, so it has to be reset or one spec's pending notice paints another's panel.
+    pendingUnheardTerminal = null;
     jobRegistrySpy = jasmine.createSpyObj<JobRegistryService>(
       'JobRegistryService',
       ['track', 'jobById$'],
@@ -117,16 +150,22 @@ describe('AnalysisPanelComponent (focused logic)', () => {
         {
           provide: AnalysisRunOrchestrationService,
           // a1: `startRun` is what the panel calls now, and the stub DELEGATES to `runAnalysisAfterSave`
-          // so the ~15 specs that swap that method in to drive a run keep working unchanged. `activeRun$`
+          // so the specs that swap that method in to drive a run keep working unchanged. f13 (2026-08-19)
+          // recounted in the current tree: `runAnalysisAfterSave` is assigned 14 times total across this
+          // spec file - 3 are provider defaults (here, and the two other `TestBed.configureTestingModule`
+          // blocks below), the other 11 are reassignments (`orch.runAnalysisAfterSave = ...`, some in a
+          // single `it`, some in a `describe`'s shared `beforeEach` reaching every `it` under it) that
+          // swap this default out to drive a specific run. `activeRun$`
           // / `activeRun` are the service's published description of the run it owns; the stub keeps them
           // inert by default and a spec drives them through `ownedRun` when that is what it is testing.
           useValue: {
-            stopProgressPolling: () => {},
             confirmReanalysisIfPendingSuggestions: () => true,
             emitInitialStatusForRun: () => 'Running…',
             formatRunDuration: () => null,
             runAnalysisAfterSave: () => EMPTY,
             doRunStreaming: () => EMPTY,
+            // c06: the panel asks this on every run-state derivation, so it is required on every stub.
+            takeUnheardRunTerminal: takeUnheardStub,
             activeRun$: ownedRun.asObservable(),
             get activeRun() { return ownedRun.value; },
             /**
@@ -1392,6 +1431,153 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect(component.proofreadFinalizing).toBeTrue();
   });
 
+  // ─── c07: SUPERSESSION - two reads for the SAME key must not race ──
+  //
+  // The Bug 1 specs above cover the other question (a read whose key the reader has left). These cover
+  // the one a context-CHANGE guard cannot see: two reads for the SAME (chapter, scene) that both pass
+  // that guard, resolving out of order, so the slower OLDER answer overwrites `allAnalyses` with a
+  // snapshot taken before the just-finished run's row existed.
+  //
+  // THE INSTRUMENT IS THE SUBJECT'S SUBSCRIBER COUNT, not the rendered result: a stub whose first read
+  // simply never completes stays subscribed and greens any result-only assertion, so each spec asserts
+  // both that a second request was really ISSUED (`calls`) and that issuing it CANCELLED the first
+  // (`observed`).
+
+  /** Hand each `getHistory` call its own Subject, and keep the handles + the call count. */
+  function stubHistorySubjects(): { subjects: Subject<AnalysisResultDto[]>[]; calls: () => number } {
+    const subjects: Subject<AnalysisResultDto[]>[] = [];
+    const svc = TestBed.inject(AnalysisService) as any;
+    svc.getHistory = () => {
+      const s = new Subject<AnalysisResultDto[]>();
+      subjects.push(s);
+      return s.asObservable();
+    };
+    return { subjects, calls: () => subjects.length };
+  }
+
+  it('c07: two loadHistory reads for the SAME key - the OLDER answer arriving LAST does not win', () => {
+    const { subjects, calls } = stubHistorySubjects();
+
+    component.chapterId = 'chap-1';
+    (component as any).loadHistory(true); // read A
+    (component as any).loadHistory(true); // read B, same (chapter, scene)
+
+    // A second request was really made, and issuing it cancelled the first.
+    expect(calls()).toBe(2);
+    expect(subjects[0].observed).toBeFalse();
+    expect(subjects[1].observed).toBeTrue();
+
+    // Out of order: the NEWER read answers first, the older one lands after it.
+    subjects[1].next([makeResultWithSuggestions({ id: 'newer' })]);
+    subjects[0].next([makeResultWithSuggestions({ id: 'older' })]);
+
+    expect(component.allAnalyses.map(r => r.id)).toEqual(['newer']);
+  });
+
+  it('c07: the latch is DOWN on every path - a superseded read cannot strand proofreadFinalizing or write late', () => {
+    const { subjects, calls } = stubHistorySubjects();
+
+    component.chapterId = 'chap-1';
+    component.proofreadFinalizing = true;
+    (component as any).loadHistory(true); // read A - the read the finalizing window is waiting on
+    (component as any).loadHistory(true); // read B supersedes A, destroying A's handlers
+
+    expect(calls()).toBe(2);
+    expect(subjects[0].observed).toBeFalse();
+    // The cancel itself neither lowers the latch nor strands it: it hands it to the read that cancelled.
+    expect(component.proofreadFinalizing).toBeTrue();
+
+    // B's ERROR arm is one of the two places the latch comes down, and it runs after the stale check.
+    subjects[1].error(new Error('history unavailable'));
+    expect(component.proofreadFinalizing).toBeFalse();
+    expect(component['proofreadFinalizeRetriesLeft']).toBe(0);
+
+    // A is gone: its late SUCCESS reaches nothing.
+    subjects[0].next([makeResultWithSuggestions({ id: 'older' })]);
+    expect(component.allAnalyses).toEqual([]);
+    expect(component.proofreadFinalizing).toBeFalse();
+  });
+
+  it('c07: superseding a read mid-retry-chain CONTINUES the chain rather than killing it', fakeAsync(() => {
+    const { subjects, calls } = stubHistorySubjects();
+
+    // A finalizing streaming Proofread: a synthetic latestResult (no id) whose persisted row has not
+    // replicated yet, with one retry left in the budget.
+    component.chapterId = 'chap-1';
+    component.selectedAnalysisType = 'Proofread';
+    component.latestResult = { ...makeResultWithSuggestions(), id: undefined as any };
+    component.proofreadFinalizing = true;
+    component['proofreadFinalizeRetriesLeft'] = 1;
+
+    (component as any).loadHistory(true); // read A
+    (component as any).loadHistory(true); // read B supersedes A
+
+    expect(calls()).toBe(2);
+    expect(subjects[0].observed).toBeFalse();
+
+    // B answers without the run's row, so the window must RETRY - the supersession did not lose the
+    // budget, and the read that cancelled A re-entered the same retry logic.
+    subjects[1].next([]);
+    expect(component.proofreadFinalizing).toBeTrue();
+    expect(component['proofreadFinalizeRetriesLeft']).toBe(0);
+
+    tick(600);
+    expect(calls()).toBe(3); // the retry timer really re-issued the read
+
+    // The retry's own answer exhausts the budget and resolves the window: the latch is down.
+    subjects[2].next([]);
+    expect(component.proofreadFinalizing).toBeFalse();
+    expect(component['proofreadFinalizeRetryTimer']).toBeNull();
+  }));
+
+  it('c07: loadVersions supersedes too - the OLDER version list arriving LAST does not win', () => {
+    const subjects: Subject<any[]>[] = [];
+    const versionsService = TestBed.inject(DocumentVersionService) as any;
+    versionsService.list = () => {
+      const s = new Subject<any[]>();
+      subjects.push(s);
+      return s.asObservable();
+    };
+
+    component.chapterId = 'chap-1';
+    component.loadVersions(); // read A
+    component.loadVersions(); // read B, same key
+
+    expect(subjects.length).toBe(2);
+    expect(subjects[0].observed).toBeFalse();
+
+    subjects[1].next([{ id: 'v-newer', bookId: 'book-1', chapterId: 'chap-1', createdAt: new Date().toISOString() }]);
+    subjects[0].next([{ id: 'v-older', bookId: 'book-1', chapterId: 'chap-1', createdAt: new Date().toISOString() }]);
+
+    expect(component.versions.map(v => v.id)).toEqual(['v-newer']);
+  });
+
+  it('c07: a loadVersions answer for a chapter the reader has LEFT writes nothing (neither arm)', () => {
+    const subjects: Subject<any[]>[] = [];
+    const versionsService = TestBed.inject(DocumentVersionService) as any;
+    versionsService.list = () => {
+      const s = new Subject<any[]>();
+      subjects.push(s);
+      return s.asObservable();
+    };
+
+    component.chapterId = 'chap-1';
+    component.loadVersions();
+    component.chapterId = 'chap-2';
+    component.versions = [{ id: 'v-chap-2' } as any];
+
+    subjects[0].next([{ id: 'v-chap-1', bookId: 'book-1', chapterId: 'chap-1', createdAt: new Date().toISOString() }]);
+    expect(component.versions.map(v => v.id)).toEqual(['v-chap-2']);
+
+    // And the error arm, which used to blank the list of whatever chapter was on screen.
+    component.chapterId = 'chap-1';
+    component.loadVersions();
+    component.chapterId = 'chap-3';
+    component.versions = [{ id: 'v-chap-3' } as any];
+    subjects[1].error(new Error('late failure'));
+    expect(component.versions.map(v => v.id)).toEqual(['v-chap-3']);
+  });
+
   // ─── Bug 3: chapter/scene change resets the streaming-proofread finalize one-shots ──
 
   it('Bug 3: a chapter change resets autoShow + finalizing so a prior run cannot auto-open in the new context', () => {
@@ -1681,170 +1867,172 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     });
   });
 
-  // Bug 1 (rf-c01): starting an async chapter Proofread/Line Edit run must publish the job to the
-  // registry on job-started, so the Activity Center + anyRunningForBook$ pick it up for THIS run and
-  // not only after a reload reattaches to it.
-  describe('job-started publishes the chapter analysis job to the registry', () => {
-    it('tracks a fresh Proofread async job with kind proofread + analysisType + chapterId + scopeLabel', () => {
-      component.bookId = 'book-1';
-      component.chapterId = 'chap-1';
-      component.selectedAnalysisType = 'Proofread';
-      (component as any).prepareForRun(); // capture the run origin, as the real run path does
+  // c06: the other half of "a terminal nobody heard". This panel instance SURVIVES navigation, so the
+  // surface that comes back to the abandoned run's chapter is often this same instance rather than a
+  // fresh one - which is the case for finding 7, where the author started a run on chapter B and the
+  // chapter A run they left behind was cancelled with no message anywhere.
+  describe('c06 a pending run terminal is claimed by the unit it belongs to', () => {
+    const message = 'הרצה קודמת הופסקה';
 
-      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-1' });
-
-      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-1', {
+    it('leaves a terminal for ANOTHER chapter alone, and shows it when the reader returns to that chapter', () => {
+      pendingUnheardTerminal = {
+        runId: 'run-3',
+        bookId: 'book-1',
+        chapterId: 'chap-2',
+        sceneId: null,
         analysisType: 'Proofread',
-        chapterId: 'chap-1',
-        sceneId: undefined,
-        scopeLabel: 'פרק',
-      });
+        message,
+      };
+
+      // Still on chapter 1. A registry emission re-derives run state, which is where the claim is made,
+      // so this is a real attempt to claim it and not merely an absence of one.
+      registryJobs.next([]);
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('.run-error'))
+        .withContext('chapter A\'s failure must not appear over chapter B')
+        .toBeNull();
+
+      component.chapterId = 'chap-2';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
+      fixture.detectChanges();
+
+      const banner = fixture.nativeElement.querySelector('.run-error') as HTMLElement | null;
+      expect(banner)
+        .withContext('coming back to the chapter is the moment the author can be told what happened to it')
+        .not.toBeNull();
+      expect(banner!.textContent!.trim()).toBe(message);
     });
 
-    it('carries analysisType LineEdit so an in-flight Line Edit does not title as proofreading', () => {
-      component.bookId = 'book-1';
+    it('takes the failure banner off the chapter it was raised on when the reader leaves it', () => {
+      component.runError = 'הניתוח נכשל.';
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('.run-error')).not.toBeNull();
+
+      component.chapterId = 'chap-2';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.run-error'))
+        .withContext('the banner is scoped to a unit like the suggestions and the history beside it; a '
+          + 'notice that follows the reader to the next chapter describes nothing on screen')
+        .toBeNull();
+    });
+
+    // final-r01: the THIRD state, between c06's two. This instance keeps its run subscription across a
+    // chapter switch (a1, on purpose), so a failure can be HEARD by a surface that has already moved on.
+    // The service correctly holds nothing for it - a subscriber existed - and the panel used to write
+    // `runError` unconditionally, so the failure appeared under the wrong chapter and c06's own reset
+    // then wiped it, leaving the origin chapter permanently silent about its own run.
+    it('does NOT banner a failure whose run started on a chapter the reader has since left', () => {
+      component.runAnalysis();
+      expect((component as any).runOriginChapterId)
+        .withContext('precondition: the run captured chapter 1 as its origin')
+        .toBe('chap-1');
+
+      component.chapterId = 'chap-2';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
+      fixture.detectChanges();
+
+      (component as any).handleRunEvent({ kind: 'error', message: 'הניתוח נכשל.' });
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.run-error'))
+        .withContext('chapter 1\'s failure is not news about chapter 2, and saying it here is the same '
+          + 'misattribution the origin check on the SUCCESS path already prevents')
+        .toBeNull();
+    });
+
+    it('shows that same failure when the reader returns to the chapter the run started on', () => {
+      component.runAnalysis();
+      component.chapterId = 'chap-2';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
+      (component as any).handleRunEvent({ kind: 'error', message: 'הניתוח נכשל.' });
+      fixture.detectChanges();
+
       component.chapterId = 'chap-1';
-      component.selectedAnalysisType = 'LineEdit';
-      (component as any).prepareForRun();
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-2', 'chap-1', false) });
+      fixture.detectChanges();
 
-      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-le' });
+      const banner = fixture.nativeElement.querySelector('.run-error') as HTMLElement | null;
+      expect(banner)
+        .withContext('dropping it instead would be strictly worse than the misattribution it replaces: '
+          + 'before c06 the banner at least survived until the reader wandered back')
+        .not.toBeNull();
+      expect(banner!.textContent!.trim()).toBe('הניתוח נכשל.');
 
-      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-le', {
-        analysisType: 'LineEdit',
-        chapterId: 'chap-1',
-        sceneId: undefined,
-        scopeLabel: 'פרק',
-      });
-    });
-
-    it('carries analysisType LinguisticAnalysis so an in-flight linguistic run does not title as proofreading', () => {
-      component.bookId = 'book-1';
+      // Single-shot, like the service's slot: leaving and returning a second time must not re-raise it.
+      component.chapterId = 'chap-2';
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
       component.chapterId = 'chap-1';
-      component.selectedAnalysisType = 'LinguisticAnalysis';
-      (component as any).prepareForRun();
-
-      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-la' });
-
-      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-la', {
-        analysisType: 'LinguisticAnalysis',
-        chapterId: 'chap-1',
-        sceneId: undefined,
-        scopeLabel: 'פרק',
-      });
+      component.ngOnChanges({ chapterId: new SimpleChange('chap-2', 'chap-1', false) });
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('.run-error'))
+        .withContext('one failure, reported once')
+        .toBeNull();
     });
 
-    it('does NOT track when there is no bookId (guard), and SAYS SO (c03)', () => {
-      // c03 observability. A decline here is the one branch on which the server has started a real job
-      // that no client surface picks up: no registry row means no Activity Center entry and no in-page
-      // banner, and nothing throws, so there is no HTTP error in the console to correlate a
-      // "my analysis vanished" report against. The bracketed-tag console.warn is the convention the c01
-      // start-budget expiry and the c02 dismissal seam already use. No ids and no document text.
-      const warn = spyOn(console, 'warn');
-      component.bookId = null;
-      component.chapterId = 'chap-1';
-      component.selectedAnalysisType = 'Proofread';
+    it('still banners immediately when the run\'s origin IS the unit on screen (the ordinary path)', () => {
+      component.runAnalysis();
+      fixture.detectChanges();
 
-      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-x' });
+      (component as any).handleRunEvent({ kind: 'error', message: 'הניתוח נכשל.' });
+      fixture.detectChanges();
 
-      expect(jobRegistrySpy.track).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalled();
-      const args = warn.calls.mostRecent().args;
-      expect(args[0] as string).toContain('[AnalysisRun]');
-      expect(JSON.stringify(args))
-        .withContext('the job id is deliberately NOT logged')
-        .not.toContain('async-x');
-    });
-
-    it('logs nothing on the ordinary path, so the warn stays a signal', () => {
-      const warn = spyOn(console, 'warn');
-      component.bookId = 'book-1';
-      component.chapterId = 'chap-1';
-      component.selectedAnalysisType = 'Proofread';
-      (component as any).prepareForRun();
-
-      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-ok' });
-
-      expect(jobRegistrySpy.track).toHaveBeenCalled();
-      expect(warn).not.toHaveBeenCalled();
-    });
-
-    it('tracks a fresh Linguistic async job with scopeLabel scene when sceneId is set', () => {
-      component.bookId = 'book-1';
-      component.chapterId = 'chap-1';
-      component.sceneId = 'scene-1';
-      component.selectedAnalysisType = 'LinguisticAnalysis';
-      (component as any).prepareForRun();
-
-      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-scene' });
-
-      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-scene', {
-        analysisType: 'LinguisticAnalysis',
-        chapterId: 'chap-1',
-        // a1: the scene half of the scope is carried now, not merely encoded in the label - so a panel
-        // showing the CHAPTER can tell this job apart from a chapter-scoped run of the same type.
-        sceneId: 'scene-1',
-        scopeLabel: 'סצנה',
-      });
-    });
-
-    it('keys the tracked job off the run ORIGIN, not live panel state, when the user switches context before the async start response', () => {
-      // The panel instance is reused across navigation and the async start response can arrive after a
-      // context switch. The tracked job must reflect the scope/chapter/type the run (and API) began with.
-      component.bookId = 'book-1';
-      component.chapterId = 'chap-scene-origin';
-      component.sceneId = 'scene-origin';
-      component.selectedAnalysisType = 'LinguisticAnalysis';
-      (component as any).prepareForRun(); // origin captured: scene scope, chap-scene-origin, LinguisticAnalysis
-
-      // User navigates to a different, non-scene chapter and flips the analysis type BEFORE job-started.
-      component.chapterId = 'chap-other';
-      component.sceneId = null;
-      component.selectedAnalysisType = 'Proofread';
-
-      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-race' });
-
-      expect(jobRegistrySpy.track).toHaveBeenCalledWith('proofread', 'book-1', 'async-race', {
-        analysisType: 'LinguisticAnalysis',
-        chapterId: 'chap-scene-origin',
-        // a1: the scene id comes off the CAPTURED origin too, for the same reason the chapter does.
-        sceneId: 'scene-origin',
-        scopeLabel: 'סצנה',
-      });
+      const banner = fixture.nativeElement.querySelector('.run-error') as HTMLElement | null;
+      expect(banner).withContext('the common case must not have been deferred by the fix').not.toBeNull();
+      expect(banner!.textContent!.trim()).toBe('הניתוח נכשל.');
     });
   });
+
+  // Bug 1 (rf-c01): starting an async chapter Proofread/Line Edit run must publish the job to the
+  // registry on job-started, so the Activity Center and the per-chapter running marks pick it up for
+  // THIS run and not only after a reload reattaches to it.
+  //
+  // c01 (registry-write-survives-unmount): that publish MOVED off this component. It is performed by
+  // `AnalysisRunOrchestrationService.publishJobToRegistry`, from the same `startRun` subscription that
+  // owns the run, because this panel is `@if`-mounted and a dispatch POST that answers after an
+  // Edit-help tab switch reached the old call site on a destroyed component - so the job was published
+  // nowhere at all. The whole describe that used to sit here (the analysisType variants, the scene
+  // scope label, the no-bookId decline and its warn, and the "keys the tracked job off the run ORIGIN"
+  // case) moved WITH the code, to `analysis-run-orchestration.service.spec.ts`. Asserting it here now
+  // would only be asserting the fidelity of this suite's orchestration STUB.
+  //
+  // What stays in this file is the panel's own half of `job-started` (the in-page banner state below)
+  // and the end-to-end unmount case that proves the write survives this component, which needs the REAL
+  // service and the REAL registry and therefore has its own TestBed at the bottom of this file.
 
   // pf-f01: async non-blocking overlay and in-panel compact banner.
   describe('pf-f01 async job non-blocking overlay', () => {
     // c01: these two used to assert the `asyncJobStarted` @Output, which lost its last consumer when the
     // blocking overlay was deleted and has now been deleted with it. Their INTENT was the async handoff -
     // the job becomes visible exactly once, and the no-bookId guard skips the whole handoff - so they are
-    // re-pointed at what actually performs it: `jobRegistry.track` plus the in-panel banner state it
-    // raises. Both halves move together or a job is tracked with no indicator (or the reverse).
-    it('publishes the job exactly once on job-started and raises the in-panel banner for it', () => {
+    // re-pointed at what actually performs it: the in-panel banner state, plus (registry-write-survives-
+    // unmount) the id it mirrors. The PUBLISH half of the handoff is the orchestration service's now;
+    // its own spec pins it, and the unmount case at the bottom of this file pins that the two halves
+    // still describe the same job after this component is gone.
+    it('mirrors the started job id exactly once on job-started and raises the in-panel banner for it', () => {
       component.bookId = 'book-1';
       component.chapterId = 'chap-1';
       component.selectedAnalysisType = 'Proofread';
 
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-1' });
 
-      expect(jobRegistrySpy.track).toHaveBeenCalledTimes(1);
-      expect(jobRegistrySpy.track.calls.mostRecent().args[2]).toBe('async-1');
-      // The banner mirrors the id that was published, so it can never point at a different job.
+      // The banner mirrors the id the service published, so it can never point at a different job.
       expect((component as any).currentRunJobId).toBe('async-1');
       expect(component.asyncJobInFlight).toBeTrue();
       expect((component as any).asyncBannerActiveForRun).toBeTrue();
     });
 
-    it('does NOT publish the job (or raise the banner) when there is no bookId', () => {
+    it('does NOT raise the banner when there is no bookId', () => {
       component.bookId = null;
       component.chapterId = 'chap-1';
       component.selectedAnalysisType = 'Proofread';
 
       (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-x' });
 
-      // The guard short-circuits: the job is never published, so no surface could render it...
-      expect(jobRegistrySpy.track).not.toHaveBeenCalled();
-      // ...and the banner must not claim a job that no surface can track.
+      // The service declines to publish on this same missing value, so the banner must not claim a job
+      // that no surface can render: `app-job-progress-inline` resolves `currentRunJobId` through
+      // `jobById$`, and there is no row for it.
       expect((component as any).currentRunJobId).toBeNull();
       expect(component.asyncJobInFlight).toBeFalse();
     });
@@ -1897,29 +2085,19 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(component.asyncJobInFlight).toBe(false);
     });
 
-    it('track fires ONCE on async start (no double-poll: handleRunEvent is not a loop)', () => {
-      component.bookId = 'book-1';
-      component.chapterId = 'chap-1';
-      component.selectedAnalysisType = 'Proofread';
-
-      (component as any).handleRunEvent({ kind: 'job-started', jobId: 'async-1' });
-
-      // track must be called exactly once: the orchestration poll is reused, not forked.
-      expect(jobRegistrySpy.track).toHaveBeenCalledTimes(1);
-    });
-
     // ── final-r01: the PRODUCTION-SOURCE half of the c02 "a sync run is on none of the three
     //    surfaces" decision ────────────────────────────────────────────────────────────────────────
     //
     // `three-surface-parity.spec.ts` pins the RENDERED consequence of that decision, but its host is a
-    // synthetic fixture that drives JobRegistryService itself: it never runs this panel, which is the
-    // component that owns the one `track()` call site. MEASURED during the closing review: adding a
-    // client-minted synthetic `track()` to `runAnalysis()` - the exact change the decision forbids -
-    // left the whole suite green, so nothing anywhere actually guarded it.
+    // synthetic fixture that drives JobRegistryService itself. MEASURED during the closing review:
+    // adding a client-minted synthetic `track()` to `runAnalysis()` - the exact change the decision
+    // forbids - left the whole suite green, so nothing anywhere actually guarded it.
     //
-    // This is that guard, asserted where the change would be made. `track()` may be reached ONLY from
-    // a `job-started` event; a run that never produces one must reach no surface but the dialog.
-    it('c02: a SYNC run (no job-started) is NEVER tracked, so the bell gets no row it cannot honor', () => {
+    // c01: the `track()` call site itself is now the orchestration service's, and the "a sync run is
+    // never tracked" half moved there with it. What is still guarded HERE is the change's most natural
+    // LOCATION: `runAnalysis()`, where a synthetic id would be minted at run start, before any event
+    // exists. This panel must reach the registry from nowhere at all.
+    it('c02: this panel never writes the registry for a run, least of all at run START', () => {
       const run$ = new Subject<AnalysisRunEvent>();
       const orch = TestBed.inject(AnalysisRunOrchestrationService) as any;
       orch.runAnalysisAfterSave = () => run$.asObservable();
@@ -2043,11 +2221,31 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       // The other half of the inversion above, and the todo's bug 1 end to end. Not derivable from the
       // "does not emit run-finished" cases: those prove the run survived the unmount, this proves its
       // result reaches the user - through a BRAND NEW instance whose own fields know nothing about it.
+      //
+      // finding 60: the RESULT is made to depend on the run having survived, which it did not used to.
+      // The spec re-stubbed `getHistory` to hand the finished row to anyone who asked, so the remount's
+      // ordinary `ngOnChanges -> loadHistory()` produced it whether or not the unmount had cancelled the
+      // request - i.e. the assertion named for bug 1 passed against bug 1. The server here answers ONLY
+      // while the request is still open, and persists the row on the same condition, which is what an
+      // aborted request really means: the run this panel started produced nothing, and there is nothing
+      // for the remount to find. `runStream$.observed` is therefore both the precondition and the thing
+      // that makes the final assertion discriminate.
       const analysis = TestBed.inject(AnalysisService) as any;
       const finished = {
         id: 'res-late', chapterId: 'chap-1', type: 'Proofread', analysisType: 'Proofread',
         resultText: 'fixed while you were away', createdAt: '2026-08-18T02:00:00.000Z', status: 'Active',
       } as AnalysisResultDto;
+
+      // The "server": whatever it has persisted so far, which is nothing until a live request answers.
+      let persisted: AnalysisResultDto[] = [];
+      analysis.getHistory = () => of(persisted.slice());
+      const serverAnswers = () => {
+        // An ABORTED request is not answered and writes no row. Cancelling the run is what the panel's
+        // ngOnDestroy used to do, so this is the one branch the pre-a1 code took.
+        if (!runStream$.observed) return;
+        persisted = [finished];
+        runStream$.next({ kind: 'sync-result', result: finished });
+      };
 
       panel.runAnalysis();
       runStream$.next({ kind: 'status', message: 'Running Proofread analysis...' });
@@ -2061,8 +2259,7 @@ describe('AnalysisPanelComponent (focused logic)', () => {
         .toBeTrue();
 
       // The server answers with NO panel on screen at all.
-      analysis.getHistory = () => of([finished]);
-      runStream$.next({ kind: 'sync-result', result: finished });
+      serverAnswers();
       runStream$.complete();
 
       // The user comes back to the Analysis sub-tab.
@@ -2073,7 +2270,8 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
       expect(remounted).not.toBe(panel);
       expect(remounted.latestResult?.id)
-        .withContext('the finished result is on screen for an instance that never started the run')
+        .withContext('the finished result is on screen for an instance that never started the run - and it '
+          + 'exists at all only because the unmount did not cancel the request that produced it')
         .toBe('res-late');
     });
 
@@ -2158,6 +2356,62 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(runButton().disabled).toBeFalse();
     });
 
+    it('54: a panel MOUNTED mid-run also gets the banner and the job the in-panel bar mirrors', () => {
+      // The button was only ever HALF the remount. `asyncJobInFlight`, `asyncBannerActiveForRun` and
+      // `currentRunJobId` are per-instance and blank on a fresh mount, so a1 left the author looking at
+      // a Running button with no banner beneath it and nothing for `app-job-progress-inline` to read -
+      // the one surface they had open was the only one of the three with no percent on it.
+      registryJobs.next([proofreadJob('running')]);
+
+      const panel = mountHost();
+      hostFixture.detectChanges();
+
+      expect(panel.asyncJobInFlight)
+        .withContext('the banner is the in-page indicator for a background run; a remount had none')
+        .toBeTrue();
+      expect((panel as any).currentRunJobId)
+        .withContext('read back out of the REGISTRY, so the bar, the dialog and the Activity Center '
+          + 'cannot show different numbers for one job')
+        .toBe('job-A');
+      expect(hostFixture.nativeElement.querySelector('.async-job-banner')).not.toBeNull();
+      expect(hostFixture.nativeElement.querySelector('app-job-progress-inline')).not.toBeNull();
+    });
+
+    it('54: the restored banner still DISMISSES, and a progress tick does not put it back', () => {
+      // The restore runs on every registry emission, and a running job emits one every couple of
+      // seconds. Without the one-shot ledger behind it, dismissing the banner would last until the next
+      // poll tick and no longer.
+      registryJobs.next([proofreadJob('running')]);
+      const panel = mountHost();
+      hostFixture.detectChanges();
+      expect(panel.asyncJobInFlight).withContext('precondition: the banner was restored').toBeTrue();
+
+      panel.dismissAsyncBanner();
+      hostFixture.detectChanges();
+      expect(hostFixture.nativeElement.querySelector('.async-job-banner')).toBeNull();
+
+      // The registry's next poll answer for the SAME job.
+      registryJobs.next([{ ...proofreadJob('running'), percent: 70 }]);
+      hostFixture.detectChanges();
+
+      expect(panel.asyncJobInFlight)
+        .withContext('a dismiss is sticky for the rest of the run, restored banner or not')
+        .toBeFalse();
+      expect(hostFixture.nativeElement.querySelector('.async-job-banner')).toBeNull();
+    });
+
+    it('54: a SCENE run does not raise the chapter-scoped panel\'s banner either', () => {
+      // The restore is read off the same context-matched list the button is, so it inherits the scope
+      // rather than re-deriving it: a job that must not disable this panel must not banner it either.
+      registryJobs.next([{ ...proofreadJob('running'), sceneId: 'scene-9' }]);
+
+      const panel = mountHost();
+      hostFixture.detectChanges();
+
+      expect(panel.asyncJobInFlight).toBeFalse();
+      expect((panel as any).currentRunJobId).toBeNull();
+    });
+
     it('bug 2: a SCENE run does not disable the chapter-scoped panel showing the same chapter', () => {
       registryJobs.next([{ ...proofreadJob('running'), sceneId: 'scene-9' }]);
 
@@ -2197,6 +2451,41 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(historyReads).toBe(readsAfterMount + 1);
     });
 
+    it('c06: a terminal NOBODY was there to hear is reported by the instance that comes back', () => {
+      // The run ended in an error with no panel on screen: a 500, the 180s start-budget expiry, or the
+      // author starting a run on another chapter, which supersedes this one. Before c06 the ONLY thing a
+      // remounted instance did about a finished run was `noteRunTerminal -> loadHistory(true)`, and a run
+      // that FAILED has no history row to find - so the author got the previous result back, unchanged and
+      // unexplained. The service holds the terminal; this is the surface that owes the author the sentence.
+      const message = runString('en', 'runSuperseded', { type: 'Proofread' });
+      pendingUnheardTerminal = {
+        runId: 'run-7',
+        bookId: 'book-1',
+        chapterId: 'chap-1',
+        sceneId: null,
+        analysisType: 'Proofread',
+        message,
+      };
+
+      mountHost();
+      hostFixture.detectChanges();
+
+      const banner = hostFixture.nativeElement.querySelector('.run-error') as HTMLElement | null;
+      expect(banner)
+        .withContext('an instance that never started the run is the only surface left to say it ended')
+        .not.toBeNull();
+      expect(banner!.textContent!.trim()).toBe(message);
+
+      // SINGLE-SHOT. The claim is what consumed it, so the next instance for this unit is not told again
+      // about a failure the author has already been shown.
+      hostFixture.destroy();
+      mountHost();
+      hostFixture.detectChanges();
+      expect(hostFixture.nativeElement.querySelector('.run-error'))
+        .withContext('one failure, reported once')
+        .toBeNull();
+    });
+
     it('bug 1: a terminal for a job this instance never saw RUNNING is history, not news', () => {
       const analysis = TestBed.inject(AnalysisService) as any;
       let historyReads = 0;
@@ -2211,6 +2500,34 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       hostFixture.detectChanges();
 
       expect(historyReads).toBe(readsAfterMount);
+    });
+
+    it('f09: a terminal arriving while chapterId is momentarily null is NOT permanently claimed', () => {
+      // The dedupe ledger (`handledRunTerminals`) must only be written on the path that actually
+      // refetches. If it were written ahead of the id guard, a terminal that lands while chapterId is
+      // transiently null (e.g. mid chapter-switch teardown) would be marked "handled" forever, and this
+      // instance would never refetch once the ids come back for the SAME run's re-delivered terminal.
+      const analysis = TestBed.inject(AnalysisService) as any;
+      let historyReads = 0;
+      analysis.getHistory = () => { historyReads++; return of([]); };
+
+      const panel = mountHost();
+      const readsAfterMount = historyReads;
+
+      panel.chapterId = null;
+      (panel as any).noteRunTerminal('job-A');
+
+      expect(historyReads)
+        .withContext('no chapterId means no refetch is possible, so the ledger must not claim one happened')
+        .toBe(readsAfterMount);
+
+      // The id comes back and the SAME run's terminal is re-delivered (the registry/service still hold it).
+      panel.chapterId = 'chap-1';
+      (panel as any).noteRunTerminal('job-A');
+
+      expect(historyReads)
+        .withContext('the earlier no-op must not have permanently claimed the key')
+        .toBe(readsAfterMount + 1);
     });
 
     it('refetches history when the analysis TYPE is switched, instead of rendering the cache alone', () => {
@@ -2708,11 +3025,11 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
     it('lets the user START a new run on a different context mid-run, without cancelling the origin job', () => {
       const runStreamA$ = startAsyncRunOnChapterA();
-      // The origin job was published to the registry, so it survives via the Activity Center even after
-      // its client stream is torn down by the next run.
-      expect(jobRegistrySpy.track).toHaveBeenCalledWith(
-        'proofread', 'book-1', 'job-A', jasmine.objectContaining({ analysisType: 'Proofread' })
-      );
+      // The origin job survives via the Activity Center even after its client stream is torn down by
+      // the next run, because the registry row belongs to the RUN, not to this view. c01 moved the
+      // write that creates it into the orchestration service (pinned in that service's own spec); what
+      // this panel still holds for job A is the id its banner mirrors.
+      expect((component as any).currentRunJobId).toBe('job-A');
 
       // Switch to chapter B mid-run.
       component.chapterId = 'chap-B';
@@ -2814,6 +3131,45 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(ctx.language).toBe('he');
     });
   });
+
+  // c10 / finding 19: `.analysis-panel { min-height: 100% }` is a CYCLIC percentage - its containing
+  // block is `app-analysis-panel`, whose height c1 made content-derived - and the worry was that an
+  // engine resolves it to 0, in which case a short or empty result floats at the top of a taller column
+  // instead of filling it. Chrome resolves it against the host's post-flex used height, measured in the
+  // live app on 2026-08-19 across 12 cells. This is the only assertion that can catch a regression to 0,
+  // and it is deliberately a LAYOUT assertion against the shipped stylesheet rather than a check that
+  // the declaration is still typed in the file.
+  describe('c10 the panel column fills its host rather than collapsing (finding 19)', () => {
+    it('resolves `min-height: 100%` against the host, so a short column is taller than its content', () => {
+      const hostFixture = TestBed.createComponent(PanelHeightChainHostComponent);
+      hostFixture.detectChanges();
+
+      const hostEl = hostFixture.nativeElement.querySelector('app-analysis-panel') as HTMLElement;
+      const panelEl = hostFixture.nativeElement.querySelector('.analysis-panel') as HTMLElement | null;
+      expect(panelEl).withContext('the panel column is rendered').toBeTruthy();
+
+      const filled = panelEl!.getBoundingClientRect().height;
+      const hostHeight = hostEl.getBoundingClientRect().height;
+
+      // The height this column would have if the cyclic percentage resolved to 0: the minimum switched
+      // off, everything else identical. Restored immediately so the fixture is not left mutated.
+      panelEl!.style.minHeight = '0px';
+      const natural = panelEl!.getBoundingClientRect().height;
+      panelEl!.style.minHeight = '';
+
+      expect(hostHeight).withContext('the stand-in host has a real height').toBeGreaterThan(0);
+      expect(natural)
+        .withContext('the seeded state is SHORT - a column already taller than its host proves nothing')
+        .toBeLessThan(hostHeight);
+
+      expect(filled).withContext('the column fills the host').toBeCloseTo(hostHeight, 0);
+      expect(filled)
+        .withContext('the percentage resolved to a real length, not to 0')
+        .toBeGreaterThan(natural);
+
+      hostFixture.destroy();
+    });
+  });
 });
 
 /**
@@ -2862,6 +3218,7 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
 
   beforeEach(async () => {
     opened = [];
+    pendingUnheardTerminal = null;
     await TestBed.configureTestingModule({
       imports: [AnalysisPanelComponent],
       providers: [
@@ -2882,7 +3239,6 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
         {
           provide: AnalysisRunOrchestrationService,
           useValue: {
-            stopProgressPolling: () => {},
             confirmReanalysisIfPendingSuggestions: () => true,
             emitInitialStatusForRun: () => 'Running',
             formatRunDuration: () => null,
@@ -2893,6 +3249,8 @@ describe('AnalysisPanelComponent tier-change refresh (tier-ux-rework fixes c04)'
             activeRun$: of(null),
             activeRun: null,
             startRun: () => EMPTY,
+            // c06: read on every run-state derivation, so the injection is not resolvable without it.
+            takeUnheardRunTerminal: takeUnheardStub,
           },
         },
         {
@@ -3452,6 +3810,7 @@ describe('AnalysisPanelComponent - the w7 removals and the Show pointer', () => 
   let overlays: AppOverlayService;
 
   beforeEach(async () => {
+    pendingUnheardTerminal = null;
     await TestBed.configureTestingModule({
       imports: [AnalysisPanelComponent],
       providers: [
@@ -3472,7 +3831,6 @@ describe('AnalysisPanelComponent - the w7 removals and the Show pointer', () => 
         {
           provide: AnalysisRunOrchestrationService,
           useValue: {
-            stopProgressPolling: () => {},
             confirmReanalysisIfPendingSuggestions: () => true,
             emitInitialStatusForRun: () => 'Running',
             formatRunDuration: () => null,
@@ -3483,6 +3841,8 @@ describe('AnalysisPanelComponent - the w7 removals and the Show pointer', () => 
             activeRun$: of(null),
             activeRun: null,
             startRun: () => EMPTY,
+            // c06: read on every run-state derivation, so the injection is not resolvable without it.
+            takeUnheardRunTerminal: takeUnheardStub,
           },
         },
         {
@@ -3716,3 +4076,302 @@ describe('AnalysisPanelComponent - the w7 removals and the Show pointer', () => 
       .toBeTrue();
   });
 });
+
+// â”€â”€ c01 (registry-write-survives-unmount): the run's registry write must OUTLIVE this panel â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// THE DEFECT, and why it needs its own TestBed. `AnalysisPanelComponent` is mounted under
+// `@if (editHelpView === 'analysis')` inside `@else if (reviewMode === 'edit')`, so switching the
+// Edit-help sub-tab or the Review/Edit control DESTROYS it, and `ngOnDestroy` unsubscribes
+// `runSubscription`. a1 made `AnalysisRunOrchestrationService` the OWNER of the run (so the request
+// itself survives) and made `JobRegistryService` the single authority on async run state - but left the
+// registry's one WRITE inside this component's `'job-started'` case. So an async run whose dispatch POST
+// answered AFTER the tab switch was published NOWHERE: no Activity Center row, no per-chapter running
+// mark on the dashboard or the editor spine, no in-panel bar, and nothing for a remounted panel to
+// derive its state from. Only a page reload's `reattach` recovered it.
+//
+// WHY THE REAL SERVICES. Every other describe in this file stubs both the orchestration service and the
+// registry, and a stub cannot answer the question "does the write survive this component" - it IS the
+// component's collaborator, alive for as long as the TestBed is. This one wires the REAL orchestration
+// service to the REAL registry over HTTP doubles, so the write travels the production path.
+//
+// WHY A SUBJECT AND NOT `of()`. The whole defect lives in the window between "the dispatch went out"
+// and "it answered". A synchronous `of()` closes that window inside `runAnalysis()`, before the panel
+// could possibly be destroyed, so every case here would pass against the unfixed code and prove
+// nothing. The dispatch is held open, the panel is destroyed FOR REAL through a structural `@if`, and
+// only then does the server answer.
+describe('c01 the registry write outlives the panel (a dispatch that answers after unmount)', () => {
+  /** The dispatch POST, held open so it can answer after the panel is gone. */
+  let startAsyncSubject: Subject<{ jobId: string }>;
+  /**
+   * The SYNC `POST /analyze`, held open for the same reason - and, for the sync case, so that spec can
+   * both prove the request was issued (`observed`) and END the run, which is what cancels
+   * `withStartTimeout`'s real 180s timer instead of leaving it pending on the root service (final-r01).
+   */
+  let runSubject: Subject<AnalysisResultDto>;
+  let registry: JobRegistryService;
+  let hostFixture: ComponentFixture<LateDispatchHostComponent>;
+  let host: LateDispatchHostComponent;
+
+  function panel(): AnalysisPanelComponent {
+    return hostFixture.debugElement.query(By.directive(AnalysisPanelComponent)).componentInstance;
+  }
+
+  /** Is the panel still in the DOM? The precondition every case here rests on. */
+  function panelMounted(): boolean {
+    return !!hostFixture.debugElement.query(By.directive(AnalysisPanelComponent));
+  }
+
+  /** Destroy the panel the way the editor does: by taking its structural `@if` away. */
+  function unmountPanel(): void {
+    host.mounted = false;
+    hostFixture.detectChanges();
+  }
+
+  beforeEach(async () => {
+    startAsyncSubject = new Subject<{ jobId: string }>();
+    runSubject = new Subject<AnalysisResultDto>();
+    await TestBed.configureTestingModule({
+      imports: [LateDispatchHostComponent],
+      providers: [
+        {
+          provide: AnalysisService,
+          useValue: {
+            getChunkThresholds: () => of({ proofreadChunkTargetWords: 500, lineEditChunkTargetWords: 1500 }),
+            getHistory: () => of([]),
+            updateSuggestionOutcome: () => of(void 0),
+            explainSuggestion: () => of({ explanation: 'because' }),
+            run: () => runSubject.asObservable(),
+            // The one call under test: it answers only when this spec says so.
+            startAsync: () => startAsyncSubject.asObservable(),
+            getByJob: () => NEVER,
+            runStream: () => NEVER,
+          },
+        },
+        { provide: DocumentVersionService, useValue: { list: () => of([]), create: () => of(), get: () => of() } },
+        {
+          provide: SuggestionAnchorService,
+          useValue: jasmine.createSpyObj('SuggestionAnchorService', { relocateAll: [], relocateOne: null }),
+        },
+        {
+          provide: StyleBaselineService,
+          useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER },
+        },
+        {
+          provide: AnalysisProgressService,
+          useValue: { pollProgress: () => NEVER, pollStyleBaselineProgress: () => NEVER },
+        },
+        // The registry's other reattach sources. Never called here (nothing calls `reattach`), but they
+        // are `inject()`ed as field initializers, so the real registry cannot be built without them.
+        { provide: BookSummaryService, useValue: {} },
+        { provide: BookReviewService, useValue: {} },
+        {
+          provide: AiTierService,
+          useValue: {
+            watch: () => NEVER, refresh: () => NEVER, get: () => NEVER,
+            setTask: () => NEVER, setBookDefault: () => NEVER, clearTask: () => NEVER,
+          },
+        },
+        // NOTE what is deliberately ABSENT: AnalysisRunOrchestrationService and JobRegistryService.
+        // Both are the real root singletons here. That is the point of this describe.
+      ],
+    }).compileComponents();
+
+    registry = TestBed.inject(JobRegistryService);
+    hostFixture = TestBed.createComponent(LateDispatchHostComponent);
+    host = hostFixture.componentInstance;
+    hostFixture.detectChanges();
+  });
+
+  /** Start an always-async run (LinguisticAnalysis needs no document to take the job route). */
+  function startAsyncRun(): void {
+    const p = panel();
+    p.selectedAnalysisType = 'LinguisticAnalysis';
+    p.runAnalysis();
+    hostFixture.detectChanges();
+  }
+
+  it('publishes the job even though the dispatch answers AFTER the panel was destroyed', async () => {
+    startAsyncRun();
+
+    // Preconditions, so a green result cannot come from the run never having started.
+    expect(startAsyncSubject.observed)
+      .withContext('the dispatch POST really is in flight')
+      .toBeTrue();
+    expect(await firstValueFrom(registry.jobs$))
+      .withContext('nothing is published before the server answers')
+      .toEqual([]);
+
+    unmountPanel();
+    expect(panelMounted())
+      .withContext('the panel really is gone: this is the window the defect lived in')
+      .toBeFalse();
+
+    // The server answers a component that no longer exists.
+    startAsyncSubject.next({ jobId: 'job-late' });
+
+    const jobs = await firstValueFrom(registry.jobs$);
+    expect(jobs.length)
+      .withContext('the run outlives the panel, so its one registry write has to as well - before this '
+        + 'fix the job was published NOWHERE and only a page reload could recover it')
+      .toBe(1);
+    expect(jobs[0]).toEqual(jasmine.objectContaining({
+      id: 'job-late',
+      kind: 'proofread',
+      bookId: 'book-1',
+      chapterId: 'chap-1',
+      sceneId: 'scene-1',
+      analysisType: 'LinguisticAnalysis',
+      scopeLabel: 'סצנה',
+      status: 'running',
+    }));
+  });
+
+  it('the Activity Center and the per-chapter running mark both see the late-published job', async () => {
+    startAsyncRun();
+    unmountPanel();
+    startAsyncSubject.next({ jobId: 'job-late' });
+
+    // The Activity Center renders `registry.jobs$`; the dock's launcher count reads `activeJobs$`.
+    expect((await firstValueFrom(registry.jobs$)).map(j => j.id))
+      .withContext('the Activity Center row: this is the stream ActivityCenterComponent renders')
+      .toEqual(['job-late']);
+    expect((await firstValueFrom(registry.activeJobs$)).map(j => j.id))
+      .withContext('the dock launcher count reads activeJobs$')
+      .toEqual(['job-late']);
+
+    // The spine's stage-4 running mark, derived exactly the way book-dashboard and editor-page derive it.
+    const runningChapters = new Set(
+      (await firstValueFrom(registry.activeJobs$))
+        .filter(j => j.bookId === 'book-1' && CHAPTER_SCOPED_KINDS.has(j.kind) && j.chapterId)
+        .map(j => j.chapterId as string),
+    );
+    expect(Array.from(runningChapters))
+      .withContext('the dashboard/editor stage-4 running mark for this chapter')
+      .toEqual(['chap-1']);
+
+    // And the one stream that deliberately does NOT light up: `anyRunningForBook$` counts only
+    // WHOLE_BOOK_BUILD_KINDS (summary + review). A chapter analysis is tracked for the Activity Center
+    // and the per-chapter marks, and must not turn the editor's "review running" affordance on.
+    expect(await firstValueFrom(registry.anyRunningForBook$('book-1')))
+      .withContext('a chapter proofread is not a whole-book build; lighting this would be the bug '
+        + 'WHOLE_BOOK_BUILD_KINDS exists to prevent')
+      .toBeFalse();
+  });
+
+  it('publishes the scope the run STARTED with, not the context the user navigated to mid-run', async () => {
+    // The captured-origin rule, end to end. The panel instance is reused across navigation and the
+    // dispatch answer can land after a chapter/scene/type switch, so a publish keyed off live state
+    // would label a scene run as a chapter run of the wrong chapter while the API ran the original
+    // scope. That is the defect which makes the rule load-bearing.
+    startAsyncRun();
+
+    host.chapterId = 'chap-other';
+    host.sceneId = null;
+    hostFixture.detectChanges();
+    panel().selectedAnalysisType = 'Proofread';
+    hostFixture.detectChanges();
+
+    unmountPanel();
+    startAsyncSubject.next({ jobId: 'job-origin' });
+
+    expect((await firstValueFrom(registry.jobs$))[0]).toEqual(jasmine.objectContaining({
+      chapterId: 'chap-1',
+      sceneId: 'scene-1',
+      analysisType: 'LinguisticAnalysis',
+      scopeLabel: 'סצנה',
+    }));
+  });
+
+  it('a run that never dispatches (the sync route) publishes nothing at all', async () => {
+    // The complement: the write is bound to a real server-issued job id, not to "a run started". A sync
+    // run persists with a NULL JobId and cannot be reattached, so a row for it would promise a
+    // durability it does not have.
+    const p = panel();
+    p.selectedAnalysisType = 'Proofread';
+    p.documentText = 'short enough to stay inline';
+    p.runAnalysis();
+    hostFixture.detectChanges();
+
+    // final-r01: the PAIRED POSITIVE, in this cell. `toEqual([])` alone cannot tell "the run happened and
+    // published nothing" (the claim) from "the run never happened" (a defect) - a new guard in
+    // `runAnalysis` on the thresholds, the document text or the pending-suggestion confirm would produce
+    // the identical empty registry and green this spec.
+    expect(runSubject.observed)
+      .withContext('precondition: the SYNC request really was issued, so the empty registry below is a '
+        + 'statement about publishing rather than about a run that never started')
+      .toBeTrue();
+
+    unmountPanel();
+
+    expect(await firstValueFrom(registry.jobs$)).toEqual([]);
+
+    // final-r01: END THE RUN. `unmountPanel()` detaches this caller (a1's whole point) and leaves the run
+    // OWNED, holding `withStartTimeout`'s real `timer(180_000)` on the root service that no TestBed
+    // teardown unsubscribes - and `provesServerAnswered` is false for the only event this run emits, so
+    // nothing cancels it. Its expiry `console.warn` would land in whatever spec is running three minutes
+    // later, which is exactly the zombie the c15/finding-59 fakeAsync wrapping was written for.
+    runSubject.complete();
+  });
+});
+
+/**
+ * c01: the panel behind a structural `@if`, with every scope input settable, so a spec can navigate the
+ * panel mid-run and then take the whole component away - the two halves of the defect.
+ */
+@Component({
+  standalone: true,
+  imports: [AnalysisPanelComponent],
+  template: `
+    @if (mounted) {
+      <app-analysis-panel
+        [bookId]="bookId"
+        [chapterId]="chapterId"
+        [sceneId]="sceneId">
+      </app-analysis-panel>
+    }
+  `,
+})
+class LateDispatchHostComponent {
+  mounted = true;
+  bookId: string | null = 'book-1';
+  chapterId: string | null = 'chap-1';
+  sceneId: string | null = 'scene-1';
+}
+
+/**
+ * c10: a stand-in for the editor's `.review-body` - a definite-height, scrolling column flex box - so the
+ * panel's own `min-height: 100%` gets the same containing block it has in production.
+ *
+ * The two rules below are copied from `editor-page.component.scss` (`.review-body` and
+ * `.review-body app-analysis-panel`), because that stylesheet is scoped to EditorPageComponent and can
+ * never reach a panel this TestBed mounts. They are the SETUP, not the subject. The rule under test is
+ * `.analysis-panel { min-height: 100% }` in the panel's own shipped stylesheet, which Angular compiles
+ * and applies here for real - so a change to that declaration is what this spec sees.
+ *
+ * The stub is 1200px so the empty-state column is comfortably shorter than its host; the spec asserts
+ * that premise rather than assuming it.
+ */
+@Component({
+  standalone: true,
+  imports: [AnalysisPanelComponent],
+  template: `
+    <div class="review-body-stub">
+      <app-analysis-panel [bookId]="'book-1'" [chapterId]="'chap-1'"></app-analysis-panel>
+    </div>
+  `,
+  styles: [`
+    .review-body-stub {
+      height: 1200px;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .review-body-stub app-analysis-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+  `],
+})
+class PanelHeightChainHostComponent {}
