@@ -184,6 +184,18 @@ describe('EditorPageComponent (focused logic)', () => {
     fixture.destroy();
   });
 
+  // ─── c6: the dashboard's openExport payload reaches the export route as ?kind= ────────────────
+
+  it('(c6) goToExport carries a requested export kind as ?kind=, and the plain call stays plain', () => {
+    const router = TestBed.inject(Router) as any;
+    component.bookId = 'book-1';
+    component.goToExport('book-docx-proofread');
+    expect(router.navigate).toHaveBeenCalledWith(['/books', 'book-1', 'export'], { queryParams: { kind: 'book-docx-proofread' } });
+    router.navigate.calls.reset();
+    component.goToExport();
+    expect(router.navigate).toHaveBeenCalledWith(['/books', 'book-1', 'export']);
+  });
+
   // ─── onApplyCorrection: relocation ─────────────────────────────────
 
   it('onApplyCorrection calls relocateOne and uses relocated offsets for the replacement', () => {

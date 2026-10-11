@@ -20,6 +20,7 @@ import {
   DashboardLabelKey,
 } from './book-dashboard.component';
 import { BookReviewStatusRowComponent } from './book-review-status-row.component';
+import { BookProofreadStatusRowComponent } from './book-proofread-status-row.component';
 import { BookReviewStatusDto, ChapterAnchor } from '../../core/models/book-review';
 import { BookSummaryStatusDto } from '../../core/models/book-summary';
 import { BookService } from '../../core/services/book.service';
@@ -36,6 +37,7 @@ import { stageGuideLink } from '../../shared/stage-spine/stage-guide';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
+import { BookProofreadService } from '../../core/services/book-proofread.service';
 import { TierToggleComponent } from '../../shared/tier-toggle/tier-toggle.component';
 import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { SHOW_POINTER_STRINGS_EN, SHOW_POINTER_STRINGS_HE } from '../../core/i18n/show-pointer-strings';
@@ -88,6 +90,8 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
         // Transitive deps of the hosted status-row children (NullInjector guard).
         // w5 (MOVE-1): transitive dep of the relocated writing-style row hosted by the dashboard.
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         {
           provide: BookSummaryService,
           useValue: {
@@ -1069,6 +1073,48 @@ describe('BookDashboardComponent (wb3-c01 host)', () => {
 
       expect(exports).toBe(1);
     });
+
+    // ── c6: the whole-book proofread row ────────────────────────────────────────────────────────────
+
+    it('mounts the whole-book proofread row inside the status card, bound to the book context', () => {
+      const row = fixture.debugElement.query(By.directive(BookProofreadStatusRowComponent));
+      expect(row).withContext('the row is mounted').not.toBeNull();
+      const card = fixture.nativeElement.querySelector('.book-status-card') as HTMLElement;
+      expect(card.contains(row.nativeElement)).withContext('inside .book-status-card').toBeTrue();
+      const inst = row.componentInstance as BookProofreadStatusRowComponent;
+      expect(inst.bookId).toBe(component.bookId);
+      expect(inst.bookLanguage).toBe(component.bookLanguage);
+      expect(inst.chapterCount).toBe(component.chapterCount);
+      expect(inst.chaptersWithText).toBe(component.chaptersWithText);
+      // Between the review row and the writing-style row, not inside the review's collapsible.
+      const reviewRow = fixture.nativeElement.querySelector('app-book-review-status-row') as HTMLElement;
+      const baselineRow = fixture.nativeElement.querySelector('app-book-style-baseline-status-row') as HTMLElement;
+      expect(reviewRow.compareDocumentPosition(row.nativeElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(row.nativeElement.compareDocumentPosition(baselineRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("the row's annotated download leaves through openExport WITH the kind", () => {
+      const seen: unknown[] = [];
+      component.openExport.subscribe(k => seen.push(k));
+      const row = fixture.debugElement.query(By.directive(BookProofreadStatusRowComponent));
+      (row.componentInstance as BookProofreadStatusRowComponent).openExport.emit('book-docx-proofread');
+      expect(seen).toEqual(['book-docx-proofread']);
+    });
+
+    it("stage 4's action scrolls to the proofread row and switches to review mode", () => {
+      const anchor = (component as any).proofreadAnchor.nativeElement as HTMLElement;
+      const scroll = spyOn(anchor, 'scrollIntoView');
+      let switched = 0;
+      component.switchToReview.subscribe(() => switched++);
+      component.onSpineAction({ stage: 'chapter-passes', action: 'open-book-proofread' });
+      expect(scroll).toHaveBeenCalled();
+      expect(switched).toBe(1);
+    });
+
+    it('the stage 4 action is a safe no-op before its anchor exists', () => {
+      (component as any).proofreadAnchor = undefined;
+      expect(() => component.onSpineAction({ stage: 'chapter-passes', action: 'open-book-proofread' })).not.toThrow();
+    });
   });
 
   // ── Wave 3 / w2: the live contradiction the brief reproduced, asserted on the HOST ────────────────
@@ -1545,6 +1591,8 @@ describe('BookDashboardComponent tier-change refresh (tier-ux-rework fixes c04)'
         },
         // w5 (MOVE-1): transitive dep of the relocated writing-style row hosted by the dashboard.
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         {
           provide: BookSummaryService,
           useValue: {
@@ -1685,6 +1733,8 @@ describe('BookDashboardComponent book-scoped chrome i18n parity', () => {
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,
@@ -1874,6 +1924,8 @@ describe('BookDashboardComponent issues no extra whole-book server call, now tha
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,
@@ -1997,6 +2049,8 @@ describe('BookDashboardComponent watches bookLanguage and drops stale responses 
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,
@@ -2198,6 +2252,8 @@ describe('BookDashboardComponent surfaces localized error messages, not transpor
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,
@@ -2386,6 +2442,8 @@ describe('BookDashboardComponent survives an in-session language change with loa
           }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         {
           provide: BookSummaryService,
           useValue: {
@@ -2542,6 +2600,8 @@ describe('BookDashboardComponent finding 19: the chapter breakdown reads an expl
           useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, getById: NEVER }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,
@@ -2665,6 +2725,8 @@ describe('BookDashboardComponent w6: first-run orientation', () => {
           useValue: jasmine.createSpyObj('BookService', { getProfile: NEVER, refreshProfile: NEVER, getById: NEVER }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         // An un-fed Subject behaves exactly like the NEVER these were: the read is issued and stays
         // outstanding, which is the state every test below that does not touch it relies on.
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => summaryStatus$, buildBookSummary: () => NEVER } },
@@ -3210,6 +3272,8 @@ describe('BookDashboardComponent - the ask card is gone and Show is pointed to (
           useValue: jasmine.createSpyObj('BookService', { getProfile: of(profile), refreshProfile: NEVER, getById: NEVER }),
         },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => NEVER, buildStyleBaseline: () => NEVER } },
+        // c6: transitive dep of the hosted whole-book proofread row (NullInjector guard).
+        { provide: BookProofreadService, useValue: { getStatus: () => NEVER, start: () => NEVER, cancel: () => NEVER } },
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => NEVER, buildBookSummary: () => NEVER } },
         {
           provide: BookReviewService,

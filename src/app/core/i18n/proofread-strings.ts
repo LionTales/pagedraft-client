@@ -10,8 +10,10 @@ import { RunChromeLang } from './run-strings';
  * language fails the build until the other has it too. `proofread-strings.spec.ts` pins parity, no
  * empty value, placeholder parity, genuinely-Hebrew values and no em-dash.
  *
- * The ETA phrase in `consentBody` is NOT composed here: callers pass the output of `formatEtaLabel`
- * (run-strings.ts) as `{eta}`, so the row and the run dialog never disagree on how a duration reads.
+ * c6: NO string here composes an ETA. f2 had `consentBody` take `formatEtaLabel` output as `{eta}`, but
+ * that function returns a whole sentence ("Estimated time remaining: about 3 minutes"), so the composed
+ * copy read "and take about Estimated time remaining: ...". The row renders `formatEtaLabel` (run-strings.ts)
+ * as its OWN line instead, so it and the run dialog still never disagree on how a duration reads.
  *
  * Hebrew is DRAFT and needs native-speaker review. No em-dash in any user-facing string.
  */
@@ -22,10 +24,18 @@ export type ProofreadStringKey =
   | 'title'
   | 'idleHint'
   | 'startButton'
+  // c6: the forced re-run, offered only when every chapter is already fresh.
+  | 'runAgainButton'
+  | 'coverage'
+  | 'lastRun'
+  | 'needsImport'
+  | 'needsText'
   // ── consent (shows the plan before any model time is spent) ──
   | 'consentTitle'
   | 'consentBody'
+  | 'consentPace'
   | 'consentSkipped'
+  | 'consentRerun'
   | 'consentConfirm'
   | 'consentDismiss'
   | 'nothingToDo'
@@ -33,6 +43,8 @@ export type ProofreadStringKey =
   | 'running'
   | 'cancelButton'
   | 'cancelling'
+  | 'startFailed'
+  | 'cancelFailed'
   // ── terminals ──
   | 'doneSummary'
   | 'failed'
@@ -47,10 +59,17 @@ export const PROOFREAD_STRINGS_HE: Record<ProofreadStringKey, string> = {
   title:          'הגהת ספר שלם',
   idleHint:       'הגהה של כל הפרקים בהרצה אחת, והצעות התיקון נשמרות בכל פרק.',
   startButton:    'הגה את כל הספר',
+  runAgainButton: 'הגה שוב את כל הספר',
+  coverage:       '{done} מתוך {total} פרקים הוגהו',
+  lastRun:        'הגהה אחרונה {when}',
+  needsImport:    'אין עדיין פרקים בספר. צריך קודם להעלות כתב יד או להוסיף פרק.',
+  needsText:      'הפרקים בספר עדיין ריקים. צריך קודם לכתוב בהם או להעלות כתב יד.',
 
   consentTitle:   'להגיה את כל הספר?',
-  consentBody:    'ההגהה תרוץ על {chapters} פרקים ותארך כ-{eta}. אפשר להמשיך לעבוד בינתיים.',
+  consentBody:    'ההגהה תעבור על {chapters} פרקים, אחד אחרי השני. אפשר להמשיך לעבוד בינתיים.',
+  consentPace:    'כל פרק נמשך כמה דקות. זמן משוער יוצג עם תחילת ההגהה.',
   consentSkipped: '{skipped} פרקים שכבר הוגהו ולא השתנו ידולגו.',
+  consentRerun:   'כל הפרקים כבר הוגהו. הגהה חוזרת תחליף את הצעות התיקון הקיימות בכל פרק.',
   consentConfirm: 'התחל הגהה',
   consentDismiss: 'ביטול',
   nothingToDo:    'כל הפרקים כבר הוגהו ולא השתנו מאז.',
@@ -58,6 +77,8 @@ export const PROOFREAD_STRINGS_HE: Record<ProofreadStringKey, string> = {
   running:        'מגיה: {done} מתוך {total} פרקים',
   cancelButton:   'עצור הגהה',
   cancelling:     'עוצר אחרי הפרק הנוכחי...',
+  startFailed:    'לא ניתן היה להתחיל את ההגהה. נסו שוב.',
+  cancelFailed:   'לא ניתן היה לעצור את ההגהה. נסו שוב.',
 
   doneSummary:    '{count} פרקים הוגהו',
   failed:         'ההגהה נכשלה. אפשר להפעיל אותה שוב והפרקים שכבר הוגהו ידולגו.',
@@ -72,10 +93,17 @@ export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
   title:          'Whole-book proofread',
   idleHint:       'Proofread every chapter in one run; the suggestions are saved on each chapter.',
   startButton:    'Proofread the whole book',
+  runAgainButton: 'Proofread the whole book again',
+  coverage:       '{done} of {total} chapters proofread',
+  lastRun:        'Last proofread {when}',
+  needsImport:    'This book has no chapters yet. Import a manuscript or add a chapter first.',
+  needsText:      'The chapters in this book are still empty. Write in them or import a manuscript first.',
 
   consentTitle:   'Proofread the whole book?',
-  consentBody:    'This will proofread {chapters} chapters and take about {eta}. You can keep working meanwhile.',
+  consentBody:    'This will proofread {chapters} chapters, one after another. You can keep working meanwhile.',
+  consentPace:    'Each chapter takes a few minutes. An estimate appears once the run starts.',
   consentSkipped: '{skipped} chapters already proofread and unchanged will be skipped.',
+  consentRerun:   'Every chapter is already proofread. Running again replaces the existing suggestions in each chapter.',
   consentConfirm: 'Start proofreading',
   consentDismiss: 'Cancel',
   nothingToDo:    'Every chapter is already proofread and unchanged since.',
@@ -83,6 +111,8 @@ export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
   running:        'Proofreading: {done} of {total} chapters',
   cancelButton:   'Stop proofreading',
   cancelling:     'Stopping after the current chapter...',
+  startFailed:    'The proofread could not be started. Try again.',
+  cancelFailed:   'The proofread could not be stopped. Try again.',
 
   doneSummary:    '{count} chapters proofread',
   failed:         'The proofread failed. You can run it again and chapters already done will be skipped.',

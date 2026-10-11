@@ -885,3 +885,58 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
     });
   });
 });
+
+// ── c6: `?kind=` brings one kind's row forward (the dashboard's whole-book proofread download) ──────
+
+describe('ExportPageComponent ?kind= focus (c6)', () => {
+  async function build(query: Record<string, string>): Promise<ComponentFixture<ExportPageComponent>> {
+    await TestBed.configureTestingModule({
+      imports: [ExportPageComponent],
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            params: new BehaviorSubject({ bookId: BOOK_ID }).asObservable(),
+            queryParams: new BehaviorSubject(query).asObservable(),
+          },
+        },
+        { provide: BookService, useValue: { getById: () => new BehaviorSubject(book('he', [chapter(0)])).asObservable() } },
+        { provide: ExportService, useValue: {} },
+        { provide: JobRegistryService, useValue: { activeJobs$: new BehaviorSubject<TrackedJob[]>([]).asObservable() } },
+      ],
+    }).compileComponents();
+    const fx = TestBed.createComponent(ExportPageComponent);
+    fx.detectChanges();
+    return fx;
+  }
+
+  function row(fx: ComponentFixture<ExportPageComponent>, id: string): HTMLElement {
+    return fx.nativeElement.querySelector(`[data-testid="export-kind-${id}"]`) as HTMLElement;
+  }
+
+  it('highlights exactly the requested kind and marks it aria-current', async () => {
+    const fx = await build({ kind: 'book-docx-proofread' });
+    expect(fx.componentInstance.focusedKindId).toBe('book-docx-proofread');
+    expect(row(fx, 'book-docx-proofread').classList).toContain('kind--focused');
+    expect(row(fx, 'book-docx-proofread').getAttribute('aria-current')).toBe('true');
+    const others = EXPORT_KINDS.filter(k => k.id !== 'book-docx-proofread');
+    for (const k of others) expect(row(fx, k.id).classList).not.toContain('kind--focused');
+  });
+
+  it('scrolls the requested row into view once the list is stable', async () => {
+    const scroll = spyOn(HTMLElement.prototype, 'scrollIntoView');
+    const fx = await build({ kind: 'book-docx-proofread' });
+    await fx.whenStable();
+    fx.detectChanges();
+    await fx.whenStable();
+    expect(scroll).toHaveBeenCalled();
+    expect((scroll.calls.mostRecent().object as HTMLElement).getAttribute('data-testid')).toBe('export-kind-book-docx-proofread');
+  });
+
+  it('ignores an unknown kind rather than highlighting nothing in particular', async () => {
+    const fx = await build({ kind: 'nonsense' });
+    expect(fx.componentInstance.focusedKindId).toBeNull();
+    expect(fx.nativeElement.querySelector('.kind--focused')).toBeNull();
+  });
+});

@@ -50,8 +50,15 @@ describe('proofread-strings (f2)', () => {
     it('substitutes every named placeholder in both languages', () => {
       expect(proofreadString('en', 'running', { done: 3, total: 10 })).toBe('Proofreading: 3 of 10 chapters');
       expect(proofreadString('he', 'running', { done: 3, total: 10 })).toBe('מגיה: 3 מתוך 10 פרקים');
-      expect(proofreadString('en', 'consentBody', { chapters: 2, eta: '3 min' }))
-        .toBe('This will proofread 2 chapters and take about 3 min. You can keep working meanwhile.');
+      expect(proofreadString('en', 'consentBody', { chapters: 2 }))
+        .toBe('This will proofread 2 chapters, one after another. You can keep working meanwhile.');
+    });
+
+    it('c6: no string composes an ETA (formatEtaLabel returns a whole sentence and renders on its own line)', () => {
+      const withEta = [...Object.entries(PROOFREAD_STRINGS_HE), ...Object.entries(PROOFREAD_STRINGS_EN)]
+        .filter(([, v]) => v.includes('{eta}'))
+        .map(([k]) => k);
+      expect(withEta).toEqual([]);
     });
 
     it('leaves an UNKNOWN placeholder verbatim rather than blanking it', () => {

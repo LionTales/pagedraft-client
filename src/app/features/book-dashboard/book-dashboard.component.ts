@@ -19,6 +19,8 @@ import { BookSummaryStatusRowComponent } from './book-summary-status-row.compone
 import { BookStyleBaselineStatusRowComponent } from './book-style-baseline-status-row.component';
 import { BookReviewState, BookReviewStatusRowComponent } from './book-review-status-row.component';
 import { BookReviewFindingsComponent } from './book-review-findings.component';
+import { BookProofreadStatusRowComponent } from './book-proofread-status-row.component';
+import { ExportKindId } from '../export/export-kinds';
 import { BookStoryBibleComponent } from './book-story-bible.component';
 import { BookChapterSummariesComponent } from './book-chapter-summaries.component';
 import { CharacterRegisterComponent } from './character-register.component';
@@ -162,6 +164,7 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
     CommonModule,
     BookSummaryStatusRowComponent,
     BookReviewStatusRowComponent,
+    BookProofreadStatusRowComponent,
     BookReviewFindingsComponent,
     BookStoryBibleComponent,
     BookChapterSummariesComponent,
@@ -348,6 +351,19 @@ export const DASHBOARD_LABELS_EN: Record<DashboardLabelKey, string> = {
             }
           </app-collapsible-section>
         }
+
+        <!-- c6: the whole-book proofread run. Stage 4's spine action scrolls here. Placed AFTER the review's
+             findings section rather than directly under the review row, so it does not split the review row
+             from the ledger that belongs to it; it is a status row, so like its neighbours it is never put
+             inside a collapsible. -->
+        <div #proofreadAnchor></div>
+        <app-book-proofread-status-row
+          [bookId]="bookId"
+          [bookLanguage]="bookLanguage"
+          [chapterCount]="chapterCount"
+          [chaptersWithText]="chaptersWithText"
+          (openExport)="openExport.emit($event)">
+        </app-book-proofread-status-row>
 
         <!-- Wave 3 / w5 (MOVE-1 + MOVE-2, Q6-A): the book-wide writing-style build, moved out of the
              per-chapter analysis Run tab to sit BESIDE the other whole-book builds, with the same row
@@ -956,8 +972,11 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    * Wave 3 / w4: go to the export screen. Raised by the spine's Export stage AND by the header button, for
    * the same reason `openImport` exists: the Router lives on the host, and the dashboard only names intent.
    * One output for both entry points, so the two cannot drift to different destinations.
+   *
+   * c6: the payload is the export KIND to bring forward on arrival, or undefined for the plain screen. The
+   * whole-book proofread row's "download the annotated DOCX" raises it with `book-docx-proofread`.
    */
-  @Output() openExport = new EventEmitter<void>();
+  @Output() openExport = new EventEmitter<ExportKindId | undefined>();
 
   /**
    * Wave 3 / w6 (Q13-A): open a served guide in the `/help/:guideId` reader that chatbot phase A.2 built.
@@ -999,6 +1018,8 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
   /** rf-f04: anchor element just above the findings/bible tabs; scrolled to when the Revise CTA is clicked. */
   @ViewChild('findingsAnchor') findingsAnchor?: ElementRef<HTMLElement>;
 
+  /** c6: anchor just above the whole-book proofread row; stage 4's spine action scrolls here. */
+  @ViewChild('proofreadAnchor') proofreadAnchor?: ElementRef<HTMLElement>;
   /**
    * d1: the Findings ledger, when the Findings tab is selected. `@if`-mounted, so this is undefined
    * whenever the Story Bible tab is showing - {@link drainPendingOpenFinding} waits for it rather than
@@ -1714,6 +1735,7 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
    *  - `open-export`    leaves the page for `/books/:bookId/export`, so like `open-import` it goes up to the
    *                     host, which owns the Router. The spine and the header button raise the SAME output,
    *                     so the two ways to reach export cannot land in different places.
+   *  - `open-book-proofread` (c6) scrolls to the whole-book proofread row, which owns its consent.
    */
   onSpineAction(event: StageActionEvent): void {
     switch (event.action) {
@@ -1733,7 +1755,17 @@ export class BookDashboardComponent implements OnInit, OnChanges, OnDestroy, Aft
       case 'open-export':
         this.openExport.emit();
         return;
+      case 'open-book-proofread':
+        // c6: stage 4's way into the whole-book run. It scrolls to the row; the row owns the consent.
+        this.switchToReview.emit();
+        this.scrollToProofread();
+        return;
     }
+  }
+
+  /** c6: bring the whole-book proofread row into view. */
+  private scrollToProofread(): void {
+    this.proofreadAnchor?.nativeElement?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   /** A chapter was picked out of stage 4's per-chapter breakdown: open it, via the existing seam. */

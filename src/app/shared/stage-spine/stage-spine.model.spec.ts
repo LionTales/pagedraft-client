@@ -521,6 +521,28 @@ describe('deriveStageSpine (Wave 3 / w2)', () => {
       expect(s.state).toBe('running');
       expect(s.chapters!.filter(c => c.running).map(c => c.chapterId)).toEqual(['ch-2']);
     });
+
+    // c6: the way into the whole-book proofread row. An action, never a state: the steady state above
+    // still carries no token, so the stage makes no book-level claim.
+    it('offers the whole-book proofread row as its action when chapters hold text, steady AND running', () => {
+      const steady = stage(deriveStageSpine(signals({ chapters: chapters(3), chaptersWithText: 3 })), 'chapter-passes');
+      expect(steady.action).toBe('open-book-proofread');
+      expect(steady.state).toBeNull();
+      const running = stage(deriveStageSpine(signals({ chapters: chapters(3, ['ch-1']), chaptersWithText: 3 })), 'chapter-passes');
+      expect(running.action).toBe('open-book-proofread');
+    });
+
+    it('offers NO proofread action where that row would refuse (no text); an UNKNOWN count refuses nothing', () => {
+      const empty = stage(deriveStageSpine(signals({ chapters: chapters(2), chaptersWithText: 0 })), 'chapter-passes');
+      expect(empty.action).toBeNull();
+      const unknownText = stage(deriveStageSpine(signals({ chapters: chapters(2), chaptersWithText: null })), 'chapter-passes');
+      expect(unknownText.action).toBe('open-book-proofread');
+    });
+
+    it('keeps open-import as the action on a book with no chapters', () => {
+      const s = stage(deriveStageSpine(signals({ chapters: [], chaptersWithText: 0 })), 'chapter-passes');
+      expect(s.action).toBe('open-import');
+    });
   });
 
   // ── Stage 5: Export ─────────────────────────────────────────────────────────

@@ -770,6 +770,83 @@ describe('JobRegistryService', () => {
     });
   });
 
+  describe('book-proofread child discovery and outcome counts (c6)', () => {
+    it('discovers each CHILD chapter job the server creates mid-run, on the parent poll ticks', () => {
+      // The server creates one Chapter-scope child per chapter, one at a time. Reattach only runs on book
+      // load, so without discovery the second chapter's child was never tracked and stage 4 / the panel
+      // never saw it.
+      const analysis = makeAnalysisStub([]);
+      configure({ analysis });
+      service.track('book-proofread', 'book-A', 'BP1');
+
+      analysis.getActiveAnalysisJobs.and.returnValue(of([activeJob({ jobId: 'child-1', chapterId: 'ch-1' })]));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, completedChunks: 0, scope: 'Book' }));
+      expect(jobById('child-1')?.kind).toBe('proofread');
+      expect(jobById('child-1')?.chapterId).toBe('ch-1');
+      expect(jobById('child-1')?.analysisType).toBe('Proofread');
+
+      analysis.getActiveAnalysisJobs.and.returnValue(of([activeJob({ jobId: 'child-2', chapterId: 'ch-2' })]));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, completedChunks: 1, scope: 'Book' }));
+      expect(jobById('child-2')?.chapterId).toBe('ch-2');
+      expect(analysis.getActiveAnalysisJobs).toHaveBeenCalledWith('book-A');
+    });
+
+    it('never overlaps two discovery reads for one parent', () => {
+      const pending = new Subject<ActiveAnalysisJobDto[]>();
+      const analysis = makeAnalysisStub([]);
+      analysis.getActiveAnalysisJobs.and.returnValue(pending.asObservable());
+      configure({ analysis });
+      service.track('book-proofread', 'book-A', 'BP1');
+
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      expect(analysis.getActiveAnalysisJobs).toHaveBeenCalledTimes(1);
+
+      pending.next([]);
+      pending.complete();
+      analysis.getActiveAnalysisJobs.and.returnValue(of([]));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      expect(analysis.getActiveAnalysisJobs).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT discover children for any other kind', () => {
+      const analysis = makeAnalysisStub([activeJob({ jobId: 'child-1' })]);
+      configure({ analysis });
+      service.track('summary', 'book-A', 'S1');
+      progressStub.summary$.next(progress({ status: 'Running', totalChunks: 3, completedChunks: 1 }));
+      expect(analysis.getActiveAnalysisJobs).not.toHaveBeenCalled();
+    });
+
+    it('a failing discovery read leaves the parent running and is retried on the next tick', () => {
+      const analysis = makeAnalysisStub([]);
+      analysis.getActiveAnalysisJobs.and.returnValue(throwError(() => new Error('500')));
+      configure({ analysis });
+      service.track('book-proofread', 'book-A', 'BP1');
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      expect(jobById('BP1')?.status).toBe('running');
+      analysis.getActiveAnalysisJobs.and.returnValue(of([activeJob({ jobId: 'child-1' })]));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      expect(jobById('child-1')).toBeDefined();
+    });
+
+    it('keeps completed < total on a SUCCEEDED parent: that shortfall is a partial run, not a lagging count', () => {
+      configure();
+      service.track('book-proofread', 'book-A', 'BP1');
+      progressStub.bookProofread$.next(progress({ status: 'Succeeded', totalChunks: 2, completedChunks: 1, scope: 'Book' }));
+      const job = jobById('BP1')!;
+      expect(job.status).toBe('succeeded');
+      expect(job.completedChunks).toBe(1);
+      expect(job.totalChunks).toBe(2);
+    });
+
+    it('still forces a succeeded CHAPTER run to total/total (the c04 lagging-snapshot rule is unchanged)', () => {
+      configure();
+      service.track('proofread', 'book-A', 'J1', { chapterId: 'ch-1' });
+      progressStub.chapter$.next(progress({ status: 'Succeeded', totalChunks: 4, completedChunks: 3 }));
+      expect(jobById('J1')?.completedChunks).toBe(4);
+    });
+  });
+
   describe('jobById$', () => {
     it('returns null for an id that was never tracked, then the job once it is', async () => {
       configure();

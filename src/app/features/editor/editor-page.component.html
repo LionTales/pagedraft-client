@@ -249,7 +249,7 @@
             [focusBaselineToken]="focusBaselineToken"
             (openChapter)="onOpenChapterFromDashboard($event)"
             (openImport)="goToImport()"
-            (openExport)="goToExport()"
+            (openExport)="goToExport($event)"
             (openGuide)="goToGuide($event)"
             (switchToReview)="onReviewModeChange('review')">
           </app-book-dashboard>

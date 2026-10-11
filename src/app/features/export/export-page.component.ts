@@ -1,9 +1,9 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, ElementRef, NgZone, OnDestroy, OnInit, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { Observable, Subject, merge } from 'rxjs';
-import { takeUntil } from 'rxjs/operators';
+import { EMPTY, Observable, Subject, merge } from 'rxjs';
+import { take, takeUntil } from 'rxjs/operators';
 
 import { BookDetailDto, ChapterSummaryDto } from '../../core/models/book';
 import {
@@ -120,7 +120,11 @@ import {
       <!-- THE LIST OF KINDS. Two today; a third joins by adding one entry to EXPORT_KINDS. -->
       <ul class="kind-list" data-testid="export-kinds">
         @for (kind of kinds; track kind.id) {
-          <li class="kind" [attr.data-testid]="'export-kind-' + kind.id">
+          <li
+            class="kind"
+            [class.kind--focused]="focusedKindId === kind.id"
+            [attr.aria-current]="focusedKindId === kind.id ? 'true' : null"
+            [attr.data-testid]="'export-kind-' + kind.id">
             <div class="kind-head">
               <span class="kind-format" aria-hidden="true">{{ kind.format }}</span>
               <div class="kind-text">
@@ -278,6 +282,12 @@ import {
       text-align: start;
     }
 
+    /* c6: the kind the caller asked for (?kind=). A ring, not a colour change, so it reads in both themes. */
+    .kind--focused {
+      border-color: var(--pd-primary-600);
+      box-shadow: var(--pd-ring);
+    }
+
     .kind-head {
       display: flex;
       flex-direction: row;
@@ -396,6 +406,23 @@ export class ExportPageComponent implements OnInit, OnDestroy {
 
   /** The kind whose request is in flight, or null. One at a time: the button is disabled while it runs. */
   busyKindId: ExportKindId | null = null;
+  /** c6: the kind the caller asked to bring forward (`?kind=`), or null. Highlighted and scrolled to. */
+  focusedKindId: ExportKindId | null = null;
+  private readonly host = inject(ElementRef<HTMLElement>);
+  private readonly zone = inject(NgZone);
+
+  /**
+   * Scroll the focused kind's row into view once the list has rendered. `onStable`, not a timer: this
+   * app coalesces change detection into a frame, so a timer would measure the page one change behind.
+   */
+  private scrollToFocusedKind(): void {
+    const id = this.focusedKindId;
+    if (!id) return;
+    this.zone.onStable.pipe(take(1)).subscribe(() => {
+      const row = (this.host.nativeElement as HTMLElement).querySelector?.(`[data-testid="export-kind-${id}"]`);
+      (row as HTMLElement | null)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    });
+  }
 
   /** The last failure per kind, already localized. Cleared when that kind is retried. */
   private errors = new Map<ExportKindId, string>();
@@ -452,6 +479,13 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    // c6: `?kind=` (the dashboard's whole-book proofread download) brings that kind's row forward. Only a
+    // listed kind id is honoured; anything else is ignored rather than highlighting nothing. Read BEFORE
+    // the book load below, whose answer is what triggers the scroll.
+    (this.route.queryParams ?? EMPTY).pipe(takeUntil(this.destroy$)).subscribe(query => {
+      const requested = query?.['kind'];
+      this.focusedKindId = this.kinds.find(k => k.id === requested)?.id ?? null;
+    });
     // A subscription, not a one-time `route.snapshot` read: this route can receive a same-route param
     // change (`/books/A/export` -> `/books/B/export`, reachable via history and the guide's deep link),
     // and a snapshot read would never see it.
@@ -518,6 +552,7 @@ export class ExportPageComponent implements OnInit, OnDestroy {
           this.chaptersKnown = true;
           this.loading = false;
           this.rebuildSpineSignals();
+          this.scrollToFocusedKind();
         },
         error: () => {
           // The chapters are UNKNOWN, not empty: the screen says it could not read the book rather than

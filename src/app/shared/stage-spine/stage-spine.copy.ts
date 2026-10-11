@@ -126,6 +126,8 @@ const ACTION_LABELS: Record<StageActionId, Bi> = {
   'build-review': { he: 'בניית סקירה', en: 'Build the review' },
   'open-findings': { he: 'מעבר לממצאים', en: 'Go to the findings' },
   'open-export': { he: 'מעבר לייצוא', en: 'Go to export' },
+  // c6. DRAFT he - needs native review.
+  'open-book-proofread': { he: 'הגהת הספר כולו', en: 'Proofread the whole book' },
 };
 
 const REBUILD_LABELS: Partial<Record<StageActionId, Bi>> = {

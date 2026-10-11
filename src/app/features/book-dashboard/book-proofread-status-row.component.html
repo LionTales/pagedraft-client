@@ -1,0 +1,138 @@
+<!-- c6: whole-book proofread row. Hidden until a status is known (or a run is being followed). Same row
+     anatomy and shared styles as the review and writing-style rows beside it. -->
+@if (visible) {
+  <div class="style-baseline-row" [attr.dir]="dir" data-testid="book-proofread-row">
+    <div class="sb-line">
+      <span class="sb-title">{{ t('title') }}</span>
+
+      @if (running) {
+        <!-- RUNNING: the counts are the registry's parent job (chapters proofread / planned). -->
+        <span class="sb-status sb-building" data-testid="bpr-running">
+          @if (runCounts; as c) {
+            {{ t('running', { done: c.done, total: c.total }) }}
+          } @else {
+            {{ t('title') }}…
+          }
+        </span>
+        <span class="sb-spinner" aria-hidden="true"></span>
+        <button
+          type="button"
+          class="pd-btn pd-btn-ghost sb-action"
+          data-testid="bpr-cancel"
+          [disabled]="cancelling"
+          (click)="cancelRun()">
+          {{ cancelling ? t('cancelling') : t('cancelButton') }}
+        </button>
+      } @else if (starting) {
+        <span class="sb-status sb-building" data-testid="bpr-starting">{{ t('title') }}…</span>
+        <span class="sb-spinner" aria-hidden="true"></span>
+      } @else {
+        @if (coverageText) {
+          <span class="sb-status sb-ready" data-testid="bpr-coverage">
+            {{ coverageText }}
+            @if (lastRunText) {
+              · {{ lastRunText }}
+            }
+          </span>
+        }
+        @if (allFresh) {
+          <!-- Every chapter is fresh: nothing a normal run would do. The forced re-run is the explicit,
+               separately labelled path, and its consent says it replaces the current suggestions. -->
+          <button
+            type="button"
+            class="pd-btn pd-btn-ghost sb-action"
+            data-testid="bpr-run-again"
+            [disabled]="blocked || preparingConsent"
+            (click)="openConsent(true)">
+            {{ t('runAgainButton') }}
+          </button>
+        } @else {
+          <button
+            type="button"
+            class="pd-btn pd-btn-primary sb-action"
+            data-testid="bpr-start"
+            [disabled]="blocked || preparingConsent"
+            (click)="openConsent(false)">
+            {{ t('startButton') }}
+          </button>
+        }
+        @if (blocked) {
+          <span class="sb-hint-inline muted" data-testid="bpr-blocked">{{ blockedReason }}</span>
+        }
+      }
+    </div>
+
+    @if (running) {
+      <app-job-progress-inline [jobId]="runJobId"></app-job-progress-inline>
+      @if (etaText) {
+        <p class="sb-consent-estimate" data-testid="bpr-eta">{{ etaText }}</p>
+      }
+    } @else if (!coverageText && !blocked && !starting) {
+      <p class="sb-what" data-testid="bpr-idle-hint">{{ t('idleHint') }}</p>
+    }
+
+    @if (staleText && !running) {
+      <p class="sb-cross-model-warning" data-testid="bpr-stale">{{ staleText }}</p>
+    }
+
+    @if ((nothingToDo || allFresh) && !running && !consent && !outcome) {
+      <p class="sb-what" data-testid="bpr-nothing-to-do">{{ t('nothingToDo') }}</p>
+    }
+
+    @if (errorKey) {
+      <p class="brev-build-failed" role="alert" data-testid="bpr-error">{{ t(errorKey) }}</p>
+    }
+
+    <!-- The last watched run's outcome. Failed reads as a fault; partial and canceled as warnings; done as
+         the summary. Every outcome that left a chapter proofread offers the annotated download. -->
+    @if (outcome && !running) {
+      <p
+        [class]="outcome.kind === 'done' ? 'sb-what' : outcome.kind === 'failed' ? 'brev-build-failed' : 'brev-build-degraded'"
+        [attr.role]="outcome.kind === 'failed' ? 'alert' : null"
+        [attr.data-testid]="'bpr-outcome-' + outcome.kind">
+        {{ outcomeText }}
+      </p>
+      @if (offerDownload) {
+        <div class="sb-consent-actions">
+          <button
+            type="button"
+            class="pd-btn pd-btn-ghost sb-action"
+            data-testid="bpr-download"
+            (click)="downloadAnnotated()">
+            {{ t('downloadLink') }}
+          </button>
+        </div>
+      }
+    }
+
+    <!-- CONSENT: shows the plan before any model time is spent. Hidden while a run is in flight. -->
+    @if (consent && !running) {
+      <div class="sb-consent" data-testid="bpr-consent">
+        <p class="sb-consent-title">{{ t('consentTitle') }}</p>
+        <p class="sb-consent-body" data-testid="bpr-consent-body">{{ t('consentBody', { chapters: consent.chapters }) }}</p>
+        @if (consent.force) {
+          <p class="sb-consent-body" data-testid="bpr-consent-rerun">{{ t('consentRerun') }}</p>
+        } @else if (consent.skipped > 0) {
+          <p class="sb-consent-body" data-testid="bpr-consent-skipped">{{ t('consentSkipped', { skipped: consent.skipped }) }}</p>
+        }
+        <p class="sb-consent-estimate" data-testid="bpr-consent-pace">{{ t('consentPace') }}</p>
+        <div class="sb-consent-actions">
+          <button
+            type="button"
+            class="pd-btn pd-btn-primary"
+            data-testid="bpr-consent-confirm"
+            (click)="confirmConsent()">
+            {{ t('consentConfirm') }}
+          </button>
+          <button
+            type="button"
+            class="pd-btn pd-btn-ghost"
+            data-testid="bpr-consent-dismiss"
+            (click)="dismissConsent()">
+            {{ t('consentDismiss') }}
+          </button>
+        </div>
+      </div>
+    }
+  </div>
+}

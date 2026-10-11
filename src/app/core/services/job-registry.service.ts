@@ -1,6 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import { BehaviorSubject, Observable, Subject, Subscription, forkJoin, of } from 'rxjs';
-import { catchError, distinctUntilChanged, map } from 'rxjs/operators';
+import { catchError, distinctUntilChanged, finalize, map } from 'rxjs/operators';
 
 import { AnalysisProgressDto, ANALYSIS_TYPE_LABELS } from '../models/analysis';
 import { ActiveAnalysisJobDto } from '../models/active-analysis-job';
@@ -173,23 +173,54 @@ export class JobRegistryService {
       // Currency guard: if a newer reattach (a different book) started while this read was in flight,
       // drop this response so a stale book's jobs are never tracked.
       if (this.reattachBookId !== bookId) return;
-      for (const s of sources) {
-        this.track(s.kind, bookId, s.jobId, {
-          scopeLabel: s.scopeLabel,
-          message: s.message,
-          initialPercent: s.percent,
-          analysisType: s.analysisType,
-          chapterId: s.chapterId,
-          // a1: the scene half of the job's SCOPE. Without it a reattached scene job is
-          // indistinguishable from a chapter job of the same type in the same chapter, and the analysis
-          // panel's "is a run in flight for what I am showing?" question (which is scene-precise, exactly
-          // like `resultBelongsToRunOrigin`) would answer yes for the wrong unit.
-          sceneId: s.sceneId,
-          // c04: this job was already running before the client knew about it, so it gets no
-          // client-side start time and therefore no ETA until it has been observed for a while.
-          reattached: true,
-        });
-      }
+      for (const s of sources) this.trackReattachSource(bookId, s);
+    });
+  }
+
+  /** Track one job the BACKEND reported as in flight (reattach, and c6's child discovery below). */
+  private trackReattachSource(bookId: string, s: ReattachSource): void {
+    this.track(s.kind, bookId, s.jobId, {
+      scopeLabel: s.scopeLabel,
+      message: s.message,
+      initialPercent: s.percent,
+      analysisType: s.analysisType,
+      chapterId: s.chapterId,
+      // a1: the scene half of the job's SCOPE. Without it a reattached scene job is
+      // indistinguishable from a chapter job of the same type in the same chapter, and the analysis
+      // panel's "is a run in flight for what I am showing?" question (which is scene-precise, exactly
+      // like `resultBelongsToRunOrigin`) would answer yes for the wrong unit.
+      sceneId: s.sceneId,
+      // c04: this job was already running before the client knew about it, so it gets no
+      // client-side start time and therefore no ETA until it has been observed for a while.
+      reattached: true,
+    });
+  }
+
+  // ── c6: the whole-book proofread's CHILD jobs ───────────────────────────────────────────────────
+  //
+  // A whole-book proofread is ONE parent job (`book-proofread`) that creates a plain Chapter-scope
+  // Proofread job per chapter, ONE AT A TIME, server-side. Before c6 the client learned about chapter
+  // jobs in exactly two ways: the run it dispatched itself, and `reattach` on book load. Neither sees a
+  // child the server creates mid-run, so a run over N chapters lit at most the chapter that happened to
+  // be running when the book was opened: the dashboard's stage-4 running marks stayed dark, and the
+  // analysis panel on the open chapter never saw its child go terminal, so it never re-read history.
+  //
+  // So while a parent is polled, each poll tick also re-reads the book's active chapter jobs and tracks
+  // what it finds. `track` is idempotent per id, which is what makes a re-read every tick safe: a child
+  // already tracked is a metadata merge, a child already finished here is never resurrected. One read in
+  // flight per parent at a time, so a slow answer is never overlapped by the next tick's.
+
+  /** Parent job ids whose child-discovery read is in flight right now. */
+  private readonly childDiscoveryInFlight = new Set<string>();
+
+  private discoverChildJobs(bookId: string, parentJobId: string): void {
+    if (this.childDiscoveryInFlight.has(parentJobId)) return;
+    this.childDiscoveryInFlight.add(parentJobId);
+    this.analysis.getActiveAnalysisJobs(bookId).pipe(
+      catchError(() => of([] as ActiveAnalysisJobDto[])),
+      finalize(() => this.childDiscoveryInFlight.delete(parentJobId)),
+    ).subscribe(jobs => {
+      for (const j of jobs ?? []) this.trackReattachSource(bookId, analysisJobToSource(j));
     });
   }
 
@@ -357,6 +388,8 @@ export class JobRegistryService {
       this.finalize(jobId, norm.status, norm.percent, norm.message, counts);
       return;
     }
+    // c6: a running whole-book proofread is the one parent whose children appear mid-run (see above).
+    if (job.kind === 'book-proofread') this.discoverChildJobs(job.bookId, jobId);
     this.patchJob(jobId, {
       ...counts,
       status: norm.status,
@@ -392,7 +425,14 @@ export class JobRegistryService {
       // (or a snapshot that lags by one chunk) would otherwise leave a finished card reading "9 of 10"
       // beside its own "Done" pill. A failed/canceled run keeps its real last-known counts: there the
       // shortfall is the truth.
-      completedChunks: status === 'succeeded' ? (totalChunks ?? completedChunks) : completedChunks,
+      //
+      // c6: EXCEPT a whole-book proofread, whose `completedChunks` is not a lagging chunk count but the
+      // run's OUTCOME: chapters actually proofread, so a Succeeded parent with completed < total is a
+      // PARTIAL run (a chapter failed and the run went on). Forcing it to total would turn every partial
+      // run into a clean one on every surface that reads the registry.
+      completedChunks: status === 'succeeded' && job.kind !== 'book-proofread'
+        ? (totalChunks ?? completedChunks)
+        : completedChunks,
       totalChunks,
       ...(counts ? { chunkClock: counts.chunkClock } : {}),
       message: message || job.message,
