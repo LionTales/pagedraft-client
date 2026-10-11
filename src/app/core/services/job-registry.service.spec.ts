@@ -21,6 +21,7 @@ import { AnalysisService } from './analysis.service';
 import { BookSummaryService } from './book-summary.service';
 import { BookReviewService } from './book-review.service';
 import { StyleBaselineService } from './style-baseline.service';
+import { BookProofreadService } from './book-proofread.service';
 import { AnalysisProgressDto } from '../models/analysis';
 import { ActiveAnalysisJobDto } from '../models/active-analysis-job';
 
@@ -45,11 +46,13 @@ class ProgressStub {
   summary$ = new Subject<AnalysisProgressDto>();
   review$ = new Subject<AnalysisProgressDto>();
   style$ = new Subject<AnalysisProgressDto>();
+  bookProofread$ = new Subject<AnalysisProgressDto>();
   chapter$ = new Subject<AnalysisProgressDto>();
 
   pollBookSummaryProgress() { return this.summary$.asObservable(); }
   pollBookReviewProgress() { return this.review$.asObservable(); }
   pollStyleBaselineProgress() { return this.style$.asObservable(); }
+  pollBookProofreadProgress() { return this.bookProofread$.asObservable(); }
   pollProgress() { return this.chapter$.asObservable(); }
 }
 
@@ -62,6 +65,9 @@ function makeReviewStub(activeBuildJobId: string | null = null) {
 }
 function makeStyleStub(activeBuildJobId: string | null = null) {
   return { getStyleBaselineStatus: jasmine.createSpy('getStyleBaselineStatus').and.returnValue(of({ activeBuildJobId })) };
+}
+function makeBookProofreadStub(activeJobId: string | null = null) {
+  return { getStatus: jasmine.createSpy('getStatus').and.returnValue(of({ activeJobId })) };
 }
 function makeAnalysisStub(jobs: ActiveAnalysisJobDto[] = []) {
   return { getActiveAnalysisJobs: jasmine.createSpy('getActiveAnalysisJobs').and.returnValue(of(jobs)) };
@@ -90,6 +96,7 @@ describe('JobRegistryService', () => {
     summary?: ReturnType<typeof makeSummaryStub>;
     review?: ReturnType<typeof makeReviewStub>;
     style?: ReturnType<typeof makeStyleStub>;
+    bookProofread?: ReturnType<typeof makeBookProofreadStub>;
     analysis?: ReturnType<typeof makeAnalysisStub>;
   } = {}): void {
     progressStub = new ProgressStub();
@@ -101,6 +108,7 @@ describe('JobRegistryService', () => {
         { provide: BookSummaryService, useValue: opts.summary ?? makeSummaryStub() },
         { provide: BookReviewService, useValue: opts.review ?? makeReviewStub() },
         { provide: StyleBaselineService, useValue: opts.style ?? makeStyleStub() },
+        { provide: BookProofreadService, useValue: opts.bookProofread ?? makeBookProofreadStub() },
       ],
     });
     service = TestBed.inject(JobRegistryService);
@@ -506,6 +514,30 @@ describe('JobRegistryService', () => {
       expect(jobById('chap-2')?.kind).toBe('proofread');
     });
 
+    it('re-tracks an in-flight whole-book proofread from status.activeJobId as kind book-proofread', () => {
+      configure({ bookProofread: makeBookProofreadStub('bp-1') });
+      service.reattach('book-A', 'he');
+      const job = jobById('bp-1');
+      expect(job?.kind).toBe('book-proofread');
+      expect(job?.bookId).toBe('book-A');
+      expect(job?.titleHe).toBe('הגהת ספר שלם');
+      expect(job?.titleEn).toBe('Whole-book proofread');
+    });
+
+    it('does NOT re-track a whole-book proofread when status.activeJobId is null', () => {
+      configure({ bookProofread: makeBookProofreadStub(null) });
+      service.reattach('book-A', 'he');
+      expect(currentJobs().length).toBe(0);
+    });
+
+    it('a failing proofread status read does not blank the other sources', () => {
+      const failing = { getStatus: jasmine.createSpy('getStatus').and.returnValue(throwError(() => new Error('500'))) };
+      configure({ bookProofread: failing as any, style: makeStyleStub('style-1') });
+      service.reattach('book-A', 'he');
+      expect(jobById('style-1')?.kind).toBe('style-baseline');
+      expect(currentJobs().length).toBe(1);
+    });
+
     it('does NOT re-track when nothing is in flight', () => {
       configure(); // all stubs default to null / empty
       service.reattach('book-A', 'he');
@@ -709,6 +741,35 @@ describe('JobRegistryService', () => {
     });
   });
 
+  describe('book-proofread kind (f2)', () => {
+    it('round-trips through track / jobById$ / jobByKindForBook$', async () => {
+      configure();
+      service.track('book-proofread', 'book-A', 'BP1');
+      expect((await firstValueFrom(service.jobById$('BP1')))?.kind).toBe('book-proofread');
+      expect((await firstValueFrom(service.jobByKindForBook$('book-A', 'book-proofread')))?.id).toBe('BP1');
+      expect(await firstValueFrom(service.jobByKindForBook$('book-A', 'review'))).toBeNull();
+    });
+
+    it('is driven by the BOOK proofread poller and finalizes exactly once on a terminal emit', async () => {
+      configure();
+      service.track('book-proofread', 'book-A', 'BP1');
+      progressStub.bookProofread$.next(progress({ totalChunks: 4, completedChunks: 1, scope: 'Book' }));
+      let job = await firstValueFrom(service.jobById$('BP1'));
+      expect(job?.percent).toBe(25);
+      expect(job?.status).toBe('running');
+
+      progressStub.bookProofread$.next(progress({ status: 'Succeeded', totalChunks: 4, completedChunks: 4, scope: 'Book' }));
+      job = await firstValueFrom(service.jobById$('BP1'));
+      expect(job?.status).toBe('succeeded');
+    });
+
+    it('does NOT light the review affordance (it is not a summary/review build)', async () => {
+      configure();
+      service.track('book-proofread', 'book-A', 'BP1');
+      expect(await firstValueFrom(service.anyRunningForBook$('book-A'))).toBeFalse();
+    });
+  });
+
   describe('jobById$', () => {
     it('returns null for an id that was never tracked, then the job once it is', async () => {
       configure();
@@ -887,6 +948,7 @@ describe('JobRegistryService', () => {
       'review': { chunkCounts: false, chapterScoped: false },
       'proofread': { chunkCounts: true, chapterScoped: true },
       'style-baseline': { chunkCounts: true, chapterScoped: false },
+      'book-proofread': { chunkCounts: true, chapterScoped: false },
     };
 
     it('has no member this suite has not decided (the discovered set drives the comparison)', () => {

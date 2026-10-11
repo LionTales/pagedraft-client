@@ -21,6 +21,7 @@ import { AnalysisProgressService } from '../../core/services/analysis-progress.s
 import { CHAPTER_SCOPED_KINDS, JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { BookReviewService } from '../../core/services/book-review.service';
+import { BookProofreadService } from '../../core/services/book-proofread.service';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 import { AiTierService } from '../../core/services/ai-tier.service';
 import { BookStyleBaselineStatusDto } from '../../core/models/style-baseline';
@@ -4218,6 +4219,7 @@ describe('c01 the registry write outlives the panel (a dispatch that answers aft
         // are `inject()`ed as field initializers, so the real registry cannot be built without them.
         { provide: BookSummaryService, useValue: {} },
         { provide: BookReviewService, useValue: {} },
+        { provide: BookProofreadService, useValue: {} },
         {
           provide: AiTierService,
           useValue: {

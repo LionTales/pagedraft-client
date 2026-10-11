@@ -10,6 +10,7 @@ import { AnalysisService } from './analysis.service';
 import { BookSummaryService } from './book-summary.service';
 import { BookReviewService } from './book-review.service';
 import { StyleBaselineService } from './style-baseline.service';
+import { BookProofreadService } from './book-proofread.service';
 
 /**
  * rf-c01 - the KEYSTONE. A root-provided singleton that is the FE's single VIEW-MODEL of every
@@ -39,6 +40,7 @@ export class JobRegistryService {
   private readonly summarySvc = inject(BookSummaryService);
   private readonly reviewSvc = inject(BookReviewService);
   private readonly styleSvc = inject(StyleBaselineService);
+  private readonly proofreadSvc = inject(BookProofreadService);
 
   /** Retained recent-completed cap so the Activity Center can show "just finished". */
   private static readonly COMPLETED_CAP = 20;
@@ -269,13 +271,21 @@ export class JobRegistryService {
         : []),
       catchError(() => of([] as ReattachSource[])),
     );
+    // f2: the whole-book proofread run. Its status carries `activeJobId` (NOT `activeBuildJobId` like the
+    // three siblings above), because it is a run over chapters rather than a cached artifact build.
+    const bookProofread$ = this.proofreadSvc.getStatus(bookId, language).pipe(
+      map(s => s.activeJobId
+        ? [{ kind: 'book-proofread' as JobKind, jobId: s.activeJobId, scopeLabel: defaultScopeLabel('book-proofread'), percent: null as number | null, message: '', analysisType: undefined as string | undefined }]
+        : []),
+      catchError(() => of([] as ReattachSource[])),
+    );
     const analysis$ = this.analysis.getActiveAnalysisJobs(bookId).pipe(
       map(jobs => jobs.map(j => analysisJobToSource(j))),
       catchError(() => of([] as ReattachSource[])),
     );
 
-    return forkJoin([summary$, review$, style$, analysis$]).pipe(
-      map(([a, b, c, d]) => [...a, ...b, ...c, ...d]),
+    return forkJoin([summary$, review$, style$, bookProofread$, analysis$]).pipe(
+      map(([a, b, c, d, e]) => [...a, ...b, ...c, ...d, ...e]),
     );
   }
 
@@ -310,6 +320,8 @@ export class JobRegistryService {
         return this.progress.pollBookReviewProgress(bookId, jobId, stop$);
       case 'style-baseline':
         return this.progress.pollStyleBaselineProgress(bookId, jobId, stop$);
+      case 'book-proofread':
+        return this.progress.pollBookProofreadProgress(bookId, jobId, stop$);
       case 'proofread': {
         // Chapter-scoped async analysis. The chapterId lives on the tracked job (set at reattach/track
         // time from the source). Fall back defensively; the poller URL needs it.
@@ -453,7 +465,10 @@ export class JobRegistryService {
  * for a capability that does not exist is the same defect class the whole wave exists to remove. If a
  * whole-book analysis kind is ever built, it comes back WITH its producer, not before it.
  */
-export type JobKind = 'summary' | 'review' | 'proofread' | 'style-baseline';
+export type JobKind = 'summary' | 'review' | 'proofread' | 'style-baseline' | 'book-proofread';
+// f2 (whole-book proofread): `book-proofread` is the PARENT job of a run over every chapter with text. It is
+// book-level (no chapterId, not in CHAPTER_SCOPED_KINDS): the per-chapter work it fans out shows up as
+// ordinary chapter `proofread` child jobs, which is how the existing per-chapter running badges light.
 
 /**
  * The JobKinds that count as a whole-book BUILD for the editor's "review running" affordance: the book
@@ -501,6 +516,7 @@ export const CHAPTER_SCOPED_KINDS: ReadonlySet<JobKind> = new Set<JobKind>(['pro
  * | `proofread`       | `UnifiedAnalysisService` (`SetTotalChunks(chunks.Count)`)   | TEXT CHUNKS of the chapter/scene being analyzed   |
  * | `summary`         | `BookSummaryService` (`SetTotalChunks(chapters.Count)`)     | CHAPTERS of the book                              |
  * | `style-baseline`  | `StyleBaselineService` (`SetTotalChunks(chapters.Count)`)   | CHAPTERS of the book                              |
+ * | `book-proofread`  | `BookProofreadService` (`SetTotalChunks(plannedChapters)`)  | PLANNED CHAPTERS of the run                       |
  * | `review`          | `BookReviewService` (`windowCount + reducePassCount`)       | MAP WINDOWS **plus** a variable number of REDUCE  |
  * |                   | and the legacy branch (`SetTotalChunks(Dimensions.Length)`) | passes, or DIMENSIONS on the legacy branch        |
  *
@@ -526,6 +542,7 @@ const CHUNK_COUNT_KINDS: ReadonlySet<JobKind> = new Set<JobKind>([
   'proofread',
   'summary',
   'style-baseline',
+  'book-proofread',
 ]);
 
 /**
@@ -855,6 +872,9 @@ export const DEFAULT_TITLES: Record<JobKind, { he: string; en: string }> = {
   // w5: renamed to match the row's new user-comprehensible name on the book dashboard, so the activity
   // entry and the build it reports name the same thing. DRAFT he - needs native review.
   'style-baseline': { he: 'בניית סגנון הכתיבה של הספר', en: "Building your book's writing style" },
+  // f2: the whole-book proofread run (parent job; the chapters it works through are plain `proofread` jobs).
+  // DRAFT he - needs native review
+  'book-proofread': { he: 'הגהת ספר שלם', en: 'Whole-book proofread' },
 };
 
 /**
@@ -902,6 +922,7 @@ function defaultScopeLabel(kind: JobKind): string {
     case 'summary':
     case 'review':
     case 'style-baseline':
+    case 'book-proofread':
       return 'הספר כולו'; // "Whole book"
     case 'proofread':
       return 'פרק'; // "Chapter"

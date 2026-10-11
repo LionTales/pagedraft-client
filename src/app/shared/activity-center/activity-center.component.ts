@@ -44,6 +44,7 @@ export const LABELS_HE: Record<string, string> = {
   review:            'סקירה',          // DRAFT he - needs native review
   proofread:         'הגהה',           // DRAFT he - needs native review
   'style-baseline':  'סגנון כתיבה',    // DRAFT he - needs native review
+  'book-proofread':  'הגהת ספר',       // DRAFT he - needs native review
 };
 
 export const LABELS_EN: Record<string, string> = {
@@ -61,6 +62,7 @@ export const LABELS_EN: Record<string, string> = {
   review:            'Review',
   proofread:         'Proofread',
   'style-baseline':  'Writing style',
+  'book-proofread':  'Book proofread',
 };
 
 /** Per-kind icon glyph (no icon library - pure Unicode/emoji). */
@@ -73,6 +75,7 @@ const KIND_ICONS: Record<JobKind, string> = {
   // without colliding with anything else in this file's combined glyph set (see the spec's combined
   // kind+type uniqueness test).
   'style-baseline':    '🎨',
+  'book-proofread':    '📖',
 };
 
 /**

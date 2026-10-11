@@ -61,6 +61,24 @@ export class AnalysisProgressService {
   }
 
   /**
+   * Poll whole-book proofread run progress (f2). Same AnalysisProgressDto shape and terminal-status
+   * logic as pollBookReviewProgress, but hits `proofread/progress/{jobId}`.
+   */
+  pollBookProofreadProgress(
+    bookId: string,
+    jobId: string,
+    stop$: Observable<unknown>,
+    intervalMs = 5000
+  ): Observable<AnalysisProgressDto> {
+    const url = `/api/books/${bookId}/proofread/progress/${jobId}`;
+    return timer(0, intervalMs).pipe(
+      takeUntil(stop$),
+      switchMap(() => this.http.get<AnalysisProgressDto>(url)),
+      takeWhile(p => !this.isTerminalStatus(p?.status), true)
+    );
+  }
+
+  /**
    * Poll style-baseline build progress (a3/a4). Same AnalysisProgressDto shape and terminal-status
    * logic as pollProgress, but hits the book-level route `style-baseline/progress/{jobId}` (no
    * chapter id). Reuses this service so the app keeps a single progress-polling mechanism.
