@@ -5,10 +5,13 @@ import { catchError, switchMap } from 'rxjs/operators';
 
 import {
   DOCX_CONTENT_TYPE,
+  EXPORT_ANNOTATION_COUNT_HEADER,
   EXPORT_SKIPPED_CHAPTERS_HEADER,
   EXPORT_SKIPPED_COUNT_HEADER,
+  EXPORT_UNANCHORED_COUNT_HEADER,
   ExportFailure,
   ExportedFile,
+  annotationReportFromHeaders,
   fileNameFromContentDisposition,
   skipReportFromHeaders,
 } from '../models/export';
@@ -53,6 +56,19 @@ export class ExportService {
   /** GET /api/document/export/chapter/{bookId}/{chapterId} - one chapter, named after the chapter. */
   exportChapter(bookId: string, chapterId: string): Observable<ExportedFile> {
     return this.request(`${this.base}/chapter/${bookId}/${chapterId}`, 'chapter.docx');
+  }
+
+  /**
+   * GET /api/document/export/book/{bookId}/proofread - the whole book with every pending proofread
+   * suggestion as a Word comment plus a tracked change. Same transfer, same failures, as the plain export.
+   */
+  exportBookProofread(bookId: string): Observable<ExportedFile> {
+    return this.request(`${this.base}/book/${bookId}/proofread`, 'book-proofread.docx');
+  }
+
+  /** GET /api/document/export/chapter/{bookId}/{chapterId}/proofread - one chapter, annotated. */
+  exportChapterProofread(bookId: string, chapterId: string): Observable<ExportedFile> {
+    return this.request(`${this.base}/chapter/${bookId}/${chapterId}/proofread`, 'chapter-proofread.docx');
   }
 
   /**
@@ -126,6 +142,11 @@ export class ExportService {
       skipped: skipReportFromHeaders(
         res.headers.get(EXPORT_SKIPPED_COUNT_HEADER),
         res.headers.get(EXPORT_SKIPPED_CHAPTERS_HEADER),
+      ),
+      // Null on a plain export (the headers are only sent by the /proofread endpoints).
+      annotations: annotationReportFromHeaders(
+        res.headers.get(EXPORT_ANNOTATION_COUNT_HEADER),
+        res.headers.get(EXPORT_UNANCHORED_COUNT_HEADER),
       ),
     });
   }

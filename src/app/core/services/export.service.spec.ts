@@ -26,6 +26,7 @@ import {
   ExportedFile,
   fileNameFromContentDisposition,
   isExportFailure,
+  annotationReportFromHeaders,
   skipReportFromHeaders,
 } from '../models/export';
 import { ExportService } from './export.service';
@@ -34,6 +35,8 @@ const BOOK_ID = '11111111-1111-1111-1111-111111111111';
 const CHAPTER_ID = '22222222-2222-2222-2222-222222222222';
 const BOOK_URL = `/api/document/export/book/${BOOK_ID}`;
 const CHAPTER_URL = `/api/document/export/chapter/${BOOK_ID}/${CHAPTER_ID}`;
+const BOOK_PROOFREAD_URL = `${BOOK_URL}/proofread`;
+const CHAPTER_PROOFREAD_URL = `${CHAPTER_URL}/proofread`;
 
 /** A Content-Disposition exactly as the API emits it: the plain parameter AND the RFC 5987 one. */
 function disposition(name: string, asciiFallback = 'book.docx'): string {
@@ -252,6 +255,55 @@ describe('ExportService (Wave 3 / w4)', () => {
       expect(skipReportFromHeaders('two', null)).toBeNull();
       expect(skipReportFromHeaders('-1', null)).toBeNull();
       expect(skipReportFromHeaders('1.5', null)).toBeNull();
+    });
+  });
+
+  describe('the annotated (proofread) calls', () => {
+    it('GETs the book proofread endpoint as a blob and reads both annotation headers', () => {
+      let got: ExportedFile | undefined;
+      svc.exportBookProofread(BOOK_ID).subscribe(f => (got = f));
+      const req = http.expectOne(BOOK_PROOFREAD_URL);
+      expect(req.request.method).toBe('GET');
+      expect(req.request.responseType).toBe('blob');
+      req.flush(docx(), {
+        headers: {
+          'Content-Disposition': disposition('ספר - הגהה.docx'),
+          'X-Export-Annotation-Count': '12',
+          'X-Export-Unanchored-Count': '3',
+        },
+      });
+      expect(got!.fileName).toBe('ספר - הגהה.docx');
+      expect(got!.annotations).toEqual({ placed: 12, unanchored: 3 });
+    });
+
+    it('GETs the chapter proofread endpoint, book-scoped in the path', () => {
+      let got: ExportedFile | undefined;
+      svc.exportChapterProofread(BOOK_ID, CHAPTER_ID).subscribe(f => (got = f));
+      const req = http.expectOne(CHAPTER_PROOFREAD_URL);
+      expect(req.request.method).toBe('GET');
+      expect(req.request.responseType).toBe('blob');
+      req.flush(docx(), { headers: { 'X-Export-Annotation-Count': '0' } });
+      expect(got!.fileName).toBe('chapter-proofread.docx');
+      expect(got!.annotations).toEqual({ placed: 0, unanchored: 0 });
+    });
+
+    it('reports no annotations on a plain export', () => {
+      let got: ExportedFile | undefined;
+      svc.exportBook(BOOK_ID).subscribe(f => (got = f));
+      http.expectOne(BOOK_URL).flush(docx());
+      expect(got!.annotations).toBeNull();
+    });
+
+    it('reads absent and garbage headers defensively', () => {
+      expect(annotationReportFromHeaders(null, null)).toBeNull();
+      expect(annotationReportFromHeaders(null, '4')).toBeNull();
+      expect(annotationReportFromHeaders('abc', '4')).toBeNull();
+      expect(annotationReportFromHeaders('-1', null)).toBeNull();
+      expect(annotationReportFromHeaders('1.5', null)).toBeNull();
+      expect(annotationReportFromHeaders('', null)).toBeNull();
+      expect(annotationReportFromHeaders('5', null)).toEqual({ placed: 5, unanchored: 0 });
+      expect(annotationReportFromHeaders('5', 'x')).toEqual({ placed: 5, unanchored: 0 });
+      expect(annotationReportFromHeaders(' 7 ', ' 2 ')).toEqual({ placed: 7, unanchored: 2 });
     });
   });
 

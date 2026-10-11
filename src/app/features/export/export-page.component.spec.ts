@@ -27,7 +27,7 @@ import { BookService } from '../../core/services/book.service';
 import { ExportService } from '../../core/services/export.service';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
 import { ExportPageComponent } from './export-page.component';
-import { EXPORT_COPY, EXPORT_ERRORS, EXPORT_KINDS, SKIPPED_UNKNOWN } from './export-kinds';
+import { EXPORT_COPY, EXPORT_ERRORS, EXPORT_KINDS, SKIPPED_UNKNOWN, annotationNotice } from './export-kinds';
 
 const BOOK_ID = 'book-1';
 
@@ -129,6 +129,14 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       },
       exportChapter: (bookId: string, chapterId: string) => {
         calls.push(`chapter:${bookId}:${chapterId}`);
+        return chapterResponse();
+      },
+      exportBookProofread: (bookId: string) => {
+        calls.push(`book-proofread:${bookId}`);
+        return bookResponse();
+      },
+      exportChapterProofread: (bookId: string, chapterId: string) => {
+        calls.push(`chapter-proofread:${bookId}:${chapterId}`);
         return chapterResponse();
       },
       saveAs: (f: ExportedFile) => {
@@ -237,6 +245,71 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       click('export-download-book-docx');
       component.startExport(EXPORT_KINDS[0]);
       expect(calls.length).toBe(1);
+    });
+  });
+
+  describe('the annotated (proofread) kinds', () => {
+    it('lists four kinds, each with its own row', () => {
+      expect(EXPORT_KINDS.map(k => k.id)).toEqual([
+        'book-docx',
+        'chapter-docx',
+        'book-docx-proofread',
+        'chapter-docx-proofread',
+      ]);
+      loadBook();
+      EXPORT_KINDS.forEach(kind => expect(el(`export-kind-${kind.id}`)).not.toBeNull());
+    });
+
+    it('dispatches the book proofread kind to the book proofread export only', () => {
+      loadBook();
+      click('export-download-book-docx-proofread');
+      expect(calls).toEqual([`book-proofread:${BOOK_ID}`]);
+    });
+
+    it('dispatches the chapter proofread kind with the picked chapter', () => {
+      loadBook();
+      component.selectedChapterId = 'ch-1';
+      fixture.detectChanges();
+      click('export-download-chapter-docx-proofread');
+      expect(calls).toEqual([`chapter-proofread:${BOOK_ID}:ch-1`]);
+    });
+
+    it('keeps the original chapter picker test id and gives the proofread kind its own', () => {
+      loadBook();
+      expect(fixture.debugElement.queryAll(By.css('[data-testid="export-chapter-select"]')).length).toBe(1);
+      expect(el('export-chapter-select-chapter-docx-proofread')).not.toBeNull();
+    });
+
+    it('names the comment counts under the download, in Hebrew', () => {
+      loadBook();
+      click('export-download-book-docx-proofread');
+      bookFiles.next({ ...file('b.docx'), annotations: { placed: 12, unanchored: 3 } });
+      fixture.detectChanges();
+      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe(annotationNotice(12, 3, 'he'));
+    });
+
+    it('names only the comment count in English when nothing was unplaced', () => {
+      loadBook('en');
+      click('export-download-book-docx-proofread');
+      bookFiles.next({ ...file('b.docx'), annotations: { placed: 5, unanchored: 0 } });
+      fixture.detectChanges();
+      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('5 comments');
+    });
+
+    it('renders no annotation line for a plain download or when the server sent no counts', () => {
+      loadBook();
+      click('export-download-book-docx');
+      bookFiles.next(file('b.docx'));
+      fixture.detectChanges();
+      expect(el('export-annotations-book-docx')).toBeNull();
+    });
+
+    it('annotation notices carry no dash and keep he/en parity', () => {
+      for (const lang of ['he', 'en'] as const) {
+        expect(annotationNotice(4, 0, lang)).not.toMatch(/[–—]/);
+        expect(annotationNotice(4, 2, lang)).not.toMatch(/[–—]/);
+        expect(annotationNotice(4, 2, lang)).toContain('2');
+      }
     });
   });
 

@@ -10,6 +10,7 @@ import {
   EXPORT_REASON_NOTHING_WRITTEN,
   EXPORT_REASON_NO_CHAPTERS,
   ExportFailure,
+  ExportAnnotationReport,
   ExportSkipReport,
   ExportedFile,
   isExportFailure,
@@ -32,6 +33,7 @@ import {
   ExportKindId,
   ExportLang,
   SKIPPED_UNKNOWN,
+  annotationNotice,
   exportLang,
   skippedNotice,
 } from './export-kinds';
@@ -137,7 +139,7 @@ import {
                     <span class="chapter-picker__label">{{ t(COPY.chooseChapter) }}</span>
                     <select
                       class="chapter-select"
-                      data-testid="export-chapter-select"
+                      [attr.data-testid]="pickerTestId(kind)"
                       [disabled]="!chapters.length"
                       [(ngModel)]="selectedChapterId">
                       @for (chapter of chapters; track chapter.id) {
@@ -183,6 +185,10 @@ import {
                 <p class="kind-done" [attr.data-testid]="'export-done-' + kind.id">
                   {{ t(COPY.downloaded) }} <span class="file-name">{{ fileName }}</span>
                 </p>
+              }
+
+              @if (annotationNoticeFor(kind); as counts) {
+                <p class="kind-done" [attr.data-testid]="'export-annotations-' + kind.id">{{ counts }}</p>
               }
 
               <!-- ...and what it does NOT contain, from the server's own headers. A chapter missing from an
@@ -404,6 +410,8 @@ export class ExportPageComponent implements OnInit, OnDestroy {
    * included). The absent-header case may never collapse into "nothing was skipped".
    */
   private skipped = new Map<ExportKindId, ExportSkipReport | null>();
+  /** What the last ANNOTATED download per kind holds, off the response headers; null when not sent. */
+  private annotations = new Map<ExportKindId, ExportAnnotationReport | null>();
 
   /** The compact spine's signals, assembled from the same book payload this page already loads. */
   spineSignals: StageSpineSignals = emptyStageSpineSignals();
@@ -488,6 +496,7 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     this.errors.clear();
     this.downloaded.clear();
     this.skipped.clear();
+    this.annotations.clear();
     this.briefsRunning = false;
     this.reviewRunning = false;
     this.spineSignals = emptyStageSpineSignals();
@@ -627,6 +636,18 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     return skippedNotice(report.count, names, this.lang);
   }
 
+  /** The comment counts of the last annotated download for this kind, or null (plain kind, or not sent). */
+  annotationNoticeFor(kind: ExportKind): string | null {
+    if (!this.downloaded.has(kind.id)) return null;
+    const report = this.annotations.get(kind.id) ?? null;
+    return report === null ? null : annotationNotice(report.placed, report.unanchored, this.lang);
+  }
+
+  /** Test id of a kind's chapter picker: the plain kind keeps the original id, the others are suffixed. */
+  pickerTestId(kind: ExportKind): string {
+    return kind.id === 'chapter-docx' ? 'export-chapter-select' : `export-chapter-select-${kind.id}`;
+  }
+
   /** "3. The Long Night" - the order the author sees, one-based, isolated from the surrounding script. */
   chapterOptionLabel(chapter: ChapterSummaryDto): string {
     return `${this.chapterNumber(chapter.order)}. ${chapter.title}`;
@@ -660,19 +681,29 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     this.errors.delete(kind.id);
     this.downloaded.delete(kind.id);
     this.skipped.delete(kind.id);
+    this.annotations.delete(kind.id);
     this.busyKindId = kind.id;
 
     switch (kind.id) {
       case 'book-docx':
         this.run(kind, this.exportService.exportBook(this.bookId));
         return;
-      case 'chapter-docx': {
+      case 'book-docx-proofread':
+        this.run(kind, this.exportService.exportBookProofread(this.bookId));
+        return;
+      case 'chapter-docx':
+      case 'chapter-docx-proofread': {
         const chapterId = this.selectedChapterId;
         if (!chapterId) {
           this.busyKindId = null;
           return;
         }
-        this.run(kind, this.exportService.exportChapter(this.bookId, chapterId));
+        this.run(
+          kind,
+          kind.id === 'chapter-docx'
+            ? this.exportService.exportChapter(this.bookId, chapterId)
+            : this.exportService.exportChapterProofread(this.bookId, chapterId),
+        );
         return;
       }
       default: {
@@ -706,6 +737,7 @@ export class ExportPageComponent implements OnInit, OnDestroy {
         this.downloaded.set(kind.id, file.fileName);
         // Recorded even when it is null: "the server did not say" is a state this screen renders.
         this.skipped.set(kind.id, file.skipped);
+        this.annotations.set(kind.id, file.annotations ?? null);
       },
       error: (err: unknown) => {
         this.busyKindId = null;

@@ -73,6 +73,41 @@ export const EXPORT_SKIPPED_COUNT_HEADER = 'X-Export-Skipped-Count';
 /** Which ones, percent-encoded JSON. Sent only when the count is not zero. */
 export const EXPORT_SKIPPED_CHAPTERS_HEADER = 'X-Export-Skipped-Chapters';
 
+/** How many proofread comments the annotated DOCX holds. Sent only by the two `/proofread` endpoints. */
+export const EXPORT_ANNOTATION_COUNT_HEADER = 'X-Export-Annotation-Count';
+/** How many pending suggestions could not be placed in the text, so they are NOT in the file. */
+export const EXPORT_UNANCHORED_COUNT_HEADER = 'X-Export-Unanchored-Count';
+
+/** What an annotated export holds: comments placed, and suggestions that found no place in the text. */
+export interface ExportAnnotationReport {
+  placed: number;
+  unanchored: number;
+}
+
+/** A header that must be a plain non-negative integer; anything else is unreadable and yields null. */
+function countFromHeader(value: string | null): number | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const n = Number(trimmed);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/**
+ * Read the annotation headers off an annotated export, or NULL when the server did not say (a plain export
+ * never sends them, and an old server or a stripping proxy sends neither). The placed count is the anchor:
+ * without a readable one there is no report. A missing or garbled unanchored count reads as 0 rather than
+ * discarding a placed count that is perfectly good.
+ */
+export function annotationReportFromHeaders(
+  placedHeader: string | null,
+  unanchoredHeader: string | null,
+): ExportAnnotationReport | null {
+  const placed = countFromHeader(placedHeader);
+  if (placed === null) return null;
+  return { placed, unanchored: countFromHeader(unanchoredHeader) ?? 0 };
+}
+
 /**
  * Read the skipped-chapter headers off a successful export, or NULL when the server did not say.
  *
@@ -124,6 +159,11 @@ export interface ExportedFile {
    * chapter missing from an exported book is indistinguishable from data loss to an author.
    */
   skipped: ExportSkipReport | null;
+  /**
+   * What an annotated (`/proofread`) export holds, or null/absent for a plain export or a server that did
+   * not say. Optional so the plain-export callers and fixtures need no change.
+   */
+  annotations?: ExportAnnotationReport | null;
 }
 
 /**
