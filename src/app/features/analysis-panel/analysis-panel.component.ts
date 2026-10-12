@@ -21,7 +21,7 @@ import { LineEditParserService } from '../../core/services/line-edit-parser.serv
 import { SuggestionAnchorService } from '../../core/services/suggestion-anchor.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
 import { ApplyCorrectionEvent } from '../language-engine/issue-panel.component';
-import { proofreadDiff } from '../../core/utils/proofread-diff';
+import { proofreadDiff, isWhitespaceOnlySuggestion } from '../../core/utils/proofread-diff';
 import { normalizeTextForAnalysis } from '../../core/utils/normalize-text-for-analysis';
 import { SuggestionCardComponent } from './suggestion-card.component';
 import { AnalysisRunTabComponent } from './analysis-run-tab.component';
@@ -393,8 +393,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
   private mapDtoSuggestions(
     result: AnalysisResultDto | null | undefined
   ): AnalysisSuggestion[] {
+    // Whitespace-only rows (stored by runs before the chunker stopped manufacturing them) stay pending on
+    // the server but are invisible here, so no count, accept-all scope, navigation or highlight sees them.
+    // Consistency cards are flag-only (original may equal suggested), so they are exempt.
     const list: AnalysisSuggestionDto[] = (result?.suggestions ?? [])
-      .slice()
+      .filter(dto => isConsistencySuggestion(dto) || !isWhitespaceOnlySuggestion(dto.originalText, dto.suggestedText))
       .sort((a, b) => a.orderIndex - b.orderIndex);
     const mapped: AnalysisSuggestion[] = list.map(dto => ({
       id: dto.id,

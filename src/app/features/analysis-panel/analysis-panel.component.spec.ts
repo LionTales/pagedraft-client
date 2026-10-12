@@ -335,6 +335,67 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect(mapped[0].suggested).toBe('לשאול');
   });
 
+  describe('whitespace-only stored suggestions are hidden everywhere the panel counts', () => {
+    function dto(id: string, order: number, original: string, suggested: string, category: string | null = null, outcome: string | null = null): AnalysisSuggestionDto {
+      return {
+        id,
+        analysisResultId: 'r-1',
+        originalText: original,
+        suggestedText: suggested,
+        startOffset: order * 10,
+        endOffset: order * 10 + original.length,
+        reason: 'Proofread',
+        category,
+        explanation: null,
+        outcome,
+        orderIndex: order,
+      };
+    }
+    // 2 real edits, 3 whitespace-only (space, NBSP, edge trim), 1 real edit that only has surrounding spaces.
+    function mixed(): AnalysisResultDto {
+      return makeResultWithSuggestions({
+        suggestions: [
+          dto('ws-1', 0, ' ', ''),
+          dto('real-1', 1, 'כול', 'כל'),
+          dto('ws-2', 2, ' ', ''),
+          dto('real-2', 3, 'world', 'friend'),
+          dto('ws-3', 4, ' הוא', 'הוא'),
+          dto('real-3', 5, ' כול ', ' כל '),
+        ],
+      });
+    }
+
+    it('mapDtoSuggestions drops whitespace-only rows and keeps order of the real ones', () => {
+      const mapped = (component as any).mapDtoSuggestions(mixed()) as AnalysisSuggestion[];
+      expect(mapped.map(s => s.id)).toEqual(['real-1', 'real-2', 'real-3']);
+    });
+
+    it('mapDtoSuggestions keeps a consistency card even when original equals suggested', () => {
+      const result = makeResultWithSuggestions({
+        suggestions: [dto('c-1', 0, 'אבא', 'אבא', 'consistency-name')],
+      });
+      expect(((component as any).mapDtoSuggestions(result) as any[]).length).toBe(1);
+    });
+
+    it('the restored Run-tab list and the pending count both exclude them', () => {
+      const result = mixed();
+      component.documentText = 'Hello world';
+      component.latestResult = result;
+      (component as any).restoreProofreadStateFromLatestResult();
+      (component as any).activeAnalyses = [result];
+      component.selectedAnalysisType = 'Proofread';
+
+      expect((component as any).getPendingSuggestionCountForActive()).toBe(3);
+      const shown = (component.proofreadSuggestions ?? []).map(s => s.id);
+      expect(shown).toEqual(['real-1', 'real-2', 'real-3']);
+    });
+
+    it('a result holding ONLY whitespace-only rows maps to nothing', () => {
+      const result = makeResultWithSuggestions({ suggestions: [dto('ws-1', 0, ' ', ''), dto('ws-2', 1, ' ', '')] });
+      expect((component as any).mapDtoSuggestions(result)).toEqual([]);
+    });
+  });
+
   it('applyProofreadOrLineEditResultToRunTab suppresses cards AND highlights for an unreliable proofread', () => {
     // An unreliable proofread returns a flood of bogus suggestions; the Run tab shows the warning and
     // we must NOT surface those suggestions as cards or as document highlights.
