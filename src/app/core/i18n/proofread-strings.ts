@@ -52,7 +52,14 @@ export type ProofreadStringKey =
   | 'canceled'
   | 'downloadLink'
   // ── freshness ──
-  | 'staleNote';
+  | 'staleNote'
+  // c6 gate: the singular of every count a one-chapter book or a one-chapter run can reach. The plural
+  // template read '1 chapters will be skipped' / '1 פרקים הוגהו'. Picked by proofreadCountString.
+  | 'consentBodyOne'
+  | 'consentSkippedOne'
+  | 'doneSummaryOne'
+  | 'canceledOne'
+  | 'staleNoteOne';
 
 // DRAFT he - needs native review
 export const PROOFREAD_STRINGS_HE: Record<ProofreadStringKey, string> = {
@@ -87,6 +94,13 @@ export const PROOFREAD_STRINGS_HE: Record<ProofreadStringKey, string> = {
   downloadLink:   'הורד קובץ DOCX עם הצעות התיקון',
 
   staleNote:      '{count} פרקים נערכו מאז ההגהה האחרונה.',
+
+  // DRAFT he - needs native review
+  consentBodyOne:    'ההגהה תעבור על פרק אחד. אפשר להמשיך לעבוד בינתיים.',
+  consentSkippedOne: 'פרק אחד שכבר הוגה ולא השתנה ידולג.',
+  doneSummaryOne:    'פרק אחד הוגה',
+  canceledOne:       'ההגהה נעצרה. פרק אחד הוגה ונשמר.',
+  staleNoteOne:      'פרק אחד נערך מאז ההגהה האחרונה.',
 };
 
 export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
@@ -121,6 +135,12 @@ export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
   downloadLink:   'Download a DOCX with the suggested changes',
 
   staleNote:      '{count} chapters were edited since the last proofread.',
+
+  consentBodyOne:    'This will proofread 1 chapter. You can keep working meanwhile.',
+  consentSkippedOne: '1 chapter already proofread and unchanged will be skipped.',
+  doneSummaryOne:    '1 chapter proofread',
+  canceledOne:       'The proofread was stopped. 1 chapter was proofread and saved.',
+  staleNoteOne:      '1 chapter was edited since the last proofread.',
 };
 
 /** Substitution parameters for a proofread string. Values are stringified as-is. */
@@ -144,4 +164,27 @@ export function proofreadString(
 ): string {
   const map = lang === 'he' ? PROOFREAD_STRINGS_HE : PROOFREAD_STRINGS_EN;
   return interpolate(map[key], params);
+}
+
+/** The plural keys that have a singular twin, and that twin. */
+export type ProofreadCountKey = 'consentBody' | 'consentSkipped' | 'doneSummary' | 'canceled' | 'staleNote';
+const SINGULAR_OF: Record<ProofreadCountKey, ProofreadStringKey> = {
+  consentBody: 'consentBodyOne',
+  consentSkipped: 'consentSkippedOne',
+  doneSummary: 'doneSummaryOne',
+  canceled: 'canceledOne',
+  staleNote: 'staleNoteOne',
+};
+
+/**
+ * c6 gate: resolve a chapter-count string, picking the singular at exactly 1 (both languages need it:
+ * '1 chapters' and '1 פרקים הוגהו' both read wrong). `params` still carries the count for the plural.
+ */
+export function proofreadCountString(
+  lang: RunChromeLang,
+  key: ProofreadCountKey,
+  count: number,
+  params?: ProofreadStringParams,
+): string {
+  return proofreadString(lang, count === 1 ? SINGULAR_OF[key] : key, params);
 }

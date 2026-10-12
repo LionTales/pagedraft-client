@@ -109,11 +109,11 @@
     @if (consent && !running) {
       <div class="sb-consent" data-testid="bpr-consent">
         <p class="sb-consent-title">{{ t('consentTitle') }}</p>
-        <p class="sb-consent-body" data-testid="bpr-consent-body">{{ t('consentBody', { chapters: consent.chapters }) }}</p>
+        <p class="sb-consent-body" data-testid="bpr-consent-body">{{ tCount('consentBody', consent.chapters, { chapters: consent.chapters }) }}</p>
         @if (consent.force) {
           <p class="sb-consent-body" data-testid="bpr-consent-rerun">{{ t('consentRerun') }}</p>
         } @else if (consent.skipped > 0) {
-          <p class="sb-consent-body" data-testid="bpr-consent-skipped">{{ t('consentSkipped', { skipped: consent.skipped }) }}</p>
+          <p class="sb-consent-body" data-testid="bpr-consent-skipped">{{ tCount('consentSkipped', consent.skipped, { skipped: consent.skipped }) }}</p>
         }
         <p class="sb-consent-estimate" data-testid="bpr-consent-pace">{{ t('consentPace') }}</p>
         <div class="sb-consent-actions">

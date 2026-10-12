@@ -6,6 +6,7 @@ import {
   PROOFREAD_STRINGS_EN,
   PROOFREAD_STRINGS_HE,
   ProofreadStringKey,
+  proofreadCountString,
   proofreadString,
 } from './proofread-strings';
 
@@ -63,6 +64,17 @@ describe('proofread-strings (f2)', () => {
 
     it('leaves an UNKNOWN placeholder verbatim rather than blanking it', () => {
       expect(proofreadString('en', 'running', { done: 3 })).toBe('Proofreading: 3 of {total} chapters');
+    });
+
+    it('c6 gate: proofreadCountString picks the singular at exactly 1, in both languages', () => {
+      expect(proofreadCountString('en', 'consentSkipped', 1, { skipped: 1 })).toBe('1 chapter already proofread and unchanged will be skipped.');
+      expect(proofreadCountString('en', 'consentSkipped', 2, { skipped: 2 })).toBe('2 chapters already proofread and unchanged will be skipped.');
+      expect(proofreadCountString('he', 'doneSummary', 1, { count: 1 })).toBe(PROOFREAD_STRINGS_HE.doneSummaryOne);
+      expect(proofreadCountString('he', 'doneSummary', 0, { count: 0 })).toBe('0 פרקים הוגהו');
+      for (const k of ['consentBody', 'consentSkipped', 'doneSummary', 'canceled', 'staleNote'] as const) {
+        expect(proofreadCountString('en', k, 1, { chapters: 1, skipped: 1, count: 1, done: 1 }))
+          .withContext(k).not.toMatch(/1 chapters/);
+      }
     });
 
     it('returns the template untouched when no params are given', () => {

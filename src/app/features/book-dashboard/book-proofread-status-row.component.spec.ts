@@ -185,7 +185,8 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         init(lang);
         answerStatus(makeStatus({ chaptersWithActiveProofread: 3, chaptersStale: 1, lastRunAt: new Date().toISOString() }));
         expect(text('bpr-coverage')).toContain(t('coverage', { done: 3, total: 3 }));
-        expect(text('bpr-stale')).toBe(t('staleNote', { count: 1 }));
+        // c6 gate: ONE stale chapter reads in the singular ('1 chapters were edited' read wrong).
+        expect(text('bpr-stale')).toBe(S.staleNoteOne);
         expect(el('bpr-start')).not.toBeNull();
       });
 
@@ -221,7 +222,7 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         answerStatus(makeStatus({ chaptersWithActiveProofread: 2, chaptersStale: 1 }));
         // 3 with text, 1 fresh (2 active - 1 stale) -> 2 planned, 1 skipped.
         expect(text('bpr-consent-body')).toBe(t('consentBody', { chapters: 2 }));
-        expect(text('bpr-consent-skipped')).toBe(t('consentSkipped', { skipped: 1 }));
+        expect(text('bpr-consent-skipped')).withContext('one skipped chapter is singular').toBe(S.consentSkippedOne);
         expect(text('bpr-consent-pace')).toBe(S.consentPace);
         expect(el('bpr-consent-rerun')).toBeNull();
         expect(startCalls.length).toBe(0);
@@ -260,6 +261,26 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         expect(el('bpr-running')).toBeNull();
       });
 
+      it('c6 gate: a count of 2 keeps the plural', () => {
+        init(lang);
+        answerStatus(makeStatus({ chaptersWithActiveProofread: 3, chaptersStale: 2, lastRunAt: new Date().toISOString() }));
+        expect(text('bpr-stale')).toBe(t('staleNote', { count: 2 }));
+      });
+
+      it('c6 gate: a one-chapter book plans and reports in the singular', () => {
+        init(lang, { chapterCount: 1, chaptersWithText: 1 });
+        answerStatus(makeStatus({ chaptersWithText: 1 }));
+        el('bpr-start')!.click();
+        answerStatus(makeStatus({ chaptersWithText: 1 }));
+        expect(text('bpr-consent-body')).toBe(S.consentBodyOne);
+        el('bpr-consent-confirm')!.click();
+        startCalls[startCalls.length - 1].reply.next(startResponse({ plannedChapters: 1 }));
+        fixture.detectChanges();
+        registry.set(makeJob({ status: 'succeeded', completedChunks: 1, totalChunks: 1, percent: 100 }));
+        fixture.detectChanges();
+        expect(text('bpr-outcome-done')).toBe(S.doneSummaryOne);
+      });
+
       it('PARTIAL: succeeded short of the plan reads partial, never done', () => {
         startRun(lang);
         registry.set(makeJob({ status: 'succeeded', completedChunks: 2, totalChunks: 3, percent: 100 }));
@@ -282,7 +303,7 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         startRun(lang);
         registry.set(makeJob({ status: 'canceled', completedChunks: 1, totalChunks: 3 }));
         fixture.detectChanges();
-        expect(text('bpr-outcome-canceled')).toBe(t('canceled', { done: 1 }));
+        expect(text('bpr-outcome-canceled')).withContext('one kept chapter is singular').toBe(S.canceledOne);
         expect(el('bpr-download')).not.toBeNull();
       });
     });

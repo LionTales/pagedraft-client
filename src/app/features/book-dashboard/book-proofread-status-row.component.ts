@@ -3,7 +3,9 @@ import { Subscription } from 'rxjs';
 import { BookProofreadStatusDto } from '../../core/models/book-proofread';
 import { BookProofreadService } from '../../core/services/book-proofread.service';
 import { JobRegistryService, TrackedJob, isTerminal } from '../../core/services/job-registry.service';
-import { ProofreadStringKey, ProofreadStringParams, proofreadString } from '../../core/i18n/proofread-strings';
+import {
+  ProofreadCountKey, ProofreadStringKey, ProofreadStringParams, proofreadCountString, proofreadString,
+} from '../../core/i18n/proofread-strings';
 import { RunChromeLang, formatEtaLabel, runChromeLang } from '../../core/i18n/run-strings';
 import { estimateRemainingMs } from '../../core/utils/chunk-eta';
 import { formatRelativeTime } from '../../core/utils/relative-time';
@@ -314,16 +316,16 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
 
   get staleText(): string {
     const stale = this.status?.chaptersStale ?? 0;
-    return stale > 0 ? this.t('staleNote', { count: stale }) : '';
+    return stale > 0 ? this.tCount('staleNote', stale, { count: stale }) : '';
   }
 
   get outcomeText(): string {
     const o = this.outcome;
     if (!o) return '';
     switch (o.kind) {
-      case 'done': return this.t('doneSummary', { count: o.done });
+      case 'done': return this.tCount('doneSummary', o.done, { count: o.done });
       case 'partial': return this.t('partial', { done: o.done, total: o.total });
-      case 'canceled': return this.t('canceled', { done: o.done });
+      case 'canceled': return this.tCount('canceled', o.done, { done: o.done });
       case 'failed': return this.t('failed');
     }
   }
@@ -336,6 +338,11 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
 
   t(key: ProofreadStringKey, params?: ProofreadStringParams): string {
     return proofreadString(this.lang, key, params);
+  }
+
+  /** A chapter-count string: the singular at exactly 1, the plural otherwise. */
+  tCount(key: ProofreadCountKey, count: number, params?: ProofreadStringParams): string {
+    return proofreadCountString(this.lang, key, count, params);
   }
 
   // ── Actions ─────────────────────────────────────────────────────────────────────────────────────
