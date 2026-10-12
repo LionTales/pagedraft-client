@@ -15,6 +15,9 @@ import { RunChromeLang } from './run-strings';
  * copy read "and take about Estimated time remaining: ...". The row renders `formatEtaLabel` (run-strings.ts)
  * as its OWN line instead, so it and the run dialog still never disagree on how a duration reads.
  *
+ * c8: the consent's ETA is now the SERVER's estimate off the status read (c7), rendered the same way, so
+ * the old pace line ("an estimate appears once the run starts") is gone: it stopped being true.
+ *
  * Hebrew is DRAFT and needs native-speaker review. No em-dash in any user-facing string.
  */
 
@@ -33,7 +36,6 @@ export type ProofreadStringKey =
   // ── consent (shows the plan before any model time is spent) ──
   | 'consentTitle'
   | 'consentBody'
-  | 'consentPace'
   | 'consentSkipped'
   | 'consentRerun'
   | 'consentConfirm'
@@ -74,7 +76,6 @@ export const PROOFREAD_STRINGS_HE: Record<ProofreadStringKey, string> = {
 
   consentTitle:   'להגיה את כל הספר?',
   consentBody:    'ההגהה תעבור על {chapters} פרקים, אחד אחרי השני. אפשר להמשיך לעבוד בינתיים.',
-  consentPace:    'כל פרק נמשך כמה דקות. זמן משוער יוצג עם תחילת ההגהה.',
   consentSkipped: '{skipped} פרקים שכבר הוגהו ולא השתנו ידולגו.',
   consentRerun:   'כל הפרקים כבר הוגהו. הגהה חוזרת תחליף את הצעות התיקון הקיימות בכל פרק.',
   consentConfirm: 'התחל הגהה',
@@ -115,7 +116,6 @@ export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
 
   consentTitle:   'Proofread the whole book?',
   consentBody:    'This will proofread {chapters} chapters, one after another. You can keep working meanwhile.',
-  consentPace:    'Each chapter takes a few minutes. An estimate appears once the run starts.',
   consentSkipped: '{skipped} chapters already proofread and unchanged will be skipped.',
   consentRerun:   'Every chapter is already proofread. Running again replaces the existing suggestions in each chapter.',
   consentConfirm: 'Start proofreading',

@@ -271,13 +271,14 @@ export function skippedNotice(count: number, names: string[], lang: ExportLang):
  * (`X-Export-Annotation-Count`, `X-Export-Unanchored-Count`); nothing here predicts them.
  */
 export function annotationNotice(placed: number, unanchored: number, lang: ExportLang): string {
-  // DRAFT he - needs native review
+  // DRAFT he - needs native review. c8: the singular at exactly 1 ('1 הערות' / '1 comments' read wrong).
   if (lang === 'he') {
-    return unanchored > 0 ? `${placed} הערות, ${unanchored} לא אותרו` : `${placed} הערות`;
+    const comments = placed === 1 ? 'הערה אחת' : `${placed} הערות`;
+    const lost = unanchored === 1 ? 'אחת לא אותרה' : `${unanchored} לא אותרו`;
+    return unanchored > 0 ? `${comments}, ${lost}` : comments;
   }
-  return unanchored > 0
-    ? `${placed} comments, ${unanchored} could not be placed`
-    : `${placed} comments`;
+  const comments = placed === 1 ? '1 comment' : `${placed} comments`;
+  return unanchored > 0 ? `${comments}, ${unanchored} could not be placed` : comments;
 }
 
 /**

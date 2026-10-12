@@ -53,6 +53,9 @@ describe('BookProofreadService (f2)', () => {
   it('getStatus GETs proofread/status?language= and returns the DTO', () => {
     const dto: BookProofreadStatusDto = {
       activeJobId: 'j9', chaptersWithText: 5, chaptersWithActiveProofread: 3, chaptersStale: 1, lastRunAt: null,
+      plannedChapters: 3, estimatedChunks: 6, estimatedSeconds: 240,
+      forcePlannedChapters: 5, forceEstimatedChunks: 10, forceEstimatedSeconds: 400,
+      unreliableChapters: [{ chapterId: 'c1', title: 'אילון', order: 0 }],
     };
     let got: BookProofreadStatusDto | undefined;
     svc.getStatus('b1', 'en').subscribe(r => (got = r));

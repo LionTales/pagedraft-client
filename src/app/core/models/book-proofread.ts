@@ -42,4 +42,31 @@ export interface BookProofreadStatusDto {
   chaptersStale: number;
   /** ISO timestamp of the newest Active proofread result; null when the book was never proofread. */
   lastRunAt: string | null;
+  /**
+   * c7/c8: what `POST .../proofread?force=false` would plan RIGHT NOW (the server's one planning method feeds
+   * both the start and this status, so the consent cannot disagree with the run it starts). 0 = nothing.
+   */
+  plannedChapters: number;
+  estimatedChunks: number;
+  /** Whole-run estimate in seconds for the non-forced plan; 0 when nothing would run. */
+  estimatedSeconds: number;
+  /** The same trio for `force=true` (the "run again" path). */
+  forcePlannedChapters: number;
+  forceEstimatedChunks: number;
+  forceEstimatedSeconds: number;
+  /**
+   * Chapters, in reading order, whose Active proofread result (chapter or scene scope, in the status
+   * language) the system flagged unreliable. The export page asks the author whether to include or skip them.
+   */
+  unreliableChapters: BookProofreadUnreliableChapter[];
+}
+
+/**
+ * A chapter whose Active proofread result was flagged unreliable. `order` is the STORED 0-based
+ * `Chapter.Order`; render it only through `chapterDisplayNumber`, never directly.
+ */
+export interface BookProofreadUnreliableChapter {
+  chapterId: string;
+  title: string;
+  order: number;
 }

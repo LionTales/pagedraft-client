@@ -18,13 +18,31 @@ import { BookProofreadStatusDto, StartBookProofreadResponse } from '../../core/m
 import { PROOFREAD_STRINGS_EN, PROOFREAD_STRINGS_HE, proofreadString } from '../../core/i18n/proofread-strings';
 import { EMPTY_CHUNK_CLOCK } from '../../core/utils/chunk-eta';
 
+/**
+ * A status read. The c7 plan fields default to what the server's planner would say for the counts given
+ * (planned = with text minus fresh; forced = every chapter with text; 80 s per planned chapter), so a
+ * fixture that only names counts still describes one coherent server state. Overrides win.
+ */
 function makeStatus(overrides: Partial<BookProofreadStatusDto> = {}): BookProofreadStatusDto {
-  return {
+  const counts = {
     activeJobId: null,
     chaptersWithText: 3,
     chaptersWithActiveProofread: 0,
     chaptersStale: 0,
     lastRunAt: null,
+    ...overrides,
+  };
+  const fresh = Math.max(0, counts.chaptersWithActiveProofread - counts.chaptersStale);
+  const planned = Math.max(0, counts.chaptersWithText - fresh);
+  return {
+    ...counts,
+    plannedChapters: planned,
+    estimatedChunks: planned * 2,
+    estimatedSeconds: planned * 80,
+    forcePlannedChapters: counts.chaptersWithText,
+    forceEstimatedChunks: counts.chaptersWithText * 2,
+    forceEstimatedSeconds: counts.chaptersWithText * 80,
+    unreliableChapters: [],
     ...overrides,
   };
 }
@@ -212,7 +230,7 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         expect(text('bpr-blocked')).toBe(S.needsImport);
       });
 
-      it('CONSENT: re-reads status, then shows planned + skipped chapters and the pace line; starts nothing', () => {
+      it('CONSENT: re-reads status, then shows planned + skipped chapters and the server ETA; starts nothing', () => {
         init(lang);
         answerStatus(makeStatus({ chaptersWithActiveProofread: 2, chaptersStale: 1 }));
         el('bpr-start')!.click();
@@ -223,7 +241,11 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         // 3 with text, 1 fresh (2 active - 1 stale) -> 2 planned, 1 skipped.
         expect(text('bpr-consent-body')).toBe(t('consentBody', { chapters: 2 }));
         expect(text('bpr-consent-skipped')).withContext('one skipped chapter is singular').toBe(S.consentSkippedOne);
-        expect(text('bpr-consent-pace')).toBe(S.consentPace);
+        // c8: the NON-forced estimate, 160 s -> ceil(160 / 60) = 3 minutes, through formatEtaLabel's own
+        // template (derived from the rule, not from running the component).
+        expect(text('bpr-consent-eta')).toBe(
+          lang === 'he' ? 'זמן משוער שנותר: כ-3 דקות' : 'Estimated time remaining: about 3 minutes');
+        expect(el('bpr-consent-pace')).withContext('the old "estimate appears later" line is gone').toBeNull();
         expect(el('bpr-consent-rerun')).toBeNull();
         expect(startCalls.length).toBe(0);
       });
@@ -237,6 +259,50 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         expect(text('bpr-consent-rerun')).toBe(S.consentRerun);
         el('bpr-consent-confirm')!.click();
         expect(startCalls[0].args).toEqual(['book-1', lang, true]);
+      });
+
+      it('c8 CONSENT ETA (normal): the planned count and estimate come from the SERVER plan, not a derivation', () => {
+        init(lang);
+        // The server plans 1 chapter (an unreliable result counts as due) even though the counts alone
+        // would derive 0: the consent must follow the server.
+        const s = makeStatus({
+          chaptersWithText: 2, chaptersWithActiveProofread: 2, chaptersStale: 0,
+          plannedChapters: 1, estimatedChunks: 2, estimatedSeconds: 80,
+        });
+        answerStatus(s);
+        el('bpr-start')!.click();
+        answerStatus(s);
+        expect(text('bpr-consent-body')).toBe(S.consentBodyOne);
+        expect(text('bpr-consent-skipped')).toBe(S.consentSkippedOne);
+        // 80 s -> ceil(80 / 60) = 2 minutes.
+        expect(text('bpr-consent-eta')).toBe(
+          lang === 'he' ? 'זמן משוער שנותר: כ-2 דקות' : 'Estimated time remaining: about 2 minutes');
+      });
+
+      it('c8 CONSENT ETA (forced): the run-again consent shows the FORCE plan and estimate', () => {
+        init(lang);
+        const s = makeStatus({
+          chaptersWithText: 2, chaptersWithActiveProofread: 2,
+          plannedChapters: 0, estimatedChunks: 0, estimatedSeconds: 0,
+          forcePlannedChapters: 2, forceEstimatedChunks: 4, forceEstimatedSeconds: 160,
+        });
+        answerStatus(s);
+        el('bpr-run-again')!.click();
+        answerStatus(s);
+        expect(text('bpr-consent-body')).toBe(t('consentBody', { chapters: 2 }));
+        expect(text('bpr-consent-eta')).toBe(
+          lang === 'he' ? 'זמן משוער שנותר: כ-3 דקות' : 'Estimated time remaining: about 3 minutes');
+      });
+
+      it('c8 CONSENT ETA: an estimate of 0 renders NO ETA line', () => {
+        init(lang);
+        const s = makeStatus({ chaptersWithActiveProofread: 3, forceEstimatedSeconds: 0 });
+        answerStatus(s);
+        el('bpr-run-again')!.click();
+        answerStatus(s);
+        expect(el('bpr-consent')).not.toBeNull();
+        expect(el('bpr-consent-eta')).toBeNull();
+        expect(fixture.nativeElement.textContent).not.toContain(lang === 'he' ? 'זמן משוער' : 'Estimated time');
       });
 
       it('RUNNING: counts off the registry job, the inline bar, the server ETA and a cancel action', () => {

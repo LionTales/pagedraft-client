@@ -78,6 +78,24 @@ export const EXPORT_ANNOTATION_COUNT_HEADER = 'X-Export-Annotation-Count';
 /** How many pending suggestions could not be placed in the text, so they are NOT in the file. */
 export const EXPORT_UNANCHORED_COUNT_HEADER = 'X-Export-Unanchored-Count';
 
+/**
+ * c7/c8: how many CHAPTERS an annotated export left un-annotated because the author chose to skip results
+ * the system flagged unreliable (`?unreliable=skip`). Written on the two `/proofread` endpoints only, `"0"`
+ * on include; exposed through the API's CORS `WithExposedHeaders`.
+ */
+export const EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER = 'X-Export-Unreliable-Skipped-Count';
+
+/**
+ * The annotated exports' `?unreliable=` query: `include` (the default, every pending suggestion) or `skip`
+ * (a unit whose Active proofread result is flagged unreliable keeps its text but gets no annotations).
+ */
+export type UnreliableExportMode = 'include' | 'skip';
+
+/** Read {@link EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER}; null when absent or not a plain non-negative integer. */
+export function unreliableSkippedFromHeader(value: string | null): number | null {
+  return countFromHeader(value);
+}
+
 /** What an annotated export holds: comments placed, and suggestions that found no place in the text. */
 export interface ExportAnnotationReport {
   placed: number;
@@ -164,6 +182,11 @@ export interface ExportedFile {
    * not say. Optional so the plain-export callers and fixtures need no change.
    */
   annotations?: ExportAnnotationReport | null;
+  /**
+   * c8: chapters left un-annotated by `?unreliable=skip`, off {@link EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER};
+   * null/absent on a plain export or when the server did not say.
+   */
+  unreliableSkipped?: number | null;
 }
 
 /**

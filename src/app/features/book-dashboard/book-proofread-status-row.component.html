@@ -115,7 +115,10 @@
         } @else if (consent.skipped > 0) {
           <p class="sb-consent-body" data-testid="bpr-consent-skipped">{{ tCount('consentSkipped', consent.skipped, { skipped: consent.skipped }) }}</p>
         }
-        <p class="sb-consent-estimate" data-testid="bpr-consent-pace">{{ t('consentPace') }}</p>
+        <!-- c8: the server's estimate for exactly this plan (forced or not); no line when it is 0. -->
+        @if (consentEtaText) {
+          <p class="sb-consent-estimate" data-testid="bpr-consent-eta">{{ consentEtaText }}</p>
+        }
         <div class="sb-consent-actions">
           <button
             type="button"

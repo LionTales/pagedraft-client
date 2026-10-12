@@ -14,7 +14,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { ActivatedRoute, provideRouter } from '@angular/router';
-import { BehaviorSubject, Observable, Subject, throwError } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
 
 import { BookDetailDto, ChapterSummaryDto } from '../../core/models/book';
 import {
@@ -22,7 +22,11 @@ import {
   ExportFailure,
   ExportSkipReport,
   ExportedFile,
+  UnreliableExportMode,
 } from '../../core/models/export';
+import { BookProofreadStatusDto, BookProofreadUnreliableChapter } from '../../core/models/book-proofread';
+import { BookProofreadService } from '../../core/services/book-proofread.service';
+import { UNRELIABLE_EXPORT_COPY } from './unreliable-export';
 import { BookService } from '../../core/services/book.service';
 import { ExportService } from '../../core/services/export.service';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
@@ -78,6 +82,16 @@ function file(name: string, skipped: ExportSkipReport | null = { count: 0, chapt
   return { blob: new Blob(['x']), fileName: name, skipped };
 }
 
+/** c8: a proofread status read whose only interesting field here is the flagged-chapter list. */
+function proofreadStatusDto(unreliableChapters: BookProofreadUnreliableChapter[]): BookProofreadStatusDto {
+  return {
+    activeJobId: null, chaptersWithText: 3, chaptersWithActiveProofread: 3, chaptersStale: 0, lastRunAt: null,
+    plannedChapters: 0, estimatedChunks: 0, estimatedSeconds: 0,
+    forcePlannedChapters: 3, forceEstimatedChunks: 6, forceEstimatedSeconds: 240,
+    unreliableChapters,
+  };
+}
+
 describe('ExportPageComponent (Wave 3 / w4)', () => {
   let fixture: ComponentFixture<ExportPageComponent>;
   let component: ExportPageComponent;
@@ -109,8 +123,13 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
   let chapterFiles: Subject<ExportedFile>;
   let bookResponse: () => Observable<ExportedFile>;
   let chapterResponse: () => Observable<ExportedFile>;
+  /** c8: what the proofread status read answers (default: nothing flagged), and every read made. */
+  let proofreadStatus: () => Observable<BookProofreadStatusDto>;
+  let statusReads: string[];
 
   beforeEach(async () => {
+    proofreadStatus = () => of(proofreadStatusDto([]));
+    statusReads = [];
     bookSubject = new Subject<BookDetailDto>();
     bookRequests = [];
     paramsSubject = new BehaviorSubject<{ bookId: string | null }>({ bookId: BOOK_ID });
@@ -131,12 +150,12 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
         calls.push(`chapter:${bookId}:${chapterId}`);
         return chapterResponse();
       },
-      exportBookProofread: (bookId: string) => {
-        calls.push(`book-proofread:${bookId}`);
+      exportBookProofread: (bookId: string, unreliable?: UnreliableExportMode) => {
+        calls.push(`book-proofread:${bookId}:${unreliable}`);
         return bookResponse();
       },
-      exportChapterProofread: (bookId: string, chapterId: string) => {
-        calls.push(`chapter-proofread:${bookId}:${chapterId}`);
+      exportChapterProofread: (bookId: string, chapterId: string, unreliable?: UnreliableExportMode) => {
+        calls.push(`chapter-proofread:${bookId}:${chapterId}:${unreliable}`);
         return chapterResponse();
       },
       saveAs: (f: ExportedFile) => {
@@ -160,6 +179,15 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
         },
         { provide: ExportService, useValue: exportStub },
         { provide: JobRegistryService, useValue: { activeJobs$: activeJobs$.asObservable() } },
+        {
+          provide: BookProofreadService,
+          useValue: {
+            getStatus: (bookId: string, language: string) => {
+              statusReads.push(`${bookId}:${language}`);
+              return proofreadStatus();
+            },
+          },
+        },
       ],
     }).compileComponents();
 
@@ -263,7 +291,7 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
     it('dispatches the book proofread kind to the book proofread export only', () => {
       loadBook();
       click('export-download-book-docx-proofread');
-      expect(calls).toEqual([`book-proofread:${BOOK_ID}`]);
+      expect(calls).toEqual([`book-proofread:${BOOK_ID}:include`]);
     });
 
     it('dispatches the chapter proofread kind with the picked chapter', () => {
@@ -271,7 +299,7 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       component.selectedChapterId = 'ch-1';
       fixture.detectChanges();
       click('export-download-chapter-docx-proofread');
-      expect(calls).toEqual([`chapter-proofread:${BOOK_ID}:ch-1`]);
+      expect(calls).toEqual([`chapter-proofread:${BOOK_ID}:ch-1:include`]);
     });
 
     it('keeps the original chapter picker test id and gives the proofread kind its own', () => {
@@ -310,6 +338,190 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
         expect(annotationNotice(4, 2, lang)).not.toMatch(/[–—]/);
         expect(annotationNotice(4, 2, lang)).toContain('2');
       }
+    });
+  });
+
+  // ── c8: results flagged unreliable are asked about BEFORE an annotated export ───────────────────────
+
+  describe('c8: the unreliable-results choice on the annotated kinds', () => {
+    const FLAGGED_FIRST: BookProofreadUnreliableChapter = { chapterId: 'ch-0', title: 'אילון', order: 0 };
+    const FLAGGED_THIRD: BookProofreadUnreliableChapter = { chapterId: 'ch-2', title: 'Third', order: 2 };
+    const dialog = () => el('unreliable-export-dialog');
+    const items = () =>
+      fixture.debugElement.queryAll(By.css('[data-testid="unreliable-export-chapters"] li'))
+        .map(li => (li.nativeElement as HTMLElement).textContent!.trim());
+    const flag = (...chapters: BookProofreadUnreliableChapter[]) => {
+      proofreadStatus = () => of(proofreadStatusDto(chapters));
+    };
+
+    it('nothing flagged: reads status in the book language, then exports with include and asks nothing', () => {
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      expect(statusReads).toEqual([`${BOOK_ID}:he`]);
+      expect(dialog()).toBeNull();
+      expect(calls).toEqual([`book-proofread:${BOOK_ID}:include`]);
+    });
+
+    it('book kind: ANY flagged chapter opens the dialog, listing each by its 1-based number; nothing exports yet', () => {
+      flag(FLAGGED_FIRST, FLAGGED_THIRD);
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      expect(dialog()).not.toBeNull();
+      expect(calls).toEqual([]);
+      // Order 0 is chapter 1, order 2 is chapter 3: never the raw stored order.
+      expect(items()).toEqual(['פרק 1: אילון', 'פרק 3: Third']);
+      expect(el('unreliable-export-body')!.textContent!.trim()).toBe(UNRELIABLE_EXPORT_COPY.bodyMany.he);
+      expect(el('unreliable-export-skip')!.textContent!.trim()).toBe(UNRELIABLE_EXPORT_COPY.skipMany.he);
+      expect(el('export-busy-book-docx-proofread')).withContext('the question is not a busy state').toBeNull();
+      expect((el('export-download-book-docx') as HTMLButtonElement).disabled)
+        .withContext('no kind can start while the question is open').toBeTrue();
+    });
+
+    it('chapter kind: asks only when the PICKED chapter is listed', () => {
+      flag(FLAGGED_THIRD);
+      loadBook('he');
+      component.selectedChapterId = 'ch-1';
+      fixture.detectChanges();
+      click('export-download-chapter-docx-proofread');
+      expect(dialog()).toBeNull();
+      expect(calls).toEqual([`chapter-proofread:${BOOK_ID}:ch-1:include`]);
+      chapterFiles.next(file('c.docx'));
+      fixture.detectChanges();
+
+      component.selectedChapterId = 'ch-2';
+      fixture.detectChanges();
+      click('export-download-chapter-docx-proofread');
+      expect(dialog()).not.toBeNull();
+      expect(items()).toEqual(['פרק 3: Third']);
+      expect(el('unreliable-export-skip')!.textContent!.trim()).toBe(UNRELIABLE_EXPORT_COPY.skipOne.he);
+      expect(calls.length).toBe(1);
+    });
+
+    it('"Export everything" is the default focus and exports with include', () => {
+      flag(FLAGGED_FIRST);
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      expect(document.activeElement).toBe(el('unreliable-export-include'));
+      click('unreliable-export-include');
+      expect(dialog()).toBeNull();
+      expect(calls).toEqual([`book-proofread:${BOOK_ID}:include`]);
+      expect(el('export-busy-book-docx-proofread')).not.toBeNull();
+      bookFiles.next({ ...file('b.docx'), annotations: { placed: 14, unanchored: 3 }, unreliableSkipped: 0 });
+      fixture.detectChanges();
+      expect(saved.length).toBe(1);
+      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('14 הערות, 3 לא אותרו');
+      expect(el('export-unreliable-skipped-book-docx-proofread')).toBeNull();
+    });
+
+    it('"Skip" exports with skip and the notice names the skipped chapter from the server count (he)', () => {
+      flag(FLAGGED_FIRST);
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      click('unreliable-export-skip');
+      expect(calls).toEqual([`book-proofread:${BOOK_ID}:skip`]);
+      bookFiles.next({ ...file('b.docx'), annotations: { placed: 6, unanchored: 3 }, unreliableSkipped: 1 });
+      fixture.detectChanges();
+      expect(el('export-unreliable-skipped-book-docx-proofread')!.textContent!.trim())
+        .toBe('הצעות התיקון של פרק אחד דולגו (פרק 1: אילון).');
+    });
+
+    it('"Skip" in English, two chapters: the plural, both named', () => {
+      flag(FLAGGED_FIRST, FLAGGED_THIRD);
+      loadBook('en');
+      click('export-download-book-docx-proofread');
+      expect(items()).toEqual(['Chapter 1: אילון', 'Chapter 3: Third']);
+      expect(el('unreliable-export-include')!.textContent!.trim()).toBe('Export everything');
+      expect(el('unreliable-export-skip')!.textContent!.trim()).toBe('Skip those chapters');
+      expect(el('unreliable-export-cancel')!.textContent!.trim()).toBe('Cancel');
+      expect(dialog()!.getAttribute('dir')).toBe('ltr');
+      click('unreliable-export-skip');
+      bookFiles.next({ ...file('b.docx'), annotations: { placed: 6, unanchored: 0 }, unreliableSkipped: 2 });
+      fixture.detectChanges();
+      expect(el('export-unreliable-skipped-book-docx-proofread')!.textContent!.trim())
+        .toBe('Suggestions skipped for 2 chapters (Chapter 1: אילון, Chapter 3: Third).');
+    });
+
+    it('the notice never names chapters the server count does not match', () => {
+      flag(FLAGGED_FIRST);
+      loadBook('en');
+      click('export-download-book-docx-proofread');
+      click('unreliable-export-skip');
+      bookFiles.next({ ...file('b.docx'), annotations: { placed: 6, unanchored: 0 }, unreliableSkipped: 2 });
+      fixture.detectChanges();
+      expect(el('export-unreliable-skipped-book-docx-proofread')!.textContent!.trim())
+        .toBe('Suggestions skipped for 2 chapters.');
+    });
+
+    it('"Cancel" downloads nothing and gives the buttons back', () => {
+      flag(FLAGGED_FIRST);
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      click('unreliable-export-cancel');
+      expect(dialog()).toBeNull();
+      expect(calls).toEqual([]);
+      expect(saved).toEqual([]);
+      expect(el('export-busy-book-docx-proofread')).toBeNull();
+      expect((el('export-download-book-docx-proofread') as HTMLButtonElement).disabled).toBeFalse();
+    });
+
+    it('Escape is Cancel', () => {
+      flag(FLAGGED_FIRST);
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      fixture.detectChanges();
+      expect(dialog()).toBeNull();
+      expect(calls).toEqual([]);
+    });
+
+    it('a failed status read never blocks the download: include, with a warning', () => {
+      const warn = spyOn(console, 'warn');
+      proofreadStatus = () => throwError(() => new Error('500'));
+      loadBook('he');
+      click('export-download-chapter-docx-proofread');
+      expect(dialog()).toBeNull();
+      expect(calls).toEqual([`chapter-proofread:${BOOK_ID}:ch-0:include`]);
+      expect(warn).toHaveBeenCalled();
+    });
+
+    it('while the status read is in flight the row is busy and nothing has exported', () => {
+      proofreadStatus = () => NEVER;
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      expect(el('export-busy-book-docx-proofread')).not.toBeNull();
+      expect(dialog()).toBeNull();
+      expect(calls).toEqual([]);
+    });
+
+    it('a same-route book change drops an open question', () => {
+      flag(FLAGGED_FIRST);
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      expect(dialog()).not.toBeNull();
+      bookSubject = new Subject<BookDetailDto>();
+      paramsSubject.next({ bookId: 'book-2' });
+      fixture.detectChanges();
+      expect(dialog()).toBeNull();
+      expect(component.unreliablePrompt).toBeNull();
+    });
+
+    it('dialog copy: he/en parity, no dash, no model or vendor name', () => {
+      const forbidden = /gemma|ollama|openai|gpt|claude|anthropic|azure|nemotron|dicta|mistral|llama/i;
+      for (const value of Object.values(UNRELIABLE_EXPORT_COPY)) {
+        for (const lang of ['he', 'en'] as const) {
+          expect(value[lang].trim().length).toBeGreaterThan(0);
+          expect(value[lang]).not.toMatch(/[–—]/);
+          expect(value[lang]).not.toMatch(forbidden);
+        }
+        expect(value.he).toMatch(/[֐-׿]/);
+      }
+    });
+
+    it('annotation counts read in the singular at 1 (he/en)', () => {
+      expect(annotationNotice(1, 0, 'he')).toBe('הערה אחת');
+      expect(annotationNotice(1, 1, 'he')).toBe('הערה אחת, אחת לא אותרה');
+      expect(annotationNotice(1, 0, 'en')).toBe('1 comment');
+      expect(annotationNotice(2, 1, 'en')).toBe('2 comments, 1 could not be placed');
     });
   });
 
@@ -904,6 +1116,7 @@ describe('ExportPageComponent ?kind= focus (c6)', () => {
         { provide: BookService, useValue: { getById: () => new BehaviorSubject(book('he', [chapter(0)])).asObservable() } },
         { provide: ExportService, useValue: {} },
         { provide: JobRegistryService, useValue: { activeJobs$: new BehaviorSubject<TrackedJob[]>([]).asObservable() } },
+        { provide: BookProofreadService, useValue: {} },
       ],
     }).compileComponents();
     const fx = TestBed.createComponent(ExportPageComponent);

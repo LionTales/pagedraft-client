@@ -28,6 +28,8 @@ import {
   isExportFailure,
   annotationReportFromHeaders,
   skipReportFromHeaders,
+  EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER,
+  unreliableSkippedFromHeader,
 } from '../models/export';
 import { ExportService } from './export.service';
 
@@ -35,8 +37,9 @@ const BOOK_ID = '11111111-1111-1111-1111-111111111111';
 const CHAPTER_ID = '22222222-2222-2222-2222-222222222222';
 const BOOK_URL = `/api/document/export/book/${BOOK_ID}`;
 const CHAPTER_URL = `/api/document/export/chapter/${BOOK_ID}/${CHAPTER_ID}`;
-const BOOK_PROOFREAD_URL = `${BOOK_URL}/proofread`;
-const CHAPTER_PROOFREAD_URL = `${CHAPTER_URL}/proofread`;
+// c8: the annotated calls always SEND the unreliable mode; the default is include.
+const BOOK_PROOFREAD_URL = `${BOOK_URL}/proofread?unreliable=include`;
+const CHAPTER_PROOFREAD_URL = `${CHAPTER_URL}/proofread?unreliable=include`;
 
 /** A Content-Disposition exactly as the API emits it: the plain parameter AND the RFC 5987 one. */
 function disposition(name: string, asciiFallback = 'book.docx'): string {
@@ -304,6 +307,45 @@ describe('ExportService (Wave 3 / w4)', () => {
       expect(annotationReportFromHeaders('5', null)).toEqual({ placed: 5, unanchored: 0 });
       expect(annotationReportFromHeaders('5', 'x')).toEqual({ placed: 5, unanchored: 0 });
       expect(annotationReportFromHeaders(' 7 ', ' 2 ')).toEqual({ placed: 7, unanchored: 2 });
+    });
+
+    it('c8: sends ?unreliable=skip on BOTH annotated paths and reads the skipped-chapter header', () => {
+      let book: ExportedFile | undefined;
+      let chapter: ExportedFile | undefined;
+      svc.exportBookProofread(BOOK_ID, 'skip').subscribe(f => (book = f));
+      svc.exportChapterProofread(BOOK_ID, CHAPTER_ID, 'skip').subscribe(f => (chapter = f));
+      http.expectOne(`${BOOK_URL}/proofread?unreliable=skip`).flush(docx(), {
+        headers: { 'X-Export-Annotation-Count': '6', 'X-Export-Unanchored-Count': '3', 'X-Export-Unreliable-Skipped-Count': '1' },
+      });
+      http.expectOne(`${CHAPTER_URL}/proofread?unreliable=skip`).flush(docx(), {
+        headers: { 'X-Export-Annotation-Count': '0', 'X-Export-Unreliable-Skipped-Count': '1' },
+      });
+      expect(book!.unreliableSkipped).toBe(1);
+      expect(book!.annotations).toEqual({ placed: 6, unanchored: 3 });
+      expect(chapter!.unreliableSkipped).toBe(1);
+    });
+
+    it('c8: include reads a skipped count of 0, and a plain export reports none', () => {
+      let annotated: ExportedFile | undefined;
+      let plain: ExportedFile | undefined;
+      svc.exportBookProofread(BOOK_ID).subscribe(f => (annotated = f));
+      svc.exportBook(BOOK_ID).subscribe(f => (plain = f));
+      http.expectOne(BOOK_PROOFREAD_URL).flush(docx(), {
+        headers: { 'X-Export-Annotation-Count': '14', 'X-Export-Unreliable-Skipped-Count': '0' },
+      });
+      http.expectOne(BOOK_URL).flush(docx());
+      expect(annotated!.unreliableSkipped).toBe(0);
+      expect(plain!.unreliableSkipped).toBeNull();
+    });
+
+    it('c8: reads the skipped-chapter header defensively', () => {
+      expect(unreliableSkippedFromHeader(null)).toBeNull();
+      expect(unreliableSkippedFromHeader('')).toBeNull();
+      expect(unreliableSkippedFromHeader('two')).toBeNull();
+      expect(unreliableSkippedFromHeader('-1')).toBeNull();
+      expect(unreliableSkippedFromHeader('1.5')).toBeNull();
+      expect(unreliableSkippedFromHeader(' 2 ')).toBe(2);
+      expect(EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER).toBe('X-Export-Unreliable-Skipped-Count');
     });
   });
 

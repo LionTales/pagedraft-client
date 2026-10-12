@@ -25,6 +25,8 @@ export interface BookProofreadConsent {
   force: boolean;
   chapters: number;
   skipped: number;
+  /** c8: the server's whole-run estimate for THIS plan (forced or not), off the same status read. 0 = none. */
+  estimatedSeconds: number;
 }
 
 /** The empty-run job id the API answers when `started === false`. */
@@ -45,8 +47,9 @@ const EMPTY_JOB_ID = '00000000-0000-0000-0000-000000000000';
  * ── The consent reads status FIRST ──────────────────────────────────────────────────────────────
  * Opening the consent re-reads the run status, and a run already in flight (another tab, another
  * session) is ATTACHED instead of being offered a second consent. The planned/skipped counts come from
- * that same fresh read. The API has no dry-run, so the consent carries the chapter count but no ETA:
- * the server's estimate arrives on the start response and renders as soon as the run starts.
+ * that same fresh read, and so does the ETA (c8): the status carries the server's plan for both a normal
+ * start and a forced one (c7), computed by the same planning method the start uses, so the consent and
+ * the run it starts cannot disagree. An estimate of 0 renders no ETA line at all.
  *
  * ── Outcomes ────────────────────────────────────────────────────────────────────────────────────
  * The parent's `completedChunks` is chapters PROOFREAD (a failed chapter advances the run but not that
@@ -264,6 +267,15 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     return formatEtaLabel(this.lang, this.estimatedSeconds * 1000 * fraction);
   }
 
+  /**
+   * c8: the consent's ETA line, the server's estimate for the plan on the prompt through the same
+   * `formatEtaLabel` the running line uses. Empty (no line) when the estimate is 0 or missing.
+   */
+  get consentEtaText(): string {
+    const seconds = this.consent?.estimatedSeconds ?? 0;
+    return seconds > 0 ? formatEtaLabel(this.lang, seconds * 1000) : '';
+  }
+
   // ── Derived idle view ───────────────────────────────────────────────────────────────────────────
 
   get buildInputs(): BuildInputs {
@@ -285,10 +297,16 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     return s ? Math.max(0, s.chaptersWithActiveProofread - s.chaptersStale) : 0;
   }
 
-  /** Chapters a non-forced run would proofread now. */
+  /**
+   * Chapters a non-forced run would proofread now: the SERVER's plan (c7), which also counts a chapter
+   * whose result was flagged unreliable as due. The derivation is only the fallback for a server that
+   * does not send it yet.
+   */
   get plannedChapters(): number {
     const s = this.status;
-    return s ? Math.max(0, s.chaptersWithText - this.freshChapters) : 0;
+    if (!s) return 0;
+    if (typeof s.plannedChapters === 'number') return Math.max(0, s.plannedChapters);
+    return Math.max(0, s.chaptersWithText - this.freshChapters);
   }
 
   /** Every chapter with text is already fresh: the only run left is a forced one. */
@@ -369,9 +387,16 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
           return;
         }
         if (force) {
-          this.consent = { force: true, chapters: s.chaptersWithText, skipped: 0 };
+          const chapters = typeof s.forcePlannedChapters === 'number' ? s.forcePlannedChapters : s.chaptersWithText;
+          this.consent = { force: true, chapters, skipped: 0, estimatedSeconds: s.forceEstimatedSeconds ?? 0 };
         } else if (this.plannedChapters > 0) {
-          this.consent = { force: false, chapters: this.plannedChapters, skipped: this.freshChapters };
+          const chapters = this.plannedChapters;
+          this.consent = {
+            force: false,
+            chapters,
+            skipped: Math.max(0, s.chaptersWithText - chapters),
+            estimatedSeconds: s.estimatedSeconds ?? 0,
+          };
         } else {
           this.nothingToDo = true;
         }
