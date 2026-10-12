@@ -533,6 +533,13 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
       // Only a job this panel actually watched RUNNING counts as "just finished here". A registry entry
       // that was already terminal when this instance mounted is history, not an event.
       if (!this.observedRunningJobIds.delete(job.id)) continue;
+      // c6 gate: a banner ADOPTED for a job this instance did not start (a remount, a reattach, or a
+      // whole-book proofread's child) has no run event to clear it; only this terminal does. Without it
+      // the "running in the background" spinner stayed up over the finished result until a context switch.
+      if (this.currentRunJobId === job.id) {
+        this.asyncJobInFlight = false;
+        this.asyncBannerActiveForRun = false;
+      }
       this.noteRunTerminal(job.id);
     }
 

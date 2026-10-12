@@ -2432,6 +2432,40 @@ describe('AnalysisPanelComponent (focused logic)', () => {
       expect(hostFixture.nativeElement.querySelector('app-job-progress-inline')).not.toBeNull();
     });
 
+    it('c6 gate: an ADOPTED banner comes down when its job goes terminal in the registry', () => {
+      // Found in the c6 browser gate: a whole-book proofread's child job (started server-side, never by
+      // this panel) raised the banner through the adopt path, finished, the history refetch landed the new
+      // cards, and the "running in the background" spinner stayed up over them at 100% for minutes. The
+      // adopt path had no terminal counterpart; only an owned run's own events ever cleared it.
+      registryJobs.next([proofreadJob('running')]);
+      const panel = mountHost();
+      hostFixture.detectChanges();
+      expect(panel.asyncJobInFlight).withContext('precondition: the banner was adopted').toBeTrue();
+
+      registryJobs.next([proofreadJob('succeeded')]);
+      hostFixture.detectChanges();
+
+      expect(panel.asyncJobInFlight)
+        .withContext('the job the banner mirrors is terminal, so the banner must not still say running')
+        .toBeFalse();
+      expect(hostFixture.nativeElement.querySelector('.async-job-banner')).toBeNull();
+    });
+
+    it('c6 gate: a job going terminal does not take down a banner that mirrors a DIFFERENT, live job', () => {
+      // Two jobs for the same unit: the banner mirrors the later-adopted one (job-B). job-A finishing is
+      // news for the history refetch, not for a banner that is following a run that is still going.
+      registryJobs.next([proofreadJob('running'), proofreadJob('running', 'job-B')]);
+      const panel = mountHost();
+      hostFixture.detectChanges();
+      expect((panel as any).currentRunJobId).withContext('precondition: the banner mirrors job-B').toBe('job-B');
+
+      registryJobs.next([proofreadJob('succeeded'), proofreadJob('running', 'job-B')]);
+      hostFixture.detectChanges();
+
+      expect(panel.asyncJobInFlight).toBeTrue();
+      expect(hostFixture.nativeElement.querySelector('.async-job-banner')).not.toBeNull();
+    });
+
     it('54: the restored banner still DISMISSES, and a progress tick does not put it back', () => {
       // The restore runs on every registry emission, and a running job emits one every couple of
       // seconds. Without the one-shot ledger behind it, dismissing the banner would last until the next
