@@ -30,6 +30,7 @@ import { UNRELIABLE_EXPORT_COPY } from './unreliable-export';
 import { BookService } from '../../core/services/book.service';
 import { ExportService } from '../../core/services/export.service';
 import { JobRegistryService, TrackedJob } from '../../core/services/job-registry.service';
+import { ExportBusyStatusComponent } from './export-busy-status.component';
 import { ExportPageComponent } from './export-page.component';
 import { EXPORT_COPY, EXPORT_ERRORS, EXPORT_KINDS, SKIPPED_UNKNOWN, annotationNotice } from './export-kinds';
 
@@ -266,6 +267,29 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
 
       expect(el('export-busy-book-docx')).toBeNull();
       expect((el('export-download-book-docx') as HTMLButtonElement).disabled).toBeFalse();
+    });
+
+    it('f7: mounts the busy status with the long-wait note for proofread kinds only, and unmounts it after', () => {
+      loadBook();
+      click('export-download-book-docx');
+      const plain = fixture.debugElement.query(By.directive(ExportBusyStatusComponent));
+      expect(plain.componentInstance.longRunNote).toBeFalse();
+      expect(plain.componentInstance.lang).toBe('he');
+      bookFiles.next(file('b.docx'));
+      fixture.detectChanges();
+      expect(fixture.debugElement.query(By.directive(ExportBusyStatusComponent))).toBeNull();
+
+      click('export-download-book-docx-proofread');
+      const annotated = fixture.debugElement.query(By.directive(ExportBusyStatusComponent));
+      expect(annotated.componentInstance.longRunNote).toBeTrue();
+    });
+
+    it('f7: unmounts the busy status when the request fails', () => {
+      loadBook();
+      bookResponse = () => throwError(() => ({ status: 0 }));
+      click('export-download-book-docx');
+      expect(fixture.debugElement.query(By.directive(ExportBusyStatusComponent))).toBeNull();
+      expect(el('export-error-book-docx')).not.toBeNull();
     });
 
     it('does not start a second export while one is running', () => {

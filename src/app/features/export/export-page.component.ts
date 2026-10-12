@@ -39,6 +39,7 @@ import {
 } from './export-kinds';
 import { BookProofreadUnreliableChapter } from '../../core/models/book-proofread';
 import { BookProofreadService } from '../../core/services/book-proofread.service';
+import { ExportBusyStatusComponent } from './export-busy-status.component';
 import { UnreliableExportDialogComponent } from './unreliable-export-dialog.component';
 import {
   UnreliableChoice, relevantUnreliableChapters, unreliableChapterLabel, unreliableSkippedNotice,
@@ -79,7 +80,7 @@ import {
 @Component({
   selector: 'app-export-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, StageSpineComponent, UnreliableExportDialogComponent],
+  imports: [CommonModule, FormsModule, RouterLink, StageSpineComponent, UnreliableExportDialogComponent, ExportBusyStatusComponent],
   template: `
     <div class="export-page" [attr.dir]="dir" data-testid="export-page">
       <header class="export-header">
@@ -170,17 +171,14 @@ import {
                 </button>
               </div>
 
-              <!-- IN PROGRESS. It says the request is being prepared, which is the only thing true here:
-                   these endpoints carry no job and no progress, so no percentage is shown or implied. -->
+              <!-- IN PROGRESS (f7): spinner, "preparing", an elapsed clock, and for proofread kinds a
+                   long-wait line after 10 s. No percentage: these endpoints carry no job or progress. -->
               @if (busyKindId === kind.id) {
-                <p
-                  class="kind-busy"
-                  role="status"
-                  [attr.aria-label]="t(COPY.preparingAria)"
+                <app-export-busy-status
+                  [lang]="lang"
+                  [longRunNote]="isProofreadKind(kind)"
                   [attr.data-testid]="'export-busy-' + kind.id">
-                  <span class="kind-spinner" aria-hidden="true"></span>
-                  {{ t(COPY.preparing) }}
-                </p>
+                </app-export-busy-status>
               }
 
               <!-- The honest failure, in this book's language, naming what to do next. -->
@@ -366,30 +364,12 @@ import {
 
     .kind-download { white-space: normal; }
 
-    .kind-busy,
     .kind-error,
     .kind-done,
     .kind-unavailable {
       margin: 0;
       font-size: var(--pd-text-body-sm);
     }
-    .kind-busy {
-      display: flex;
-      flex-direction: row;
-      align-items: center;
-      gap: var(--pd-space-2);
-      color: var(--pd-info);
-    }
-    .kind-spinner {
-      inline-size: 12px;
-      block-size: 12px;
-      border: 2px solid color-mix(in srgb, var(--pd-info) 30%, transparent);
-      border-top-color: var(--pd-info);
-      border-radius: 50%;
-      animation: export-spin 0.8s linear infinite;
-    }
-    @keyframes export-spin { to { transform: rotate(360deg); } }
-
     .kind-error { color: var(--pd-cut); }
     .kind-done { color: var(--pd-keep); }
     /* Not an error (the file did land) and not a success either. It hugs the reading edge, so it mirrors. */
@@ -663,6 +643,12 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     return true;
   }
 
+  /** f7: the annotated kinds run the proofread merge server-side, so they get the long-wait line. */
+  isProofreadKind(kind: ExportKind): boolean {
+    return kind.id === 'book-docx-proofread' || kind.id === 'chapter-docx-proofread';
+  }
+
+  /** The button's label. It says what it is doing while it runs rather than going blank or spinning mute. */
   /** The button's label. It says what it is doing while it runs rather than going blank or spinning mute. */
   buttonLabel(kind: ExportKind): string {
     return this.busyKindId === kind.id ? this.t(this.COPY.preparing) : this.t(this.COPY.download);
