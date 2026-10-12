@@ -109,6 +109,22 @@
   color: var(--pd-improve);
 }
 
+// c20: the whole-book proofread's failed-chapters list. Logical padding so it indents from the reading
+// start in both directions (RTL and LTR); long titles wrap instead of widening the row.
+.bpr-failed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pd-space-1);
+}
+
+.bpr-failed-list {
+  margin: 0;
+  padding-inline-start: var(--pd-space-5);
+  font-size: var(--pd-text-caption);
+  color: var(--pd-text-secondary);
+  overflow-wrap: anywhere;
+}
+
 // ── Spinner ───────────────────────────────────────────────────────────────────
 
 .sb-spinner {

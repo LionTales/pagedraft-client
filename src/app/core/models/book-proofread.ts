@@ -59,6 +59,26 @@ export interface BookProofreadStatusDto {
    * language) the system flagged unreliable. The export page asks the author whether to include or skip them.
    */
   unreliableChapters: BookProofreadUnreliableChapter[];
+  /**
+   * c20: chapters, in reading order, whose LATEST whole-book attempt failed or came back unreliable and that no
+   * reliable proofread has covered since. A failed chapter keeps its previous result, which counts as fresh, so
+   * the normal plan skips it; `POST .../proofread?onlyFailed=true` plans exactly these. The server keeps this
+   * record IN MEMORY, so it is empty after an API restart. Optional: an older API does not send it.
+   */
+  failedChapters?: BookProofreadFailedChapter[];
+  /** The `onlyFailed` plan's estimate, from the same server planning method. 0 when nothing failed. */
+  failedEstimatedChunks?: number;
+  failedEstimatedSeconds?: number;
+}
+
+/**
+ * c20: a chapter whose latest whole-book proofread attempt failed. `order` is the STORED 0-based
+ * `Chapter.Order`; render it only through `chapterDisplayNumber`, never directly.
+ */
+export interface BookProofreadFailedChapter {
+  chapterId: string;
+  title: string;
+  order: number;
 }
 
 /**

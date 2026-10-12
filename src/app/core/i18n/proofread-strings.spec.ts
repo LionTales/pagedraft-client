@@ -77,6 +77,27 @@ describe('proofread-strings (f2)', () => {
       }
     });
 
+    it('c20: every count key has a singular twin that differs from its plural and never reads "1 chapters"', () => {
+      const countKeys = [
+        'consentBody', 'consentSkipped', 'doneSummary', 'canceled', 'staleNote',
+        'failedNote', 'retryFailedButton', 'consentRetryTitle', 'consentRetryBody', 'running',
+      ] as const;
+      const params = { chapters: 1, skipped: 1, count: 1, done: 1, total: 1 };
+      for (const k of countKeys) {
+        for (const lang of ['he', 'en'] as const) {
+          const one = proofreadCountString(lang, k, 1, params);
+          const many = proofreadCountString(lang, k, 2, { chapters: 2, skipped: 2, count: 2, done: 2, total: 2 });
+          expect(one).withContext(`${lang} ${k}`).not.toBe(many);
+          expect(one).withContext(`${lang} ${k}`).not.toMatch(/\b1 chapters\b|1 פרקים/);
+          expect(one).withContext(`${lang} ${k}`).not.toMatch(/\{\w+\}/);
+        }
+      }
+      expect(proofreadCountString('he', 'failedNote', 1, { count: 1 })).toBe('פרק אחד נכשל בהגהה האחרונה:');
+      expect(proofreadCountString('en', 'failedNote', 3, { count: 3 })).toBe('3 chapters failed in the last run:');
+      expect(proofreadString('he', 'failedChapterItem', { number: 2, title: 'יומנו' })).toBe('פרק 2: יומנו');
+      expect(proofreadString('en', 'failedChapterItemUntitled', { number: 5 })).toBe('Chapter 5');
+    });
+
     it('returns the template untouched when no params are given', () => {
       expect(proofreadString('en', 'title')).toBe(PROOFREAD_STRINGS_EN['title']);
       expect(proofreadString('he', 'title')).toBe(PROOFREAD_STRINGS_HE['title']);

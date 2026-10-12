@@ -61,7 +61,20 @@ export type ProofreadStringKey =
   | 'consentSkippedOne'
   | 'doneSummaryOne'
   | 'canceledOne'
-  | 'staleNoteOne';
+  | 'staleNoteOne'
+  // ── c20: retry the chapters that failed in the last run ──
+  | 'failedNote'
+  | 'failedNoteOne'
+  | 'failedChapterItem'
+  | 'failedChapterItemUntitled'
+  | 'retryFailedButton'
+  | 'retryFailedButtonOne'
+  | 'consentRetryTitle'
+  | 'consentRetryTitleOne'
+  | 'consentRetryBody'
+  | 'consentRetryBodyOne'
+  // c20 gate: a retry of ONE failed chapter runs as 'of 1 chapters' without this twin.
+  | 'runningOne';
 
 // DRAFT he - needs native review
 export const PROOFREAD_STRINGS_HE: Record<ProofreadStringKey, string> = {
@@ -102,6 +115,19 @@ export const PROOFREAD_STRINGS_HE: Record<ProofreadStringKey, string> = {
   doneSummaryOne:    'פרק אחד הוגה',
   canceledOne:       'ההגהה נעצרה. פרק אחד הוגה ונשמר.',
   staleNoteOne:      'פרק אחד נערך מאז ההגהה האחרונה.',
+
+  // DRAFT he - needs native review
+  failedNote:                '{count} פרקים נכשלו בהגהה האחרונה:',
+  failedNoteOne:             'פרק אחד נכשל בהגהה האחרונה:',
+  failedChapterItem:         'פרק {number}: {title}',
+  failedChapterItemUntitled: 'פרק {number}',
+  retryFailedButton:         'הגה שוב את הפרקים שנכשלו',
+  retryFailedButtonOne:      'הגה שוב את הפרק שנכשל',
+  consentRetryTitle:         'להגיה שוב את הפרקים שנכשלו?',
+  consentRetryTitleOne:      'להגיה שוב את הפרק שנכשל?',
+  consentRetryBody:          'ההגהה תעבור שוב על {chapters} הפרקים שנכשלו. שאר הפרקים לא ישתנו. אפשר להמשיך לעבוד בינתיים.',
+  consentRetryBodyOne:       'ההגהה תעבור שוב על הפרק שנכשל. שאר הפרקים לא ישתנו. אפשר להמשיך לעבוד בינתיים.',
+  runningOne:                'מגיה: {done} מתוך פרק אחד',
 };
 
 export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
@@ -141,6 +167,18 @@ export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
   doneSummaryOne:    '1 chapter proofread',
   canceledOne:       'The proofread was stopped. 1 chapter was proofread and saved.',
   staleNoteOne:      '1 chapter was edited since the last proofread.',
+
+  failedNote:                '{count} chapters failed in the last run:',
+  failedNoteOne:             '1 chapter failed in the last run:',
+  failedChapterItem:         'Chapter {number}: {title}',
+  failedChapterItemUntitled: 'Chapter {number}',
+  retryFailedButton:         'Retry the failed chapters',
+  retryFailedButtonOne:      'Retry the failed chapter',
+  consentRetryTitle:         'Retry the failed chapters?',
+  consentRetryTitleOne:      'Retry the failed chapter?',
+  consentRetryBody:          'This will proofread the {chapters} failed chapters again. The other chapters stay as they are. You can keep working meanwhile.',
+  consentRetryBodyOne:       'This will proofread the failed chapter again. The other chapters stay as they are. You can keep working meanwhile.',
+  runningOne:                'Proofreading: {done} of 1 chapter',
 };
 
 /** Substitution parameters for a proofread string. Values are stringified as-is. */
@@ -167,13 +205,23 @@ export function proofreadString(
 }
 
 /** The plural keys that have a singular twin, and that twin. */
-export type ProofreadCountKey = 'consentBody' | 'consentSkipped' | 'doneSummary' | 'canceled' | 'staleNote';
+export type ProofreadCountKey =
+  | 'consentBody' | 'consentSkipped' | 'doneSummary' | 'canceled' | 'staleNote'
+  // c20: the button and the consent title name "the failed chapters", which reads wrong at 1 too.
+  | 'failedNote' | 'retryFailedButton' | 'consentRetryTitle' | 'consentRetryBody'
+  // c20 gate: keyed on the run's TOTAL (a one-chapter run), not on the chapters done.
+  | 'running';
 const SINGULAR_OF: Record<ProofreadCountKey, ProofreadStringKey> = {
   consentBody: 'consentBodyOne',
   consentSkipped: 'consentSkippedOne',
   doneSummary: 'doneSummaryOne',
   canceled: 'canceledOne',
   staleNote: 'staleNoteOne',
+  failedNote: 'failedNoteOne',
+  retryFailedButton: 'retryFailedButtonOne',
+  consentRetryTitle: 'consentRetryTitleOne',
+  consentRetryBody: 'consentRetryBodyOne',
+  running: 'runningOne',
 };
 
 /**

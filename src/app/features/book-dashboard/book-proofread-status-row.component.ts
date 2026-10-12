@@ -1,6 +1,6 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { Subscription } from 'rxjs';
-import { BookProofreadStatusDto } from '../../core/models/book-proofread';
+import { BookProofreadFailedChapter, BookProofreadStatusDto } from '../../core/models/book-proofread';
 import { BookProofreadService } from '../../core/services/book-proofread.service';
 import { JobRegistryService, TrackedJob, isTerminal } from '../../core/services/job-registry.service';
 import {
@@ -9,6 +9,7 @@ import {
 import { RunChromeLang, formatEtaLabel, runChromeLang } from '../../core/i18n/run-strings';
 import { estimateRemainingMs } from '../../core/utils/chunk-eta';
 import { formatRelativeTime } from '../../core/utils/relative-time';
+import { chapterDisplayNumber } from '../../core/utils/chapter-number';
 import { BuildInputs, buildInputsFor, buildIsRefused } from '../../shared/stage-spine/stage-spine.model';
 import { JobProgressInlineComponent } from '../../shared/job-progress-inline/job-progress-inline.component';
 import { ExportKindId } from '../export/export-kinds';
@@ -20,9 +21,13 @@ export type BookProofreadOutcome =
   | { kind: 'canceled'; done: number; total: number }
   | { kind: 'failed'; done: number; total: number };
 
-/** What the consent prompt is about to start. `force` is the "run again" path (every chapter fresh). */
+/**
+ * What the consent prompt is about to start. `force` is the "run again" path (every chapter fresh);
+ * `onlyFailed` (c20) is the retry of the chapters that failed in the last run (the server forces those).
+ */
 export interface BookProofreadConsent {
   force: boolean;
+  onlyFailed?: boolean;
   chapters: number;
   skipped: number;
   /** c8: the server's whole-run estimate for THIS plan (forced or not), off the same status read. 0 = none. */
@@ -50,6 +55,12 @@ const EMPTY_JOB_ID = '00000000-0000-0000-0000-000000000000';
  * that same fresh read, and so does the ETA (c8): the status carries the server's plan for both a normal
  * start and a forced one (c7), computed by the same planning method the start uses, so the consent and
  * the run it starts cannot disagree. An estimate of 0 renders no ETA line at all.
+ *
+ * ── Failed chapters (c20) ───────────────────────────────────────────────────────────────────────
+ * A chapter that fails keeps its previous result, which the server counts as fresh, so a normal start
+ * would skip it. The status lists those chapters (`failedChapters`, 0-based orders shown through
+ * `chapterDisplayNumber`) with the estimate of re-running exactly them, and the row offers that retry
+ * through the same consent. The record is the server's in-memory one: after an API restart it is empty.
  *
  * ── Outcomes ────────────────────────────────────────────────────────────────────────────────────
  * The parent's `completedChunks` is chapters PROOFREAD (a failed chapter advances the run but not that
@@ -341,6 +352,20 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     return stale > 0 ? this.tCount('staleNote', stale, { count: stale }) : '';
   }
 
+  /** c20: chapters whose latest whole-book attempt failed (server order = reading order). */
+  get failedChapters(): BookProofreadFailedChapter[] {
+    return this.status?.failedChapters ?? [];
+  }
+
+  /** "פרק 3: title" / "Chapter 3: title": the 1-based number the author sees, never the stored order. */
+  failedChapterLabel(chapter: BookProofreadFailedChapter): string {
+    const number = chapterDisplayNumber(chapter.order);
+    const title = (chapter.title ?? '').trim();
+    return title
+      ? this.t('failedChapterItem', { number, title })
+      : this.t('failedChapterItemUntitled', { number });
+  }
+
   get outcomeText(): string {
     const o = this.outcome;
     if (!o) return '';
@@ -374,6 +399,41 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
    * second consent (c), and so the counts on the prompt are the ones the server will plan from.
    */
   openConsent(force: boolean): void {
+    this.prepareConsent(s => {
+      if (force) {
+        const chapters = typeof s.forcePlannedChapters === 'number' ? s.forcePlannedChapters : s.chaptersWithText;
+        return { force: true, chapters, skipped: 0, estimatedSeconds: s.forceEstimatedSeconds ?? 0 };
+      }
+      if (this.plannedChapters > 0) {
+        const chapters = this.plannedChapters;
+        return {
+          force: false,
+          chapters,
+          skipped: Math.max(0, s.chaptersWithText - chapters),
+          estimatedSeconds: s.estimatedSeconds ?? 0,
+        };
+      }
+      this.nothingToDo = true;
+      return null;
+    });
+  }
+
+  /**
+   * c20: open the consent for re-running exactly the chapters that failed in the last run, off a FRESH
+   * status read (count and ETA are the server's `onlyFailed` plan). When the fresh read lists none any
+   * more (another tab retried them, or a per-chapter run covered them), the refreshed status simply drops
+   * the failed block: there is nothing to confirm and nothing to explain.
+   */
+  openRetryConsent(): void {
+    this.prepareConsent(s => {
+      const chapters = s.failedChapters?.length ?? 0;
+      if (chapters === 0) return null;
+      return { force: false, onlyFailed: true, chapters, skipped: 0, estimatedSeconds: s.failedEstimatedSeconds ?? 0 };
+    });
+  }
+
+  /** The shared half of both consents: re-read status, attach to a run in flight, else build the prompt. */
+  private prepareConsent(build: (s: BookProofreadStatusDto) => BookProofreadConsent | null): void {
     if (!this.bookId || this.blocked || this.running || this.preparingConsent || this.starting) return;
     const bookId = this.bookId;
     const lang = this.runLanguage;
@@ -386,24 +446,7 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
         if (!this.isCurrent(bookId, lang)) return;
         this.preparingConsent = false;
         this.applyStatus(s);
-        if (this.running) {
-          this.cdr.detectChanges();
-          return;
-        }
-        if (force) {
-          const chapters = typeof s.forcePlannedChapters === 'number' ? s.forcePlannedChapters : s.chaptersWithText;
-          this.consent = { force: true, chapters, skipped: 0, estimatedSeconds: s.forceEstimatedSeconds ?? 0 };
-        } else if (this.plannedChapters > 0) {
-          const chapters = this.plannedChapters;
-          this.consent = {
-            force: false,
-            chapters,
-            skipped: Math.max(0, s.chaptersWithText - chapters),
-            estimatedSeconds: s.estimatedSeconds ?? 0,
-          };
-        } else {
-          this.nothingToDo = true;
-        }
+        if (!this.running) this.consent = build(s);
         this.cdr.detectChanges();
       },
       error: () => {
@@ -431,12 +474,16 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     this.outcome = null;
     this.nothingToDo = false;
     this.startSub?.unsubscribe();
-    this.startSub = this.proofreadService.start(bookId, lang, consent.force).subscribe({
+    const start$ = consent.onlyFailed
+      ? this.proofreadService.startFailed(bookId, lang)
+      : this.proofreadService.start(bookId, lang, consent.force);
+    this.startSub = start$.subscribe({
       next: resp => {
         if (!this.isCurrent(bookId, lang)) return;
         this.starting = false;
         if (!resp.started || !resp.jobId || resp.jobId === EMPTY_JOB_ID) {
-          this.nothingToDo = true;
+          // A retry that finds nothing recorded any more says nothing: the refreshed status drops the block.
+          this.nothingToDo = !consent.onlyFailed;
           this.loadStatus();
         } else {
           // A run that was already in flight comes back started=true with ITS id; following it is the

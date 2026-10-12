@@ -43,6 +43,18 @@ export class BookProofreadService {
     return this.http.post<StartBookProofreadResponse>(`${this.base}/${bookId}/proofread`, null, { params });
   }
 
+  /**
+   * c20: POST .../proofread?onlyFailed=true - re-run exactly the status's `failedChapters` (the server forces
+   * them and leaves every other chapter alone). Same response shape as {@link start}; `started === false`
+   * when nothing is recorded as failed any more.
+   */
+  startFailed(bookId: string, language = 'he'): Observable<StartBookProofreadResponse> {
+    const params = new HttpParams()
+      .set('language', language || 'he')
+      .set('onlyFailed', 'true');
+    return this.http.post<StartBookProofreadResponse>(`${this.base}/${bookId}/proofread`, null, { params });
+  }
+
   /** GET .../proofread/status?language= - coverage, staleness and the in-flight run id. */
   getStatus(bookId: string, language: string): Observable<BookProofreadStatusDto> {
     const lang = encodeURIComponent(language || 'he');

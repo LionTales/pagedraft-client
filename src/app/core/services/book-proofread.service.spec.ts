@@ -50,12 +50,38 @@ describe('BookProofreadService (f2)', () => {
     req.flush({});
   });
 
+  it('startFailed (c20) POSTs proofread with onlyFailed=true, the language, no force and no body', () => {
+    let got: StartBookProofreadResponse | undefined;
+    svc.startFailed('b1', 'en').subscribe(r => (got = r));
+    const req = http.expectOne(r => r.url === '/api/books/b1/proofread');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.params.get('onlyFailed')).toBe('true');
+    expect(req.request.params.get('language')).toBe('en');
+    expect(req.request.params.has('force')).toBeFalse();
+    expect(req.request.body).toBeNull();
+    const body: StartBookProofreadResponse = {
+      jobId: 'j2', started: true, skippedFresh: 0, plannedChapters: 1, estimatedChunks: 2, estimatedSeconds: 20,
+    };
+    req.flush(body);
+    expect(got).toEqual(body);
+  });
+
+  it('startFailed defaults to language he', () => {
+    svc.startFailed('b1').subscribe();
+    const req = http.expectOne(r => r.url === '/api/books/b1/proofread');
+    expect(req.request.params.get('language')).toBe('he');
+    req.flush({});
+  });
+
   it('getStatus GETs proofread/status?language= and returns the DTO', () => {
     const dto: BookProofreadStatusDto = {
       activeJobId: 'j9', chaptersWithText: 5, chaptersWithActiveProofread: 3, chaptersStale: 1, lastRunAt: null,
       plannedChapters: 3, estimatedChunks: 6, estimatedSeconds: 240,
       forcePlannedChapters: 5, forceEstimatedChunks: 10, forceEstimatedSeconds: 400,
       unreliableChapters: [{ chapterId: 'c1', title: 'אילון', order: 0 }],
+      failedChapters: [{ chapterId: 'c2', title: 'יומנו', order: 1 }],
+      failedEstimatedChunks: 2,
+      failedEstimatedSeconds: 20,
     };
     let got: BookProofreadStatusDto | undefined;
     svc.getStatus('b1', 'en').subscribe(r => (got = r));
