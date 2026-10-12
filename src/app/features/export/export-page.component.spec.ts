@@ -308,7 +308,7 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       expect(el('export-chapter-select-chapter-docx-proofread')).not.toBeNull();
     });
 
-    it('names the comment counts under the download, in Hebrew', () => {
+    it('names the tracked-change counts under the download, in Hebrew', () => {
       loadBook();
       click('export-download-book-docx-proofread');
       bookFiles.next({ ...file('b.docx'), annotations: { placed: 12, unanchored: 3 } });
@@ -316,12 +316,12 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe(annotationNotice(12, 3, 'he'));
     });
 
-    it('names only the comment count in English when nothing was unplaced', () => {
+    it('names only the tracked-change count in English when nothing was unplaced', () => {
       loadBook('en');
       click('export-download-book-docx-proofread');
       bookFiles.next({ ...file('b.docx'), annotations: { placed: 5, unanchored: 0 } });
       fixture.detectChanges();
-      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('5 comments');
+      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('5 tracked changes');
     });
 
     it('renders no annotation line for a plain download or when the server sent no counts', () => {
@@ -409,7 +409,7 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       bookFiles.next({ ...file('b.docx'), annotations: { placed: 14, unanchored: 3 }, unreliableSkipped: 0 });
       fixture.detectChanges();
       expect(saved.length).toBe(1);
-      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('14 הערות, 3 לא אותרו');
+      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('14 תיקונים מסומנים, 3 לא אותרו');
       expect(el('export-unreliable-skipped-book-docx-proofread')).toBeNull();
     });
 
@@ -518,10 +518,10 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
     });
 
     it('annotation counts read in the singular at 1 (he/en)', () => {
-      expect(annotationNotice(1, 0, 'he')).toBe('הערה אחת');
-      expect(annotationNotice(1, 1, 'he')).toBe('הערה אחת, אחת לא אותרה');
-      expect(annotationNotice(1, 0, 'en')).toBe('1 comment');
-      expect(annotationNotice(2, 1, 'en')).toBe('2 comments, 1 could not be placed');
+      expect(annotationNotice(1, 0, 'he')).toBe('תיקון מסומן אחד');
+      expect(annotationNotice(1, 1, 'he')).toBe('תיקון מסומן אחד, אחת לא אותרה');
+      expect(annotationNotice(1, 0, 'en')).toBe('1 tracked change');
+      expect(annotationNotice(2, 1, 'en')).toBe('2 tracked changes, 1 could not be placed');
     });
   });
 

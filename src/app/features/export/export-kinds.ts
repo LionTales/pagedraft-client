@@ -101,11 +101,11 @@ export const EXPORT_KINDS: readonly ExportKind[] = [
     scope: 'book',
     format: 'DOCX',
     // DRAFT he - needs native review
-    name: { he: 'הספר כולו עם הערות הגהה', en: 'The whole book with proofread comments' },
+    name: { he: 'הספר כולו עם תיקוני הגהה', en: 'The whole book with proofread changes' },
     description: {
       // DRAFT he - needs native review
-      he: 'DOCX עם הערות הגהה ושינויים מסומנים',
-      en: 'DOCX with proofread comments and tracked changes',
+      he: 'DOCX עם תיקוני ההגהה כשינויים מסומנים; הסברים מופיעים כהערות',
+      en: 'DOCX with the proofread suggestions as tracked changes; explanations appear as comments',
     },
     availability: { available: true },
   },
@@ -114,11 +114,11 @@ export const EXPORT_KINDS: readonly ExportKind[] = [
     scope: 'chapter',
     format: 'DOCX',
     // DRAFT he - needs native review
-    name: { he: 'פרק אחד עם הערות הגהה', en: 'A single chapter with proofread comments' },
+    name: { he: 'פרק אחד עם תיקוני הגהה', en: 'A single chapter with proofread changes' },
     description: {
       // DRAFT he - needs native review
-      he: 'DOCX עם הערות הגהה ושינויים מסומנים',
-      en: 'DOCX with proofread comments and tracked changes',
+      he: 'DOCX עם תיקוני ההגהה כשינויים מסומנים; הסברים מופיעים כהערות',
+      en: 'DOCX with the proofread suggestions as tracked changes; explanations appear as comments',
     },
     availability: { available: true },
   },
@@ -266,19 +266,19 @@ export function skippedNotice(count: number, names: string[], lang: ExportLang):
 }
 
 /**
- * The notice under a completed ANNOTATED download: how many comments the file holds and, when there are
+ * The notice under a completed ANNOTATED download: how many tracked changes the file holds and, when there are
  * any, how many suggestions found no place in the text and so are not in it. The counts are the SERVER's
  * (`X-Export-Annotation-Count`, `X-Export-Unanchored-Count`); nothing here predicts them.
  */
 export function annotationNotice(placed: number, unanchored: number, lang: ExportLang): string {
-  // DRAFT he - needs native review. c8: the singular at exactly 1 ('1 הערות' / '1 comments' read wrong).
+  // DRAFT he - needs native review. c8: the singular at exactly 1 ('1 תיקונים' / '1 changes' read wrong).
   if (lang === 'he') {
-    const comments = placed === 1 ? 'הערה אחת' : `${placed} הערות`;
+    const changes = placed === 1 ? 'תיקון מסומן אחד' : `${placed} תיקונים מסומנים`;
     const lost = unanchored === 1 ? 'אחת לא אותרה' : `${unanchored} לא אותרו`;
-    return unanchored > 0 ? `${comments}, ${lost}` : comments;
+    return unanchored > 0 ? `${changes}, ${lost}` : changes;
   }
-  const comments = placed === 1 ? '1 comment' : `${placed} comments`;
-  return unanchored > 0 ? `${comments}, ${unanchored} could not be placed` : comments;
+  const changes = placed === 1 ? '1 tracked change' : `${placed} tracked changes`;
+  return unanchored > 0 ? `${changes}, ${unanchored} could not be placed` : changes;
 }
 
 /**

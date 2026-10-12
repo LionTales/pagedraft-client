@@ -63,7 +63,7 @@ export class ExportService {
 
   /**
    * GET /api/document/export/book/{bookId}/proofread?unreliable= - the whole book with every pending
-   * proofread suggestion as a Word comment plus a tracked change. Same transfer, same failures, as the plain
+   * proofread suggestion as a tracked change (a Word comment only where there is an explanation). Same transfer, same failures, as the plain
    * export. c8: `unreliable` is always SENT (default include, the server's own default), so the wire says
    * what the author chose rather than leaving it to a default on either side.
    */

@@ -694,7 +694,7 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     return skippedNotice(report.count, names, this.lang);
   }
 
-  /** The comment counts of the last annotated download for this kind, or null (plain kind, or not sent). */
+  /** The tracked-change counts of the last annotated download for this kind, or null (plain kind, or not sent). */
   annotationNoticeFor(kind: ExportKind): string | null {
     if (!this.downloaded.has(kind.id)) return null;
     const report = this.annotations.get(kind.id) ?? null;

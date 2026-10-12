@@ -73,7 +73,7 @@ export const EXPORT_SKIPPED_COUNT_HEADER = 'X-Export-Skipped-Count';
 /** Which ones, percent-encoded JSON. Sent only when the count is not zero. */
 export const EXPORT_SKIPPED_CHAPTERS_HEADER = 'X-Export-Skipped-Chapters';
 
-/** How many proofread comments the annotated DOCX holds. Sent only by the two `/proofread` endpoints. */
+/** How many proofread suggestions the annotated DOCX holds as tracked changes. Sent only by the two `/proofread` endpoints. */
 export const EXPORT_ANNOTATION_COUNT_HEADER = 'X-Export-Annotation-Count';
 /** How many pending suggestions could not be placed in the text, so they are NOT in the file. */
 export const EXPORT_UNANCHORED_COUNT_HEADER = 'X-Export-Unanchored-Count';
@@ -96,7 +96,7 @@ export function unreliableSkippedFromHeader(value: string | null): number | null
   return countFromHeader(value);
 }
 
-/** What an annotated export holds: comments placed, and suggestions that found no place in the text. */
+/** What an annotated export holds: suggestions placed, and suggestions that found no place in the text. */
 export interface ExportAnnotationReport {
   placed: number;
   unanchored: number;
