@@ -15,6 +15,8 @@ import {
   clampPercent,
   normalizeStatus,
   normalizeLang,
+  serverEtaOf,
+  serverWordPercent,
 } from './job-registry.service';
 import { AnalysisProgressService } from './analysis-progress.service';
 import { AnalysisService } from './analysis.service';
@@ -263,6 +265,77 @@ describe('JobRegistryService', () => {
 
       expect(jobById('J1')!.completedChunks).toBe(6);
       expect(jobById('J1')!.totalChunks).toBe(10);
+    });
+  });
+
+  describe('whole-book proofread server ETA + word-weighted percent (f6)', () => {
+    beforeEach(() => configure());
+
+    it('serverEtaOf: a non-negative number is kept (0 included); absent, null, negative, NaN are null', () => {
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: 600 }))).toBe(600);
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: 0 }))).toBe(0);
+      expect(serverEtaOf(progress({}))).toBeNull(); // an older API omits the field
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: null }))).toBeNull();
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: -5 }))).toBeNull();
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: NaN }))).toBeNull();
+    });
+
+    it('serverWordPercent: only a strictly positive percent counts', () => {
+      expect(serverWordPercent(progress({ estimatedCompletionPercent: 70 }))).toBe(70);
+      expect(serverWordPercent(progress({ estimatedCompletionPercent: 0 }))).toBeNull();
+      expect(serverWordPercent(progress({ estimatedCompletionPercent: -1 }))).toBeNull();
+    });
+
+    it('bar uses the word percent while the counts stay CHAPTERS (1 of 55 chapters, 70 percent of the words)', () => {
+      service.track('book-proofread', 'book-A', 'bp-1');
+      progressStub.bookProofread$.next(progress({
+        status: 'Running', totalChunks: 55, completedChunks: 1, estimatedCompletionPercent: 70, estimatedRemainingSeconds: 900,
+      }));
+      const job = jobById('bp-1')!;
+      expect(job.percent).toBe(70); // chunk-derived would be round(100 * 1 / 55) = 2
+      expect(job.completedChunks).toBe(1);
+      expect(job.totalChunks).toBe(55);
+      expect(job.serverEtaSeconds).toBe(900);
+    });
+
+    it('a zero word percent falls back to the chapter-derived percent', () => {
+      service.track('book-proofread', 'book-A', 'bp-1');
+      progressStub.bookProofread$.next(progress({
+        status: 'Running', totalChunks: 4, completedChunks: 1, estimatedCompletionPercent: 0, estimatedRemainingSeconds: 80,
+      }));
+      expect(jobById('bp-1')!.percent).toBe(25);
+    });
+
+    it('an older API (no field) leaves serverEtaSeconds null and the percent chapter-derived', () => {
+      service.track('book-proofread', 'book-A', 'bp-1');
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 4, completedChunks: 2 }));
+      const job = jobById('bp-1')!;
+      expect(job.serverEtaSeconds ?? null).toBeNull();
+      expect(job.percent).toBe(50);
+    });
+
+    it('a terminal clears the server ETA and a Succeeded run is 100', () => {
+      service.track('book-proofread', 'book-A', 'bp-1');
+      progressStub.bookProofread$.next(progress({
+        status: 'Running', totalChunks: 3, completedChunks: 1, estimatedCompletionPercent: 60, estimatedRemainingSeconds: 300,
+      }));
+      progressStub.bookProofread$.next(progress({
+        status: 'Succeeded', totalChunks: 3, completedChunks: 3, estimatedCompletionPercent: 100, estimatedRemainingSeconds: 0,
+      }));
+      const job = jobById('bp-1')!;
+      expect(job.status).toBe('succeeded');
+      expect(job.percent).toBe(100);
+      expect(job.serverEtaSeconds ?? null).toBeNull();
+    });
+
+    it('other kinds ignore both fields: chunk-derived percent, no serverEtaSeconds', () => {
+      service.track('proofread', 'book-A', 'chap-1', { chapterId: 'ch-1' });
+      progressStub.chapter$.next(progress({
+        status: 'Running', totalChunks: 4, completedChunks: 1, estimatedCompletionPercent: 90, estimatedRemainingSeconds: 123,
+      }));
+      const job = jobById('chap-1')!;
+      expect(job.percent).toBe(25);
+      expect(job.serverEtaSeconds).toBeUndefined();
     });
   });
 

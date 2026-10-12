@@ -255,6 +255,10 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
   get etaText(): string {
     const job = this.runJob;
     if (!job) return '';
+    // f6: the server's word-weighted figure outranks both client estimates (the chapter clock
+    // multiplies one giant chapter by the chapters left). 0 = nothing to say, so no line.
+    const server = job.serverEtaSeconds;
+    if (typeof server === 'number') return server > 0 ? formatEtaLabel(this.lang, server * 1000) : '';
     const observed = estimateRemainingMs({
       totalChunks: job.totalChunks,
       completedChunks: job.completedChunks,

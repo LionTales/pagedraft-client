@@ -372,6 +372,13 @@ export class JobRegistryService {
     if (!job || isTerminal(job.status)) return; // context/stale guard + single-finalize
 
     const norm = normalizeProgress(p);
+    // f6: a whole-book proofread parent reports a WORD-weighted percent and a server ETA; every other
+    // kind keeps the chunk-derived percent and no server ETA, byte for byte.
+    if (job.kind === 'book-proofread') {
+      const wordPercent = serverWordPercent(p);
+      if (wordPercent !== null) norm.percent = wordPercent;
+    }
+    const serverEtaSeconds = job.kind === 'book-proofread' ? serverEtaOf(p) : undefined;
     const at = nowIso();
     // c04: fold this observation into the throughput clock BEFORE the terminal branch, so the last
     // chunk of a run that succeeds on the same poll still counts as evidence. Counts are STICKY: a
@@ -392,6 +399,7 @@ export class JobRegistryService {
     if (job.kind === 'book-proofread') this.discoverChildJobs(job.bookId, jobId);
     this.patchJob(jobId, {
       ...counts,
+      ...(job.kind === 'book-proofread' ? { serverEtaSeconds } : {}),
       status: norm.status,
       percent: norm.percent ?? job.percent,
       message: norm.message || job.message,
@@ -419,6 +427,8 @@ export class JobRegistryService {
     const totalChunks = counts?.totalChunks ?? job.totalChunks;
     this.patchJob(jobId, {
       status,
+      // f6: a terminal run has no time remaining; clear the server ETA of a whole-book proofread.
+      ...(job.kind === 'book-proofread' ? { serverEtaSeconds: null } : {}),
       percent: status === 'succeeded' ? 100 : (percent ?? job.percent),
       // c04: a SUCCEEDED run reads "10 of 10", for the same reason its percent is forced to 100. The
       // final poll usually says so already, but a terminal reached through the poll's error channel
@@ -674,6 +684,14 @@ export interface TrackedJob {
    */
   chunkClock: ChunkClock;
   /**
+   * f6: the SERVER's time-remaining for a whole-book proofread parent (AnalysisProgressDto
+   * `estimatedRemainingSeconds`, word-weighted), or null/undefined for every other kind, before the
+   * first poll, after a terminal, and against an older API that does not send it. When non-null it
+   * outranks {@link chunkClock}: the chapter-count clock multiplies one giant chapter by the chapters
+   * left. 0 means "nothing left to say", which surfaces render as no line.
+   */
+  serverEtaSeconds?: number | null;
+  /**
    * The backend's own progress prose, verbatim ("Running chunk 2/10", "Proofread finished", a .NET
    * exception string on a failure).
    *
@@ -814,6 +832,26 @@ export function progressPercent(p: AnalysisProgressDto): number | null {
     return clampPercent(est);
   }
   return null;
+}
+
+/**
+ * f6: the whole-book proofread parent's WORD-weighted percent, or null when the server sent none worth
+ * showing. Only a strictly positive value counts: 0 is both "just started" and the older API's shape,
+ * and either way the chapter-derived percent is the better readout. Exported for the spec.
+ */
+export function serverWordPercent(p: AnalysisProgressDto): number | null {
+  const est = p?.estimatedCompletionPercent;
+  return typeof est === 'number' && Number.isFinite(est) && est > 0 ? clampPercent(est) : null;
+}
+
+/**
+ * f6: the server's time remaining in seconds, or null when the DTO carries none (absent on an older
+ * API, null on a non-parent, negative or non-finite). 0 is kept: it is a real "nothing left". Exported
+ * for the spec.
+ */
+export function serverEtaOf(p: AnalysisProgressDto): number | null {
+  const s = p?.estimatedRemainingSeconds;
+  return typeof s === 'number' && Number.isFinite(s) && s >= 0 ? s : null;
 }
 
 /** Clamp a percent to [0, 100]; null/NaN/undefined -> null. Never negative/over-100/NaN. */

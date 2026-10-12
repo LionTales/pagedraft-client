@@ -318,6 +318,31 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         expect(el('bpr-consent')).toBeNull();
       });
 
+      it('f6 RUNNING ETA: the server figure wins over the chunk clock and the start estimate; the label stays chapters', () => {
+        startRun(lang); // start estimate 480 s, 2 of 3 chapters left would say 320 s (6 minutes)
+        registry.set(makeJob({ completedChunks: 1, totalChunks: 3, percent: 80, serverEtaSeconds: 600 }));
+        fixture.detectChanges();
+        // 600 s -> ceil(600 / 60) = 10 minutes through formatEtaLabel, not the 6 the chapter fraction gives.
+        expect(text('bpr-eta')).toContain(lang === 'he' ? '10' : 'about 10 minutes');
+        expect(text('bpr-eta')).not.toContain(lang === 'he' ? '6' : 'about 6 minutes');
+        expect(text('bpr-running')).toBe(t('running', { done: 1, total: 3 }));
+      });
+
+      it('f6 RUNNING ETA: a null server figure falls back to the start estimate scaled by chapters left', () => {
+        startRun(lang);
+        registry.set(makeJob({ completedChunks: 1, totalChunks: 3, percent: 33, serverEtaSeconds: null }));
+        fixture.detectChanges();
+        expect(text('bpr-eta')).toContain(lang === 'he' ? '6' : 'about 6 minutes');
+      });
+
+      it('f6 RUNNING ETA: a server figure of 0 shows no ETA line', () => {
+        startRun(lang);
+        registry.set(makeJob({ completedChunks: 1, totalChunks: 3, percent: 90, serverEtaSeconds: 0 }));
+        fixture.detectChanges();
+        expect(el('bpr-eta')).toBeNull();
+        expect(text('bpr-running')).toBe(t('running', { done: 1, total: 3 }));
+      });
+
       it('DONE: the summary and the annotated download', () => {
         startRun(lang);
         registry.set(makeJob({ status: 'succeeded', completedChunks: 3, totalChunks: 3, percent: 100 }));

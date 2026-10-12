@@ -258,6 +258,13 @@ export interface AnalysisProgressDto {
   message: string;
   estimatedCompletionPercent: number;
   /**
+   * Server-owned time remaining, in seconds. Non-null ONLY on a whole-book proofread PARENT (the one
+   * job whose plan has uneven word counts the client cannot see); null on every other kind. Absent on
+   * an older API: read it as null. For that same parent `estimatedCompletionPercent` is word-weighted
+   * while `currentChunk` / `completedChunks` / `totalChunks` stay CHAPTERS.
+   */
+  estimatedRemainingSeconds?: number | null;
+  /**
    * Whole-book REVIEW build-shape (wb4-c06). Populated ONLY on a BookReview build's TERMINAL progress poll —
    * the LIVE build-completion channel for the window/continuity/failed-window provenance the persisted status
    * probe reports as 0/false. Undefined/null on every other progress route and before a review build reaches
