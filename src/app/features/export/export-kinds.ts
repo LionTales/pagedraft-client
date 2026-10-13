@@ -104,8 +104,8 @@ export const EXPORT_KINDS: readonly ExportKind[] = [
     name: { he: 'הספר כולו עם תיקוני הגהה', en: 'The whole book with proofread changes' },
     description: {
       // DRAFT he - needs native review
-      he: 'DOCX עם תיקוני ההגהה כשינויים מסומנים; הסברים מופיעים כהערות',
-      en: 'DOCX with the proofread suggestions as tracked changes; explanations appear as comments',
+      he: 'DOCX עם תיקוני ההגהה כשינויים מסומנים; הסברים מופיעים כהערות.',
+      en: 'DOCX with the proofread suggestions as tracked changes; explanations appear as comments.',
     },
     availability: { available: true },
   },
@@ -117,8 +117,8 @@ export const EXPORT_KINDS: readonly ExportKind[] = [
     name: { he: 'פרק אחד עם תיקוני הגהה', en: 'A single chapter with proofread changes' },
     description: {
       // DRAFT he - needs native review
-      he: 'DOCX עם תיקוני ההגהה כשינויים מסומנים; הסברים מופיעים כהערות',
-      en: 'DOCX with the proofread suggestions as tracked changes; explanations appear as comments',
+      he: 'DOCX עם תיקוני ההגהה כשינויים מסומנים; הסברים מופיעים כהערות.',
+      en: 'DOCX with the proofread suggestions as tracked changes; explanations appear as comments.',
     },
     availability: { available: true },
   },
@@ -271,13 +271,15 @@ export function skippedNotice(count: number, names: string[], lang: ExportLang):
  * (`X-Export-Annotation-Count`, `X-Export-Unanchored-Count`); nothing here predicts them.
  */
 export function annotationNotice(placed: number, unanchored: number, lang: ExportLang): string {
-  // DRAFT he - needs native review. c8: the singular at exactly 1 ('1 תיקונים' / '1 changes' read wrong).
+  // DRAFT he - needs native review. c8: the singular at exactly 1. f01: the counts are SUGGESTIONS (Word shows a
+  // replacement as two revisions, so a "tracked changes" count would not match Word's Review pane), and the
+  // feminine noun takes the feminine count.
   if (lang === 'he') {
-    const changes = placed === 1 ? 'תיקון מסומן אחד' : `${placed} תיקונים מסומנים`;
-    const lost = unanchored === 1 ? 'אחת לא אותרה' : `${unanchored} לא אותרו`;
+    const changes = placed === 1 ? 'הצעה אחת כשינוי מסומן' : `${placed} הצעות כשינויים מסומנים`;
+    const lost = unanchored === 1 ? 'הצעה אחת לא אותרה' : `${unanchored} הצעות לא אותרו`;
     return unanchored > 0 ? `${changes}, ${lost}` : changes;
   }
-  const changes = placed === 1 ? '1 tracked change' : `${placed} tracked changes`;
+  const changes = placed === 1 ? '1 suggestion as a tracked change' : `${placed} suggestions as tracked changes`;
   return unanchored > 0 ? `${changes}, ${unanchored} could not be placed` : changes;
 }
 

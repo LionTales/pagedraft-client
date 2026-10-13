@@ -11,6 +11,7 @@
  * records what it was asked for, so a screen that called the book endpoint for the chapter kind would fail
  * here rather than pass quietly.
  */
+import { ApplicationRef } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { ActivatedRoute, provideRouter } from '@angular/router';
@@ -345,7 +346,7 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       click('export-download-book-docx-proofread');
       bookFiles.next({ ...file('b.docx'), annotations: { placed: 5, unanchored: 0 } });
       fixture.detectChanges();
-      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('5 tracked changes');
+      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('5 suggestions as tracked changes');
     });
 
     it('renders no annotation line for a plain download or when the server sent no counts', () => {
@@ -383,6 +384,13 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       click('export-download-book-docx-proofread');
       expect(statusReads).toEqual([`${BOOK_ID}:he`]);
       expect(dialog()).toBeNull();
+      expect(calls).toEqual([`book-proofread:${BOOK_ID}:include`]);
+    });
+
+    it('reads the status in the BOOK language (en), not a hard-coded one', () => {
+      loadBook('en');
+      click('export-download-book-docx-proofread');
+      expect(statusReads).toEqual([`${BOOK_ID}:en`]);
       expect(calls).toEqual([`book-proofread:${BOOK_ID}:include`]);
     });
 
@@ -433,8 +441,10 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       bookFiles.next({ ...file('b.docx'), annotations: { placed: 14, unanchored: 3 }, unreliableSkipped: 0 });
       fixture.detectChanges();
       expect(saved.length).toBe(1);
-      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('14 תיקונים מסומנים, 3 לא אותרו');
+      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe('14 הצעות כשינויים מסומנים, 3 הצעות לא אותרו');
       expect(el('export-unreliable-skipped-book-docx-proofread')).toBeNull();
+      // c02: a 0 count after "Export everything" is not a Skip that skipped nothing.
+      expect(el('export-unreliable-nothing-skipped-book-docx-proofread')).toBeNull();
     });
 
     it('"Skip" exports with skip and the notice names the skipped chapter from the server count (he)', () => {
@@ -476,6 +486,31 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
         .toBe('Suggestions skipped for 2 chapters.');
     });
 
+    it('c02: "Skip" that the server answers with 0 skipped says the listed chapter had nothing to skip', () => {
+      flag(FLAGGED_FIRST);
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      click('unreliable-export-skip');
+      expect(calls).toEqual([`book-proofread:${BOOK_ID}:skip`]);
+      bookFiles.next({ ...file('b.docx'), annotations: { placed: 9, unanchored: 0 }, unreliableSkipped: 0 });
+      fixture.detectChanges();
+      expect(el('export-unreliable-skipped-book-docx-proofread')).withContext('nothing was skipped').toBeNull();
+      expect(el('export-unreliable-nothing-skipped-book-docx-proofread')!.textContent!.trim())
+        .toBe('בפרק אחד שנבחר לדילוג לא היו הצעות מסומנות לדלג עליהן (פרק 1: אילון).');
+    });
+
+    it('c02: "Skip" matching the list renders the skipped notice only', () => {
+      flag(FLAGGED_FIRST, FLAGGED_THIRD);
+      loadBook('en');
+      click('export-download-book-docx-proofread');
+      click('unreliable-export-skip');
+      bookFiles.next({ ...file('b.docx'), annotations: { placed: 6, unanchored: 0 }, unreliableSkipped: 2 });
+      fixture.detectChanges();
+      expect(el('export-unreliable-skipped-book-docx-proofread')!.textContent!.trim())
+        .toBe('Suggestions skipped for 2 chapters (Chapter 1: אילון, Chapter 3: Third).');
+      expect(el('export-unreliable-nothing-skipped-book-docx-proofread')).toBeNull();
+    });
+
     it('"Cancel" downloads nothing and gives the buttons back', () => {
       flag(FLAGGED_FIRST);
       loadBook('he');
@@ -486,6 +521,39 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
       expect(saved).toEqual([]);
       expect(el('export-busy-book-docx-proofread')).toBeNull();
       expect((el('export-download-book-docx-proofread') as HTMLButtonElement).disabled).toBeFalse();
+    });
+
+    it('"Cancel" leaves the previous successful download\'s file name and counts notice standing', () => {
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      bookFiles.next({ ...file('b.docx'), annotations: { placed: 14, unanchored: 3 }, unreliableSkipped: 0 });
+      fixture.detectChanges();
+      const doneBefore = el('export-done-book-docx-proofread')!.textContent!.trim();
+      const countsBefore = el('export-annotations-book-docx-proofread')!.textContent!.trim();
+      expect(countsBefore).toContain('14');
+
+      flag(FLAGGED_FIRST);
+      click('export-download-book-docx-proofread');
+      expect(dialog()).not.toBeNull();
+      click('unreliable-export-cancel');
+      expect(dialog()).toBeNull();
+      expect(el('export-done-book-docx-proofread')).withContext('file name notice survives Cancel').not.toBeNull();
+      expect(el('export-done-book-docx-proofread')!.textContent!.trim()).toBe(doneBefore);
+      expect(el('export-annotations-book-docx-proofread')!.textContent!.trim()).toBe(countsBefore);
+    });
+
+    it('closing the dialog by Cancel puts focus on that kind\'s download button, not body', () => {
+      // Focus only lands on an element in the document; this spec's fixture root is detached.
+      document.body.appendChild(fixture.nativeElement);
+      fixture.autoDetectChanges(true);
+      flag(FLAGGED_FIRST);
+      loadBook('he');
+      click('export-download-book-docx-proofread');
+      expect(dialog()).not.toBeNull();
+      click('unreliable-export-cancel');
+      expect(dialog()).toBeNull();
+      TestBed.inject(ApplicationRef).tick();
+      expect(document.activeElement).toBe(el('export-download-book-docx-proofread'));
     });
 
     it('Escape is Cancel', () => {
@@ -542,10 +610,10 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
     });
 
     it('annotation counts read in the singular at 1 (he/en)', () => {
-      expect(annotationNotice(1, 0, 'he')).toBe('תיקון מסומן אחד');
-      expect(annotationNotice(1, 1, 'he')).toBe('תיקון מסומן אחד, אחת לא אותרה');
-      expect(annotationNotice(1, 0, 'en')).toBe('1 tracked change');
-      expect(annotationNotice(2, 1, 'en')).toBe('2 tracked changes, 1 could not be placed');
+      expect(annotationNotice(1, 0, 'he')).toBe('הצעה אחת כשינוי מסומן');
+      expect(annotationNotice(1, 1, 'he')).toBe('הצעה אחת כשינוי מסומן, הצעה אחת לא אותרה');
+      expect(annotationNotice(1, 0, 'en')).toBe('1 suggestion as a tracked change');
+      expect(annotationNotice(2, 1, 'en')).toBe('2 suggestions as tracked changes, 1 could not be placed');
     });
   });
 
@@ -923,6 +991,20 @@ describe('ExportPageComponent (Wave 3 / w4)', () => {
   });
 
   // ── A same-route bookId change must not leak the previous book (Finding 15) ─────────────────────
+
+  describe('the downloaded file name (f02)', () => {
+    it('renders the name with a COMPUTED unicode-bidi of plaintext, so a Hebrew name is not reversed', () => {
+      loadBook('he', [chapter(0)]);
+      click('export-download-book-docx');
+      bookFiles.next(file('נסיון - הגהה.docx', { count: 1, chapters: [{ order: 0, title: 'X' }] }));
+      fixture.detectChanges();
+
+      const span = (fixture.nativeElement as HTMLElement).querySelector('.file-name') as HTMLElement;
+      expect(span).not.toBeNull();
+      expect(span.textContent).toContain('נסיון - הגהה.docx');
+      expect(getComputedStyle(span).unicodeBidi).toBe('plaintext');
+    });
+  });
 
   describe('a same-route bookId change', () => {
     /** A fresh Subject: the previous one already completed, and a completed Subject replays nothing. */

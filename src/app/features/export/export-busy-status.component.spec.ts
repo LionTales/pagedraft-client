@@ -1,4 +1,4 @@
-import { ComponentFixture, TestBed, discardPeriodicTasks, fakeAsync, tick } from '@angular/core/testing';
+import { ComponentFixture, TestBed, fakeAsync, tick } from '@angular/core/testing';
 
 import {
   EXPORT_BUSY_COPY, EXPORT_LONG_NOTE_AFTER_MS, ExportBusyStatusComponent, formatExportElapsed,
@@ -89,9 +89,14 @@ describe('ExportBusyStatusComponent (f7)', () => {
   it('clears its timer on destroy (no periodic task left pending)', fakeAsync(() => {
     make('en', true);
     tick(2000);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    expect(component.elapsedMs).toBeGreaterThanOrEqual(2000);
     fixture.destroy();
-    // fakeAsync fails the test if a periodic timer is still queued; this would throw otherwise.
+    const atDestroy = component.elapsedMs;
+    // No discardPeriodicTasks(): fakeAsync fails the test if a periodic timer is still queued, and the
+    // elapsed value must not move after destroy.
     tick(5000);
-    discardPeriodicTasks();
+    expect(component.elapsedMs).toBe(atDestroy);
   }));
 });

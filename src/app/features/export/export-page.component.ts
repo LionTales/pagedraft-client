@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, ElementRef, NgZone, OnDestroy, OnInit, inject } from '@angular/core';
+import { Component, ElementRef, Injector, NgZone, OnDestroy, OnInit, afterNextRender, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { EMPTY, Observable, Subject, merge } from 'rxjs';
@@ -42,7 +42,8 @@ import { BookProofreadService } from '../../core/services/book-proofread.service
 import { ExportBusyStatusComponent } from './export-busy-status.component';
 import { UnreliableExportDialogComponent } from './unreliable-export-dialog.component';
 import {
-  UnreliableChoice, relevantUnreliableChapters, unreliableChapterLabel, unreliableSkippedNotice,
+  UnreliableChoice, relevantUnreliableChapters, unreliableChapterLabel, unreliableNothingToSkipNotice,
+  unreliableSkippedNotice,
 } from './unreliable-export';
 
 /**
@@ -201,6 +202,10 @@ import {
               }
               @if (unreliableNoticeFor(kind); as notice) {
                 <p class="kind-skipped" [attr.data-testid]="'export-unreliable-skipped-' + kind.id">{{ notice }}</p>
+              }
+              <!-- c02: Skip chosen, but the server skipped fewer chapters than the dialog listed (0 included). -->
+              @if (unreliableNothingToSkipFor(kind); as notice) {
+                <p class="kind-skipped" [attr.data-testid]="'export-unreliable-nothing-skipped-' + kind.id">{{ notice }}</p>
               }
 
               <!-- ...and what it does NOT contain, from the server's own headers. A chapter missing from an
@@ -381,7 +386,10 @@ import {
       color: var(--pd-text);
     }
     .kind-unavailable { color: var(--pd-text-muted); }
-    .file-name { unicode-bidi: isolate; font-family: var(--pd-font-mono); }
+    /* plaintext, NOT isolate: the span inherits direction: rtl, so isolate still lays the name out RTL
+       and a Hebrew name renders as "docx.<name reversed>". plaintext resolves the direction from the
+       name's own first strong character. */
+    .file-name { unicode-bidi: plaintext; font-family: var(--pd-font-mono); }
   `],
 })
 export class ExportPageComponent implements OnInit, OnDestroy {
@@ -406,6 +414,7 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   focusedKindId: ExportKindId | null = null;
   private readonly host = inject(ElementRef<HTMLElement>);
   private readonly zone = inject(NgZone);
+  private readonly injector = inject(Injector);
 
   /**
    * Scroll the focused kind's row into view once the list has rendered. `onStable`, not a timer: this
@@ -649,7 +658,6 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   }
 
   /** The button's label. It says what it is doing while it runs rather than going blank or spinning mute. */
-  /** The button's label. It says what it is doing while it runs rather than going blank or spinning mute. */
   buttonLabel(kind: ExportKind): string {
     return this.busyKindId === kind.id ? this.t(this.COPY.preparing) : this.t(this.COPY.download);
   }
@@ -695,6 +703,17 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     return unreliableSkippedNotice(skip.count, skip.names, this.lang);
   }
 
+  /**
+   * c02: after a Skip, how many of the chapters the dialog listed had nothing to skip (the server count fell
+   * short of the list, 0 included); null when it did not, on Export everything, or when the count is unknown.
+   */
+  unreliableNothingToSkipFor(kind: ExportKind): string | null {
+    if (!this.downloaded.has(kind.id)) return null;
+    const skip = this.unreliableSkips.get(kind.id);
+    if (!skip) return null;
+    return unreliableNothingToSkipNotice(skip.count, skip.names, this.lang);
+  }
+
   /** Test id of a kind's chapter picker: the plain kind keeps the original id, the others are suffixed. */
   pickerTestId(kind: ExportKind): string {
     return kind.id === 'chapter-docx' ? 'export-chapter-select' : `export-chapter-select-${kind.id}`;
@@ -730,11 +749,8 @@ export class ExportPageComponent implements OnInit, OnDestroy {
    */
   startExport(kind: ExportKind): void {
     if (!this.canRun(kind) || !this.bookId) return;
-    this.errors.delete(kind.id);
-    this.downloaded.delete(kind.id);
-    this.skipped.delete(kind.id);
-    this.annotations.delete(kind.id);
-    this.unreliableSkips.delete(kind.id);
+    // Per-kind state (file name, counts notice, error) is cleared in `run`, when a request is actually sent:
+    // the unreliable dialog is cancellable, and Cancel must leave the previous download's notice standing.
     this.busyKindId = kind.id;
 
     switch (kind.id) {
@@ -763,13 +779,6 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  /**
-   * One subscription shape for every kind, so the two document paths cannot behave differently here.
-   *
-   * `takeUntil(merge(destroy$, bookChange$))` (Finding 14): without it, a response landing after this
-   * component is destroyed - or after the route moved on to a different book - called `saveAs` from a
-   * dead component and dropped a file onto whatever screen the user had since navigated to.
-   */
   /**
    * c8: an annotated export first reads the proofread status (in the book language, the run's key). No
    * flagged chapter in this export -> export with include straight away (the pre-c8 behaviour, no dialog);
@@ -802,9 +811,20 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   onUnreliableChoice(choice: UnreliableChoice): void {
     const prompt = this.unreliablePrompt;
     this.unreliablePrompt = null;
+    // Every path out of the dialog hands focus back to the kind's download button once it is enabled again
+    // (the dialog's own restore target was captured after the trigger was disabled, so it can land on body).
+    if (prompt) this.focusDownloadButton(prompt.kind);
     if (!prompt || choice === 'cancel' || !this.bookId) return;
     this.busyKindId = prompt.kind.id;
     this.exportProofread(prompt.kind, prompt.chapterId, choice, choice === 'skip' ? prompt.chapters : []);
+  }
+
+  private focusDownloadButton(kind: ExportKind): void {
+    afterNextRender(() => {
+      const button = (this.host.nativeElement as HTMLElement)
+        .querySelector?.(`[data-testid="export-download-${kind.id}"]`) as HTMLButtonElement | null;
+      if (button && !button.disabled) button.focus({ preventScroll: true });
+    }, { injector: this.injector });
   }
 
   private exportProofread(
@@ -820,7 +840,20 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     this.run(kind, call, skipped.map(c => unreliableChapterLabel(c, this.lang)));
   }
 
+  /**
+   * One subscription shape for every kind, so the two document paths cannot behave differently here.
+   * It clears the kind's previous notices (file name, counts, error) because a request is actually being sent.
+   *
+   * `takeUntil(merge(destroy$, bookChange$))` (Finding 14): without it, a response landing after this
+   * component is destroyed - or after the route moved on to a different book - called `saveAs` from a
+   * dead component and dropped a file onto whatever screen the user had since navigated to.
+   */
   private run(kind: ExportKind, call: Observable<ExportedFile>, skippedNames: string[] = []): void {
+    this.errors.delete(kind.id);
+    this.downloaded.delete(kind.id);
+    this.skipped.delete(kind.id);
+    this.annotations.delete(kind.id);
+    this.unreliableSkips.delete(kind.id);
     call.pipe(takeUntil(merge(this.destroy$, this.bookChange$))).subscribe({
       next: (file: ExportedFile) => {
         this.busyKindId = null;

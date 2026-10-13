@@ -4,15 +4,15 @@ import { takeUntil } from 'rxjs/operators';
 
 import { EXPORT_COPY, ExportLang } from './export-kinds';
 
-/** After this long in flight, a proofread export says that a whole book can take minutes. */
+/** After this long in flight, a proofread export says that it can take minutes. */
 export const EXPORT_LONG_NOTE_AFTER_MS = 10_000;
 
 /** The long-wait line, shown only for the proofread kinds. DRAFT he - needs native review. */
 export const EXPORT_BUSY_COPY = {
   longNote: {
     // DRAFT he - needs native review
-    he: 'ספר שלם עם הגהה עשוי לקחת כמה דקות',
-    en: 'A whole book with proofreading can take a few minutes',
+    he: 'ייצוא עם הגהה עשוי לקחת כמה דקות',
+    en: 'A proofread export can take a few minutes',
   },
 } satisfies Record<string, Record<ExportLang, string>>;
 

@@ -85,3 +85,33 @@ export function unreliableSkippedNotice(count: number, names: string[], lang: Ex
     : (count === 1 ? 'Suggestions skipped for 1 chapter' : `Suggestions skipped for ${count} chapters`);
   return names.length > 0 && names.length === count ? `${head} (${names.join(', ')}).` : `${head}.`;
 }
+
+/**
+ * c02: the line under a completed Skip download when the server skipped FEWER chapters than the dialog
+ * listed (`skipped` is `X-Export-Unreliable-Skipped-Count`; `listed` are the labels of the chapters the
+ * author chose to skip). Without it a Skip that skipped nothing showed nothing at all, which reads as if the
+ * flagged suggestions were dropped. Since be-c05 the status and the export read one rule, so a gap means
+ * the book changed between the dialog and the export (a chapter re-proofread meanwhile) or an older server.
+ *
+ * Returns null when there is no gap (the existing skipped notice says it all), when the server count is
+ * unknown (an absent header is never read as 0), or when nothing was listed (Export everything). The
+ * chapters are NAMED only when none was skipped, the one case where which ones is certain; otherwise the
+ * count alone, so the line can never name a chapter the server did skip.
+ */
+export function unreliableNothingToSkipNotice(
+  skipped: number | null,
+  listed: string[],
+  lang: ExportLang,
+): string | null {
+  if (skipped === null || listed.length === 0 || skipped >= listed.length) return null;
+  const missing = listed.length - Math.max(0, skipped);
+  // DRAFT he - needs native review
+  const head = lang === 'he'
+    ? (missing === 1
+      ? 'בפרק אחד שנבחר לדילוג לא היו הצעות מסומנות לדלג עליהן'
+      : `ב-${missing} פרקים שנבחרו לדילוג לא היו הצעות מסומנות לדלג עליהן`)
+    : (missing === 1
+      ? '1 chapter chosen for skipping had no flagged suggestions to skip'
+      : `${missing} chapters chosen for skipping had no flagged suggestions to skip`);
+  return skipped === 0 ? `${head} (${listed.join(', ')}).` : `${head}.`;
+}
