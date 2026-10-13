@@ -199,6 +199,13 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         expect(el('bpr-coverage')).toBeNull();
       });
 
+      it('f01: a ONE-chapter book reads the singular coverage line', () => {
+        init(lang);
+        answerStatus(makeStatus({ chaptersWithText: 1, chaptersWithActiveProofread: 1, chaptersStale: 1, lastRunAt: new Date().toISOString() }));
+        expect(text('bpr-coverage')).toContain(S.coverageOne.replace('{done}', '1'));
+        expect(text('bpr-coverage')).not.toMatch(/1 chapters|1 פרקים/);
+      });
+
       it('STALE: coverage, the stale note, and a normal (non-forced) start', () => {
         init(lang);
         answerStatus(makeStatus({ chaptersWithActiveProofread: 3, chaptersStale: 1, lastRunAt: new Date().toISOString() }));
@@ -244,7 +251,7 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         // c8: the NON-forced estimate, 160 s -> ceil(160 / 60) = 3 minutes, through formatEtaLabel's own
         // template (derived from the rule, not from running the component).
         expect(text('bpr-consent-eta')).toBe(
-          lang === 'he' ? 'זמן משוער שנותר: כ-3 דקות' : 'Estimated time remaining: about 3 minutes');
+          lang === 'he' ? 'זמן משוער: כ-3 דקות' : 'Estimated time: about 3 minutes');
         expect(el('bpr-consent-pace')).withContext('the old "estimate appears later" line is gone').toBeNull();
         expect(el('bpr-consent-rerun')).toBeNull();
         expect(startCalls.length).toBe(0);
@@ -276,7 +283,7 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         expect(text('bpr-consent-skipped')).toBe(S.consentSkippedOne);
         // 80 s -> ceil(80 / 60) = 2 minutes.
         expect(text('bpr-consent-eta')).toBe(
-          lang === 'he' ? 'זמן משוער שנותר: כ-2 דקות' : 'Estimated time remaining: about 2 minutes');
+          lang === 'he' ? 'זמן משוער: כ-2 דקות' : 'Estimated time: about 2 minutes');
       });
 
       it('c8 CONSENT ETA (forced): the run-again consent shows the FORCE plan and estimate', () => {
@@ -291,7 +298,7 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
         answerStatus(s);
         expect(text('bpr-consent-body')).toBe(t('consentBody', { chapters: 2 }));
         expect(text('bpr-consent-eta')).toBe(
-          lang === 'he' ? 'זמן משוער שנותר: כ-3 דקות' : 'Estimated time remaining: about 3 minutes');
+          lang === 'he' ? 'זמן משוער: כ-3 דקות' : 'Estimated time: about 3 minutes');
       });
 
       it('c8 CONSENT ETA: an estimate of 0 renders NO ETA line', () => {
@@ -404,7 +411,7 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
     it('confirm POSTs a NON-forced start and publishes the run to the registry as book-proofread', () => {
       startRun('he');
       expect(startCalls[0].args).toEqual(['book-1', 'he', false]);
-      expect(registry.trackCalls).toEqual([{ kind: 'book-proofread', bookId: 'book-1', jobId: 'BP1', meta: {} }]);
+      expect(registry.trackCalls).toEqual([{ kind: 'book-proofread', bookId: 'book-1', jobId: 'BP1', meta: { language: 'he' } }]);
       expect(component.running).toBeTrue();
     });
 
@@ -483,7 +490,7 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
     it('on load: status.activeJobId attaches the run (reattached) and offers no start', () => {
       init('he');
       answerStatus(makeStatus({ activeJobId: 'OTHER' }));
-      expect(registry.trackCalls).toEqual([{ kind: 'book-proofread', bookId: 'book-1', jobId: 'OTHER', meta: { reattached: true } }]);
+      expect(registry.trackCalls).toEqual([{ kind: 'book-proofread', bookId: 'book-1', jobId: 'OTHER', meta: { language: 'he', reattached: true } }]);
       expect(el('bpr-running')).not.toBeNull();
       expect(el('bpr-start')).toBeNull();
       expect(el('bpr-eta')).withContext('a reattached run has no estimate until observed').toBeNull();
@@ -504,6 +511,28 @@ describe('BookProofreadStatusRowComponent (c6)', () => {
       startRun('en', startResponse({ jobId: 'OTHER' }));
       expect(registry.trackCalls[0].jobId).toBe('OTHER');
       expect(component.running).toBeTrue();
+    });
+
+    it('c04 on confirm: an in-flight run this client already knew is followed as a REATTACH, without this plan\'s estimate', () => {
+      // The registry already holds OTHER (found on book load, say) at 2 of 5 chapters. The start answers
+      // with OTHER and the estimate of the plan THIS click would have run: a different plan.
+      registry.set(makeJob({ id: 'OTHER', totalChunks: 5, completedChunks: 2 }));
+      startRun('en', startResponse({ jobId: 'OTHER', estimatedSeconds: 480 }));
+
+      expect(registry.trackCalls)
+        .withContext('a run this click did not create gets no start-time clock')
+        .toEqual([{ kind: 'book-proofread', bookId: 'book-1', jobId: 'OTHER', meta: { language: 'en', reattached: true } }]);
+      expect(component.estimatedSeconds).toBeNull();
+      expect(component.running).toBeTrue();
+      expect(el('bpr-eta'))
+        .withContext('no fallback ETA describing another plan; the server ETA or the observed clock speaks later')
+        .toBeNull();
+    });
+
+    it('c04 on confirm: a run the start CREATED (an id nobody knew) keeps its estimate and is tracked live', () => {
+      startRun('en', startResponse({ jobId: 'BP1', estimatedSeconds: 480 }));
+      expect(registry.trackCalls[0].meta).toEqual({ language: 'en' });
+      expect(component.estimatedSeconds).toBe(480);
     });
   });
 

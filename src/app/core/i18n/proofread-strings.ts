@@ -74,7 +74,13 @@ export type ProofreadStringKey =
   | 'consentRetryBody'
   | 'consentRetryBodyOne'
   // c20 gate: a retry of ONE failed chapter runs as 'of 1 chapters' without this twin.
-  | 'runningOne';
+  | 'runningOne'
+  // f01: coverage at exactly 1 chapter.
+  | 'coverageOne'
+  // c02 (be-c05 split): a chapter whose current result is flagged unreliable is NOT 'edited since'; it
+  // needs proofreading again. 'staleNote' now names edited chapters only (or the old mixed count, older API).
+  | 'unreliableNote'
+  | 'unreliableNoteOne';
 
 // DRAFT he - needs native review
 export const PROOFREAD_STRINGS_HE: Record<ProofreadStringKey, string> = {
@@ -128,6 +134,11 @@ export const PROOFREAD_STRINGS_HE: Record<ProofreadStringKey, string> = {
   consentRetryBody:          'ההגהה תעבור שוב על {chapters} הפרקים שנכשלו. שאר הפרקים לא ישתנו. אפשר להמשיך לעבוד בינתיים.',
   consentRetryBodyOne:       'ההגהה תעבור שוב על הפרק שנכשל. שאר הפרקים לא ישתנו. אפשר להמשיך לעבוד בינתיים.',
   runningOne:                'מגיה: {done} מתוך פרק אחד',
+  coverageOne:               '{done} מתוך פרק אחד הוגה',
+
+  // DRAFT he - needs native review
+  unreliableNote:            '{count} פרקים צריכים הגהה חוזרת: תוצאת ההגהה האחרונה שלהם סומנה כלא אמינה.',
+  unreliableNoteOne:         'פרק אחד צריך הגהה חוזרת: תוצאת ההגהה האחרונה שלו סומנה כלא אמינה.',
 };
 
 export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
@@ -179,6 +190,10 @@ export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
   consentRetryBody:          'This will proofread the {chapters} failed chapters again. The other chapters stay as they are. You can keep working meanwhile.',
   consentRetryBodyOne:       'This will proofread the failed chapter again. The other chapters stay as they are. You can keep working meanwhile.',
   runningOne:                'Proofreading: {done} of 1 chapter',
+  coverageOne:               '{done} of 1 chapter proofread',
+
+  unreliableNote:            '{count} chapters need proofreading again: their last proofread was flagged unreliable.',
+  unreliableNoteOne:         '1 chapter needs proofreading again: its last proofread was flagged unreliable.',
 };
 
 /** Substitution parameters for a proofread string. Values are stringified as-is. */
@@ -210,7 +225,11 @@ export type ProofreadCountKey =
   // c20: the button and the consent title name "the failed chapters", which reads wrong at 1 too.
   | 'failedNote' | 'retryFailedButton' | 'consentRetryTitle' | 'consentRetryBody'
   // c20 gate: keyed on the run's TOTAL (a one-chapter run), not on the chapters done.
-  | 'running';
+  | 'running'
+  // f01: keyed on the TOTAL chapters with text.
+  | 'coverage'
+  // c02: keyed on the unreliable chapters the failed list does not already name.
+  | 'unreliableNote';
 const SINGULAR_OF: Record<ProofreadCountKey, ProofreadStringKey> = {
   consentBody: 'consentBodyOne',
   consentSkipped: 'consentSkippedOne',
@@ -222,6 +241,8 @@ const SINGULAR_OF: Record<ProofreadCountKey, ProofreadStringKey> = {
   consentRetryTitle: 'consentRetryTitleOne',
   consentRetryBody: 'consentRetryBodyOne',
   running: 'runningOne',
+  coverage: 'coverageOne',
+  unreliableNote: 'unreliableNoteOne',
 };
 
 /**

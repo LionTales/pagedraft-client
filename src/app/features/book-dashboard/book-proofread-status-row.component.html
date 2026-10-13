@@ -27,11 +27,17 @@
         <span class="sb-status sb-building" data-testid="bpr-starting">{{ t('title') }}…</span>
         <span class="sb-spinner" aria-hidden="true"></span>
       } @else {
-        @if (coverageText) {
+        <!-- c02: the coverage count yields when it would claim every chapter beside a partial outcome or the
+             failed list; the last-run time still stands on its own then. -->
+        @if (coverageText || (hasCoverage && lastRunText)) {
           <span class="sb-status sb-ready" data-testid="bpr-coverage">
-            {{ coverageText }}
-            @if (lastRunText) {
-              · {{ lastRunText }}
+            @if (coverageText) {
+              {{ coverageText }}
+              @if (lastRunText) {
+                · {{ lastRunText }}
+              }
+            } @else {
+              {{ lastRunText }}
             }
           </span>
         }
@@ -67,12 +73,17 @@
       @if (etaText) {
         <p class="sb-consent-estimate" data-testid="bpr-eta">{{ etaText }}</p>
       }
-    } @else if (!coverageText && !blocked && !starting) {
+    } @else if (!hasCoverage && !blocked && !starting) {
       <p class="sb-what" data-testid="bpr-idle-hint">{{ t('idleHint') }}</p>
     }
 
+    <!-- c02 (be-c05 split): edited and unreliable are different states with different words. A chapter the
+         failed block below names is reported there only (see unreliableText). -->
     @if (staleText && !running) {
       <p class="sb-cross-model-warning" data-testid="bpr-stale">{{ staleText }}</p>
+    }
+    @if (unreliableText && !running) {
+      <p class="sb-cross-model-warning" data-testid="bpr-unreliable">{{ unreliableText }}</p>
     }
 
     <!-- c20: "nothing to do" would contradict the failed-chapters note below, so it yields to it. -->

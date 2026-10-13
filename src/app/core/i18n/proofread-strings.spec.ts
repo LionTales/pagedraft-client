@@ -80,7 +80,9 @@ describe('proofread-strings (f2)', () => {
     it('c20: every count key has a singular twin that differs from its plural and never reads "1 chapters"', () => {
       const countKeys = [
         'consentBody', 'consentSkipped', 'doneSummary', 'canceled', 'staleNote',
-        'failedNote', 'retryFailedButton', 'consentRetryTitle', 'consentRetryBody', 'running',
+        'failedNote', 'retryFailedButton', 'consentRetryTitle', 'consentRetryBody', 'running', 'coverage',
+        // c02: the unreliable note (be-c05 split).
+        'unreliableNote',
       ] as const;
       const params = { chapters: 1, skipped: 1, count: 1, done: 1, total: 1 };
       for (const k of countKeys) {
@@ -96,6 +98,14 @@ describe('proofread-strings (f2)', () => {
       expect(proofreadCountString('en', 'failedNote', 3, { count: 3 })).toBe('3 chapters failed in the last run:');
       expect(proofreadString('he', 'failedChapterItem', { number: 2, title: 'יומנו' })).toBe('פרק 2: יומנו');
       expect(proofreadString('en', 'failedChapterItemUntitled', { number: 5 })).toBe('Chapter 5');
+      // c02: unreliable reads as needing proofreading again, never as edited.
+      expect(proofreadCountString('en', 'unreliableNote', 2, { count: 2 }))
+        .toBe('2 chapters need proofreading again: their last proofread was flagged unreliable.');
+      expect(proofreadCountString('he', 'unreliableNote', 1, { count: 1 })).toBe(PROOFREAD_STRINGS_HE.unreliableNoteOne);
+      for (const lang of ['he', 'en'] as const) {
+        expect(proofreadCountString(lang, 'unreliableNote', 2, { count: 2 }))
+          .not.toBe(proofreadCountString(lang, 'staleNote', 2, { count: 2 }));
+      }
     });
 
     it('returns the template untouched when no params are given', () => {

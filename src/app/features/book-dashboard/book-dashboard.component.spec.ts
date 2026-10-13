@@ -2655,6 +2655,17 @@ describe('BookDashboardComponent finding 19: the chapter breakdown reads an expl
     const running = component.spineSignals.chapters?.filter(c => c.running).map(c => c.chapterId);
     expect(running).toEqual(['ch-1']);
   });
+
+  it('c03: a whole-book run\'s CHILD (parentJobId set) still lights its own chapter', () => {
+    // The Activity Center and the dock fold a child into its parent; this per-chapter reader must not.
+    activeJobs$.next([
+      job({ id: 'BP1', kind: 'book-proofread', titleHe: 'הגהת ספר שלם', titleEn: 'Whole-book proofread' }),
+      job({ id: 'child-2', kind: 'proofread', analysisType: 'Proofread', chapterId: 'ch-2', parentJobId: 'BP1' }),
+    ]);
+
+    const running = component.spineSignals.chapters?.filter(c => c.running).map(c => c.chapterId);
+    expect(running).toEqual(['ch-2']);
+  });
 });
 
 // ─── Wave 3 / w6 (Q10-D): the first-run orientation lifecycle ────────────────────────────────────────

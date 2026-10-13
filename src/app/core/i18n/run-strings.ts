@@ -120,7 +120,12 @@ export type RunStringKey =
   | 'etaLessThanMinute'
   | 'etaMinute'
   | 'etaMinutes'
-  | 'etaHours';
+  | 'etaHours'
+  // f01: the CONSENT's variant, shown before anything has started, where "remaining" reads wrong.
+  | 'etaTotalLessThanMinute'
+  | 'etaTotalMinute'
+  | 'etaTotalMinutes'
+  | 'etaTotalHours';
 
 /**
  * Hebrew run strings. DRAFT he - needs native review.
@@ -170,6 +175,11 @@ export const RUN_STRINGS_HE: Record<RunStringKey, string> = {
   etaMinute:             'זמן משוער שנותר: כדקה',
   etaMinutes:            'זמן משוער שנותר: כ-{minutes} דקות',
   etaHours:              'זמן משוער שנותר: כ-{hours} שעות',
+  // DRAFT he - needs native review
+  etaTotalLessThanMinute: 'זמן משוער: פחות מדקה',
+  etaTotalMinute:         'זמן משוער: כדקה',
+  etaTotalMinutes:        'זמן משוער: כ-{minutes} דקות',
+  etaTotalHours:          'זמן משוער: כ-{hours} שעות',
 };
 
 export const RUN_STRINGS_EN: Record<RunStringKey, string> = {
@@ -212,6 +222,10 @@ export const RUN_STRINGS_EN: Record<RunStringKey, string> = {
   etaMinute:             'Estimated time remaining: about 1 minute',
   etaMinutes:            'Estimated time remaining: about {minutes} minutes',
   etaHours:              'Estimated time remaining: about {hours} hours',
+  etaTotalLessThanMinute: 'Estimated time: less than a minute',
+  etaTotalMinute:         'Estimated time: about 1 minute',
+  etaTotalMinutes:        'Estimated time: about {minutes} minutes',
+  etaTotalHours:          'Estimated time: about {hours} hours',
 };
 
 /** Substitution parameters for a run string. Values are stringified as-is. */
@@ -301,18 +315,19 @@ export function formatRunDurationLabel(lang: RunChromeLang, elapsedMs: number): 
  * render the number bare. Pass a value from {@link estimateRemainingMs}; a null estimate must render
  * NOTHING rather than being passed here as 0.
  */
-export function formatEtaLabel(lang: RunChromeLang, remainingMs: number): string {
+export function formatEtaLabel(lang: RunChromeLang, remainingMs: number, variant: 'remaining' | 'total' = 'remaining'): string {
+  const total = variant === 'total';
   const ms = Math.max(0, remainingMs);
-  if (ms < 60_000) return runString(lang, 'etaLessThanMinute');
+  if (ms < 60_000) return runString(lang, total ? 'etaTotalLessThanMinute' : 'etaLessThanMinute');
 
   const minutes = Math.ceil(ms / 60_000);
   if (minutes < 90) {
     return minutes === 1
-      ? runString(lang, 'etaMinute')
-      : runString(lang, 'etaMinutes', { minutes });
+      ? runString(lang, total ? 'etaTotalMinute' : 'etaMinute')
+      : runString(lang, total ? 'etaTotalMinutes' : 'etaMinutes', { minutes });
   }
 
   // minutes >= 90 here, so `hours` is always >= 2 and the plural string always reads correctly.
   const hours = Math.round(minutes / 60);
-  return runString(lang, 'etaHours', { hours });
+  return runString(lang, total ? 'etaTotalHours' : 'etaHours', { hours });
 }

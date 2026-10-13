@@ -200,7 +200,7 @@ describe('BookProofreadStatusRowComponent: retry the failed chapters (c20)', () 
         expect(el('bpr-consent')).not.toBeNull();
         expect(el('bpr-consent')!.textContent).toContain(S.consentRetryTitleOne);
         expect(text('bpr-consent-body')).toBe(S.consentRetryBodyOne);
-        expect(text('bpr-consent-eta')).toBe(formatEtaLabel(lang, 200_000));
+        expect(text('bpr-consent-eta')).toBe(formatEtaLabel(lang, 200_000, 'total'));
         expect(el('bpr-consent-rerun')).toBeNull();
         expect(el('bpr-consent-skipped')).toBeNull();
         expect((el('bpr-retry-failed') as HTMLButtonElement).disabled).toBeTrue(); // a consent is open
@@ -314,6 +314,112 @@ describe('BookProofreadStatusRowComponent: retry the failed chapters (c20)', () 
       answerStatus(makeStatus(undefined));
       expect(el('bpr-failed')).toBeNull();
       expect(el('bpr-nothing-to-do')).not.toBeNull();
+    });
+  });
+
+  // ── c02: one word per chapter state, on the be-c05 split ─────────────────────────────────────────────
+  // Seeded status cells, expectations written from the rule (covered = "N of M proofread", never all of them
+  // beside a partial outcome or the failed list; edited = "edited since"; unreliable = "needs proofreading
+  // again", unless the failed block already names that chapter), not from running the component.
+  describe('c02: coverage, edited and unreliable never contradict each other', () => {
+    const NOW = new Date().toISOString();
+
+    /** Idle -> consent -> a run over 3 chapters that ends Succeeded with 2 of 3 done (PARTIAL). */
+    function runPartial(lang: 'he' | 'en'): void {
+      init(lang);
+      const before = makeStatus(undefined, { chaptersWithActiveProofread: 0, lastRunAt: null, plannedChapters: 3, estimatedSeconds: 240 });
+      answerStatus(before);
+      el('bpr-start')!.click();
+      answerStatus(before);
+      el('bpr-consent-confirm')!.click();
+      startCalls[0].reply.next(startResponse({ jobId: 'BP1', plannedChapters: 3 }));
+      fixture.detectChanges();
+      registry.set(makeJob({ id: 'BP1', status: 'succeeded', completedChunks: 2, totalChunks: 3, percent: 100 }));
+      fixture.detectChanges();
+    }
+
+    for (const lang of ['he', 'en'] as const) {
+      const S = lang === 'he' ? PROOFREAD_STRINGS_HE : PROOFREAD_STRINGS_EN;
+      const t = (k: Parameters<typeof proofreadString>[1], p?: Record<string, string | number>) => proofreadString(lang, k, p);
+      const allOf3 = t('coverage', { done: 3, total: 3 });
+      const editedWords = lang === 'he' ? 'נערך' : 'edited since';
+
+      it(`(${lang}) ONE unreliable chapter after a partial run: "2 of 3", never "edited since", the unreliable wording`, () => {
+        runPartial(lang);
+        // be-c05: the unreliable chapter is not covered and not edited; the in-memory failed record does not
+        // list it (an API restart, or an older server without the field).
+        answerStatus(makeStatus([], {
+          chaptersWithActiveProofread: 2, chaptersEdited: 0, chaptersUnreliable: 1, chaptersStale: 1,
+          lastRunAt: NOW, plannedChapters: 1, unreliableChapters: [YOMANO],
+        }));
+        expect(text('bpr-outcome-partial')).toBe(t('partial', { done: 2, total: 3 }));
+        expect(text('bpr-coverage')).toContain(t('coverage', { done: 2, total: 3 }));
+        expect(fixture.nativeElement.textContent).not.toContain(allOf3);
+        expect(el('bpr-stale')).withContext('an unreliable chapter is not "edited since"').toBeNull();
+        expect(fixture.nativeElement.textContent).not.toContain(editedWords);
+        expect(text('bpr-unreliable')).toBe(S.unreliableNoteOne);
+      });
+
+      it(`(${lang}) a partial run whose failed chapter kept its old result: no "3 of 3" beside it`, () => {
+        runPartial(lang);
+        // The failed chapter's previous reliable result still counts as covered, so the server says 3 of 3.
+        answerStatus(makeStatus([YOMANO], { chaptersWithActiveProofread: 3, chaptersEdited: 0, chaptersUnreliable: 0 }));
+        expect(text('bpr-outcome-partial')).toBe(t('partial', { done: 2, total: 3 }));
+        expect(fixture.nativeElement.textContent).not.toContain(allOf3);
+        // The last-run time still stands, and the book is not described as never proofread.
+        expect(text('bpr-coverage')).toBe(component.lastRunText);
+        expect(component.lastRunText).not.toBe('');
+        expect(el('bpr-idle-hint')).toBeNull();
+        expect(text('bpr-failed-note')).toBe(S.failedNoteOne);
+      });
+
+      it(`(${lang}) an unreliable chapter the failed block names is reported THERE only`, () => {
+        runPartial(lang);
+        // be-c01: an unreliable result in a whole-book run also lands the chapter in the failed record.
+        answerStatus(makeStatus([YOMANO], {
+          chaptersWithActiveProofread: 2, chaptersEdited: 0, chaptersUnreliable: 1, chaptersStale: 1,
+          unreliableChapters: [YOMANO],
+        }));
+        expect(items()).toEqual([t('failedChapterItem', { number: 2, title: 'יומנו' })]);
+        expect(el('bpr-unreliable')).withContext('the failed block owns this chapter').toBeNull();
+        expect(el('bpr-stale')).toBeNull();
+        expect(text('bpr-coverage')).toContain(t('coverage', { done: 2, total: 3 }));
+      });
+
+      it(`(${lang}) an EDITED chapter keeps the edited wording; unreliable says nothing at 0`, () => {
+        init(lang);
+        answerStatus(makeStatus([], { chaptersWithActiveProofread: 3, chaptersEdited: 1, chaptersUnreliable: 0, chaptersStale: 1, plannedChapters: 1 }));
+        expect(text('bpr-coverage')).toContain(allOf3);
+        expect(text('bpr-stale')).toBe(S.staleNoteOne);
+        expect(el('bpr-unreliable')).toBeNull();
+      });
+
+      it(`(${lang}) edited 2 and unreliable 2 (not failed): each plural on its own line`, () => {
+        init(lang);
+        answerStatus(makeStatus([], {
+          chaptersWithText: 5, chaptersWithActiveProofread: 3, chaptersEdited: 2, chaptersUnreliable: 2, chaptersStale: 4,
+          plannedChapters: 4, unreliableChapters: [EILON, YOMANO],
+        }));
+        expect(text('bpr-stale')).toBe(t('staleNote', { count: 2 }));
+        expect(text('bpr-unreliable')).toBe(t('unreliableNote', { count: 2 }));
+      });
+
+      it(`(${lang}) an OLDER API without the split: the mixed stale count keeps the old wording, no unreliable note`, () => {
+        init(lang);
+        const old = makeStatus(undefined, { chaptersWithActiveProofread: 3, chaptersStale: 1, plannedChapters: 1 });
+        delete old.chaptersEdited;
+        delete old.chaptersUnreliable;
+        answerStatus(old);
+        expect(text('bpr-stale')).toBe(S.staleNoteOne);
+        expect(el('bpr-unreliable')).toBeNull();
+        expect(component.freshChapters).withContext('old covered (3) minus old stale (1)').toBe(2);
+      });
+    }
+
+    it('freshChapters on the split: covered minus EDITED only (an unreliable chapter is not covered any more)', () => {
+      init('en');
+      answerStatus(makeStatus([], { chaptersWithActiveProofread: 2, chaptersEdited: 1, chaptersUnreliable: 1, chaptersStale: 2 }));
+      expect(component.freshChapters).toBe(1);
     });
   });
 });

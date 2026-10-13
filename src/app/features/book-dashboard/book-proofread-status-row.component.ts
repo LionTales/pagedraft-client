@@ -1,5 +1,5 @@
 import { ChangeDetectorRef, Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
-import { Subscription } from 'rxjs';
+import { Subscription, take } from 'rxjs';
 import { BookProofreadFailedChapter, BookProofreadStatusDto } from '../../core/models/book-proofread';
 import { BookProofreadService } from '../../core/services/book-proofread.service';
 import { JobRegistryService, TrackedJob, isTerminal } from '../../core/services/job-registry.service';
@@ -57,8 +57,10 @@ const EMPTY_JOB_ID = '00000000-0000-0000-0000-000000000000';
  * the run it starts cannot disagree. An estimate of 0 renders no ETA line at all.
  *
  * ── Failed chapters (c20) ───────────────────────────────────────────────────────────────────────
- * A chapter that fails keeps its previous result, which the server counts as fresh, so a normal start
- * would skip it. The status lists those chapters (`failedChapters`, 0-based orders shown through
+ * A chapter whose attempt THREW keeps its previous result, which the server still counts as fresh when
+ * it is reliable and newer than the last edit, so a normal start would skip it. A chapter that came back
+ * unreliable archived its previous result (pending suggestions superseded) and is never fresh, so a
+ * normal start re-plans it, but it is listed here too. The status lists those chapters (`failedChapters`, 0-based orders shown through
  * `chapterDisplayNumber`) with the estimate of re-running exactly them, and the row offers that retry
  * through the same consent. The record is the server's in-memory one: after an API restart it is empty.
  *
@@ -66,6 +68,13 @@ const EMPTY_JOB_ID = '00000000-0000-0000-0000-000000000000';
  * The parent's `completedChunks` is chapters PROOFREAD (a failed chapter advances the run but not that
  * count), so Succeeded with completed < total is a PARTIAL run, never a clean one. The registry keeps
  * that count unforced for this kind for exactly this reason.
+ *
+ * ── One word per chapter state (c02, on the be-c05 split) ──────────────────────────────────────────
+ * The server reports each chapter as exactly one of covered, edited since, unreliable or not proofread.
+ * The row says "N of M proofread" for covered (never all of them beside a partial outcome or the failed
+ * list), "edited since the last proofread" for edited ONLY, and "needs proofreading again" for unreliable,
+ * except a chapter the failed block already names, which that block owns. An older API without the split
+ * keeps the old mixed stale count under the old wording.
  */
 @Component({
   selector: 'app-book-proofread-status-row',
@@ -116,6 +125,18 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
   private jobSub: Subscription | null = null;
   /** The parent whose terminal this row already handled, so a lingering status cannot re-attach it. */
   private handledJobId: string | null = null;
+  /**
+   * c01: the handled parent ended because this CLIENT lost its poll (`endedBy: 'poll-error'`), not by a
+   * server terminal. A status that still lists it as active then re-attaches it (the registry resumes the
+   * poll) instead of being ignored as a lingering entry.
+   */
+  private handledJobLost = false;
+  /**
+   * c01: a parent whose poll was lost and whose fate the row is asking the status about. While set the row
+   * keeps showing the run (no premature "failed"); the status answer either re-attaches it (still active)
+   * or settles it as failed (not active, or the read itself failed: the window always resolves).
+   */
+  private lostRun: TrackedJob | null = null;
 
   constructor(
     private proofreadService: BookProofreadService,
@@ -172,6 +193,8 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     this.nothingToDo = false;
     this.estimatedSeconds = null;
     this.handledJobId = null;
+    this.handledJobLost = false;
+    this.lostRun = null;
   }
 
   // ── Status ──────────────────────────────────────────────────────────────────────────────────────
@@ -191,13 +214,32 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
       error: () => {
         // Leave the last good status alone: a failed refresh must not blank a row that was describing
         // the book a moment ago. A row that never got one stays hidden, like the review row.
+        if (!this.isCurrent(bookId, lang)) return;
+        // c01: a lost run waiting on this read cannot wait forever; with no answer it is reported failed.
+        const lost = this.lostRun;
+        if (lost) {
+          this.settleTerminal(lost);
+          this.cdr.detectChanges();
+        }
       },
     });
   }
 
   private applyStatus(s: BookProofreadStatusDto): void {
     this.status = s;
-    if (s.activeJobId && s.activeJobId !== this.handledJobId && s.activeJobId !== this.runJobId) {
+    const lost = this.lostRun;
+    if (lost) {
+      // c01: the status decides a lost run's fate. Still active: follow it again (the registry resumes its
+      // poll). Gone: the run really ended without this client hearing how, so it is reported failed.
+      if (s.activeJobId === lost.id) {
+        this.lostRun = null;
+        this.attach(lost.id, true);
+        return;
+      }
+      this.settleTerminal(lost);
+    }
+    const handled = s.activeJobId === this.handledJobId && !this.handledJobLost;
+    if (s.activeJobId && !handled && s.activeJobId !== this.runJobId) {
       this.attach(s.activeJobId, true);
     }
   }
@@ -220,20 +262,42 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     this.outcome = null;
     this.nothingToDo = false;
     this.cancelling = false;
+    this.lostRun = null;
     this.runJobId = jobId;
     this.runJob = null;
-    this.jobRegistry.track('book-proofread', bookId, jobId, reattached ? { reattached: true } : {});
+    // c01: for a parent this client LOST (`endedBy: 'poll-error'`), this track resumes its poll.
+    // c03: `language` lets the registry word the run's scope label, and its discovered children's, in the
+    // book's language ('Whole book' / 'Chapter' on an English book, as the live chapter path does).
+    this.jobRegistry.track('book-proofread', bookId, jobId, reattached ? { language: lang, reattached: true } : { language: lang });
     this.jobSub?.unsubscribe();
     this.jobSub = this.jobRegistry.jobById$(jobId).subscribe(job => {
       if (!this.isCurrent(bookId, lang) || this.runJobId !== jobId) return;
       this.runJob = job;
-      if (job && isTerminal(job.status)) this.onTerminal(job);
+      // A lost run already being confirmed is not a second terminal.
+      if (job && isTerminal(job.status) && this.lostRun?.id !== job.id) this.onTerminal(job);
       this.cdr.detectChanges();
     });
   }
 
   private onTerminal(job: TrackedJob): void {
+    if (job.endedBy === 'poll-error') {
+      // c01: the CLIENT stopped hearing from the server; the run may well be going on. Ask the status before
+      // saying "failed": the row keeps showing the run meanwhile (`running` stays true while `lostRun` is
+      // set), and `applyStatus` / the read's error path settle it.
+      this.lostRun = job;
+      this.loadStatus();
+      return;
+    }
+    this.settleTerminal(job);
+    // Coverage and staleness moved: re-read them.
+    this.loadStatus();
+  }
+
+  /** Record how the followed parent ended and stop following it. */
+  private settleTerminal(job: TrackedJob): void {
+    this.lostRun = null;
     this.handledJobId = job.id;
+    this.handledJobLost = job.endedBy === 'poll-error';
     this.outcome = outcomeOf(job);
     this.runJobId = null;
     this.runJob = null;
@@ -242,13 +306,14 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     // The job subscription is left to the next attach / reset / destroy: it can be delivering THIS call
     // synchronously from inside `attach` (a job already terminal in the registry), before `jobSub` is even
     // assigned. With `runJobId` cleared its handler is inert.
-    // Coverage and staleness moved: re-read them.
-    this.loadStatus();
   }
 
   /** True while a run is in flight (from this row's start, or found by status/registry). */
   get running(): boolean {
-    return !!this.runJobId && (!this.runJob || !isTerminal(this.runJob.status));
+    if (!this.runJobId) return false;
+    // c01: a lost run awaiting its status verdict still reads as running, never as a premature failure.
+    if (this.lostRun?.id === this.runJobId) return true;
+    return !this.runJob || !isTerminal(this.runJob.status);
   }
 
   /** Chapters proofread so far and planned, off the registry's parent job. */
@@ -288,7 +353,7 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
    */
   get consentEtaText(): string {
     const seconds = this.consent?.estimatedSeconds ?? 0;
-    return seconds > 0 ? formatEtaLabel(this.lang, seconds * 1000) : '';
+    return seconds > 0 ? formatEtaLabel(this.lang, seconds * 1000, 'total') : '';
   }
 
   // ── Derived idle view ───────────────────────────────────────────────────────────────────────────
@@ -306,10 +371,16 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     return this.t(this.buildInputs === 'no-text' ? 'needsText' : 'needsImport');
   }
 
-  /** Chapters whose Active proofread result is newer than their last edit. */
+  /**
+   * Chapters covered and not edited since. be-c05: covered no longer includes an unreliable chapter, so only
+   * the edited ones come off it; an older API (no split) counted unreliable as covered AND stale, so its
+   * mixed stale count comes off instead.
+   */
   get freshChapters(): number {
     const s = this.status;
-    return s ? Math.max(0, s.chaptersWithActiveProofread - s.chaptersStale) : 0;
+    if (!s) return 0;
+    const edited = typeof s.chaptersEdited === 'number' ? s.chaptersEdited : s.chaptersStale;
+    return Math.max(0, s.chaptersWithActiveProofread - edited);
   }
 
   /**
@@ -335,10 +406,24 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     return !!this.status || this.running;
   }
 
+  /** The book holds at least one covered chapter (so the idle "what this does" hint is not for it). */
+  get hasCoverage(): boolean {
+    return (this.status?.chaptersWithActiveProofread ?? 0) > 0;
+  }
+
+  /**
+   * "N of M chapters proofread" (covered of chapters with text). c02: the row never claims EVERY chapter
+   * while it also says a chapter did not make it, i.e. beside a partial outcome or the failed-chapters list.
+   * A chapter whose attempt threw keeps its previous reliable result, which the server counts as covered, so the full
+   * count can be literally true and still contradict the line under it (the c20 gate showed "2 of 2
+   * proofread" beside "partial 1 of 2"). A count short of every chapter agrees with both and stays.
+   */
   get coverageText(): string {
     const s = this.status;
     if (!s || s.chaptersWithActiveProofread === 0) return '';
-    return this.t('coverage', { done: s.chaptersWithActiveProofread, total: s.chaptersWithText });
+    const claimsAll = s.chaptersWithActiveProofread >= s.chaptersWithText;
+    if (claimsAll && (this.outcome?.kind === 'partial' || this.failedChapters.length > 0)) return '';
+    return this.tCount('coverage', s.chaptersWithText, { done: s.chaptersWithActiveProofread, total: s.chaptersWithText });
   }
 
   /** Timezone-aware relative time of the newest result (never a raw date pipe). */
@@ -347,9 +432,35 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
     return when ? this.t('lastRun', { when }) : '';
   }
 
+  /**
+   * "N chapters were edited since the last proofread". c02: from the be-c05 split this is `chaptersEdited`
+   * ONLY, so an unreliable chapter is never worded as edited. An older API sends no split, and its mixed
+   * `chaptersStale` keeps the old wording (the only count it has).
+   */
   get staleText(): string {
-    const stale = this.status?.chaptersStale ?? 0;
-    return stale > 0 ? this.tCount('staleNote', stale, { count: stale }) : '';
+    const s = this.status;
+    if (!s) return '';
+    const edited = typeof s.chaptersEdited === 'number' ? s.chaptersEdited : s.chaptersStale;
+    return edited > 0 ? this.tCount('staleNote', edited, { count: edited }) : '';
+  }
+
+  /**
+   * c02: "N chapters need proofreading again", for chapters whose current result is flagged unreliable.
+   *
+   * ONE owner per chapter: since be-c01 an unreliable result in a whole-book run also lands the chapter in
+   * `failedChapters`, and the failed block NAMES it and offers the retry, so it owns that chapter. This note
+   * counts only the unreliable chapters the failed block does not list (an unreliable result from a
+   * single-chapter run, or one the in-memory failed record lost to an API restart); the normal start plans
+   * those (the server counts an unreliable chapter as due). Older API without the split: no note (its
+   * `chaptersStale` already carries them, under the old wording).
+   */
+  get unreliableText(): string {
+    const s = this.status;
+    if (!s || typeof s.chaptersUnreliable !== 'number') return '';
+    const failedIds = new Set(this.failedChapters.map(c => c.chapterId));
+    const ownedByFailed = (s.unreliableChapters ?? []).filter(c => failedIds.has(c.chapterId)).length;
+    const count = Math.max(0, s.chaptersUnreliable - ownedByFailed);
+    return count > 0 ? this.tCount('unreliableNote', count, { count }) : '';
   }
 
   /** c20: chapters whose latest whole-book attempt failed (server order = reading order). */
@@ -487,10 +598,12 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
           this.loadStatus();
         } else {
           // A run that was already in flight comes back started=true with ITS id; following it is the
-          // whole of (c). The estimate is only meaningful for a run this start actually created, but the
-          // API gives the same plan either way, so it is kept.
-          this.estimatedSeconds = resp.estimatedSeconds > 0 ? resp.estimatedSeconds : null;
-          this.attach(resp.jobId, false);
+          // whole of (c). c04: the response's estimate is for the plan THIS click would have run, not for
+          // the run it hands back, so a run this client already knew (a lost run, one the registry tracks)
+          // is followed as a reattach: no start-time clock, no estimate. A brand-new id is known nowhere.
+          const created = !this.isKnownRun(resp.jobId);
+          this.estimatedSeconds = created && resp.estimatedSeconds > 0 ? resp.estimatedSeconds : null;
+          this.attach(resp.jobId, !created);
         }
         this.cdr.detectChanges();
       },
@@ -501,6 +614,21 @@ export class BookProofreadStatusRowComponent implements OnChanges, OnDestroy {
         this.cdr.detectChanges();
       },
     });
+  }
+
+  /**
+   * c04: true when `jobId` names a run this client already knew before the start answered: the run this
+   * row last settled, the run its status read reported, or any job the registry holds (a run found on book
+   * load, or one this row lost its poll on). A run the start CREATED has a fresh id none of them can hold.
+   * Residual: a run another tab started after this tab's last read is unknown here too, and still reads as
+   * created; the start response carries no field that tells the two apart.
+   */
+  private isKnownRun(jobId: string): boolean {
+    if (jobId === this.handledJobId || jobId === this.status?.activeJobId) return true;
+    let known = false;
+    // The registry's job list is a BehaviorSubject, so this answers synchronously.
+    this.jobRegistry.jobById$(jobId).pipe(take(1)).subscribe(job => { known = job !== null; });
+    return known;
   }
 
   /** Stop the run before its next chapter. Finished chapters keep their results. */
