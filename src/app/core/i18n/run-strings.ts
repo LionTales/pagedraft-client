@@ -1,4 +1,5 @@
 import { ANALYSIS_TYPE_LABELS } from '../models/analysis';
+import { StringParams, interpolate } from './interpolate';
 
 /**
  * c02: the ONE source of every user-facing string an ANALYSIS RUN can put on screen.
@@ -229,18 +230,7 @@ export const RUN_STRINGS_EN: Record<RunStringKey, string> = {
 };
 
 /** Substitution parameters for a run string. Values are stringified as-is. */
-export type RunStringParams = Readonly<Record<string, string | number>>;
-
-/**
- * Substitute `{name}` placeholders. An unknown placeholder is left VERBATIM rather than blanked, so a
- * mismatch between a template and its caller shows up as `{parts}` on screen (and in a test) instead of
- * silently producing a sentence with a hole in it.
- */
-function interpolate(template: string, params?: RunStringParams): string {
-  if (!params) return template;
-  return template.replace(/\{(\w+)\}/g, (whole, name: string) =>
-    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : whole);
-}
+export type RunStringParams = StringParams;
 
 /** Resolve one run string in the given chrome language. */
 export function runString(lang: RunChromeLang, key: RunStringKey, params?: RunStringParams): string {

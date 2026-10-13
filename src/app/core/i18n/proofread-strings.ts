@@ -1,3 +1,4 @@
+import { StringParams, interpolate } from './interpolate';
 import { RunChromeLang } from './run-strings';
 
 /**
@@ -197,17 +198,7 @@ export const PROOFREAD_STRINGS_EN: Record<ProofreadStringKey, string> = {
 };
 
 /** Substitution parameters for a proofread string. Values are stringified as-is. */
-export type ProofreadStringParams = Readonly<Record<string, string | number>>;
-
-/**
- * Substitute `{name}` placeholders. An unknown placeholder is left VERBATIM rather than blanked, so a
- * template/caller mismatch shows up as `{eta}` on screen (and in a test) instead of a sentence with a hole.
- */
-function interpolate(template: string, params?: ProofreadStringParams): string {
-  if (!params) return template;
-  return template.replace(/\{(\w+)\}/g, (whole, name: string) =>
-    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : whole);
-}
+export type ProofreadStringParams = StringParams;
 
 /** Resolve one proofread string in the given chrome language. */
 export function proofreadString(
