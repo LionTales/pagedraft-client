@@ -30,17 +30,38 @@ export interface StartBookProofreadResponse {
 /**
  * Response for GET /api/books/{bookId}/proofread/status?language= - coverage and freshness of the
  * book's chapter proofread results, plus the in-flight run (if any).
+ *
+ * be-c05: per chapter the server reports EXACTLY ONE of covered and fresh, edited ({@link chaptersEdited}),
+ * unreliable ({@link chaptersUnreliable}) or not proofread (some exported unit has no result in the status
+ * language), each read through the one unit rule the annotated export also uses. Not proofread is
+ * `chaptersWithText - chaptersWithActiveProofread - chaptersUnreliable`.
  */
 export interface BookProofreadStatusDto {
   /** Job id of the in-flight whole-book run for this (book, language); null when none. */
   activeJobId: string | null;
   /** Chapters that have text (the run's candidate set). */
   chaptersWithText: number;
-  /** Chapters holding an Active proofread result. */
+  /**
+   * Chapters COVERED: every exported unit has a RELIABLE result in the status language (fresh or edited
+   * since). An unreliable chapter is never covered. (Before be-c05: any Active result, unreliable included.)
+   */
   chaptersWithActiveProofread: number;
-  /** Chapters whose Active proofread result is OLDER than the chapter's last edit. */
+  /**
+   * KEPT for older clients: {@link chaptersEdited} + {@link chaptersUnreliable} (disjoint). An older API sent
+   * it alone, meaning edited and unreliable mixed; read it only when the split is absent.
+   */
   chaptersStale: number;
-  /** ISO timestamp of the newest Active proofread result; null when the book was never proofread. */
+  /**
+   * be-c05: covered chapters with at least one unit edited after its result (a subset of the covered count).
+   * Optional: an older API does not send it, and the row then falls back to {@link chaptersStale}.
+   */
+  chaptersEdited?: number;
+  /**
+   * be-c05: chapters with at least one unit whose current result is flagged unreliable; never covered;
+   * equals `unreliableChapters.length`. Optional for an older API, like {@link chaptersEdited}.
+   */
+  chaptersUnreliable?: number;
+  /** ISO timestamp of the newest result of a COVERED chapter's units; null when nothing is covered. */
   lastRunAt: string | null;
   /**
    * c7/c8: what `POST .../proofread?force=false` would plan RIGHT NOW (the server's one planning method feeds
@@ -55,14 +76,17 @@ export interface BookProofreadStatusDto {
   forceEstimatedChunks: number;
   forceEstimatedSeconds: number;
   /**
-   * Chapters, in reading order, whose Active proofread result (chapter or scene scope, in the status
-   * language) the system flagged unreliable. The export page asks the author whether to include or skip them.
+   * Chapters, in reading order, one of whose exported units' current proofread result (in the status
+   * language) the system flagged unreliable: the {@link chaptersUnreliable} chapters. The export page asks the
+   * author whether to include or skip them, and `?unreliable=skip` skips exactly these.
    */
   unreliableChapters: BookProofreadUnreliableChapter[];
   /**
    * c20: chapters, in reading order, whose LATEST whole-book attempt failed or came back unreliable and that no
-   * reliable proofread has covered since. A failed chapter keeps its previous result, which counts as fresh, so
-   * the normal plan skips it; `POST .../proofread?onlyFailed=true` plans exactly these. The server keeps this
+   * reliable proofread has covered since. A chapter whose attempt THREW keeps its previous result, which still
+   * counts as fresh when it is reliable and newer than the last edit, so the normal plan skips it; an unreliable
+   * result archived the previous one (its pending suggestions superseded) and is never fresh, so the normal plan
+   * re-plans that chapter too. `POST .../proofread?onlyFailed=true` plans exactly these. The server keeps this
    * record IN MEMORY, so it is empty after an API restart. Optional: an older API does not send it.
    */
   failedChapters?: BookProofreadFailedChapter[];

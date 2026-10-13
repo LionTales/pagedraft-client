@@ -1,13 +1,15 @@
 /**
  * Wave 3 / w4 - the export WIRE contract, exactly as w1 inventoried it on the server.
  *
- * Both endpoints are SYNCHRONOUS and unmetered: a plain GET that answers with the file itself. There is no
+ * All four endpoints are SYNCHRONOUS and unmetered: a plain GET that answers with the file itself. There is no
  * job, no progress payload and no polling contract, and none is invented here - the only "in progress" this
  * client can honestly show is "the request is in flight", which is a fact about the request and not a
  * fabricated server-side percentage.
  *
- *   GET /api/document/export/book/{bookId}                -> 200 DOCX | 404 | 409 ExportUnavailableDto
- *   GET /api/document/export/chapter/{bookId}/{chapterId} -> 200 DOCX | 404 | 409 ExportUnavailableDto
+ *   GET /api/document/export/book/{bookId}                            -> 200 DOCX | 404 | 409 ExportUnavailableDto
+ *   GET /api/document/export/chapter/{bookId}/{chapterId}             -> 200 DOCX | 404 | 409 ExportUnavailableDto
+ *   GET /api/document/export/book/{bookId}/proofread?unreliable=      -> the same, with proofread suggestions as tracked changes | 400 on a bad `unreliable`
+ *   GET /api/document/export/chapter/{bookId}/{chapterId}/proofread?unreliable= -> the same for one chapter
  *
  * The 200 carries `Content-Disposition: attachment` with BOTH a plain `filename` and an RFC 5987
  * `filename*=UTF-8''...`; Hebrew titles survive only in the second, which is why this client reads that one
@@ -15,9 +17,12 @@
  *
  * It also carries {@link EXPORT_SKIPPED_COUNT_HEADER} and, when that is not zero,
  * {@link EXPORT_SKIPPED_CHAPTERS_HEADER}: the export leaves out a chapter with nothing written in it, and
- * an author must be told which ones rather than discovering a gap in their own manuscript. All three
- * headers are in the API's CORS `WithExposedHeaders`; none of them is CORS-safelisted, so a missing entry
- * there makes every read here return null cross-origin while dev, being same-origin, shows nothing.
+ * an author must be told which ones rather than discovering a gap in their own manuscript. The two
+ * `/proofread` endpoints add {@link EXPORT_ANNOTATION_COUNT_HEADER}, {@link EXPORT_UNANCHORED_COUNT_HEADER}
+ * and {@link EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER} (and a sixth, `X-Export-Whitespace-Skipped-Count`, that
+ * this client does not read). Every one of the six is in the API's CORS `WithExposedHeaders`
+ * (`CorsPolicyConfiguration`); none of them is CORS-safelisted, so a missing entry there makes every read
+ * here return null cross-origin while dev, being same-origin, shows nothing.
  */
 
 /** The DOCX media type both endpoints answer with. */

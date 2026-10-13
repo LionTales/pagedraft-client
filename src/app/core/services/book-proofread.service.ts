@@ -6,7 +6,7 @@ import { AnalysisProgressDto } from '../models/analysis';
 import { AnalysisProgressService } from './analysis-progress.service';
 
 /**
- * Starts, observes and cancels the whole-book proofread run (f2). Routes live on BooksController under
+ * Starts, observes and cancels the whole-book proofread run (f2). Routes live on BookProofreadController under
  * `api/books/{bookId}/proofread`:
  *
  * | call     | route                                         | body / query                          |
