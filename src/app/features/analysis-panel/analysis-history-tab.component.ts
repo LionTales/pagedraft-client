@@ -268,7 +268,10 @@ export class AnalysisHistoryTabComponent implements OnChanges {
 
     const lineEdit = this.getLineEdit(current);
     if (!lineEdit) return [];
-    const suggestions = this.lineEditParser.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, this.documentText);
+    // c04: the model's chips never pass the server-row filter above, so apply the same shared predicate.
+    const suggestions = this.lineEditParser.toLineEditSuggestionsWithOffsets(
+      lineEdit.suggestions.filter(s => !isWhitespaceOnlySuggestion(s.original, s.suggested)),
+      this.documentText);
     const keyBased = suggestions.map(s => {
       const key = keyFor(s);
       if (this.acceptedLineEditKeys.has(key)) return { suggestion: s, status: 'accepted' as const };

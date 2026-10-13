@@ -453,6 +453,25 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    */
   private readonly bannerSettledJobIds = new Set<string>();
 
+  /**
+   * final-r02 (CR-5): registry job ids this instance saw end with `endedBy: 'poll-error'`, i.e. the
+   * CLIENT ran out of poll reads (c01's budget), not the server. `JobRegistryService.track` RESUMES such
+   * a job (status back to running, `endedBy` cleared), so its 'failed' is provisional. Recorded here
+   * because the resumed job no longer carries `endedBy`: this set is how the running branch of
+   * {@link deriveRunState} tells a resume apart from any other running emission, and it is the ONLY
+   * thing allowed to release a job's two one-shot ledgers ({@link handledRunTerminals},
+   * {@link bannerSettledJobIds}). A server terminal never enters it, so it stays handled once.
+   */
+  private readonly pollLostJobIds = new Set<string>();
+
+  /**
+   * final-r02 (CR-5): registry job ids whose banner the author DISMISSED on this instance (every job the
+   * banner covered at that moment: the one it mirrored plus any other watched job for the unit, since
+   * the banner is the unit's). A resume after a poll loss re-raises the banner only for a job not in
+   * here, so the documented contract holds: a dismiss is sticky for the life of this instance.
+   */
+  private readonly bannerDismissedJobIds = new Set<string>();
+
   ngOnInit(): void {
     this.loadChunkThresholds();
     this.watchRunState();
@@ -529,19 +548,42 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
     for (const job of matching) {
       if (!isTerminal(job.status)) {
+        // final-r02 (CR-5): a job this instance saw LOST (poll-error) is running again, so the registry
+        // resumed it. Its lost 'failed' claimed both one-shot ledgers below, which would make this resumed
+        // run invisible: no banner, and its REAL terminal returning early from noteRunTerminal (no history
+        // refetch, the finished result never shown until a context change). Treat it as a fresh watch:
+        // release the terminal claim, and the banner claim unless the author dismissed that banner here.
+        if (this.pollLostJobIds.delete(job.id)) {
+          this.handledRunTerminals.delete(job.id);
+          if (!this.bannerDismissedJobIds.has(job.id)) this.bannerSettledJobIds.delete(job.id);
+        }
         this.observedRunningJobIds.add(job.id);
         this.adoptAsyncBannerForJob(job.id);
         continue;
       }
+      // final-r02 (CR-5): remember a CLIENT-side loss before the watched-running gate, so a loss this
+      // instance first sees as already terminal (it was on another unit when the poll ran out) still
+      // lets a later resume through. Only `'poll-error'`: a server terminal is forever (the registry
+      // never resumes it), so it keeps the handled-once rule.
+      if (job.endedBy === 'poll-error') this.pollLostJobIds.add(job.id);
       // Only a job this panel actually watched RUNNING counts as "just finished here". A registry entry
       // that was already terminal when this instance mounted is history, not an event.
       if (!this.observedRunningJobIds.delete(job.id)) continue;
       // c6 gate: a banner ADOPTED for a job this instance did not start (a remount, a reattach, or a
       // whole-book proofread's child) has no run event to clear it; only this terminal does. Without it
       // the "running in the background" spinner stayed up over the finished result until a context switch.
+      // c04: the banner is the UNIT's, not one job's. If another watched job for this unit is still
+      // running (an older job-A while the later-adopted job-B finished), the banner hands over to it
+      // rather than dropping: `bannerSettledJobIds` already holds job-A, so it can never re-adopt. The
+      // flags are left as they are (a dismissed banner stays dismissed); only the last job clears them.
       if (this.currentRunJobId === job.id) {
-        this.asyncJobInFlight = false;
-        this.asyncBannerActiveForRun = false;
+        const stillRunning = matching.find(j => j.id !== job.id && !isTerminal(j.status));
+        if (stillRunning) {
+          this.currentRunJobId = stillRunning.id;
+        } else {
+          this.asyncJobInFlight = false;
+          this.asyncBannerActiveForRun = false;
+        }
       }
       this.noteRunTerminal(job.id);
     }
@@ -577,7 +619,8 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
    * {@link dismissAsyncBanner} is sticky FOR THE LIFE OF THIS INSTANCE. Without the ledger the next
    * registry emission - a progress tick, which lands every couple of seconds - would put a dismissed
    * banner straight back on screen. Ids are per dispatch, so the ledger cannot suppress the NEXT run's
-   * banner.
+   * banner. One exception, final-r02 (CR-5): a job the registry RESUMES after a client poll loss is
+   * released from the ledger once ({@link pollLostJobIds}), unless its banner was dismissed here.
    *
    * final-r01 NARROWED THAT SENTENCE: it used to read "sticky for the rest of the run", and it is not.
    * The ledger and both banner flags are per-instance and start blank on every mount, so a dismiss
@@ -1251,8 +1294,11 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
 
   private recomputeLineEditOffsets(): void {
-    const result = this.lineEditParser.recomputeLineEditOffsets(this.lineEditRunSuggestions, this.documentText);
-    if (result.changed) {
+    // c04: the same whitespace-only predicate the restore applies, so a row that changes nothing a reader
+    // can see cannot ride an offset recompute back onto the Run tab, whatever list reached this field.
+    const visible = this.lineEditRunSuggestions.filter(s => !isWhitespaceOnlySuggestion(s.original, s.suggested));
+    const result = this.lineEditParser.recomputeLineEditOffsets(visible, this.documentText);
+    if (result.changed || visible.length !== this.lineEditRunSuggestions.length) {
       this.lineEditRunSuggestions = [...result.suggestions];
       this.emitSuggestionRanges();
     }
@@ -1852,8 +1898,15 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
     const base: AnalysisSuggestion[] = mapped.length
       ? mapped
       : (() => {
+          // c04: the structuredResult chips are model output, never seen by the server-row filter in
+          // `mapDtoSuggestions`, so this fallback (also reached when that filter emptied `mapped`) must
+          // apply the same shared predicate or whitespace-only rows come straight back.
           const lineEdit = this.getLineEdit(result);
-          return lineEdit ? this.lineEditParser.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, this.documentText) : [];
+          return lineEdit
+            ? this.lineEditParser.toLineEditSuggestionsWithOffsets(
+                lineEdit.suggestions.filter(s => !isWhitespaceOnlySuggestion(s.original, s.suggested)),
+                this.documentText)
+            : [];
         })();
 
     this.lineEditRunSuggestions = base.filter(s => {
@@ -2517,6 +2570,10 @@ export class AnalysisPanelComponent implements OnChanges, OnInit, OnDestroy {
 
   /** Dismiss the compact async-job banner without cancelling the job (it keeps running in the background). */
   dismissAsyncBanner(): void {
+    // final-r02 (CR-5): record WHICH jobs the dismissed banner covered, so a registry resume after a
+    // poll loss (which releases the one-shot banner ledger) does not put it back on this instance.
+    if (this.currentRunJobId) this.bannerDismissedJobIds.add(this.currentRunJobId);
+    for (const id of this.observedRunningJobIds) this.bannerDismissedJobIds.add(id);
     this.asyncJobInFlight = false;
     // A dismiss is sticky for the rest of this run: clearing the persistent flag stops ngOnChanges from
     // reconstructing the banner if the user navigates away and back while the job is still running.

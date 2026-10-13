@@ -823,6 +823,43 @@ describe('AnalysisPanelComponent (focused logic)', () => {
     expect(component['hasRestoredLineEditForCurrentContext']).toBeTrue();
   });
 
+  it('c04: when the whitespace filter empties the DTO list, the structuredResult fallback is filtered by the same predicate', () => {
+    // Every stored row is whitespace-only, so `mapDtoSuggestions` maps to nothing and the restore falls
+    // back to the model's chips. Those chips carry the same whitespace-only edit, and used to come back.
+    const result = makeLineEditResult({
+      suggestions: [
+        {
+          id: 'sug-ws',
+          analysisResultId: 'r-le',
+          originalText: 'old text',
+          suggestedText: ' old text ',
+          startOffset: 0,
+          endOffset: 8,
+          reason: 'spacing',
+          category: 'style',
+          explanation: null,
+          outcome: null,
+          orderIndex: 0,
+        },
+      ],
+      structuredResult: JSON.stringify({
+        suggestions: [
+          { original: 'old text', suggested: ' old text ', reason: 'spacing', category: 'style' },
+          { original: 'same', suggested: 'same', reason: 'noop', category: 'style' },
+          { original: 'the document', suggested: 'the manuscript', reason: 'clarity', category: 'clarity' },
+        ],
+        overallFeedback: '',
+      }),
+    });
+
+    (component as any).documentText = 'old text in the document here';
+    (component as any).restoreLineEditStateFromResult(result);
+
+    expect(component['lineEditRunSuggestions'].map((s: AnalysisSuggestion) => s.original))
+      .withContext('only the edit a reader can see survives the fallback')
+      .toEqual(['the document']);
+  });
+
   // ─── onShowInDocument fallback ──────────────────────────────────────
 
   it('onShowInDocument emits with offsets when both are present', () => {
@@ -907,6 +944,21 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
     expect(component['lineEditRunSuggestions'][0].startOffset).toBe(100);
     expect(component['lineEditRunSuggestions'][0].endOffset).toBe(104);
+  });
+
+  it('c04: recomputeLineEditOffsets drops whitespace-only rows instead of re-anchoring them', () => {
+    component['lineEditRunSuggestions'] = [
+      { original: 'word one', suggested: ' word one', reason: 'r', category: 'c' },
+      { original: 'word two', suggested: 'word TWO', reason: 'r', category: 'c' },
+    ];
+
+    (component as any).documentText = 'prefix word one middle word two suffix';
+    (component as any).recomputeLineEditOffsets();
+
+    expect(component['lineEditRunSuggestions'].map((s: AnalysisSuggestion) => s.original))
+      .withContext('a row that changes nothing a reader can see never reaches the Run tab')
+      .toEqual(['word two']);
+    expect(component['lineEditRunSuggestions'][0].startOffset).toBe(23);
   });
 
   it('ngOnChanges triggers offset-recompute when documentText changes and suggestions have null offsets', () => {
@@ -2525,6 +2577,192 @@ describe('AnalysisPanelComponent (focused logic)', () => {
 
       expect(panel.asyncJobInFlight).toBeTrue();
       expect(hostFixture.nativeElement.querySelector('.async-job-banner')).not.toBeNull();
+    });
+
+    it('c04: the banner MIRRORED job finishing first hands over to the older job still running, then clears', () => {
+      // The reverse order of the case above. The banner mirrors job-B (adopted later); job-B finishes
+      // while job-A, already in the one-shot ledger, is still running. The banner is the unit's, so it
+      // must stay (and mirror job-A) until the LAST watched job settles.
+      registryJobs.next([proofreadJob('running'), proofreadJob('running', 'job-B')]);
+      const panel = mountHost();
+      hostFixture.detectChanges();
+      expect((panel as any).currentRunJobId).withContext('precondition: the banner mirrors job-B').toBe('job-B');
+
+      registryJobs.next([proofreadJob('running'), proofreadJob('succeeded', 'job-B')]);
+      hostFixture.detectChanges();
+
+      expect(panel.asyncJobInFlight)
+        .withContext('job-A is still running for this unit, so the banner must not drop')
+        .toBeTrue();
+      expect(hostFixture.nativeElement.querySelector('.async-job-banner')).not.toBeNull();
+      expect((panel as any).currentRunJobId)
+        .withContext('the in-panel bar follows the job that is still live')
+        .toBe('job-A');
+
+      registryJobs.next([proofreadJob('succeeded'), proofreadJob('succeeded', 'job-B')]);
+      hostFixture.detectChanges();
+
+      expect(panel.asyncJobInFlight).withContext('the last watched job settled').toBeFalse();
+      expect(hostFixture.nativeElement.querySelector('.async-job-banner')).toBeNull();
+    });
+
+    it('c04: a hand-over does not resurrect a DISMISSED banner', () => {
+      registryJobs.next([proofreadJob('running'), proofreadJob('running', 'job-B')]);
+      const panel = mountHost();
+      hostFixture.detectChanges();
+      panel.dismissAsyncBanner();
+      hostFixture.detectChanges();
+
+      registryJobs.next([proofreadJob('running'), proofreadJob('succeeded', 'job-B')]);
+      hostFixture.detectChanges();
+
+      expect(panel.asyncJobInFlight).toBeFalse();
+      expect(hostFixture.nativeElement.querySelector('.async-job-banner')).toBeNull();
+    });
+
+    // final-r02 (CR-5): c01 made a registry poll that runs out of reads end the job 'failed' with
+    // `endedBy: 'poll-error'`, and `JobRegistryService.track` RESUMES such a job (status back to running,
+    // `endedBy` cleared) when the backend still lists it. The panel used to read that lost 'failed' as a
+    // real terminal and claim both one-shot ledgers, so the resumed run came back with no banner and its
+    // real terminal never refetched history. The registry stream is the held BehaviorSubject driving each
+    // state by hand, so every step is one emission the panel sees in order.
+    describe('final-r02 a registry RESUME after a poll loss', () => {
+      const lost = (): TrackedJob => ({ ...proofreadJob('failed'), endedBy: 'poll-error' });
+      const serverFailed = (): TrackedJob => ({ ...proofreadJob('failed'), endedBy: 'server' });
+      const finished = {
+        id: 'res-new', chapterId: 'chap-1', type: 'Proofread', analysisType: 'Proofread',
+        resultText: 'fixed', createdAt: '2026-08-18T01:00:00.000Z', status: 'Active',
+      } as AnalysisResultDto;
+      let historyReads: number;
+      let serverHasResult: boolean;
+
+      beforeEach(() => {
+        historyReads = 0;
+        serverHasResult = false;
+        const analysis = TestBed.inject(AnalysisService) as any;
+        analysis.getHistory = () => { historyReads++; return of(serverHasResult ? [finished] : []); };
+      });
+
+      it('running -> lost -> resumed -> succeeded: the banner returns and the REAL terminal refetches history', () => {
+        registryJobs.next([proofreadJob('running')]);
+        const panel = mountHost();
+        hostFixture.detectChanges();
+        const readsAfterMount = historyReads;
+
+        registryJobs.next([lost()]);
+        hostFixture.detectChanges();
+        expect(historyReads).withContext('the lost terminal reads once (harmless: nothing new yet)')
+          .toBe(readsAfterMount + 1);
+        expect(panel.asyncJobInFlight).withContext('the registry says failed, so no running banner')
+          .toBeFalse();
+
+        // The registry resumed the SAME id (endedBy cleared, as `track` does).
+        registryJobs.next([proofreadJob('running')]);
+        hostFixture.detectChanges();
+        expect(panel.asyncJobInFlight)
+          .withContext('a resumed run is a fresh watch: its banner comes back')
+          .toBeTrue();
+        expect((panel as any).currentRunJobId).withContext('the in-panel bar mirrors it again').toBe('job-A');
+        expect(hostFixture.nativeElement.querySelector('.async-job-banner')).not.toBeNull();
+
+        serverHasResult = true;
+        registryJobs.next([proofreadJob('succeeded')]);
+        hostFixture.detectChanges();
+        expect(historyReads)
+          .withContext('the real terminal must refetch: a SECOND terminal read, not deduped by the lost one')
+          .toBe(readsAfterMount + 2);
+        expect(panel.latestResult?.id).withContext('the finished result is on screen').toBe('res-new');
+        expect(panel.asyncJobInFlight).withContext('and the banner is down again').toBeFalse();
+
+        // Still handled once: a re-emission of the real terminal is not a third event.
+        registryJobs.next([proofreadJob('succeeded')]);
+        hostFixture.detectChanges();
+        expect(historyReads).toBe(readsAfterMount + 2);
+      });
+
+      it('a SERVER failed stays handled once even if the same id shows running again', () => {
+        // The registry never resumes a server terminal; the running emission below is contrived to pin
+        // that the release is keyed on `endedBy: 'poll-error'`, not on "a terminal id is running again".
+        registryJobs.next([proofreadJob('running')]);
+        const panel = mountHost();
+        hostFixture.detectChanges();
+        const readsAfterMount = historyReads;
+
+        registryJobs.next([serverFailed()]);
+        hostFixture.detectChanges();
+        expect(historyReads).toBe(readsAfterMount + 1);
+
+        registryJobs.next([proofreadJob('running')]);
+        hostFixture.detectChanges();
+        expect(panel.asyncJobInFlight)
+          .withContext('a server terminal is forever: its banner ledger is not released')
+          .toBeFalse();
+
+        registryJobs.next([proofreadJob('succeeded')]);
+        hostFixture.detectChanges();
+        expect(historyReads)
+          .withContext('a server terminal claimed the id for good: no second refetch')
+          .toBe(readsAfterMount + 1);
+      });
+
+      it('a DISMISSED banner stays dismissed across the resume, while the real terminal still refetches', () => {
+        registryJobs.next([proofreadJob('running')]);
+        const panel = mountHost();
+        hostFixture.detectChanges();
+        panel.dismissAsyncBanner();
+        hostFixture.detectChanges();
+        const readsAfterMount = historyReads;
+
+        registryJobs.next([lost()]);
+        hostFixture.detectChanges();
+        registryJobs.next([proofreadJob('running')]);
+        hostFixture.detectChanges();
+        expect(panel.asyncJobInFlight)
+          .withContext('a dismiss is sticky for the life of this instance, resume or not')
+          .toBeFalse();
+        expect(hostFixture.nativeElement.querySelector('.async-job-banner')).toBeNull();
+
+        serverHasResult = true;
+        registryJobs.next([proofreadJob('succeeded')]);
+        hostFixture.detectChanges();
+        expect(historyReads).withContext('the dismiss covers the banner only, never the result')
+          .toBe(readsAfterMount + 2);
+        expect(panel.latestResult?.id).toBe('res-new');
+      });
+
+      it('a loss this instance first sees as ALREADY terminal (it was on another unit) still lets the resume through', () => {
+        registryJobs.next([proofreadJob('running')]);
+        const panel = mountHost();
+        hostFixture.detectChanges();
+        const readsAfterMount = historyReads;
+
+        // Away on chapter 2 while the poll runs out.
+        panel.chapterId = 'chap-2';
+        panel.ngOnChanges({ chapterId: new SimpleChange('chap-1', 'chap-2', false) });
+        hostFixture.detectChanges();
+        registryJobs.next([lost()]);
+        hostFixture.detectChanges();
+        // Back on chapter 1: the job reads failed here, so it is history, not an event.
+        panel.chapterId = 'chap-1';
+        panel.ngOnChanges({ chapterId: new SimpleChange('chap-2', 'chap-1', false) });
+        hostFixture.detectChanges();
+        expect(panel.asyncJobInFlight).withContext('precondition: a failed job raises no banner').toBeFalse();
+        const readsBack = historyReads;
+        expect(readsBack).withContext('precondition: the two switches read history').toBeGreaterThan(readsAfterMount);
+
+        registryJobs.next([proofreadJob('running')]);
+        hostFixture.detectChanges();
+        expect(panel.asyncJobInFlight)
+          .withContext('the banner ledger was settled at mount; the resume must release it')
+          .toBeTrue();
+        expect(hostFixture.nativeElement.querySelector('.async-job-banner')).not.toBeNull();
+
+        serverHasResult = true;
+        registryJobs.next([proofreadJob('succeeded')]);
+        hostFixture.detectChanges();
+        expect(historyReads).withContext('the resumed run\'s real terminal refetches').toBe(readsBack + 1);
+        expect(panel.latestResult?.id).toBe('res-new');
+      });
     });
 
     it('54: the restored banner still DISMISSES, and a progress tick does not put it back', () => {
