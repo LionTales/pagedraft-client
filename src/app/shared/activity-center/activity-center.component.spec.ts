@@ -286,6 +286,28 @@ describe('ActivityCenterComponent (rf-f01)', () => {
     });
   });
 
+  // ── c03: a whole-book run is ONE row ────────────────────────────────────────
+
+  describe('whole-book proofread children (c03)', () => {
+    it('folds the run\'s chapter children into the run\'s row; an unrelated job keeps its own', () => {
+      const parent = makeJob({ id: 'BP1', kind: 'book-proofread', titleHe: 'הגהת ספר שלם', titleEn: 'Whole-book proofread' });
+      const children = [1, 2, 3].map(i => makeJob({
+        id: `child-${i}`, kind: 'proofread', analysisType: 'Proofread', chapterId: `ch-${i}`, parentJobId: 'BP1',
+        scopeLabel: 'Chapter', titleHe: 'הגהה', titleEn: 'Proofread', status: i < 3 ? 'succeeded' : 'running',
+      }));
+      const other = makeJob({ id: 'S1', kind: 'summary', status: 'succeeded' });
+      stub.setJobs([parent, ...children, other]);
+      component.panelOpen = true;
+      fixture.detectChanges();
+
+      const rows = fixture.debugElement.queryAll(By.css('.ac-row'));
+      expect(rows.length).withContext('the run row + the unrelated job; no per-chapter rows').toBe(2);
+      const kinds = rows.map(r => (r.query(By.css('.ac-kind-icon')).nativeElement as HTMLElement).textContent?.trim());
+      expect(kinds).toContain('📖');
+      expect(kinds).not.toContain('✏️');
+    });
+  });
+
   // ── 'view' link ─────────────────────────────────────────────────────────────
 
   describe('view link', () => {

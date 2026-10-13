@@ -18,6 +18,7 @@ import {
   TrackedJob,
   isTerminal,
   showsChunkCounts,
+  topLevelJobs,
 } from '../../core/services/job-registry.service';
 import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
@@ -291,12 +292,16 @@ export class ActivityCenterComponent implements OnDestroy {
    * A low-frequency timer (60s cadence) is merged in via combineLatest so that the async pipe
    * re-renders once a minute even after terminal jobs stop emitting from the registry. This keeps
    * "לפני X דקות" / "X minutes ago" from freezing at finalize time.
+   *
+   * c03: one row per RUN. A whole-book proofread's per-chapter children are folded into the run's own
+   * row ({@link topLevelJobs}), which already carries the run's chapter counts and percent; before this a
+   * 30-chapter run listed 30 'Proofread' rows under it.
    */
   readonly jobs$ = combineLatest([
     this.registry.jobs$,
     timer(60_000, 60_000).pipe(startWith(0), takeUntil(this.destroy$)),
   ]).pipe(
-    map(([jobs]) => [...jobs].sort((a, b) => {
+    map(([jobs]) => topLevelJobs(jobs).sort((a, b) => {
       const timeDiff = Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
       // Secondary tiebreak by id for stable order when timestamps are equal.
       return timeDiff !== 0 ? timeDiff : a.id.localeCompare(b.id);
