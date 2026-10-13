@@ -3,7 +3,7 @@ import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from
 import { ANALYSIS_TYPE_LABELS, AnalysisResultDto, AnalysisSuggestion, AnalysisSuggestionDto, isConsistencySuggestion } from '../../core/models/analysis';
 import { LineEditParserService, ParsedLineEdit } from '../../core/services/line-edit-parser.service';
 import { SuggestionKeyService } from '../../core/services/suggestion-key.service';
-import { proofreadDiff } from '../../core/utils/proofread-diff';
+import { proofreadDiff, isWhitespaceOnlySuggestion } from '../../core/utils/proofread-diff';
 import { formatRelativeTime } from '../../core/utils/relative-time';
 import { SuggestionCardComponent } from './suggestion-card.component';
 import { LinguisticResultComponent } from './linguistic-result.component';
@@ -154,7 +154,7 @@ export class AnalysisHistoryTabComponent implements OnChanges {
    */
   private mapDtoSuggestionsForHistory(result: AnalysisResultDto): AnalysisSuggestion[] {
     const list: AnalysisSuggestionDto[] = (result?.suggestions ?? [])
-      .slice()
+      .filter(dto => isConsistencySuggestion(dto) || !isWhitespaceOnlySuggestion(dto.originalText, dto.suggestedText))
       .sort((a, b) => a.orderIndex - b.orderIndex);
     return list.map(dto => ({
       id: dto.id,
@@ -268,7 +268,10 @@ export class AnalysisHistoryTabComponent implements OnChanges {
 
     const lineEdit = this.getLineEdit(current);
     if (!lineEdit) return [];
-    const suggestions = this.lineEditParser.toLineEditSuggestionsWithOffsets(lineEdit.suggestions, this.documentText);
+    // c04: the model's chips never pass the server-row filter above, so apply the same shared predicate.
+    const suggestions = this.lineEditParser.toLineEditSuggestionsWithOffsets(
+      lineEdit.suggestions.filter(s => !isWhitespaceOnlySuggestion(s.original, s.suggested)),
+      this.documentText);
     const keyBased = suggestions.map(s => {
       const key = keyFor(s);
       if (this.acceptedLineEditKeys.has(key)) return { suggestion: s, status: 'accepted' as const };

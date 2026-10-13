@@ -1,15 +1,16 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, ElementRef, Injector, NgZone, OnDestroy, OnInit, afterNextRender, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { Observable, Subject, merge } from 'rxjs';
-import { takeUntil } from 'rxjs/operators';
+import { EMPTY, Observable, Subject, merge } from 'rxjs';
+import { take, takeUntil } from 'rxjs/operators';
 
 import { BookDetailDto, ChapterSummaryDto } from '../../core/models/book';
 import {
   EXPORT_REASON_NOTHING_WRITTEN,
   EXPORT_REASON_NO_CHAPTERS,
   ExportFailure,
+  ExportAnnotationReport,
   ExportSkipReport,
   ExportedFile,
   isExportFailure,
@@ -32,9 +33,18 @@ import {
   ExportKindId,
   ExportLang,
   SKIPPED_UNKNOWN,
+  annotationNotice,
   exportLang,
   skippedNotice,
 } from './export-kinds';
+import { BookProofreadUnreliableChapter } from '../../core/models/book-proofread';
+import { BookProofreadService } from '../../core/services/book-proofread.service';
+import { ExportBusyStatusComponent } from './export-busy-status.component';
+import { UnreliableExportDialogComponent } from './unreliable-export-dialog.component';
+import {
+  UnreliableChoice, relevantUnreliableChapters, unreliableChapterLabel, unreliableNothingToSkipNotice,
+  unreliableSkippedNotice,
+} from './unreliable-export';
 
 /**
  * Wave 3 / w4 - THE EXPORT SCREEN. Stage 5 of the spine stops being an honest grey box and gets a
@@ -54,7 +64,8 @@ import {
  * ── What this screen is NOT ───────────────────────────────────────────────────────────────────────
  * Not a formatting studio. There are no options, no page setup, no font choices and no scope pickers
  * beyond "which chapter", because the endpoints take no parameters: they are two plain GETs. Inventing
- * controls the server cannot honour would be the same class of lie the wave exists to remove.
+ * controls the server cannot honour would be the same class of lie the wave exists to remove. (c8: the
+ * annotated kinds' one parameter, `?unreliable=`, is a question asked only when it matters, not a control.)
  *
  * ── RTL, per element (mirror or fixed) ────────────────────────────────────────────────────────────
  *   - root `dir`          MIRRORS, following the BOOK language (book-scoped surface).
@@ -70,7 +81,7 @@ import {
 @Component({
   selector: 'app-export-page',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, StageSpineComponent],
+  imports: [CommonModule, FormsModule, RouterLink, StageSpineComponent, UnreliableExportDialogComponent, ExportBusyStatusComponent],
   template: `
     <div class="export-page" [attr.dir]="dir" data-testid="export-page">
       <header class="export-header">
@@ -118,7 +129,11 @@ import {
       <!-- THE LIST OF KINDS. Two today; a third joins by adding one entry to EXPORT_KINDS. -->
       <ul class="kind-list" data-testid="export-kinds">
         @for (kind of kinds; track kind.id) {
-          <li class="kind" [attr.data-testid]="'export-kind-' + kind.id">
+          <li
+            class="kind"
+            [class.kind--focused]="focusedKindId === kind.id"
+            [attr.aria-current]="focusedKindId === kind.id ? 'true' : null"
+            [attr.data-testid]="'export-kind-' + kind.id">
             <div class="kind-head">
               <span class="kind-format" aria-hidden="true">{{ kind.format }}</span>
               <div class="kind-text">
@@ -137,7 +152,7 @@ import {
                     <span class="chapter-picker__label">{{ t(COPY.chooseChapter) }}</span>
                     <select
                       class="chapter-select"
-                      data-testid="export-chapter-select"
+                      [attr.data-testid]="pickerTestId(kind)"
                       [disabled]="!chapters.length"
                       [(ngModel)]="selectedChapterId">
                       @for (chapter of chapters; track chapter.id) {
@@ -157,17 +172,14 @@ import {
                 </button>
               </div>
 
-              <!-- IN PROGRESS. It says the request is being prepared, which is the only thing true here:
-                   these endpoints carry no job and no progress, so no percentage is shown or implied. -->
+              <!-- IN PROGRESS (f7): spinner, "preparing", an elapsed clock, and for proofread kinds a
+                   long-wait line after 10 s. No percentage: these endpoints carry no job or progress. -->
               @if (busyKindId === kind.id) {
-                <p
-                  class="kind-busy"
-                  role="status"
-                  [attr.aria-label]="t(COPY.preparingAria)"
+                <app-export-busy-status
+                  [lang]="lang"
+                  [longRunNote]="isProofreadKind(kind)"
                   [attr.data-testid]="'export-busy-' + kind.id">
-                  <span class="kind-spinner" aria-hidden="true"></span>
-                  {{ t(COPY.preparing) }}
-                </p>
+                </app-export-busy-status>
               }
 
               <!-- The honest failure, in this book's language, naming what to do next. -->
@@ -185,6 +197,17 @@ import {
                 </p>
               }
 
+              @if (annotationNoticeFor(kind); as counts) {
+                <p class="kind-done" [attr.data-testid]="'export-annotations-' + kind.id">{{ counts }}</p>
+              }
+              @if (unreliableNoticeFor(kind); as notice) {
+                <p class="kind-skipped" [attr.data-testid]="'export-unreliable-skipped-' + kind.id">{{ notice }}</p>
+              }
+              <!-- c02: Skip chosen, but the server skipped fewer chapters than the dialog listed (0 included). -->
+              @if (unreliableNothingToSkipFor(kind); as notice) {
+                <p class="kind-skipped" [attr.data-testid]="'export-unreliable-nothing-skipped-' + kind.id">{{ notice }}</p>
+              }
+
               <!-- ...and what it does NOT contain, from the server's own headers. A chapter missing from an
                    exported manuscript with no word said about it is indistinguishable from data loss. -->
               @if (skippedNoticeFor(kind); as notice) {
@@ -194,6 +217,12 @@ import {
           </li>
         }
       </ul>
+
+      <!-- c8: asked only when an annotated export would carry results the system flagged unreliable. -->
+      @if (unreliablePrompt; as prompt) {
+        <app-unreliable-export-dialog [lang]="lang" [chapters]="prompt.chapters" (choose)="onUnreliableChoice($event)">
+        </app-unreliable-export-dialog>
+      }
     </div>
   `,
   styles: [`
@@ -272,6 +301,12 @@ import {
       text-align: start;
     }
 
+    /* c6: the kind the caller asked for (?kind=). A ring, not a colour change, so it reads in both themes. */
+    .kind--focused {
+      border-color: var(--pd-primary-600);
+      box-shadow: var(--pd-ring);
+    }
+
     .kind-head {
       display: flex;
       flex-direction: row;
@@ -334,30 +369,12 @@ import {
 
     .kind-download { white-space: normal; }
 
-    .kind-busy,
     .kind-error,
     .kind-done,
     .kind-unavailable {
       margin: 0;
       font-size: var(--pd-text-body-sm);
     }
-    .kind-busy {
-      display: flex;
-      flex-direction: row;
-      align-items: center;
-      gap: var(--pd-space-2);
-      color: var(--pd-info);
-    }
-    .kind-spinner {
-      inline-size: 12px;
-      block-size: 12px;
-      border: 2px solid color-mix(in srgb, var(--pd-info) 30%, transparent);
-      border-top-color: var(--pd-info);
-      border-radius: 50%;
-      animation: export-spin 0.8s linear infinite;
-    }
-    @keyframes export-spin { to { transform: rotate(360deg); } }
-
     .kind-error { color: var(--pd-cut); }
     .kind-done { color: var(--pd-keep); }
     /* Not an error (the file did land) and not a success either. It hugs the reading edge, so it mirrors. */
@@ -369,7 +386,10 @@ import {
       color: var(--pd-text);
     }
     .kind-unavailable { color: var(--pd-text-muted); }
-    .file-name { unicode-bidi: isolate; font-family: var(--pd-font-mono); }
+    /* plaintext, NOT isolate: the span inherits direction: rtl, so isolate still lays the name out RTL
+       and a Hebrew name renders as "docx.<name reversed>". plaintext resolves the direction from the
+       name's own first strong character. */
+    .file-name { unicode-bidi: plaintext; font-family: var(--pd-font-mono); }
   `],
 })
 export class ExportPageComponent implements OnInit, OnDestroy {
@@ -390,6 +410,24 @@ export class ExportPageComponent implements OnInit, OnDestroy {
 
   /** The kind whose request is in flight, or null. One at a time: the button is disabled while it runs. */
   busyKindId: ExportKindId | null = null;
+  /** c6: the kind the caller asked to bring forward (`?kind=`), or null. Highlighted and scrolled to. */
+  focusedKindId: ExportKindId | null = null;
+  private readonly host = inject(ElementRef<HTMLElement>);
+  private readonly zone = inject(NgZone);
+  private readonly injector = inject(Injector);
+
+  /**
+   * Scroll the focused kind's row into view once the list has rendered. `onStable`, not a timer: this
+   * app coalesces change detection into a frame, so a timer would measure the page one change behind.
+   */
+  private scrollToFocusedKind(): void {
+    const id = this.focusedKindId;
+    if (!id) return;
+    this.zone.onStable.pipe(take(1)).subscribe(() => {
+      const row = (this.host.nativeElement as HTMLElement).querySelector?.(`[data-testid="export-kind-${id}"]`);
+      (row as HTMLElement | null)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    });
+  }
 
   /** The last failure per kind, already localized. Cleared when that kind is retried. */
   private errors = new Map<ExportKindId, string>();
@@ -404,6 +442,13 @@ export class ExportPageComponent implements OnInit, OnDestroy {
    * included). The absent-header case may never collapse into "nothing was skipped".
    */
   private skipped = new Map<ExportKindId, ExportSkipReport | null>();
+  /** What the last ANNOTATED download per kind holds, off the response headers; null when not sent. */
+  private annotations = new Map<ExportKindId, ExportAnnotationReport | null>();
+  /** c8: chapters the last annotated download skipped (server count) and the names the author chose. */
+  private unreliableSkips = new Map<ExportKindId, { count: number | null; names: string[] }>();
+  /** c8: the open "flagged unreliable" question, or null. While it is open no kind can start. */
+  unreliablePrompt: { kind: ExportKind; chapterId: string | null; chapters: BookProofreadUnreliableChapter[] } | null = null;
+  private readonly proofreadService = inject(BookProofreadService);
 
   /** The compact spine's signals, assembled from the same book payload this page already loads. */
   spineSignals: StageSpineSignals = emptyStageSpineSignals();
@@ -444,6 +489,13 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   ) {}
 
   ngOnInit(): void {
+    // c6: `?kind=` (the dashboard's whole-book proofread download) brings that kind's row forward. Only a
+    // listed kind id is honoured; anything else is ignored rather than highlighting nothing. Read BEFORE
+    // the book load below, whose answer is what triggers the scroll.
+    (this.route.queryParams ?? EMPTY).pipe(takeUntil(this.destroy$)).subscribe(query => {
+      const requested = query?.['kind'];
+      this.focusedKindId = this.kinds.find(k => k.id === requested)?.id ?? null;
+    });
     // A subscription, not a one-time `route.snapshot` read: this route can receive a same-route param
     // change (`/books/A/export` -> `/books/B/export`, reachable via history and the guide's deep link),
     // and a snapshot read would never see it.
@@ -488,6 +540,9 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     this.errors.clear();
     this.downloaded.clear();
     this.skipped.clear();
+    this.annotations.clear();
+    this.unreliableSkips.clear();
+    this.unreliablePrompt = null;
     this.briefsRunning = false;
     this.reviewRunning = false;
     this.spineSignals = emptyStageSpineSignals();
@@ -509,6 +564,7 @@ export class ExportPageComponent implements OnInit, OnDestroy {
           this.chaptersKnown = true;
           this.loading = false;
           this.rebuildSpineSignals();
+          this.scrollToFocusedKind();
         },
         error: () => {
           // The chapters are UNKNOWN, not empty: the screen says it could not read the book rather than
@@ -590,10 +646,15 @@ export class ExportPageComponent implements OnInit, OnDestroy {
    */
   canRun(kind: ExportKind): boolean {
     if (!kind.availability.available) return false;
-    if (!this.bookId || this.loading || this.busyKindId !== null) return false;
+    if (!this.bookId || this.loading || this.busyKindId !== null || this.unreliablePrompt) return false;
     if (this.noChapters || !this.chaptersKnown) return false;
     if (kind.scope === 'chapter') return !!this.selectedChapterId;
     return true;
+  }
+
+  /** f7: the annotated kinds run the proofread merge server-side, so they get the long-wait line. */
+  isProofreadKind(kind: ExportKind): boolean {
+    return kind.id === 'book-docx-proofread' || kind.id === 'chapter-docx-proofread';
   }
 
   /** The button's label. It says what it is doing while it runs rather than going blank or spinning mute. */
@@ -627,6 +688,37 @@ export class ExportPageComponent implements OnInit, OnDestroy {
     return skippedNotice(report.count, names, this.lang);
   }
 
+  /** The tracked-change counts of the last annotated download for this kind, or null (plain kind, or not sent). */
+  annotationNoticeFor(kind: ExportKind): string | null {
+    if (!this.downloaded.has(kind.id)) return null;
+    const report = this.annotations.get(kind.id) ?? null;
+    return report === null ? null : annotationNotice(report.placed, report.unanchored, this.lang);
+  }
+
+  /** c8: "suggestions skipped for N chapters", from the SERVER's count; null when 0 or not sent. */
+  unreliableNoticeFor(kind: ExportKind): string | null {
+    if (!this.downloaded.has(kind.id)) return null;
+    const skip = this.unreliableSkips.get(kind.id);
+    if (!skip || !skip.count) return null;
+    return unreliableSkippedNotice(skip.count, skip.names, this.lang);
+  }
+
+  /**
+   * c02: after a Skip, how many of the chapters the dialog listed had nothing to skip (the server count fell
+   * short of the list, 0 included); null when it did not, on Export everything, or when the count is unknown.
+   */
+  unreliableNothingToSkipFor(kind: ExportKind): string | null {
+    if (!this.downloaded.has(kind.id)) return null;
+    const skip = this.unreliableSkips.get(kind.id);
+    if (!skip) return null;
+    return unreliableNothingToSkipNotice(skip.count, skip.names, this.lang);
+  }
+
+  /** Test id of a kind's chapter picker: the plain kind keeps the original id, the others are suffixed. */
+  pickerTestId(kind: ExportKind): string {
+    return kind.id === 'chapter-docx' ? 'export-chapter-select' : `export-chapter-select-${kind.id}`;
+  }
+
   /** "3. The Long Night" - the order the author sees, one-based, isolated from the surrounding script. */
   chapterOptionLabel(chapter: ChapterSummaryDto): string {
     return `${this.chapterNumber(chapter.order)}. ${chapter.title}`;
@@ -657,22 +749,26 @@ export class ExportPageComponent implements OnInit, OnDestroy {
    */
   startExport(kind: ExportKind): void {
     if (!this.canRun(kind) || !this.bookId) return;
-    this.errors.delete(kind.id);
-    this.downloaded.delete(kind.id);
-    this.skipped.delete(kind.id);
+    // Per-kind state (file name, counts notice, error) is cleared in `run`, when a request is actually sent:
+    // the unreliable dialog is cancellable, and Cancel must leave the previous download's notice standing.
     this.busyKindId = kind.id;
 
     switch (kind.id) {
       case 'book-docx':
         this.run(kind, this.exportService.exportBook(this.bookId));
         return;
-      case 'chapter-docx': {
+      case 'book-docx-proofread':
+        this.checkUnreliableThenExport(kind, null);
+        return;
+      case 'chapter-docx':
+      case 'chapter-docx-proofread': {
         const chapterId = this.selectedChapterId;
         if (!chapterId) {
           this.busyKindId = null;
           return;
         }
-        this.run(kind, this.exportService.exportChapter(this.bookId, chapterId));
+        if (kind.id === 'chapter-docx') this.run(kind, this.exportService.exportChapter(this.bookId, chapterId));
+        else this.checkUnreliableThenExport(kind, chapterId);
         return;
       }
       default: {
@@ -684,13 +780,80 @@ export class ExportPageComponent implements OnInit, OnDestroy {
   }
 
   /**
+   * c8: an annotated export first reads the proofread status (in the book language, the run's key). No
+   * flagged chapter in this export -> export with include straight away (the pre-c8 behaviour, no dialog);
+   * otherwise ask. A failed status read never blocks the download: it exports with include and warns.
+   * The chapter id is the one captured at the click, so a picker change while the read runs cannot move it.
+   */
+  private checkUnreliableThenExport(kind: ExportKind, chapterId: string | null): void {
+    const bookId = this.bookId!;
+    const language = (this.bookLanguage ?? '').trim() || 'he';
+    this.proofreadService.getStatus(bookId, language)
+      .pipe(takeUntil(merge(this.destroy$, this.bookChange$)))
+      .subscribe({
+        next: status => {
+          const chapters = relevantUnreliableChapters(status, kind.scope, chapterId);
+          if (chapters.length === 0) {
+            this.exportProofread(kind, chapterId, 'include', []);
+            return;
+          }
+          this.busyKindId = null;
+          this.unreliablePrompt = { kind, chapterId, chapters };
+        },
+        error: (err: unknown) => {
+          console.warn('[Export] proofread status read failed; exporting with unreliable=include', { bookId, err });
+          this.exportProofread(kind, chapterId, 'include', []);
+        },
+      });
+  }
+
+  /** c8: the dialog's answer. Cancel downloads nothing; include / skip export with that mode. */
+  onUnreliableChoice(choice: UnreliableChoice): void {
+    const prompt = this.unreliablePrompt;
+    this.unreliablePrompt = null;
+    // Every path out of the dialog hands focus back to the kind's download button once it is enabled again
+    // (the dialog's own restore target was captured after the trigger was disabled, so it can land on body).
+    if (prompt) this.focusDownloadButton(prompt.kind);
+    if (!prompt || choice === 'cancel' || !this.bookId) return;
+    this.busyKindId = prompt.kind.id;
+    this.exportProofread(prompt.kind, prompt.chapterId, choice, choice === 'skip' ? prompt.chapters : []);
+  }
+
+  private focusDownloadButton(kind: ExportKind): void {
+    afterNextRender(() => {
+      const button = (this.host.nativeElement as HTMLElement)
+        .querySelector?.(`[data-testid="export-download-${kind.id}"]`) as HTMLButtonElement | null;
+      if (button && !button.disabled) button.focus({ preventScroll: true });
+    }, { injector: this.injector });
+  }
+
+  private exportProofread(
+    kind: ExportKind,
+    chapterId: string | null,
+    mode: 'include' | 'skip',
+    skipped: BookProofreadUnreliableChapter[],
+  ): void {
+    const bookId = this.bookId!;
+    const call = chapterId
+      ? this.exportService.exportChapterProofread(bookId, chapterId, mode)
+      : this.exportService.exportBookProofread(bookId, mode);
+    this.run(kind, call, skipped.map(c => unreliableChapterLabel(c, this.lang)));
+  }
+
+  /**
    * One subscription shape for every kind, so the two document paths cannot behave differently here.
+   * It clears the kind's previous notices (file name, counts, error) because a request is actually being sent.
    *
    * `takeUntil(merge(destroy$, bookChange$))` (Finding 14): without it, a response landing after this
    * component is destroyed - or after the route moved on to a different book - called `saveAs` from a
    * dead component and dropped a file onto whatever screen the user had since navigated to.
    */
-  private run(kind: ExportKind, call: Observable<ExportedFile>): void {
+  private run(kind: ExportKind, call: Observable<ExportedFile>, skippedNames: string[] = []): void {
+    this.errors.delete(kind.id);
+    this.downloaded.delete(kind.id);
+    this.skipped.delete(kind.id);
+    this.annotations.delete(kind.id);
+    this.unreliableSkips.delete(kind.id);
     call.pipe(takeUntil(merge(this.destroy$, this.bookChange$))).subscribe({
       next: (file: ExportedFile) => {
         this.busyKindId = null;
@@ -706,6 +869,8 @@ export class ExportPageComponent implements OnInit, OnDestroy {
         this.downloaded.set(kind.id, file.fileName);
         // Recorded even when it is null: "the server did not say" is a state this screen renders.
         this.skipped.set(kind.id, file.skipped);
+        this.annotations.set(kind.id, file.annotations ?? null);
+        this.unreliableSkips.set(kind.id, { count: file.unreliableSkipped ?? null, names: skippedNames });
       },
       error: (err: unknown) => {
         this.busyKindId = null;

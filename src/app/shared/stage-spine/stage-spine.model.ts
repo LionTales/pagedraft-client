@@ -95,7 +95,10 @@ export type StageActionId =
   | 'build-briefs'
   | 'build-review'
   | 'open-findings'
-  | 'open-export';
+  | 'open-export'
+  // c6: stage 4's way into the whole-book proofread row. It scrolls to the row, it starts nothing, and it
+  // claims nothing about the stage: stage 4 stays a per-chapter picture with no book-level state.
+  | 'open-book-proofread';
 
 /**
  * One chapter, as stage 4 sees it. Stage 4 is a PER-CHAPTER picture by decision (Q2-A): there is no
@@ -287,7 +290,7 @@ export function deriveStageSpine(signals: StageSpineSignals): StageStatus[] {
     deriveImport(chapterCount, chaptersWithText),
     deriveBriefs(signals.summary, inputs, signals.summaryRunning),
     deriveReview(signals.review, inputs, signals.reviewRunning),
-    deriveChapterPasses(chapters, chapterCount),
+    deriveChapterPasses(chapters, chapterCount, inputs),
     // Stage 5 gets its OWN inputs, off its own count. It is the one stage whose claim belongs to the
     // exporter rather than to the whole-book builders, and `inputs` is the builders' precondition.
     deriveExport(
@@ -622,6 +625,7 @@ function deriveReview(
 function deriveChapterPasses(
   chapters: ChapterPassSignal[] | null,
   chapterCount: number | null,
+  inputs: BuildInputs,
 ): StageStatus {
   const base = emptyStatus('chapter-passes');
   base.chapters = chapters;
@@ -636,6 +640,11 @@ function deriveChapterPasses(
     base.unknown = true;
     return base;
   }
+  // c6: the whole-book proofread row is a way to do this stage's work for every chapter at once. The
+  // action only scrolls to it, and only where that row CAN run: on a book whose chapters hold no text the
+  // row refuses, and an offered action the neighbouring row refuses is the walkability defect c02 fixed.
+  // It is offered in the running state too: that row is also where the run is followed and stopped.
+  base.action = buildIsRefused(inputs) ? null : 'open-book-proofread';
   if (chapters.some(c => c.running)) {
     base.state = 'running';
     base.perChapter = true;

@@ -239,7 +239,8 @@ export class AnalysisRunTabComponent implements OnChanges {
 
   /**
    * True when the latest completed result is a Proofread that the server flagged as
-   * untrustworthy (empty / unrelated / dropped-span flood of bogus deletions). When true, the Run
+   * untrustworthy (empty / unrelated / dropped-span flood of bogus deletions, or a chunk that fell back to
+   * its original text on a long chapter). When true, the Run
    * tab shows a single warning and suppresses the suggestion cards and the "looks clean" message.
    */
   get isProofreadResultUnreliable(): boolean {

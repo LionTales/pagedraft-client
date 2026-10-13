@@ -37,6 +37,7 @@ import { AnalysisService } from '../../core/services/analysis.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { BookReviewService } from '../../core/services/book-review.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
+import { BookProofreadService } from '../../core/services/book-proofread.service';
 import { runString } from '../../core/i18n/run-strings';
 
 const JOB_ID = 'JOB-I18N-1';
@@ -124,6 +125,7 @@ describe('a Hebrew book shows no Latin-script run chrome (c02)', () => {
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) } },
         { provide: BookReviewService, useValue: { getReviewStatus: () => of({ activeBuildJobId: null }) } },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => of({ activeBuildJobId: null }) } },
+        { provide: BookProofreadService, useValue: { getStatus: () => of({ activeJobId: null }) } },
       ],
     }).compileComponents();
 

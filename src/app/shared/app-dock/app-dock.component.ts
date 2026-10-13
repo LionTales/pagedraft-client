@@ -14,7 +14,7 @@ import { Subject, map, takeUntil } from 'rxjs';
 import { ActivityCenterComponent, LABELS_EN, LABELS_HE } from '../activity-center/activity-center.component';
 import { ProductChatComponent } from '../product-chat/product-chat.component';
 import { AppDockTab, AppOverlayService } from '../../core/services/app-overlay.service';
-import { JobRegistryService } from '../../core/services/job-registry.service';
+import { JobRegistryService, topLevelJobs } from '../../core/services/job-registry.service';
 import { ChatChromeLang, chatString } from '../../core/i18n/chat-strings';
 import { DockStringKey, dockString, launcherAriaLabel } from '../../core/i18n/dock-strings';
 import { guidesString } from '../../core/i18n/guides-strings';
@@ -127,6 +127,9 @@ export class AppDockComponent implements OnDestroy {
   /**
    * Non-terminal jobs, counted for the launcher badge.
    *
+   * c03: counted per RUN. A whole-book proofread's running chapter child folds into its running parent
+   * ({@link topLevelJobs} over the ACTIVE list), so one whole-book run reads 1, not parent + child.
+   *
    * This is why the Activity Center bell existed, so it had to survive the merge: the count is now
    * carried by the ONE launcher (and, while the drawer is open and the launcher is therefore not
    * rendered, by the activity tab itself, so the number never disappears mid-run).
@@ -136,7 +139,7 @@ export class AppDockComponent implements OnDestroy {
    * MESSAGES, which is the opposite of what this counts. The mark and the composed accessible name
    * below say the same thing, one to the eye and one to a screen reader.
    */
-  readonly activeCount$ = this.registry.activeJobs$.pipe(map(jobs => jobs.length));
+  readonly activeCount$ = this.registry.activeJobs$.pipe(map(jobs => topLevelJobs(jobs).length));
 
   /** The launcher's accessible name, which carries the count rather than hiding it in a glyph. */
   readonly launcherAria$ = this.activeCount$.pipe(

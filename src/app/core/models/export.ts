@@ -1,13 +1,15 @@
 /**
  * Wave 3 / w4 - the export WIRE contract, exactly as w1 inventoried it on the server.
  *
- * Both endpoints are SYNCHRONOUS and unmetered: a plain GET that answers with the file itself. There is no
+ * All four endpoints are SYNCHRONOUS and unmetered: a plain GET that answers with the file itself. There is no
  * job, no progress payload and no polling contract, and none is invented here - the only "in progress" this
  * client can honestly show is "the request is in flight", which is a fact about the request and not a
  * fabricated server-side percentage.
  *
- *   GET /api/document/export/book/{bookId}                -> 200 DOCX | 404 | 409 ExportUnavailableDto
- *   GET /api/document/export/chapter/{bookId}/{chapterId} -> 200 DOCX | 404 | 409 ExportUnavailableDto
+ *   GET /api/document/export/book/{bookId}                            -> 200 DOCX | 404 | 409 ExportUnavailableDto
+ *   GET /api/document/export/chapter/{bookId}/{chapterId}             -> 200 DOCX | 404 | 409 ExportUnavailableDto
+ *   GET /api/document/export/book/{bookId}/proofread?unreliable=      -> the same, with proofread suggestions as tracked changes | 400 on a bad `unreliable`
+ *   GET /api/document/export/chapter/{bookId}/{chapterId}/proofread?unreliable= -> the same for one chapter
  *
  * The 200 carries `Content-Disposition: attachment` with BOTH a plain `filename` and an RFC 5987
  * `filename*=UTF-8''...`; Hebrew titles survive only in the second, which is why this client reads that one
@@ -15,9 +17,12 @@
  *
  * It also carries {@link EXPORT_SKIPPED_COUNT_HEADER} and, when that is not zero,
  * {@link EXPORT_SKIPPED_CHAPTERS_HEADER}: the export leaves out a chapter with nothing written in it, and
- * an author must be told which ones rather than discovering a gap in their own manuscript. All three
- * headers are in the API's CORS `WithExposedHeaders`; none of them is CORS-safelisted, so a missing entry
- * there makes every read here return null cross-origin while dev, being same-origin, shows nothing.
+ * an author must be told which ones rather than discovering a gap in their own manuscript. The two
+ * `/proofread` endpoints add {@link EXPORT_ANNOTATION_COUNT_HEADER}, {@link EXPORT_UNANCHORED_COUNT_HEADER}
+ * and {@link EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER} (and a sixth, `X-Export-Whitespace-Skipped-Count`, that
+ * this client does not read). Every one of the six is in the API's CORS `WithExposedHeaders`
+ * (`CorsPolicyConfiguration`); none of them is CORS-safelisted, so a missing entry there makes every read
+ * here return null cross-origin while dev, being same-origin, shows nothing.
  */
 
 /** The DOCX media type both endpoints answer with. */
@@ -73,6 +78,59 @@ export const EXPORT_SKIPPED_COUNT_HEADER = 'X-Export-Skipped-Count';
 /** Which ones, percent-encoded JSON. Sent only when the count is not zero. */
 export const EXPORT_SKIPPED_CHAPTERS_HEADER = 'X-Export-Skipped-Chapters';
 
+/** How many proofread suggestions the annotated DOCX holds as tracked changes. Sent only by the two `/proofread` endpoints. */
+export const EXPORT_ANNOTATION_COUNT_HEADER = 'X-Export-Annotation-Count';
+/** How many pending suggestions could not be placed in the text, so they are NOT in the file. */
+export const EXPORT_UNANCHORED_COUNT_HEADER = 'X-Export-Unanchored-Count';
+
+/**
+ * c7/c8: how many CHAPTERS an annotated export left un-annotated because the author chose to skip results
+ * the system flagged unreliable (`?unreliable=skip`). Written on the two `/proofread` endpoints only, `"0"`
+ * on include; exposed through the API's CORS `WithExposedHeaders`.
+ */
+export const EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER = 'X-Export-Unreliable-Skipped-Count';
+
+/**
+ * The annotated exports' `?unreliable=` query: `include` (the default, every pending suggestion) or `skip`
+ * (a unit whose Active proofread result is flagged unreliable keeps its text but gets no annotations).
+ */
+export type UnreliableExportMode = 'include' | 'skip';
+
+/** Read {@link EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER}; null when absent or not a plain non-negative integer. */
+export function unreliableSkippedFromHeader(value: string | null): number | null {
+  return countFromHeader(value);
+}
+
+/** What an annotated export holds: suggestions placed, and suggestions that found no place in the text. */
+export interface ExportAnnotationReport {
+  placed: number;
+  unanchored: number;
+}
+
+/** A header that must be a plain non-negative integer; anything else is unreadable and yields null. */
+function countFromHeader(value: string | null): number | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const n = Number(trimmed);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/**
+ * Read the annotation headers off an annotated export, or NULL when the server did not say (a plain export
+ * never sends them, and an old server or a stripping proxy sends neither). The placed count is the anchor:
+ * without a readable one there is no report. A missing or garbled unanchored count reads as 0 rather than
+ * discarding a placed count that is perfectly good.
+ */
+export function annotationReportFromHeaders(
+  placedHeader: string | null,
+  unanchoredHeader: string | null,
+): ExportAnnotationReport | null {
+  const placed = countFromHeader(placedHeader);
+  if (placed === null) return null;
+  return { placed, unanchored: countFromHeader(unanchoredHeader) ?? 0 };
+}
+
 /**
  * Read the skipped-chapter headers off a successful export, or NULL when the server did not say.
  *
@@ -124,6 +182,16 @@ export interface ExportedFile {
    * chapter missing from an exported book is indistinguishable from data loss to an author.
    */
   skipped: ExportSkipReport | null;
+  /**
+   * What an annotated (`/proofread`) export holds, or null/absent for a plain export or a server that did
+   * not say. Optional so the plain-export callers and fixtures need no change.
+   */
+  annotations?: ExportAnnotationReport | null;
+  /**
+   * c8: chapters left un-annotated by `?unreliable=skip`, off {@link EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER};
+   * null/absent on a plain export or when the server did not say.
+   */
+  unreliableSkipped?: number | null;
 }
 
 /**

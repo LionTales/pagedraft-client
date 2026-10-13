@@ -123,7 +123,7 @@ const LABELS_EN: Record<string, string> = {
               <button type="button" class="pd-btn pd-btn-link" (click)="fileInput.click()">{{ t('browse') }}</button>
             </p>
             <p *ngIf="preview">
-              {{ t('selectedFile') }} <strong>{{ preview.fileName }}</strong> ({{ preview.fileSize | number }} {{ t('bytes') }})
+              {{ t('selectedFile') }} <strong class="file-name">{{ preview.fileName }}</strong> ({{ preview.fileSize | number }} {{ t('bytes') }})
               <button type="button" class="pd-btn pd-btn-link" (click)="fileInput.click()">{{ t('change') }}</button>
             </p>
             <input
@@ -265,6 +265,8 @@ const LABELS_EN: Record<string, string> = {
         color: var(--pd-cut);
         font-size: var(--pd-text-body-sm);
       }
+      /* plaintext, not isolate: the file name sits inside RTL text and must resolve its own direction. */
+      .file-name { unicode-bidi: plaintext; }
       .preview-section {
         margin-block-start: var(--pd-space-5);
       }

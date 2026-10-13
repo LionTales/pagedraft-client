@@ -138,11 +138,17 @@ export function proofreadDiff(originalText: string, resultText: string): Analysi
 
   const expanded = raw.map(s => expandToWordBoundaries(normalizedOriginal, s));
   // Hide no-op and whitespace-only suggestions so the list doesn't show "add/remove space" that can break RTL
-  return expanded.filter(s => {
-    if (s.original === s.suggested) return false;
-    const o = s.original.trim();
-    const g = s.suggested.trim();
-    if (o === g) return false; // only whitespace changed (e.g. "הוא" vs " הוא")
-    return true;
-  });
+  return expanded.filter(s => !isWhitespaceOnlySuggestion(s.original, s.suggested));
+}
+
+/**
+ * True when a suggestion changes nothing a reader can see: the texts are identical, or they differ only
+ * in leading/trailing whitespace (e.g. "הוא" vs " הוא", or a stored NBSP/space deletion). The single
+ * source of this rule: the diff path above and the server-suggestion mapping in the analysis panel both
+ * call it, so they cannot drift. The API annotator mirrors the same trim rule.
+ */
+export function isWhitespaceOnlySuggestion(original: string | null | undefined, suggested: string | null | undefined): boolean {
+  const o = original ?? '';
+  const g = suggested ?? '';
+  return o === g || o.trim() === g.trim();
 }

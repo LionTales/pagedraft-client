@@ -15,12 +15,15 @@ import {
   clampPercent,
   normalizeStatus,
   normalizeLang,
+  serverEtaOf,
+  serverWordPercent,
 } from './job-registry.service';
 import { AnalysisProgressService } from './analysis-progress.service';
 import { AnalysisService } from './analysis.service';
 import { BookSummaryService } from './book-summary.service';
 import { BookReviewService } from './book-review.service';
 import { StyleBaselineService } from './style-baseline.service';
+import { BookProofreadService } from './book-proofread.service';
 import { AnalysisProgressDto } from '../models/analysis';
 import { ActiveAnalysisJobDto } from '../models/active-analysis-job';
 
@@ -45,11 +48,13 @@ class ProgressStub {
   summary$ = new Subject<AnalysisProgressDto>();
   review$ = new Subject<AnalysisProgressDto>();
   style$ = new Subject<AnalysisProgressDto>();
+  bookProofread$ = new Subject<AnalysisProgressDto>();
   chapter$ = new Subject<AnalysisProgressDto>();
 
   pollBookSummaryProgress() { return this.summary$.asObservable(); }
   pollBookReviewProgress() { return this.review$.asObservable(); }
   pollStyleBaselineProgress() { return this.style$.asObservable(); }
+  pollBookProofreadProgress() { return this.bookProofread$.asObservable(); }
   pollProgress() { return this.chapter$.asObservable(); }
 }
 
@@ -62,6 +67,9 @@ function makeReviewStub(activeBuildJobId: string | null = null) {
 }
 function makeStyleStub(activeBuildJobId: string | null = null) {
   return { getStyleBaselineStatus: jasmine.createSpy('getStyleBaselineStatus').and.returnValue(of({ activeBuildJobId })) };
+}
+function makeBookProofreadStub(activeJobId: string | null = null) {
+  return { getStatus: jasmine.createSpy('getStatus').and.returnValue(of({ activeJobId })) };
 }
 function makeAnalysisStub(jobs: ActiveAnalysisJobDto[] = []) {
   return { getActiveAnalysisJobs: jasmine.createSpy('getActiveAnalysisJobs').and.returnValue(of(jobs)) };
@@ -90,6 +98,7 @@ describe('JobRegistryService', () => {
     summary?: ReturnType<typeof makeSummaryStub>;
     review?: ReturnType<typeof makeReviewStub>;
     style?: ReturnType<typeof makeStyleStub>;
+    bookProofread?: ReturnType<typeof makeBookProofreadStub>;
     analysis?: ReturnType<typeof makeAnalysisStub>;
   } = {}): void {
     progressStub = new ProgressStub();
@@ -101,6 +110,7 @@ describe('JobRegistryService', () => {
         { provide: BookSummaryService, useValue: opts.summary ?? makeSummaryStub() },
         { provide: BookReviewService, useValue: opts.review ?? makeReviewStub() },
         { provide: StyleBaselineService, useValue: opts.style ?? makeStyleStub() },
+        { provide: BookProofreadService, useValue: opts.bookProofread ?? makeBookProofreadStub() },
       ],
     });
     service = TestBed.inject(JobRegistryService);
@@ -255,6 +265,77 @@ describe('JobRegistryService', () => {
 
       expect(jobById('J1')!.completedChunks).toBe(6);
       expect(jobById('J1')!.totalChunks).toBe(10);
+    });
+  });
+
+  describe('whole-book proofread server ETA + word-weighted percent (f6)', () => {
+    beforeEach(() => configure());
+
+    it('serverEtaOf: a non-negative number is kept (0 included); absent, null, negative, NaN are null', () => {
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: 600 }))).toBe(600);
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: 0 }))).toBe(0);
+      expect(serverEtaOf(progress({}))).toBeNull(); // an older API omits the field
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: null }))).toBeNull();
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: -5 }))).toBeNull();
+      expect(serverEtaOf(progress({ estimatedRemainingSeconds: NaN }))).toBeNull();
+    });
+
+    it('serverWordPercent: only a strictly positive percent counts', () => {
+      expect(serverWordPercent(progress({ estimatedCompletionPercent: 70 }))).toBe(70);
+      expect(serverWordPercent(progress({ estimatedCompletionPercent: 0 }))).toBeNull();
+      expect(serverWordPercent(progress({ estimatedCompletionPercent: -1 }))).toBeNull();
+    });
+
+    it('bar uses the word percent while the counts stay CHAPTERS (1 of 55 chapters, 70 percent of the words)', () => {
+      service.track('book-proofread', 'book-A', 'bp-1');
+      progressStub.bookProofread$.next(progress({
+        status: 'Running', totalChunks: 55, completedChunks: 1, estimatedCompletionPercent: 70, estimatedRemainingSeconds: 900,
+      }));
+      const job = jobById('bp-1')!;
+      expect(job.percent).toBe(70); // chunk-derived would be round(100 * 1 / 55) = 2
+      expect(job.completedChunks).toBe(1);
+      expect(job.totalChunks).toBe(55);
+      expect(job.serverEtaSeconds).toBe(900);
+    });
+
+    it('a zero word percent falls back to the chapter-derived percent', () => {
+      service.track('book-proofread', 'book-A', 'bp-1');
+      progressStub.bookProofread$.next(progress({
+        status: 'Running', totalChunks: 4, completedChunks: 1, estimatedCompletionPercent: 0, estimatedRemainingSeconds: 80,
+      }));
+      expect(jobById('bp-1')!.percent).toBe(25);
+    });
+
+    it('an older API (no field) leaves serverEtaSeconds null and the percent chapter-derived', () => {
+      service.track('book-proofread', 'book-A', 'bp-1');
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 4, completedChunks: 2 }));
+      const job = jobById('bp-1')!;
+      expect(job.serverEtaSeconds ?? null).toBeNull();
+      expect(job.percent).toBe(50);
+    });
+
+    it('a terminal clears the server ETA and a Succeeded run is 100', () => {
+      service.track('book-proofread', 'book-A', 'bp-1');
+      progressStub.bookProofread$.next(progress({
+        status: 'Running', totalChunks: 3, completedChunks: 1, estimatedCompletionPercent: 60, estimatedRemainingSeconds: 300,
+      }));
+      progressStub.bookProofread$.next(progress({
+        status: 'Succeeded', totalChunks: 3, completedChunks: 3, estimatedCompletionPercent: 100, estimatedRemainingSeconds: 0,
+      }));
+      const job = jobById('bp-1')!;
+      expect(job.status).toBe('succeeded');
+      expect(job.percent).toBe(100);
+      expect(job.serverEtaSeconds ?? null).toBeNull();
+    });
+
+    it('other kinds ignore both fields: chunk-derived percent, no serverEtaSeconds', () => {
+      service.track('proofread', 'book-A', 'chap-1', { chapterId: 'ch-1' });
+      progressStub.chapter$.next(progress({
+        status: 'Running', totalChunks: 4, completedChunks: 1, estimatedCompletionPercent: 90, estimatedRemainingSeconds: 123,
+      }));
+      const job = jobById('chap-1')!;
+      expect(job.percent).toBe(25);
+      expect(job.serverEtaSeconds).toBeUndefined();
     });
   });
 
@@ -506,6 +587,30 @@ describe('JobRegistryService', () => {
       expect(jobById('chap-2')?.kind).toBe('proofread');
     });
 
+    it('re-tracks an in-flight whole-book proofread from status.activeJobId as kind book-proofread', () => {
+      configure({ bookProofread: makeBookProofreadStub('bp-1') });
+      service.reattach('book-A', 'he');
+      const job = jobById('bp-1');
+      expect(job?.kind).toBe('book-proofread');
+      expect(job?.bookId).toBe('book-A');
+      expect(job?.titleHe).toBe('הגהת ספר שלם');
+      expect(job?.titleEn).toBe('Whole-book proofread');
+    });
+
+    it('does NOT re-track a whole-book proofread when status.activeJobId is null', () => {
+      configure({ bookProofread: makeBookProofreadStub(null) });
+      service.reattach('book-A', 'he');
+      expect(currentJobs().length).toBe(0);
+    });
+
+    it('a failing proofread status read does not blank the other sources', () => {
+      const failing = { getStatus: jasmine.createSpy('getStatus').and.returnValue(throwError(() => new Error('500'))) };
+      configure({ bookProofread: failing as any, style: makeStyleStub('style-1') });
+      service.reattach('book-A', 'he');
+      expect(jobById('style-1')?.kind).toBe('style-baseline');
+      expect(currentJobs().length).toBe(1);
+    });
+
     it('does NOT re-track when nothing is in flight', () => {
       configure(); // all stubs default to null / empty
       service.reattach('book-A', 'he');
@@ -709,6 +814,112 @@ describe('JobRegistryService', () => {
     });
   });
 
+  describe('book-proofread kind (f2)', () => {
+    it('round-trips through track / jobById$ / jobByKindForBook$', async () => {
+      configure();
+      service.track('book-proofread', 'book-A', 'BP1');
+      expect((await firstValueFrom(service.jobById$('BP1')))?.kind).toBe('book-proofread');
+      expect((await firstValueFrom(service.jobByKindForBook$('book-A', 'book-proofread')))?.id).toBe('BP1');
+      expect(await firstValueFrom(service.jobByKindForBook$('book-A', 'review'))).toBeNull();
+    });
+
+    it('is driven by the BOOK proofread poller and finalizes exactly once on a terminal emit', async () => {
+      configure();
+      service.track('book-proofread', 'book-A', 'BP1');
+      progressStub.bookProofread$.next(progress({ totalChunks: 4, completedChunks: 1, scope: 'Book' }));
+      let job = await firstValueFrom(service.jobById$('BP1'));
+      expect(job?.percent).toBe(25);
+      expect(job?.status).toBe('running');
+
+      progressStub.bookProofread$.next(progress({ status: 'Succeeded', totalChunks: 4, completedChunks: 4, scope: 'Book' }));
+      job = await firstValueFrom(service.jobById$('BP1'));
+      expect(job?.status).toBe('succeeded');
+    });
+
+    it('does NOT light the review affordance (it is not a summary/review build)', async () => {
+      configure();
+      service.track('book-proofread', 'book-A', 'BP1');
+      expect(await firstValueFrom(service.anyRunningForBook$('book-A'))).toBeFalse();
+    });
+  });
+
+  describe('book-proofread child discovery and outcome counts (c6)', () => {
+    it('discovers each CHILD chapter job the server creates mid-run, on the parent poll ticks', () => {
+      // The server creates one Chapter-scope child per chapter, one at a time. Reattach only runs on book
+      // load, so without discovery the second chapter's child was never tracked and stage 4 / the panel
+      // never saw it.
+      const analysis = makeAnalysisStub([]);
+      configure({ analysis });
+      service.track('book-proofread', 'book-A', 'BP1');
+
+      analysis.getActiveAnalysisJobs.and.returnValue(of([activeJob({ jobId: 'child-1', chapterId: 'ch-1' })]));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, completedChunks: 0, scope: 'Book' }));
+      expect(jobById('child-1')?.kind).toBe('proofread');
+      expect(jobById('child-1')?.chapterId).toBe('ch-1');
+      expect(jobById('child-1')?.analysisType).toBe('Proofread');
+
+      analysis.getActiveAnalysisJobs.and.returnValue(of([activeJob({ jobId: 'child-2', chapterId: 'ch-2' })]));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, completedChunks: 1, scope: 'Book' }));
+      expect(jobById('child-2')?.chapterId).toBe('ch-2');
+      expect(analysis.getActiveAnalysisJobs).toHaveBeenCalledWith('book-A');
+    });
+
+    it('never overlaps two discovery reads for one parent', () => {
+      const pending = new Subject<ActiveAnalysisJobDto[]>();
+      const analysis = makeAnalysisStub([]);
+      analysis.getActiveAnalysisJobs.and.returnValue(pending.asObservable());
+      configure({ analysis });
+      service.track('book-proofread', 'book-A', 'BP1');
+
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      expect(analysis.getActiveAnalysisJobs).toHaveBeenCalledTimes(1);
+
+      pending.next([]);
+      pending.complete();
+      analysis.getActiveAnalysisJobs.and.returnValue(of([]));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      expect(analysis.getActiveAnalysisJobs).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT discover children for any other kind', () => {
+      const analysis = makeAnalysisStub([activeJob({ jobId: 'child-1' })]);
+      configure({ analysis });
+      service.track('summary', 'book-A', 'S1');
+      progressStub.summary$.next(progress({ status: 'Running', totalChunks: 3, completedChunks: 1 }));
+      expect(analysis.getActiveAnalysisJobs).not.toHaveBeenCalled();
+    });
+
+    it('a failing discovery read leaves the parent running and is retried on the next tick', () => {
+      const analysis = makeAnalysisStub([]);
+      analysis.getActiveAnalysisJobs.and.returnValue(throwError(() => new Error('500')));
+      configure({ analysis });
+      service.track('book-proofread', 'book-A', 'BP1');
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      expect(jobById('BP1')?.status).toBe('running');
+      analysis.getActiveAnalysisJobs.and.returnValue(of([activeJob({ jobId: 'child-1' })]));
+      progressStub.bookProofread$.next(progress({ status: 'Running', totalChunks: 2, scope: 'Book' }));
+      expect(jobById('child-1')).toBeDefined();
+    });
+
+    it('keeps completed < total on a SUCCEEDED parent: that shortfall is a partial run, not a lagging count', () => {
+      configure();
+      service.track('book-proofread', 'book-A', 'BP1');
+      progressStub.bookProofread$.next(progress({ status: 'Succeeded', totalChunks: 2, completedChunks: 1, scope: 'Book' }));
+      const job = jobById('BP1')!;
+      expect(job.status).toBe('succeeded');
+      expect(job.completedChunks).toBe(1);
+      expect(job.totalChunks).toBe(2);
+    });
+
+    it('still forces a succeeded CHAPTER run to total/total (the c04 lagging-snapshot rule is unchanged)', () => {
+      configure();
+      service.track('proofread', 'book-A', 'J1', { chapterId: 'ch-1' });
+      progressStub.chapter$.next(progress({ status: 'Succeeded', totalChunks: 4, completedChunks: 3 }));
+      expect(jobById('J1')?.completedChunks).toBe(4);
+    });
+  });
+
   describe('jobById$', () => {
     it('returns null for an id that was never tracked, then the job once it is', async () => {
       configure();
@@ -887,6 +1098,7 @@ describe('JobRegistryService', () => {
       'review': { chunkCounts: false, chapterScoped: false },
       'proofread': { chunkCounts: true, chapterScoped: true },
       'style-baseline': { chunkCounts: true, chapterScoped: false },
+      'book-proofread': { chunkCounts: true, chapterScoped: false },
     };
 
     it('has no member this suite has not decided (the discovered set drives the comparison)', () => {

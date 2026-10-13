@@ -240,6 +240,15 @@ describe('run-strings (c02)', () => {
       }
     });
 
+    it('f01: the consent variant drops "remaining" in both languages and keeps the buckets', () => {
+      expect(formatEtaLabel('en', 200_000, 'total')).toBe('Estimated time: about 4 minutes');
+      expect(formatEtaLabel('en', 60_000, 'total')).toBe('Estimated time: about 1 minute');
+      expect(formatEtaLabel('en', 10_000, 'total')).toBe('Estimated time: less than a minute');
+      expect(formatEtaLabel('en', 90 * 60_000, 'total')).toBe('Estimated time: about 2 hours');
+      expect(formatEtaLabel('he', 200_000, 'total')).toBe('זמן משוער: כ-4 דקות');
+      expect(formatEtaLabel('he', 200_000)).toBe('זמן משוער שנותר: כ-4 דקות');
+    });
+
     it('never renders a negative estimate', () => {
       expect(formatEtaLabel('en', -5_000)).toBe('Estimated time remaining: less than a minute');
     });

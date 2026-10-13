@@ -34,6 +34,7 @@ import { AnalysisService } from '../../core/services/analysis.service';
 import { BookSummaryService } from '../../core/services/book-summary.service';
 import { BookReviewService } from '../../core/services/book-review.service';
 import { StyleBaselineService } from '../../core/services/style-baseline.service';
+import { BookProofreadService } from '../../core/services/book-proofread.service';
 
 const JOB_ID = 'JOB-PARITY-1';
 const BOOK_ID = 'book-1';
@@ -158,6 +159,7 @@ describe('three-surface parity over ONE registry job (Wave 1d c2)', () => {
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) } },
         { provide: BookReviewService, useValue: { getReviewStatus: () => of({ activeBuildJobId: null }) } },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => of({ activeBuildJobId: null }) } },
+        { provide: BookProofreadService, useValue: { getStatus: () => of({ activeJobId: null }) } },
       ],
     }).compileComponents();
 
@@ -393,6 +395,7 @@ describe('a SYNC run is on none of the three surfaces (c02)', () => {
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) } },
         { provide: BookReviewService, useValue: { getReviewStatus: () => of({ activeBuildJobId: null }) } },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => of({ activeBuildJobId: null }) } },
+        { provide: BookProofreadService, useValue: { getStatus: () => of({ activeJobId: null }) } },
       ],
     }).compileComponents();
 
@@ -514,6 +517,7 @@ describe('the bare chunk COUNTS are scoped by job KIND (c02)', () => {
         { provide: BookSummaryService, useValue: { getBookSummaryStatus: () => of({ activeBuildJobId: null }) } },
         { provide: BookReviewService, useValue: { getReviewStatus: () => of({ activeBuildJobId: null }) } },
         { provide: StyleBaselineService, useValue: { getStyleBaselineStatus: () => of({ activeBuildJobId: null }) } },
+        { provide: BookProofreadService, useValue: { getStatus: () => of({ activeJobId: null }) } },
       ],
     }).compileComponents();
 

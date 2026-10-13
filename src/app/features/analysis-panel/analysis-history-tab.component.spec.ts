@@ -1090,3 +1090,30 @@ describe('AnalysisHistoryTabComponent - a retired pass stays readable (w7)', () 
       .toEqual(['Custom']);
   });
 });
+
+describe('AnalysisHistoryTabComponent - c04 LineEdit structuredResult fallback', () => {
+  it('drops whitespace-only chips with the shared predicate, like the server-row path', async () => {
+    await TestBed.configureTestingModule({
+      imports: [AnalysisHistoryTabComponent],
+      providers: [LineEditParserService, SuggestionKeyService],
+    }).compileComponents();
+    const component = TestBed.createComponent(AnalysisHistoryTabComponent).componentInstance;
+
+    // No stored rows, so the history list is read from the model's chips, which no filter had seen.
+    const result = makeLiteraryResult(
+      JSON.stringify({
+        suggestions: [
+          { original: 'old text', suggested: ' old text ', reason: 'spacing', category: 'style' },
+          { original: 'same', suggested: 'same', reason: 'noop', category: 'style' },
+          { original: 'the document', suggested: 'the manuscript', reason: 'clarity', category: 'clarity' },
+        ],
+        overallFeedback: '',
+      }),
+      { id: 'r-le', type: 'LineEdit', analysisType: 'LineEdit' },
+    );
+
+    expect(component.lineEditSuggestionsWithStatus(result).map(i => i.suggestion.original))
+      .withContext('only the edit a reader can see is listed')
+      .toEqual(['the document']);
+  });
+});

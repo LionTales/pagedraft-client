@@ -18,6 +18,7 @@ import {
   TrackedJob,
   isTerminal,
   showsChunkCounts,
+  topLevelJobs,
 } from '../../core/services/job-registry.service';
 import { AppOverlayService } from '../../core/services/app-overlay.service';
 import { formatRelativeTime } from '../../core/utils/relative-time';
@@ -44,6 +45,7 @@ export const LABELS_HE: Record<string, string> = {
   review:            'סקירה',          // DRAFT he - needs native review
   proofread:         'הגהה',           // DRAFT he - needs native review
   'style-baseline':  'סגנון כתיבה',    // DRAFT he - needs native review
+  'book-proofread':  'הגהת ספר',       // DRAFT he - needs native review
 };
 
 export const LABELS_EN: Record<string, string> = {
@@ -61,6 +63,7 @@ export const LABELS_EN: Record<string, string> = {
   review:            'Review',
   proofread:         'Proofread',
   'style-baseline':  'Writing style',
+  'book-proofread':  'Book proofread',
 };
 
 /** Per-kind icon glyph (no icon library - pure Unicode/emoji). */
@@ -73,6 +76,7 @@ const KIND_ICONS: Record<JobKind, string> = {
   // without colliding with anything else in this file's combined glyph set (see the spec's combined
   // kind+type uniqueness test).
   'style-baseline':    '🎨',
+  'book-proofread':    '📖',
 };
 
 /**
@@ -288,12 +292,16 @@ export class ActivityCenterComponent implements OnDestroy {
    * A low-frequency timer (60s cadence) is merged in via combineLatest so that the async pipe
    * re-renders once a minute even after terminal jobs stop emitting from the registry. This keeps
    * "לפני X דקות" / "X minutes ago" from freezing at finalize time.
+   *
+   * c03: one row per RUN. A whole-book proofread's per-chapter children are folded into the run's own
+   * row ({@link topLevelJobs}), which already carries the run's chapter counts and percent; before this a
+   * 30-chapter run listed 30 'Proofread' rows under it.
    */
   readonly jobs$ = combineLatest([
     this.registry.jobs$,
     timer(60_000, 60_000).pipe(startWith(0), takeUntil(this.destroy$)),
   ]).pipe(
-    map(([jobs]) => [...jobs].sort((a, b) => {
+    map(([jobs]) => topLevelJobs(jobs).sort((a, b) => {
       const timeDiff = Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
       // Secondary tiebreak by id for stable order when timestamps are equal.
       return timeDiff !== 0 ? timeDiff : a.id.localeCompare(b.id);

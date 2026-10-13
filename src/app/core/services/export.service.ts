@@ -5,12 +5,18 @@ import { catchError, switchMap } from 'rxjs/operators';
 
 import {
   DOCX_CONTENT_TYPE,
+  EXPORT_ANNOTATION_COUNT_HEADER,
   EXPORT_SKIPPED_CHAPTERS_HEADER,
   EXPORT_SKIPPED_COUNT_HEADER,
+  EXPORT_UNANCHORED_COUNT_HEADER,
+  EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER,
   ExportFailure,
   ExportedFile,
+  UnreliableExportMode,
+  annotationReportFromHeaders,
   fileNameFromContentDisposition,
   skipReportFromHeaders,
+  unreliableSkippedFromHeader,
 } from '../models/export';
 
 /**
@@ -53,6 +59,28 @@ export class ExportService {
   /** GET /api/document/export/chapter/{bookId}/{chapterId} - one chapter, named after the chapter. */
   exportChapter(bookId: string, chapterId: string): Observable<ExportedFile> {
     return this.request(`${this.base}/chapter/${bookId}/${chapterId}`, 'chapter.docx');
+  }
+
+  /**
+   * GET /api/document/export/book/{bookId}/proofread?unreliable= - the whole book with every pending
+   * proofread suggestion as a tracked change (a Word comment only where there is an explanation). Same transfer, same failures, as the plain
+   * export. c8: `unreliable` is always SENT (default include, the server's own default), so the wire says
+   * what the author chose rather than leaving it to a default on either side.
+   */
+  exportBookProofread(bookId: string, unreliable: UnreliableExportMode = 'include'): Observable<ExportedFile> {
+    return this.request(`${this.base}/book/${bookId}/proofread?unreliable=${unreliable}`, 'book-proofread.docx');
+  }
+
+  /** GET /api/document/export/chapter/{bookId}/{chapterId}/proofread?unreliable= - one chapter, annotated. */
+  exportChapterProofread(
+    bookId: string,
+    chapterId: string,
+    unreliable: UnreliableExportMode = 'include',
+  ): Observable<ExportedFile> {
+    return this.request(
+      `${this.base}/chapter/${bookId}/${chapterId}/proofread?unreliable=${unreliable}`,
+      'chapter-proofread.docx',
+    );
   }
 
   /**
@@ -127,6 +155,13 @@ export class ExportService {
         res.headers.get(EXPORT_SKIPPED_COUNT_HEADER),
         res.headers.get(EXPORT_SKIPPED_CHAPTERS_HEADER),
       ),
+      // Null on a plain export (the headers are only sent by the /proofread endpoints).
+      annotations: annotationReportFromHeaders(
+        res.headers.get(EXPORT_ANNOTATION_COUNT_HEADER),
+        res.headers.get(EXPORT_UNANCHORED_COUNT_HEADER),
+      ),
+      // c8: chapters left un-annotated by `?unreliable=skip`; null on a plain export (never sent there).
+      unreliableSkipped: unreliableSkippedFromHeader(res.headers.get(EXPORT_UNRELIABLE_SKIPPED_COUNT_HEADER)),
     });
   }
 

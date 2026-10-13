@@ -12,7 +12,7 @@ import {
 } from '../models/analysis';
 import { AnalysisService } from './analysis.service';
 import { AnalysisProgressService } from './analysis-progress.service';
-import { JobRegistryService } from './job-registry.service';
+import { JobRegistryService, jobScopeLabel } from './job-registry.service';
 import {
   analysisTypeLabelFor,
   formatRunDurationLabel,
@@ -201,6 +201,10 @@ interface ProgressUpdateResult {
  * `Ollama_LineEdit.NumPredict` (5120). The 394.3s run did not approach that cap, so the true ceiling is
  * several times higher again - a budget that never misfired would have to be ~13 minutes, which is
  * indistinguishable from the endless wait this budget exists to end.
+ * Those three LineEdit figures are DictaLM-3.0's. LineEdit moved to `gemma4:12b` on 2026-10-13; one cold
+ * `gemma4:12b` LineEdit on a 229-word Hebrew passage, timed through the server pipeline below the HTTP layer
+ * (be-c08, 2026-10-13), took 70.0s (19.5s of it the model load, 535 generated tokens). That clears 180s, but
+ * the token-count argument above is model-independent, so the misfire stays possible and stays recoverable.
  *
  * The number is therefore NOT raised. Raising it re-creates the reported bug (a modal with no bound) to
  * buy an ever-shrinking reduction in false alarms. Instead the MISFIRE WAS MADE RECOVERABLE: the expiry
@@ -656,15 +660,12 @@ export class AnalysisRunOrchestrationService {
     // `track()` is idempotent per jobId, so a later reattach that re-discovers this job cannot
     // double-track it.
     //
-    // scopeLabel 'פרק' matches `defaultScopeLabel('proofread')` in the registry so live-tracked and
-    // reattached jobs render identically ON A HEBREW BOOK. DRAFT he - needs native review.
-    // The language is the RUN's (`ctx.language` is the panel's normalized `bookLanguage`, the same
-    // value `panelLang` normalizes), so an English book's live-tracked job does not carry a Hebrew
-    // scope label. NOTE this covers the LIVE path only: `defaultScopeLabel` (the RE-ATTACH path, read
-    // on reload) still returns Hebrew unconditionally, so on an English book a freshly-started job
-    // reads "Chapter"/"Scene" while the same job re-attached after a reload still reads "פרק"/"סצנה".
-    // Left as a follow-up: fixing it means threading a language into `defaultScopeLabel`.
-    const scopeHe = runChromeLang(ctx.language) === 'he';
+    // The scope label is worded in the RUN's language (`ctx.language` is the panel's normalized
+    // `bookLanguage`, the same value `panelLang` normalizes), so an English book's live-tracked job does
+    // not carry a Hebrew scope label. c03: through the registry's own `jobScopeLabel` table, the one its
+    // reattach and child-discovery defaults read too (with the book's language), so a live-tracked job
+    // and the same job re-discovered after a reload word their scope identically in either language; and
+    // a re-discovery no longer merges its default label over this one at all.
     this.jobRegistry.track('proofread', ctx.bookId, jobId, {
       analysisType: ctx.selectedAnalysisType,
       chapterId: ctx.chapterId || undefined,
@@ -672,9 +673,7 @@ export class AnalysisRunOrchestrationService {
       // from a chapter-scoped run of the same type in the same chapter, so a remounted panel showing
       // the CHAPTER would read a scene run as its own and disable its button.
       sceneId: ctx.sceneId ?? undefined,
-      scopeLabel: ctx.sceneId
-        ? (scopeHe ? 'סצנה' : 'Scene') // DRAFT he - needs native review
-        : (scopeHe ? 'פרק' : 'Chapter'), // DRAFT he - needs native review
+      scopeLabel: jobScopeLabel(ctx.sceneId ? 'scene' : 'chapter', ctx.language),
     });
   }
 

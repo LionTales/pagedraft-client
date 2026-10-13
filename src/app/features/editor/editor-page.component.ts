@@ -2272,9 +2272,16 @@ export class EditorPageComponent implements OnInit, AfterViewChecked, DoCheck, O
    * server, and silently writing the open document on the way to a download would make the file the user
    * gets depend on which route they took to it. The editor's own canDeactivate guard still asks about
    * unsaved work, which is the right place for that question.
+   *
+   * c6: `kind` (the whole-book proofread row's annotated download) rides as `?kind=`, which the export
+   * screen uses to bring that kind's row forward. Absent for the two plain entry points.
    */
-  goToExport(): void {
+  goToExport(kind?: string): void {
     if (!this.bookId) return;
+    if (kind) {
+      this.router.navigate(['/books', this.bookId, 'export'], { queryParams: { kind } });
+      return;
+    }
     this.router.navigate(['/books', this.bookId, 'export']);
   }
 

@@ -208,6 +208,25 @@ describe('AppDockComponent (chatbot phase A.1)', () => {
         .toBe('2');
     });
 
+    it('c03: counts ONE whole-book proofread run as 1, not parent + its running chapter child', () => {
+      registry.setJobs([
+        makeJob({ id: 'BP1', kind: 'book-proofread', status: 'running' }),
+        makeJob({ id: 'child-1', kind: 'proofread', analysisType: 'Proofread', chapterId: 'ch-1', parentJobId: 'BP1', status: 'running' }),
+      ]);
+      fixture.detectChanges();
+      expect((q('.dock-badge .dock-badge-count').nativeElement as HTMLElement).textContent?.trim())
+        .toBe('1');
+
+      // A child still running after its parent ended is the run's only live trace: it counts.
+      registry.setJobs([
+        makeJob({ id: 'BP1', kind: 'book-proofread', status: 'succeeded' }),
+        makeJob({ id: 'child-1', kind: 'proofread', analysisType: 'Proofread', chapterId: 'ch-1', parentJobId: 'BP1', status: 'running' }),
+      ]);
+      fixture.detectChanges();
+      expect((q('.dock-badge .dock-badge-count').nativeElement as HTMLElement).textContent?.trim())
+        .toBe('1');
+    });
+
     it('NAMES the count as running work, so a number on the chat glyph cannot read as unread messages', () => {
       // c02. The launcher's glyph is a speech bubble and the badge is a numeric corner badge, which is
       // the unread-messages idiom in every product that ships one - and this number means the opposite.

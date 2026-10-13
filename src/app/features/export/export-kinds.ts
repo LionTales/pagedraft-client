@@ -40,7 +40,11 @@ export function exportLang(bookLanguage: string | null | undefined): ExportLang 
 }
 
 /** The kinds this screen knows about. `editor-report` joins here when it is built. */
-export type ExportKindId = 'book-docx' | 'chapter-docx';
+export type ExportKindId =
+  | 'book-docx'
+  | 'chapter-docx'
+  | 'book-docx-proofread'
+  | 'chapter-docx-proofread';
 
 /**
  * What the kind needs before it can run. It drives the ROW's shape, not the endpoint:
@@ -89,6 +93,32 @@ export const EXPORT_KINDS: readonly ExportKind[] = [
     description: {
       he: 'פרק אחד לבחירתכם, בקובץ וורד שנקרא על שם הפרק.',
       en: 'One chapter of your choosing, in a Word file named after the chapter.',
+    },
+    availability: { available: true },
+  },
+  {
+    id: 'book-docx-proofread',
+    scope: 'book',
+    format: 'DOCX',
+    // DRAFT he - needs native review
+    name: { he: 'הספר כולו עם תיקוני הגהה', en: 'The whole book with proofread changes' },
+    description: {
+      // DRAFT he - needs native review
+      he: 'DOCX עם תיקוני ההגהה כשינויים מסומנים; הסברים מופיעים כהערות.',
+      en: 'DOCX with the proofread suggestions as tracked changes; explanations appear as comments.',
+    },
+    availability: { available: true },
+  },
+  {
+    id: 'chapter-docx-proofread',
+    scope: 'chapter',
+    format: 'DOCX',
+    // DRAFT he - needs native review
+    name: { he: 'פרק אחד עם תיקוני הגהה', en: 'A single chapter with proofread changes' },
+    description: {
+      // DRAFT he - needs native review
+      he: 'DOCX עם תיקוני ההגהה כשינויים מסומנים; הסברים מופיעים כהערות.',
+      en: 'DOCX with the proofread suggestions as tracked changes; explanations appear as comments.',
     },
     availability: { available: true },
   },
@@ -233,6 +263,24 @@ export function skippedNotice(count: number, names: string[], lang: ExportLang):
   if (names.length >= count) return `${head}: ${list}.`;
   // Fewer names than the count: say so, rather than letting the list read as the whole of it.
   return lang === 'he' ? `${head}. בהם: ${list}.` : `${head}. Among them: ${list}.`;
+}
+
+/**
+ * The notice under a completed ANNOTATED download: how many tracked changes the file holds and, when there are
+ * any, how many suggestions found no place in the text and so are not in it. The counts are the SERVER's
+ * (`X-Export-Annotation-Count`, `X-Export-Unanchored-Count`); nothing here predicts them.
+ */
+export function annotationNotice(placed: number, unanchored: number, lang: ExportLang): string {
+  // DRAFT he - needs native review. c8: the singular at exactly 1. f01: the counts are SUGGESTIONS (Word shows a
+  // replacement as two revisions, so a "tracked changes" count would not match Word's Review pane), and the
+  // feminine noun takes the feminine count.
+  if (lang === 'he') {
+    const changes = placed === 1 ? 'הצעה אחת כשינוי מסומן' : `${placed} הצעות כשינויים מסומנים`;
+    const lost = unanchored === 1 ? 'הצעה אחת לא אותרה' : `${unanchored} הצעות לא אותרו`;
+    return unanchored > 0 ? `${changes}, ${lost}` : changes;
+  }
+  const changes = placed === 1 ? '1 suggestion as a tracked change' : `${placed} suggestions as tracked changes`;
+  return unanchored > 0 ? `${changes}, ${unanchored} could not be placed` : changes;
 }
 
 /**
