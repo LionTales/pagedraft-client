@@ -24,9 +24,11 @@ This repo is the PageDraft client side (Angular 18 SPA). Its contract partner is
 6. **Page conventions**: timezone-aware dates (never raw `| date`); UTF-8 BOM on client CSV (Hebrew); buttons labelled and disabled properly; `[dir]` plus he/en i18n parity; no em-dash in user-facing text; RTL and narrow-viewport pass.
 7. **A new persisted setting** needs the end-to-end checklist on the client side too: FE normalize and form control plus tests; the server half (entity, save-copy line, controller) is checked in `../Pagedraft.Api-repo`.
 8. **AI results**: the model copies what the client renders and gets what it must derive wrong; chapter orders are 0-based on the wire and 1-based wherever a human reads (`chapterDisplayNumber`). A chip or label shown beside a model answer must use the human numbering.
+9. **Async editor state is co-defining here**: a handler that mutates selection, editor or open-document state around an async server call (optimistic delete, clear or save; SignalR-synced state) gets the kit's `fe-optimistic-async` lens (Phase 4d), forced with `--lens fe-optimistic-async` when its globs miss. This class produced six post-review CRs on the scene delete/clear feature after two review passes missed them.
 
 ## Review framework
 
 - Repo files to read, by the area the diff touches: `README.md`, `docs/`, `src/app/core`, `src/app/features`.
 - Contract reference lives in the workspace: `../docs/PAGEDRAFT_DESIGN.md` (API contracts, DTOs, SignalR events, config).
+- The PageDraft traps live in the workspace-root `../../CLAUDE.md`: section 4 (Syncfusion SFDT round trip, RTL/Hebrew alignment, the new-persisted-setting checklist) and section 5 (RULE 0: re-produce the artifact and inspect it the way the user sees it). Read the section the diff touches. An AI change closes on a live model run (Phase 4c), not on fixtures alone.
 - No FormatBookWebApi `code-review-lessons` skill applies here. Use the kit's cross-stack review lenses and the kit's engineering lessons and validation discipline; PageDraft's defining bug class is the AI/LLM lens, not the formatting-pipeline or billing lenses.
