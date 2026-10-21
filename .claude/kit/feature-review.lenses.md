@@ -29,6 +29,7 @@ This repo is the PageDraft client side (Angular 18 SPA). Its contract partner is
 ## Review framework
 
 - Repo files to read, by the area the diff touches: `README.md`, `docs/`, `src/app/core`, `src/app/features`.
+- `docs/FRONTEND_ARCHITECTURE_NOTES.md` holds the client's load-bearing rules (`JobRegistryService` is the single owner of a job's percent; the run dialog is modal only while the run is live; the Activity Center bell; run chrome is composed by the client, never backend prose). Read it when the diff touches job progress, a run dialog or the Activity Center.
 - Contract reference lives in the workspace: `../docs/PAGEDRAFT_DESIGN.md` (API contracts, DTOs, SignalR events, config).
 - The PageDraft traps live in the workspace-root `../../CLAUDE.md`: section 4 (Syncfusion SFDT round trip, RTL/Hebrew alignment, the new-persisted-setting checklist) and section 5 (RULE 0: re-produce the artifact and inspect it the way the user sees it). Read the section the diff touches. An AI change closes on a live model run (Phase 4c), not on fixtures alone.
 - No FormatBookWebApi `code-review-lessons` skill applies here. Use the kit's cross-stack review lenses and the kit's engineering lessons and validation discipline; PageDraft's defining bug class is the AI/LLM lens, not the formatting-pipeline or billing lenses.
