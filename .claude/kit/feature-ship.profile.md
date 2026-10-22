@@ -10,7 +10,7 @@ This repo is the PageDraft client side. Its contract partner is `../Pagedraft.Ap
 
 - Repo: this checkout, remote `LionTales/pagedraft-client`, PR base `master` (`master` is the integration branch; `main` is a stub: trust the remote HEAD). The PageDraft root `..` is not a git repo.
 - Branch: one FRESH branch per PR off `origin/master`, slug `<feature>` (the server's parallel slug is `api-<feature>`). Branch reuse was retired 2026-06-18.
-- Plans: `.cursor/plans/` and the workspace-level `../.cursor/plans/`; reviews: `.cursor/reviews/`. `.cursor/` is gitignored here, so plan and review artifacts are never staged and never show in `git status`.
+- Plans: `.cursor/plans/` and the workspace-level `../.cursor/plans/`; reviews: top-level `docs/reviews/`, committed with the work. `.cursor/` is gitignored here, so plan artifacts are never staged and never show in `git status`.
 - Tests: one spec `npx ng test --include <spec> --watch=false --browsers=ChromeHeadless`; full suite `npm run test:ci`. CI: job `Frontend tests` in `.github/workflows/ci.yml`. Discover the checks per PR with `gh pr checks <pr>`.
 - Commit-message style: plain imperative, no conventional-commit prefix. No ticket convention is recorded for PageDraft: leave a tracker status alone.
 
